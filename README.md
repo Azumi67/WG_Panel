@@ -1,6 +1,7 @@
 # Wireguard_PanelV2
 ------------
 
+**کار پنل تموم شده و در مرحله debug و cli میباشد** (باید مشکلات تا جای ممکن برطرف بشود) 
 <p align="right">
   <img src="https://github.com/user-attachments/assets/30f029a5-bd20-440e-8313-177e24d6e762" alt="Image" />
 </p>
