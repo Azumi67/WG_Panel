@@ -1,0 +1,502 @@
+:root {
+    --bg: #f6f7fb;
+    --card: #fff;
+    --card-2: #fff;
+    --line: #e6e8f0;
+    --ring: #f6f7fb;
+
+    --text: #0f172a;
+    --text-weak: #334155;
+    --muted: #64748b;
+
+    --accent: #4f46e5;
+    --accent-2: #22c55e;
+    --accent-3: #f59e0b;
+
+    --success: #16a34a;
+    --danger: #dc2626;
+    --warning: #d97706;
+
+    --chip: #f3f4f6;
+    --chip-text: #1f2937;
+    --chip-line: #e5e7eb;
+
+    --track: #e8ebf3;
+    --box: #f8fafc;
+
+    --shadow: 0 6px 20px rgba(2, 6, 23, .06);
+    --shadow-strong: 0 12px 34px rgba(2, 6, 23, .10);
+}
+
+:root[data-theme="dark"] {
+    --bg: #0b1020;
+    --card: #0f162c;
+    --card-2: #0d152a;
+    --line: #19243d;
+    --ring: #0b1020;
+
+    --text: #e6e8ee;
+    --text-weak: #cbd5e1;
+    --muted: #9aa4b2;
+
+    --accent: #6366f1;
+    --accent-2: #22c55e;
+    --accent-3: #f59e0b;
+
+    --success: #22c55e;
+    --danger: #ef4444;
+    /* red */
+    --warning: #f59e0b;
+
+    --chip: #121a31;
+    --chip-text: #e6e8ee;
+    --chip-line: #1b2642;
+
+    --track: #1b2a4a;
+    --box: #0e1530;
+
+    --shadow: 0 10px 26px rgba(0, 0, 0, .32);
+    --shadow-strong: 0 16px 42px rgba(0, 0, 0, .42);
+}
+
+.ulc-body {
+    background:
+        radial-gradient(1100px 700px at 70% -10%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 60%),
+        radial-gradient(800px 600px at -10% 110%, color-mix(in srgb, var(--accent-2) 13%, transparent), transparent 60%),
+        var(--bg);
+    color: var(--text);
+    font: 400 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    margin: 0;
+    min-height: 100svh;
+}
+
+.ulc-wrap {
+    width: min(920px, 100%);
+    margin: 22px auto;
+    padding: 12px;
+    display: grid;
+    gap: 12px;
+}
+
+.ulc-card {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--card) 92%, transparent), var(--card));
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 14px 14px 16px;
+    box-shadow: var(--shadow);
+    -webkit-font-smoothing: antialiased;
+}
+
+.ulc-card:hover {
+    box-shadow: var(--shadow-strong);
+    transition: box-shadow .2s ease;
+}
+
+.ulc-idcard .ulc-id-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.ulc-title {
+    display: inline-flex;
+    gap: 10px;
+    align-items: center;
+    font-weight: 800;
+    font-size: 16px;
+}
+
+.ulc-title i {
+    font-size: 16px;
+}
+
+.ulc-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+}
+
+@media (max-width:780px) {
+    .ulc-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width:440px) {
+    .ulc-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.ulc-kv {
+    background: var(--card-2);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 12px;
+    min-height: 56px;
+    display: grid;
+    align-content: center;
+}
+
+.ulc-kv .k {
+    font-size: 11px;
+    letter-spacing: .04em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+
+.ulc-kv .v {
+    font-size: 14px;
+    font-weight: 800;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "Courier New";
+}
+
+.ulc-badge {
+    --halo: color-mix(in srgb, var(--success) 22%, transparent);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 12px;
+    border-radius: 999px;
+    font: 800 12px/1 ui-sans-serif;
+    border: 1px solid var(--chip-line);
+    background: var(--chip);
+    color: var(--chip-text);
+}
+
+.ulc-badge::before {
+    content: "";
+    width: .55rem;
+    height: .55rem;
+    border-radius: 50%;
+    box-shadow: 0 0 0 3px var(--halo);
+}
+
+.ulc-badge.ok {
+    --halo: color-mix(in srgb, var(--success) 22%, transparent);
+}
+
+.ulc-badge.off {
+    --halo: color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
+.ulc-badge.block {
+    --halo: color-mix(in srgb, var(--danger) 22%, transparent);
+    border-color: color-mix(in srgb, var(--danger) 25%, var(--chip-line));
+}
+
+.ulc-badge.ok::before {
+    background: var(--success);
+}
+
+.ulc-badge.off::before {
+    background: var(--danger);
+}
+
+.ulc-badge.block::before {
+    background: var(--danger);
+}
+
+.ulc-actions {
+    display: inline-flex;
+    gap: 8px;
+}
+
+.ulc-icon {
+    --_bg: transparent;
+    --_bd: var(--line);
+    --_fg: var(--text);
+    height: 36px;
+    width: 36px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--_bd);
+    background: var(--_bg);
+    color: var(--_fg);
+    cursor: pointer;
+    transition: transform .12s, background .15s, border-color .15s, filter .15s;
+}
+
+.ulc-icon:hover {
+    transform: translateY(-1px);
+}
+
+.ulc-icon.ghost:hover {
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+.ulc-icon.solid {
+    --_bg: var(--accent);
+    --_bd: transparent;
+    --_fg: #fff;
+    box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.ulc-icon.solid:hover {
+    filter: brightness(1.06);
+}
+
+.ulc-icon:focus-visible {
+    outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent);
+    outline-offset: 2px;
+    border-color: transparent;
+}
+
+.ulc-gauges {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+@media (max-width:620px) {
+    .ulc-gauges {
+        grid-template-columns: 1fr;
+    }
+}
+
+.ulc-gauge {
+    display: grid;
+    justify-items: center;
+    gap: 8px;
+    padding: 6px;
+}
+
+.ulc-g-caption {
+    color: var(--muted);
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.radial {
+    --pct: 0;
+    --clr: var(--accent-2);
+    width: 150px;
+    height: 150px;
+    position: relative;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background:
+        radial-gradient(closest-side, var(--card) 72%, transparent 73%),
+        conic-gradient(var(--clr) calc(var(--pct)*1turn), var(--track) 0);
+}
+
+.radial .ring {
+    position: absolute;
+    inset: 12px;
+    border-radius: 50%;
+    background: var(--ring);
+    box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.radial .center {
+    position: absolute;
+    inset: 30px;
+    border-radius: 50%;
+    background: var(--card);
+    display: grid;
+    place-items: center;
+    gap: 2px;
+    text-align: center;
+    padding: 4px;
+    box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.radial .value {
+    font-weight: 900;
+    font-size: 16px;
+    letter-spacing: .01em;
+    color: var(--text);
+}
+
+.radial .label,
+.radial .subtle {
+    font-size: 11px;
+}
+
+.radial .label {
+    color: var(--muted);
+}
+
+.radial .subtle {
+    color: var(--text-weak);
+}
+
+.ulc-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.ulc-row-between {
+    justify-content: space-between;
+}
+
+.ulc-h {
+    margin: 0;
+    font: 800 15px/1 ui-sans-serif;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ulc-config .ulc-btns {
+    display: flex;
+    gap: 10px;
+}
+
+.ulc-config-grid {
+    display: grid;
+    gap: 12px;
+    align-items: center;
+    margin-top: 10px;
+    grid-template-columns: 200px 1fr;
+}
+
+@media (max-width:700px) {
+    .ulc-config-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.ulc-qr {
+    background: var(--box);
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+    min-height: 200px;
+    display: grid;
+    place-items: center;
+}
+
+.ulc-contacts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.ulc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    background: var(--chip);
+    border: 1px solid var(--chip-line);
+    color: var(--chip-text);
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.ulc-chip:hover {
+    transform: translateY(-1px);
+    transition: transform .12s ease;
+}
+
+#toast-container {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    display: grid;
+    gap: 8px;
+    z-index: 9999;
+}
+
+.toast {
+    background: var(--card-2);
+    border: 1px solid var(--line);
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    font-size: 13px;
+}
+
+.toast.ok {
+    border-color: color-mix(in srgb, var(--success) 40%, transparent);
+}
+
+.toast.err {
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.hidden {
+    display: none !important;
+}
+
+.truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ulc-card,
+.ulc-title,
+.ulc-h,
+.ulc-kv .v,
+.ulc-kv .v.mono {
+    color: var(--text) !important;
+}
+
+.ulc-kv .k,
+.ulc-g-caption,
+.ulc-tips li {
+    color: var(--muted) !important;
+}
+
+.ulc-chip,
+.ulc-card a {
+    color: var(--text) !important;
+}
+
+.ulc-card i,
+.ulc-card svg {
+    color: currentColor !important;
+    fill: currentColor !important;
+}
+
+.ulc-icon.solid,
+.ulc-icon.solid i,
+.ulc-icon.solid svg {
+    color: #fff !important;
+    fill: #fff !important;
+    stroke: #fff !important;
+}
+.ulc-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+
+.ulc-wrap,
+.ulc-card,
+.ulc-gauges,
+.ulc-config,
+.ulc-idcard {
+    position: relative;
+    z-index: 1;
+}
+#ulc-bg {
+    width: 100%;
+    height: 100%;
+    display: block;
+    opacity: .55;
+    mix-blend-mode: normal;
+}
+
+:root[data-theme="dark"] #ulc-bg {
+    opacity: .45;
+}
