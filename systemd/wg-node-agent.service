@@ -1,0 +1,24 @@
+[Unit]
+Description=WG Panel (Flask + Gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+WorkingDirectory=/root/wg/agent
+
+EnvironmentFile=/root/wg/agent/.env
+Environment=USE_GUNICORN=1
+Environment=FLASK_ENV=production
+ExecStart=/root/wp2/agent/venv/bin/python /root/wp2/agent/agent_node.py
+
+Restart=always
+RestartSec=5
+
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+

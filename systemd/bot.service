@@ -1,0 +1,22 @@
+[Unit]
+Description=WireGuard Panel – Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+WorkingDirectory=/root/wp2
+EnvironmentFile=-/root/wg/.env
+ExecStart=/root/wg/venv/bin/python /root/wp2/telegram_bot.py
+
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
