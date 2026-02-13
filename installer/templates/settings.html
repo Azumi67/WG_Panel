@@ -1,0 +1,57 @@
+{% extends "layout.html" %}
+{% block body %}
+<div class="card">
+    <div class="title">Settings</div>
+    <div class="small">Everything is editable anytime. These values drive .env + systemd generation.</div>
+    <div class="hr"></div>
+
+    <form method="post" action="{{ url_for('settings_save') }}">
+        <div class="kvs">
+            <div class="k">Install dir</div>
+            <div><input name="install_dir" value="{{ st.install_dir }}"></div>
+            <div class="k">Venv dir</div>
+            <div><input name="venv_dir" value="{{ st.venv_dir }}"></div>
+            <div class="k">Instance dir</div>
+            <div><input name="instance_dir" value="{{ st.instance_dir }}"></div>
+            <div class="k">Env file</div>
+            <div><input name="env_file" value="{{ st.env_file }}"></div>
+
+            <div class="k">Bind</div>
+            <div><input name="bind" value="{{ st.bind }}"></div>
+            <div class="k">Port</div>
+            <div><input name="port" value="{{ st.port }}"></div>
+            <div class="k">Workers</div>
+            <div><input name="workers" value="{{ st.workers }}"></div>
+            <div class="k">Threads</div>
+            <div><input name="threads" value="{{ st.threads }}"></div>
+            <div class="k">Timeout</div>
+            <div><input name="timeout" value="{{ st.timeout }}"></div>
+            <div class="k">Graceful timeout</div>
+            <div><input name="graceful_timeout" value="{{ st.graceful_timeout }}"></div>
+            <div class="k">Loglevel</div>
+            <div><input name="loglevel" value="{{ st.loglevel }}"></div>
+
+            <div class="k">Panel service</div>
+            <div><input name="panel_service" value="{{ st.panel_service }}"></div>
+            <div class="k">Bot service</div>
+            <div><input name="bot_service" value="{{ st.bot_service }}"></div>
+
+            <div class="k">Gunicorn TLS</div>
+            <div>
+                <select name="tls_enabled">
+                    <option value="0" {% if not st.tls_enabled %}selected{% endif %}>Disabled</option>
+                    <option value="1" {% if st.tls_enabled %}selected{% endif %}>Enabled</option>
+                </select>
+            </div>
+
+            <div class="k">TLS certfile</div>
+            <div><input name="tls_certfile" value="{{ st.tls_certfile }}"></div>
+            <div class="k">TLS keyfile</div>
+            <div><input name="tls_keyfile" value="{{ st.tls_keyfile }}"></div>
+        </div>
+
+        <div class="hr"></div>
+        <button class="btn primary" type="submit">Save settings</button>
+    </form>
+</div>
+{% endblock %}
