@@ -1,0 +1,12 @@
+{% extends "layout.html" %}
+{% block body %}
+<div class="card">
+    <div class="title">Installer Log</div>
+    <div class="hr"></div>
+    <div class="log">{{ log_text or "No log yet." }}</div>
+    <div class="hr"></div>
+    <form method="post" action="{{ url_for('do', action='clearlog') }}">
+        <button class="btn warn" type="submit">Clear log</button>
+    </form>
+</div>
+{% endblock %}
