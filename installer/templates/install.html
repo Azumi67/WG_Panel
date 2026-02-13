@@ -1,0 +1,1500 @@
+{% extends "layout.html" %}
+{% block body %}
+
+{# --- defensive defaults so template never 500s even if backend forgets vars --- #}
+{% set ST = st|default({}) %}
+{% set ENVD = envd|default({}) %}
+{% set PS = ps|default({}) %}
+{% set BS = bs|default({}) %}
+{% set TS = ts|default({}) %}
+{% set ADMINS_TXT = admins_txt|default('') %}
+
+<style>
+
+        :root {
+                --i-bg: var(--bg, #0b1020);
+                --i-card: var(--card, rgba(18, 26, 46, .72));
+                --i-card2: rgba(18, 26, 46, .55);
+                --i-brd: rgba(255, 255, 255, .10);
+                --i-brd2: rgba(255, 255, 255, .07);
+                --i-txt: var(--text, rgba(255, 255, 255, .92));
+                --i-mut: rgba(255, 255, 255, .62);
+                --i-good: #38f8b6;
+                --i-warn: #ffd166;
+                --i-bad: #ff5c7a;
+                --i-ac: var(--accent, #56ccff);
+                --i-ac2: #a855f7;
+                --i-shadow: 0 24px 80px rgba(0, 0, 0, .55);
+                --i-radius: 18px;
+                --i-radius2: 14px;
+                --i-gap: 14px;
+        }
+
+        .inst-wrap {
+                position: relative;
+                isolation: isolate;
+                border-radius: calc(var(--i-radius) + 4px);
+                padding: 18px;
+                overflow: hidden;
+                background: linear-gradient(180deg, rgba(255, 255, 255, .03), rgba(255, 255, 255, 0));
+                border: 1px solid var(--i-brd2);
+                box-shadow: var(--i-shadow);
+        }
+
+        .inst-wrap::before,
+        .inst-wrap::after {
+                content: "";
+                position: absolute;
+                inset: -40px;
+                z-index: -1;
+                pointer-events: none;
+                filter: blur(26px);
+                opacity: .55;
+        }
+
+        .inst-wrap::before {
+                background:
+                        radial-gradient(600px 320px at 15% 10%, rgba(86, 204, 255, .33), transparent 60%),
+                        radial-gradient(520px 320px at 85% 25%, rgba(168, 85, 247, .25), transparent 60%),
+                        radial-gradient(520px 340px at 45% 95%, rgba(56, 248, 182, .16), transparent 65%);
+        }
+
+        .inst-wrap::after {
+                opacity: .22;
+                background:
+                        radial-gradient(520px 260px at 60% 20%, rgba(255, 255, 255, .08), transparent 60%),
+                        radial-gradient(520px 260px at 25% 70%, rgba(255, 255, 255, .06), transparent 60%);
+        }
+
+        .inst-head {
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                gap: 14px;
+                margin-bottom: 14px;
+        }
+
+        .inst-title {
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+        }
+
+        .inst-title h1 {
+                margin: 0;
+                font-size: 18px;
+                letter-spacing: .2px;
+                color: var(--i-txt);
+        }
+
+        .inst-title .sub {
+                margin: 0;
+                font-size: 12px;
+                color: var(--i-mut);
+                line-height: 1.4;
+        }
+
+        .inst-chips {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                justify-content: flex-end;
+        }
+
+        .chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                padding: 7px 10px;
+                border-radius: 999px;
+                border: 1px solid var(--i-brd);
+                background: rgba(0, 0, 0, .22);
+                color: rgba(255, 255, 255, .82);
+                font-size: 12px;
+                backdrop-filter: blur(8px);
+        }
+
+        .chip b {
+                font-weight: 700;
+                color: rgba(255, 255, 255, .92);
+        }
+
+        .dot {
+                width: 8px;
+                height: 8px;
+                border-radius: 999px;
+                background: rgba(255, 255, 255, .28);
+                box-shadow: 0 0 0 3px rgba(255, 255, 255, .05);
+        }
+
+        .dot.good {
+                background: var(--i-good);
+                box-shadow: 0 0 0 3px rgba(56, 248, 182, .15);
+        }
+
+        .dot.warn {
+                background: var(--i-warn);
+                box-shadow: 0 0 0 3px rgba(255, 209, 102, .15);
+        }
+
+        .dot.bad {
+                background: var(--i-bad);
+                box-shadow: 0 0 0 3px rgba(255, 92, 122, .15);
+        }
+
+        .tabs {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                padding: 10px;
+                border-radius: var(--i-radius);
+                border: 1px solid var(--i-brd2);
+                background: rgba(0, 0, 0, .18);
+                margin-bottom: 14px;
+        }
+
+        .tabbtn {
+                appearance: none;
+                border: 1px solid var(--i-brd);
+                background: rgba(255, 255, 255, .03);
+                color: rgba(255, 255, 255, .82);
+                border-radius: 14px;
+                padding: 9px 12px;
+                display: inline-flex;
+                gap: 8px;
+                align-items: center;
+                cursor: pointer;
+                transition: transform .06s ease, background .15s ease, border-color .15s ease;
+                font-size: 13px;
+        }
+
+        .tabbtn:active {
+                transform: scale(.99);
+        }
+
+        .tabbtn.active {
+                background: linear-gradient(135deg, rgba(86, 204, 255, .18), rgba(168, 85, 247, .12));
+                border-color: rgba(86, 204, 255, .30);
+                color: rgba(255, 255, 255, .92);
+        }
+
+        .tabpill {
+                font-size: 11px;
+                padding: 4px 8px;
+                border-radius: 999px;
+                border: 1px solid rgba(255, 255, 255, .10);
+                background: rgba(0, 0, 0, .22);
+                color: rgba(255, 255, 255, .72);
+        }
+
+        .inst-grid {
+                display: grid;
+                grid-template-columns: 1.25fr .75fr;
+                gap: var(--i-gap);
+                align-items: start;
+        }
+
+        @media (max-width: 1100px) {
+                .inst-grid {
+                        grid-template-columns: 1fr;
+                }
+
+                .sticky {
+                        position: static !important;
+                        top: auto !important;
+                }
+        }
+
+        .pane {
+                display: none;
+        }
+
+        .pane.active {
+                display: block;
+        }
+
+        .cardx {
+                border-radius: var(--i-radius);
+                border: 1px solid var(--i-brd2);
+                background: linear-gradient(180deg, rgba(255, 255, 255, .03), rgba(255, 255, 255, 0));
+                box-shadow: 0 10px 40px rgba(0, 0, 0, .35);
+                overflow: hidden;
+        }
+
+        .cardx .hd {
+                padding: 14px 14px 10px 14px;
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                gap: 10px;
+                border-bottom: 1px solid rgba(255, 255, 255, .06);
+                background: rgba(0, 0, 0, .12);
+        }
+
+        .cardx .hd .t {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+        }
+
+        .cardx .hd .t .h {
+                font-size: 14px;
+                font-weight: 750;
+                color: rgba(255, 255, 255, .92);
+                margin: 0;
+        }
+
+        .cardx .hd .t .p {
+                font-size: 12px;
+                color: var(--i-mut);
+                margin: 0;
+                line-height: 1.35;
+        }
+
+        .cardx .bd {
+                padding: 14px;
+        }
+
+        .kv {
+                display: grid;
+                grid-template-columns: 220px 1fr;
+                gap: 10px 12px;
+                align-items: center;
+        }
+
+        @media (max-width: 700px) {
+                .kv {
+                        grid-template-columns: 1fr;
+                }
+        }
+
+        .k {
+                color: rgba(255, 255, 255, .70);
+                font-size: 12px;
+        }
+
+        .inp,
+        .sel,
+        .txt {
+                width: 100%;
+                border-radius: 14px;
+                border: 1px solid rgba(255, 255, 255, .10);
+                background: rgba(0, 0, 0, .28);
+                color: rgba(255, 255, 255, .92);
+                padding: 10px 12px;
+                outline: none;
+        }
+
+        .txt {
+                min-height: 110px;
+                resize: vertical;
+        }
+
+        .sel {
+                padding: 10px 12px;
+        }
+
+        .row {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                align-items: center;
+        }
+
+        .hrx {
+                height: 1px;
+                background: rgba(255, 255, 255, .06);
+                margin: 14px 0;
+        }
+
+        .help {
+                font-size: 12px;
+                color: var(--i-mut);
+                line-height: 1.4;
+                margin-top: 6px;
+        }
+
+        .mono {
+                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+                font-size: 12px;
+        }
+
+        .btnx {
+                appearance: none;
+                border: 1px solid rgba(255, 255, 255, .14);
+                background: rgba(255, 255, 255, .04);
+                color: rgba(255, 255, 255, .90);
+                padding: 10px 12px;
+                border-radius: 14px;
+                cursor: pointer;
+                transition: transform .06s ease, background .15s ease, border-color .15s ease;
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 13px;
+        }
+
+        .btnx:active {
+                transform: scale(.99);
+        }
+
+        .btnx.primary {
+                background: linear-gradient(135deg, rgba(86, 204, 255, .20), rgba(168, 85, 247, .14));
+                border-color: rgba(86, 204, 255, .30);
+        }
+
+        .btnx.good {
+                border-color: rgba(56, 248, 182, .35);
+                background: rgba(56, 248, 182, .10);
+        }
+
+        .btnx.warn {
+                border-color: rgba(255, 209, 102, .35);
+                background: rgba(255, 209, 102, .10);
+        }
+
+        .btnx.bad {
+                border-color: rgba(255, 92, 122, .40);
+                background: rgba(255, 92, 122, .10);
+        }
+
+        .sticky {
+                position: sticky;
+                top: 16px;
+        }
+
+        .sumlist {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+        }
+
+        .sumitem {
+                display: flex;
+                align-items: flex-start;
+                justify-content: space-between;
+                gap: 10px;
+                padding: 10px 12px;
+                border-radius: 14px;
+                border: 1px solid rgba(255, 255, 255, .08);
+                background: rgba(0, 0, 0, .18);
+        }
+
+        .sumitem .l {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+        }
+
+        .sumitem .l .a {
+                font-size: 12px;
+                color: rgba(255, 255, 255, .75);
+        }
+
+        .sumitem .l .b {
+                font-size: 12px;
+                color: rgba(255, 255, 255, .92);
+        }
+
+        .sumitem .r {
+                font-size: 12px;
+                color: rgba(255, 255, 255, .70);
+                white-space: nowrap;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+        }
+
+        .logbox {
+                border-radius: 14px;
+                border: 1px solid rgba(255, 255, 255, .10);
+                background: rgba(0, 0, 0, .32);
+                padding: 12px;
+                min-height: 260px;
+                max-height: 460px;
+                overflow: auto;
+                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+                font-size: 12px;
+                line-height: 1.45;
+                color: rgba(255, 255, 255, .86);
+                white-space: pre-wrap;
+        }
+
+        .ln.cmd {
+                color: rgba(86, 204, 255, .90);
+        }
+
+        .ln.exit0 {
+                color: rgba(56, 248, 182, .90);
+        }
+
+        .ln.exit1 {
+                color: rgba(255, 92, 122, .92);
+        }
+
+        .ln.warn {
+                color: rgba(255, 209, 102, .95);
+        }
+
+        .mini {
+                padding: 8px 10px;
+                border-radius: 12px;
+                font-size: 12px;
+        }
+</style>
+
+<div class="inst-wrap">
+
+        <div class="inst-head">
+                <div class="inst-title">
+                        <h1>Installer</h1>
+                        <p class="sub">A guided setup that normal users can follow. Everything stays editable after
+                                install.</p>
+                </div>
+
+                <div class="inst-chips">
+                        <span class="chip" title="Installer state file"><span class="dot"></span><b>State</b> <span
+                                        class="mono">/etc/wg-panel/installer.json</span></span>
+                        <span class="chip" title="Installer log file"><span class="dot"></span><b>Log</b> <span
+                                        class="mono">/etc/wg-panel/installer.log</span></span>
+                </div>
+        </div>
+
+        <div class="tabs" role="tablist" aria-label="Installer tabs">
+                <button class="tabbtn active" data-tab="quick" type="button">Quick Start <span
+                                class="tabpill">wizard</span></button>
+                <button class="tabbtn" data-tab="system" type="button">System <span class="tabpill">paths &
+                                gunicorn</span></button>
+                <button class="tabbtn" data-tab="env" type="button">.env <span class="tabpill">minimal</span></button>
+                <button class="tabbtn" data-tab="wg" type="button">WireGuard <span
+                                class="tabpill">inputs</span></button>
+                <button class="tabbtn" data-tab="json" type="button">JSON <span
+                                class="tabpill">panel/bot</span></button>
+                <button class="tabbtn" data-tab="steps" type="button">Steps <span
+                                class="tabpill">separate</span></button>
+                <button class="tabbtn" data-tab="activity" type="button">Activity <span
+                                class="tabpill">live</span></button>
+        </div>
+
+        <div class="inst-grid">
+
+                <!-- LEFT: panes -->
+                <div>
+
+                        <!-- QUICK START -->
+                        <div class="pane active" id="pane-quick">
+                                <div class="cardx">
+                                        <div class="hd">
+                                                <div class="t">
+                                                        <p class="h">Normal-user flow</p>
+                                                        <p class="p">If you don’t know what each item means: do these in
+                                                                order. You can come back later and edit everything.</p>
+                                                </div>
+                                        </div>
+                                        <div class="bd">
+                                                <div class="row">
+                                                        <form method="post" action="{{ url_for('do', action='all') }}">
+                                                                <button class="btnx primary" type="submit">Install
+                                                                        Everything (one-click)</button>
+                                                        </form>
+                                                        <form method="post"
+                                                                action="{{ url_for('do', action='restart') }}">
+                                                                <button class="btnx good" type="submit">Restart
+                                                                        Services</button>
+                                                        </form>
+                                                        <form method="post"
+                                                                action="{{ url_for('do', action='clearlog') }}">
+                                                                <button class="btnx warn" type="submit">Clear Installer
+                                                                        Log</button>
+                                                        </form>
+                                                </div>
+
+                                                <div class="hrx"></div>
+
+                                                <div class="cardx"
+                                                        style="background: rgba(0,0,0,.10); border-color: rgba(255,255,255,.06);">
+                                                        <div class="bd">
+                                                                <div class="kv">
+                                                                        <div class="k">Step 1</div>
+                                                                        <div><span class="mono">System → confirm paths,
+                                                                                        port, services</span></div>
+                                                                        <div class="k">Step 2</div>
+                                                                        <div><span class="mono">.env → generate keys +
+                                                                                        API_KEY</span></div>
+                                                                        <div class="k">Step 3</div>
+                                                                        <div><span class="mono">WireGuard → set conf
+                                                                                        path + default interface</span>
+                                                                        </div>
+                                                                        <div class="k">Step 4</div>
+                                                                        <div><span class="mono">JSON →
+                                                                                        TLS/backup/telegram
+                                                                                        inputs</span></div>
+                                                                        <div class="k">Step 5</div>
+                                                                        <div><span class="mono">Steps → run each install
+                                                                                        step (or one-click)</span></div>
+                                                                </div>
+                                                                <div class="help">Tip: If you see 500 here, it’s almost
+                                                                        always a missing template variable. Patch
+                                                                        backend (below).</div>
+                                                        </div>
+                                                </div>
+                                        </div>
+                                </div>
+                        </div>
+
+                        <!-- SYSTEM -->
+                        <div class="pane" id="pane-system">
+                                <div class="cardx">
+                                        <div class="hd">
+                                                <div class="t">
+                                                        <p class="h">System parameters</p>
+                                                        <p class="p">Paths, Gunicorn, bind/port, service names. Saved to
+                                                                <span class="mono">/etc/wg-panel/installer.json</span>.
+                                                        </p>
+                                                </div>
+                                        </div>
+                                        <div class="bd">
+                                                <form method="post" action="{{ url_for('install_params_apply') }}">
+                                                        <div class="kv">
+                                                                <div class="k">Install dir</div>
+                                                                <div><input class="inp" name="install_dir"
+                                                                                value="{{ ST.get('install_dir','') }}">
+                                                                </div>
+
+                                                                <div class="k">Venv dir</div>
+                                                                <div><input class="inp" name="venv_dir"
+                                                                                value="{{ ST.get('venv_dir','venv') }}">
+                                                                </div>
+
+                                                                <div class="k">Instance dir</div>
+                                                                <div><input class="inp" name="instance_dir"
+                                                                                value="{{ ST.get('instance_dir','instance') }}">
+                                                                </div>
+
+                                                                <div class="k">Env file</div>
+                                                                <div><input class="inp" name="env_file"
+                                                                                value="{{ ST.get('env_file','.env') }}">
+                                                                </div>
+
+                                                                <div class="k">Bind</div>
+                                                                <div><input class="inp" name="bind"
+                                                                                value="{{ ST.get('bind','0.0.0.0') }}">
+                                                                </div>
+
+                                                                <div class="k">Port</div>
+                                                                <div><input class="inp" name="port" inputmode="numeric"
+                                                                                value="{{ ST.get('port',8000) }}"></div>
+
+                                                                <div class="k">Workers</div>
+                                                                <div><input class="inp" name="workers"
+                                                                                inputmode="numeric"
+                                                                                value="{{ ST.get('workers',2) }}"></div>
+
+                                                                <div class="k">Threads</div>
+                                                                <div><input class="inp" name="threads"
+                                                                                inputmode="numeric"
+                                                                                value="{{ ST.get('threads',4) }}"></div>
+
+                                                                <div class="k">Timeout</div>
+                                                                <div><input class="inp" name="timeout"
+                                                                                inputmode="numeric"
+                                                                                value="{{ ST.get('timeout',60) }}">
+                                                                </div>
+
+                                                                <div class="k">Graceful timeout</div>
+                                                                <div><input class="inp" name="graceful_timeout"
+                                                                                inputmode="numeric"
+                                                                                value="{{ ST.get('graceful_timeout',30) }}">
+                                                                </div>
+
+                                                                <div class="k">Log level</div>
+                                                                <div><input class="inp" name="loglevel"
+                                                                                value="{{ ST.get('loglevel','info') }}">
+                                                                </div>
+
+                                                                <div class="k">Panel service</div>
+                                                                <div><input class="inp" name="panel_service"
+                                                                                value="{{ ST.get('panel_service','wg-panel') }}">
+                                                                </div>
+
+                                                                <div class="k">Bot service</div>
+                                                                <div><input class="inp" name="bot_service"
+                                                                                value="{{ ST.get('bot_service','wg-panel-bot') }}">
+                                                                </div>
+
+                                                                <div class="k">Gunicorn TLS</div>
+                                                                <div>
+                                                                        <select class="sel" name="tls_enabled">
+                                                                                <option value="0" {% if not
+                                                                                        ST.get('tls_enabled',False)
+                                                                                        %}selected{% endif %}>Disabled
+                                                                                </option>
+                                                                                <option value="1" {% if
+                                                                                        ST.get('tls_enabled',False)
+                                                                                        %}selected{% endif %}>Enabled
+                                                                                </option>
+                                                                        </select>
+                                                                </div>
+
+                                                                <div class="k">TLS certfile</div>
+                                                                <div><input class="inp" name="tls_certfile"
+                                                                                value="{{ ST.get('tls_certfile','') }}">
+                                                                </div>
+
+                                                                <div class="k">TLS keyfile</div>
+                                                                <div><input class="inp" name="tls_keyfile"
+                                                                                value="{{ ST.get('tls_keyfile','') }}">
+                                                                </div>
+                                                        </div>
+
+                                                        <div class="hrx"></div>
+                                                        <button class="btnx primary" type="submit">Save System
+                                                                Parameters</button>
+                                                        <div class="help">If you change bind/port/service names, run
+                                                                <span class="mono">Steps → systemd</span> then restart.
+                                                        </div>
+                                                </form>
+                                        </div>
+                                </div>
+                        </div>
+
+                        <!-- ENV -->
+                        <div class="pane" id="pane-env">
+                                <div class="cardx">
+                                        <div class="hd">
+                                                <div class="t">
+                                                        <p class="h">.env (minimal)</p>
+                                                        <p class="p">Only what your project actually uses (keys + API +
+                                                                DB + prod toggles + WireGuard path).</p>
+                                                </div>
+                                        </div>
+                                        <div class="bd">
+                                                <form method="post" action="{{ url_for('install_env_apply') }}"
+                                                        id="envForm">
+                                                        <div class="kv">
+
+                                                                <div class="k">FLASK_SECRET_KEY</div>
+                                                                <div class="row" style="flex-wrap:nowrap">
+                                                                        <input class="inp mono" name="FLASK_SECRET_KEY"
+                                                                                id="FLASK_SECRET_KEY"
+                                                                                value="{{ ENVD.get('FLASK_SECRET_KEY','') }}">
+                                                                        <button class="btnx mini" type="button"
+                                                                                data-gen="flask_secret"
+                                                                                data-target="FLASK_SECRET_KEY">Generate</button>
+                                                                </div>
+
+                                                                <div class="k">FERNET_KEY</div>
+                                                                <div class="row" style="flex-wrap:nowrap">
+                                                                        <input class="inp mono" name="FERNET_KEY"
+                                                                                id="FERNET_KEY"
+                                                                                value="{{ ENVD.get('FERNET_KEY','') }}">
+                                                                        <button class="btnx mini" type="button"
+                                                                                data-gen="fernet"
+                                                                                data-target="FERNET_KEY">Generate</button>
+                                                                </div>
+
+                                                                <div class="k">API_KEY</div>
+                                                                <div class="row" style="flex-wrap:nowrap">
+                                                                        <input class="inp mono" name="API_KEY"
+                                                                                id="API_KEY"
+                                                                                value="{{ ENVD.get('API_KEY','') }}">
+                                                                        <button class="btnx mini" type="button"
+                                                                                data-gen="api_key"
+                                                                                data-target="API_KEY">Generate</button>
+                                                                </div>
+
+                                                                <div class="k">DATABASE_URL</div>
+                                                                <div><input class="inp mono" name="DATABASE_URL"
+                                                                                value="{{ ENVD.get('DATABASE_URL','sqlite:///instance/wg_panel.db') }}">
+                                                                </div>
+
+                                                                <div class="k">LOG_LEVEL</div>
+                                                                <div><input class="inp" name="LOG_LEVEL"
+                                                                                value="{{ ENVD.get('LOG_LEVEL','INFO') }}">
+                                                                </div>
+
+                                                                <div class="k">SECURE_COOKIES</div>
+                                                                <div>
+                                                                        <select class="sel" name="SECURE_COOKIES">
+                                                                                <option value="1" {% if
+                                                                                        ENVD.get('SECURE_COOKIES','1')=='1'
+                                                                                        %}selected{% endif %}>1
+                                                                                        (prod/https)</option>
+                                                                                <option value="0" {% if
+                                                                                        ENVD.get('SECURE_COOKIES','1')=='0'
+                                                                                        %}selected{% endif %}>0
+                                                                                        (dev/http)</option>
+                                                                        </select>
+                                                                </div>
+
+                                                                <div class="k">WIREGUARD_CONF_PATH</div>
+                                                                <div><input class="inp mono" name="WIREGUARD_CONF_PATH"
+                                                                                value="{{ ENVD.get('WIREGUARD_CONF_PATH','/etc/wireguard') }}">
+                                                                </div>
+
+                                                                <div class="k">SETUP_TOKEN</div>
+                                                                <div class="row" style="flex-wrap:nowrap">
+                                                                        <input class="inp mono" name="SETUP_TOKEN"
+                                                                                id="SETUP_TOKEN"
+                                                                                value="{{ ENVD.get('SETUP_TOKEN','') }}">
+                                                                        <button class="btnx mini" type="button"
+                                                                                data-gen="setup_token"
+                                                                                data-target="SETUP_TOKEN">Generate</button>
+                                                                </div>
+
+                                                                <div class="k">TG_HEARTBEAT_SEC</div>
+                                                                <div><input class="inp mono" name="TG_HEARTBEAT_SEC"
+                                                                                value="{{ ENVD.get('TG_HEARTBEAT_SEC','60') }}">
+                                                                </div>
+                                                        </div>
+
+                                                        <div class="hrx"></div>
+                                                        <button class="btnx primary" type="submit">Save .env</button>
+                                                        <div class="help">This writes/updates your <span class="mono">{{
+                                                                        ST.get('env_file','.env') }}</span> inside
+                                                                install dir.</div>
+                                                </form>
+                                        </div>
+                                </div>
+                        </div>
+
+                        <!-- WIREGUARD -->
+                        <div class="pane" id="pane-wg">
+                                <div class="cardx">
+                                        <div class="hd">
+                                                <div class="t">
+                                                        <p class="h">WireGuard inputs</p>
+                                                        <p class="p">Set where configs live and pick a default
+                                                                interface. Detected .conf files show automatically.</p>
+                                                </div>
+                                        </div>
+                                        <div class="bd">
+                                                <form method="post" action="{{ url_for('install_wg_apply') }}">
+                                                        <div class="kv">
+                                                                <div class="k">Config path</div>
+                                                                <div><input class="inp mono" name="wg_conf_path"
+                                                                                id="wg_conf_path"
+                                                                                value="{{ ST.get('wg_conf_path','/etc/wireguard') }}">
+                                                                </div>
+
+                                                                <div class="k">Default interface</div>
+                                                                <div>
+                                                                        <div class="row">
+                                                                                <select class="sel"
+                                                                                        name="wg_default_iface"
+                                                                                        id="wg_default_iface"
+                                                                                        style="flex:1">
+                                                                                        <option value="">(none)</option>
+                                                                                </select>
+                                                                                <button class="btnx mini" type="button"
+                                                                                        id="btnWgRefresh">Refresh</button>
+                                                                        </div>
+                                                                        <div class="help" id="wgHelp">Detected
+                                                                                interfaces will appear here.</div>
+                                                                </div>
+                                                        </div>
+
+                                                        <div class="hrx"></div>
+                                                        <button class="btnx primary" type="submit">Save
+                                                                WireGuard</button>
+                                                        <div class="help">Also mirrors <span
+                                                                        class="mono">WIREGUARD_CONF_PATH</span> into
+                                                                your .env.</div>
+                                                </form>
+                                        </div>
+                                </div>
+                        </div>
+
+                        <!-- JSON -->
+                        <div class="pane" id="pane-json">
+                                <div class="cardx">
+                                        <div class="hd">
+                                                <div class="t">
+                                                        <p class="h">JSON inputs (panel + bot)</p>
+                                                        <p class="p">These are the real settings your project uses
+                                                                (mostly JSON, not env).</p>
+                                                </div>
+                                        </div>
+                                        <div class="bd">
+                                                <form method="post" action="{{ url_for('install_json_apply') }}">
+                                                        <div class="cardx"
+                                                                style="background: rgba(0,0,0,.10); border-color: rgba(255,255,255,.06);">
+                                                                <div class="bd">
+                                                                        <p class="h" style="margin:0 0 8px 0;">
+                                                                                panel_settings.json</p>
+
+                                                                        <div class="kv">
+                                                                                <div class="k">TLS enabled</div>
+                                                                                <div>
+                                                                                        <select class="sel"
+                                                                                                name="ps_tls_enabled">
+                                                                                                <option value="0" {% if
+                                                                                                        not
+                                                                                                        PS.get('tls_enabled',False)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>
+                                                                                                        Disabled
+                                                                                                </option>
+                                                                                                <option value="1" {% if
+                                                                                                        PS.get('tls_enabled',False)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>Enabled
+                                                                                                </option>
+                                                                                        </select>
+                                                                                </div>
+
+                                                                                <div class="k">Domain</div>
+                                                                                <div><input class="inp" name="ps_domain"
+                                                                                                value="{{ PS.get('domain','') }}">
+                                                                                </div>
+
+                                                                                <div class="k">Force HTTPS redirect
+                                                                                </div>
+                                                                                <div>
+                                                                                        <select class="sel"
+                                                                                                name="ps_force_https">
+                                                                                                <option value="0" {% if
+                                                                                                        not
+                                                                                                        PS.get('force_https_redirect',False)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>No
+                                                                                                </option>
+                                                                                                <option value="1" {% if
+                                                                                                        PS.get('force_https_redirect',False)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>Yes
+                                                                                                </option>
+                                                                                        </select>
+                                                                                </div>
+
+                                                                                <div class="k">HSTS</div>
+                                                                                <div>
+                                                                                        <select class="sel"
+                                                                                                name="ps_hsts">
+                                                                                                <option value="0" {% if
+                                                                                                        not
+                                                                                                        PS.get('hsts',False)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>Off
+                                                                                                </option>
+                                                                                                <option value="1" {% if
+                                                                                                        PS.get('hsts',False)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>On
+                                                                                                </option>
+                                                                                        </select>
+                                                                                </div>
+
+                                                                                <div class="k">HTTPS port</div>
+                                                                                <div><input class="inp mono"
+                                                                                                name="ps_https_port"
+                                                                                                value="{{ PS.get('https_port',443) }}">
+                                                                                </div>
+
+                                                                                <div class="k">TLS cert path</div>
+                                                                                <div><input class="inp mono"
+                                                                                                name="ps_cert"
+                                                                                                value="{{ PS.get('tls_cert_path','') }}">
+                                                                                </div>
+
+                                                                                <div class="k">TLS key path</div>
+                                                                                <div><input class="inp mono"
+                                                                                                name="ps_key"
+                                                                                                value="{{ PS.get('tls_key_path','') }}">
+                                                                                </div>
+                                                                        </div>
+                                                                </div>
+                                                        </div>
+
+                                                        <div class="hrx"></div>
+
+                                                        <div class="cardx"
+                                                                style="background: rgba(0,0,0,.10); border-color: rgba(255,255,255,.06);">
+                                                                <div class="bd">
+                                                                        <p class="h" style="margin:0 0 8px 0;">
+                                                                                backup_schedule.json</p>
+                                                                        <div class="kv">
+                                                                                <div class="k">Enabled</div>
+                                                                                <div>
+                                                                                        <select class="sel"
+                                                                                                name="bs_enabled">
+                                                                                                <option value="0" {% if
+                                                                                                        not
+                                                                                                        BS.get('enabled',False)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>No
+                                                                                                </option>
+                                                                                                <option value="1" {% if
+                                                                                                        BS.get('enabled',False)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>Yes
+                                                                                                </option>
+                                                                                        </select>
+                                                                                </div>
+
+                                                                                <div class="k">Frequency</div>
+                                                                                <div>
+                                                                                        <select class="sel"
+                                                                                                name="bs_freq">
+                                                                                                {% set f =
+                                                                                                BS.get('freq','daily')
+                                                                                                %}
+                                                                                                <option value="daily" {%
+                                                                                                        if f=='daily'
+                                                                                                        %}selected{%
+                                                                                                        endif %}>Daily
+                                                                                                </option>
+                                                                                                <option value="weekly"
+                                                                                                        {% if
+                                                                                                        f=='weekly'
+                                                                                                        %}selected{%
+                                                                                                        endif %}>Weekly
+                                                                                                </option>
+                                                                                                <option value="monthly"
+                                                                                                        {% if
+                                                                                                        f=='monthly'
+                                                                                                        %}selected{%
+                                                                                                        endif %}>Monthly
+                                                                                                </option>
+                                                                                        </select>
+                                                                                </div>
+
+                                                                                <div class="k">Time</div>
+                                                                                <div><input class="inp mono"
+                                                                                                name="bs_time"
+                                                                                                value="{{ BS.get('time','03:00') }}">
+                                                                                </div>
+
+                                                                                <div class="k">Timezone</div>
+                                                                                <div><input class="inp" name="bs_tz"
+                                                                                                value="{{ BS.get('timezone','UTC') }}">
+                                                                                </div>
+
+                                                                                <div class="k">Keep last N</div>
+                                                                                <div><input class="inp mono"
+                                                                                                name="bs_keep"
+                                                                                                value="{{ BS.get('keep',7) }}">
+                                                                                </div>
+
+                                                                                <div class="k">Include WireGuard</div>
+                                                                                <div>
+                                                                                        <select class="sel"
+                                                                                                name="bs_include_wg">
+                                                                                                <option value="1" {% if
+                                                                                                        BS.get('include_wg',True)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>Yes
+                                                                                                </option>
+                                                                                                <option value="0" {% if
+                                                                                                        not
+                                                                                                        BS.get('include_wg',True)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>No
+                                                                                                </option>
+                                                                                        </select>
+                                                                                </div>
+
+                                                                                <div class="k">Send to Telegram</div>
+                                                                                <div>
+                                                                                        <select class="sel"
+                                                                                                name="bs_send_tg">
+                                                                                                <option value="0" {% if
+                                                                                                        not
+                                                                                                        BS.get('send_to_telegram',False)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>No
+                                                                                                </option>
+                                                                                                <option value="1" {% if
+                                                                                                        BS.get('send_to_telegram',False)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>Yes
+                                                                                                </option>
+                                                                                        </select>
+                                                                                </div>
+                                                                        </div>
+                                                                </div>
+                                                        </div>
+
+                                                        <div class="hrx"></div>
+
+                                                        <div class="cardx"
+                                                                style="background: rgba(0,0,0,.10); border-color: rgba(255,255,255,.06);">
+                                                                <div class="bd">
+                                                                        <p class="h" style="margin:0 0 8px 0;">
+                                                                                telegram_settings.json +
+                                                                                telegram_admins.json</p>
+                                                                        <div class="kv">
+                                                                                <div class="k">Bot enabled</div>
+                                                                                <div>
+                                                                                        <select class="sel"
+                                                                                                name="tg_enabled">
+                                                                                                <option value="0" {% if
+                                                                                                        not
+                                                                                                        TS.get('enabled',False)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>No
+                                                                                                </option>
+                                                                                                <option value="1" {% if
+                                                                                                        TS.get('enabled',False)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>Yes
+                                                                                                </option>
+                                                                                        </select>
+                                                                                </div>
+
+                                                                                <div class="k">Bot token</div>
+                                                                                <div><input class="inp mono"
+                                                                                                name="tg_token"
+                                                                                                value="{{ TS.get('bot_token','') }}">
+                                                                                </div>
+
+                                                                                <div class="k">Notify: app down</div>
+                                                                                <div>
+                                                                                        <select class="sel"
+                                                                                                name="tg_app_down">
+                                                                                                {% set n =
+                                                                                                (TS.get('notify',{}) or
+                                                                                                {}) %}
+                                                                                                <option value="1" {% if
+                                                                                                        n.get('app_down',True)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>Yes
+                                                                                                </option>
+                                                                                                <option value="0" {% if
+                                                                                                        not
+                                                                                                        n.get('app_down',True)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>No
+                                                                                                </option>
+                                                                                        </select>
+                                                                                </div>
+
+                                                                                <div class="k">Notify: iface down</div>
+                                                                                <div>
+                                                                                        <select class="sel"
+                                                                                                name="tg_iface_down">
+                                                                                                {% set n2 =
+                                                                                                (TS.get('notify',{}) or
+                                                                                                {}) %}
+                                                                                                <option value="1" {% if
+                                                                                                        n2.get('iface_down',True)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>Yes
+                                                                                                </option>
+                                                                                                <option value="0" {% if
+                                                                                                        not
+                                                                                                        n2.get('iface_down',True)
+                                                                                                        %}selected{%
+                                                                                                        endif %}>No
+                                                                                                </option>
+                                                                                        </select>
+                                                                                </div>
+
+                                                                                <div class="k">Admin IDs</div>
+                                                                                <div>
+                                                                                        <textarea class="txt mono"
+                                                                                                name="tg_admins"
+                                                                                                placeholder="123456789, 987654321">{{ ADMINS_TXT }}</textarea>
+                                                                                        <div class="help">Comma or
+                                                                                                newline separated.</div>
+                                                                                </div>
+                                                                        </div>
+                                                                </div>
+                                                        </div>
+
+                                                        <div class="hrx"></div>
+                                                        <button class="btnx primary" type="submit">Save JSON</button>
+                                                        <div class="help">Writes to your instance folder (panel + bot
+                                                                share these files).</div>
+                                                </form>
+                                        </div>
+                                </div>
+                        </div>
+
+                        <!-- STEPS -->
+                        <div class="pane" id="pane-steps">
+                                <div class="cardx">
+                                        <div class="hd">
+                                                <div class="t">
+                                                        <p class="h">Run install steps separately</p>
+                                                        <p class="p">Use this if you want full control. Buttons show
+                                                                output in Activity.</p>
+                                                </div>
+                                        </div>
+                                        <div class="bd">
+                                                <div class="row">
+                                                        <form method="post" action="{{ url_for('do', action='deps') }}">
+                                                                <button class="btnx" type="submit">1) Deps</button>
+                                                        </form>
+                                                        <form method="post" action="{{ url_for('do', action='venv') }}">
+                                                                <button class="btnx" type="submit">2) Venv +
+                                                                        requirements</button></form>
+                                                        <form method="post" action="{{ url_for('do', action='env') }}">
+                                                                <button class="btnx" type="submit">3) Ensure
+                                                                        .env</button></form>
+                                                        <form method="post"
+                                                                action="{{ url_for('do', action='botenv') }}"><button
+                                                                        class="btnx" type="submit">4) Bot env
+                                                                        sync</button></form>
+                                                        <form method="post" action="{{ url_for('do', action='json') }}">
+                                                                <button class="btnx" type="submit">5) Ensure
+                                                                        JSON</button></form>
+                                                        <form method="post" action="{{ url_for('do', action='db') }}">
+                                                                <button class="btnx" type="submit">6) DB init</button>
+                                                        </form>
+                                                        <form method="post"
+                                                                action="{{ url_for('do', action='systemd') }}"><button
+                                                                        class="btnx" type="submit">7) systemd</button>
+                                                        </form>
+                                                        <form method="post" action="{{ url_for('do', action='cli') }}">
+                                                                <button class="btnx good" type="submit">8) Install
+                                                                        wgpanel CLI</button></form>
+                                                </div>
+
+                                                <div class="hrx"></div>
+
+                                                <div class="row">
+                                                        <form method="post"
+                                                                action="{{ url_for('do', action='start') }}"><button
+                                                                        class="btnx good" type="submit">Start</button>
+                                                        </form>
+                                                        <form method="post" action="{{ url_for('do', action='stop') }}">
+                                                                <button class="btnx warn" type="submit">Stop</button>
+                                                        </form>
+                                                        <form method="post"
+                                                                action="{{ url_for('do', action='restart') }}"><button
+                                                                        class="btnx primary"
+                                                                        type="submit">Restart</button></form>
+                                                </div>
+
+                                                <div class="help">“wgpanel CLI” is for power users; normal users can
+                                                        ignore it and use the panel UI.</div>
+                                        </div>
+                                </div>
+                        </div>
+
+                        <!-- ACTIVITY -->
+                        <div class="pane" id="pane-activity">
+                                <div class="cardx">
+                                        <div class="hd">
+                                                <div class="t">
+                                                        <p class="h">Live activity</p>
+                                                        <p class="p">Installer output (polls <span
+                                                                        class="mono">/api/log-stream</span>). Use Search
+                                                                + Pause.</p>
+                                                </div>
+                                                <div class="row">
+                                                        <input class="inp mono" id="logSearch" placeholder="Search…"
+                                                                style="max-width: 240px">
+                                                </div>
+                                        </div>
+                                        <div class="bd">
+                                                <div class="logbox" id="liveLog">Loading…</div>
+                                                <div class="hrx"></div>
+                                                <div class="row">
+                                                        <button class="btnx warn" type="button"
+                                                                id="btnPause">Pause</button>
+                                                        <button class="btnx" type="button" id="btnFollow">Follow:
+                                                                ON</button>
+                                                        <a class="btnx"
+                                                                href="{{ url_for('api_log_download') }}">Download
+                                                                log</a>
+                                                        <form method="post"
+                                                                action="{{ url_for('do', action='clearlog') }}"><button
+                                                                        class="btnx bad" type="submit">Clear
+                                                                        log</button></form>
+                                                </div>
+                                                <div class="help">Tip: if nothing updates, open the “Overview” page and
+                                                        confirm installer service is running.</div>
+                                        </div>
+                                </div>
+                        </div>
+
+                </div>
+
+                <!-- RIGHT: summary -->
+                <div class="sticky">
+                        <div class="cardx">
+                                <div class="hd">
+                                        <div class="t">
+                                                <p class="h">Summary</p>
+                                                <p class="p">Live status from <span class="mono">/api/status</span></p>
+                                        </div>
+                                </div>
+                                <div class="bd">
+                                        <div class="sumlist">
+                                                <div class="sumitem">
+                                                        <div class="l">
+                                                                <div class="a">Install dir</div>
+                                                                <div class="b mono" id="sumInstallDir">{{
+                                                                        ST.get('install_dir','') }}</div>
+                                                        </div>
+                                                        <div class="r"><span class="dot" id="dotProject"></span><span
+                                                                        id="txtProject">Project</span></div>
+                                                </div>
+
+                                                <div class="sumitem">
+                                                        <div class="l">
+                                                                <div class="a">Bind / Port</div>
+                                                                <div class="b mono" id="sumBindPort">{{
+                                                                        ST.get('bind','0.0.0.0') }}:{{
+                                                                        ST.get('port',8000) }}</div>
+                                                        </div>
+                                                        <div class="r"><span class="dot" id="dotPanel"></span><span
+                                                                        id="txtPanel">Panel</span></div>
+                                                </div>
+
+                                                <div class="sumitem">
+                                                        <div class="l">
+                                                                <div class="a">Bot service</div>
+                                                                <div class="b mono" id="sumBot">{{
+                                                                        ST.get('bot_service','wg-panel-bot') }}</div>
+                                                        </div>
+                                                        <div class="r"><span class="dot" id="dotBot"></span><span
+                                                                        id="txtBot">Bot</span></div>
+                                                </div>
+
+                                                <div class="sumitem">
+                                                        <div class="l">
+                                                                <div class="a">WireGuard path</div>
+                                                                <div class="b mono" id="sumWgPath">{{
+                                                                        ENVD.get('WIREGUARD_CONF_PATH','/etc/wireguard')
+                                                                        }}</div>
+                                                        </div>
+                                                        <div class="r"><span class="dot" id="dotWg"></span><span
+                                                                        id="txtWg">WG</span></div>
+                                                </div>
+
+                                                <div class="sumitem">
+                                                        <div class="l">
+                                                                <div class="a">Quick links</div>
+                                                                <div class="b">
+                                                                        <span class="mono">Install → Steps →
+                                                                                Activity</span>
+                                                                </div>
+                                                        </div>
+                                                        <div class="r"><span class="dot good"></span>Ready</div>
+                                                </div>
+                                        </div>
+
+                                        <div class="hrx"></div>
+                                        <div class="help">If “Project” is red: your <span
+                                                        class="mono">install_dir</span> doesn’t contain <span
+                                                        class="mono">app.py</span>, <span
+                                                        class="mono">telegram_bot.py</span>, <span
+                                                        class="mono">requirements.txt</span>.</div>
+                                </div>
+                        </div>
+                </div>
+
+        </div>
+</div>
+
+<script>
+        (function () {
+                // ---------------- Tabs (remember selection) ----------------
+                const buttons = Array.from(document.querySelectorAll(".tabbtn"));
+                const panes = new Map(Array.from(document.querySelectorAll(".pane")).map(p => [p.id.replace("pane-", ""), p]));
+                const storageKey = "installer.activeTab";
+
+                function setTab(name) {
+                        buttons.forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+                        panes.forEach((p, k) => p.classList.toggle("active", k === name));
+                        localStorage.setItem(storageKey, name);
+                }
+
+                buttons.forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+                const remembered = localStorage.getItem(storageKey);
+                if (remembered && panes.has(remembered)) setTab(remembered);
+
+                // ---------------- Generators (env secrets) ----------------
+                async function gen(kind) {
+                        const r = await fetch("/api/gen", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind }) });
+                        const j = await r.json();
+                        return j.value || "";
+                }
+                document.querySelectorAll("[data-gen]").forEach(btn => {
+                        btn.addEventListener("click", async () => {
+                                btn.disabled = true;
+                                try {
+                                        const v = await gen(btn.dataset.gen);
+                                        const el = document.getElementById(btn.dataset.target);
+                                        if (el) el.value = v;
+                                } finally {
+                                        btn.disabled = false;
+                                }
+                        });
+                });
+
+                // ---------------- Status poll (summary + WG list) ----------------
+                const dots = {
+                        project: document.getElementById("dotProject"),
+                        panel: document.getElementById("dotPanel"),
+                        bot: document.getElementById("dotBot"),
+                        wg: document.getElementById("dotWg"),
+                };
+                const txt = {
+                        project: document.getElementById("txtProject"),
+                        panel: document.getElementById("txtPanel"),
+                        bot: document.getElementById("txtBot"),
+                        wg: document.getElementById("txtWg"),
+                };
+
+                function setDot(el, state) {
+                        el.classList.remove("good", "warn", "bad");
+                        if (state === "good") el.classList.add("good");
+                        else if (state === "warn") el.classList.add("warn");
+                        else if (state === "bad") el.classList.add("bad");
+                }
+
+                function activeToState(s) {
+                        // systemctl is-active: active, inactive, failed, unknown...
+                        if (s === "active") return "good";
+                        if (s === "inactive") return "warn";
+                        if (s === "failed") return "bad";
+                        return "warn";
+                }
+
+                const wgSelect = document.getElementById("wg_default_iface");
+                const wgHelp = document.getElementById("wgHelp");
+                const wgPathInput = document.getElementById("wg_conf_path");
+                const btnWgRefresh = document.getElementById("btnWgRefresh");
+
+                function fillWgIfaces(ifaces, selected) {
+                        if (!wgSelect) return;
+                        const keep = selected || wgSelect.dataset.selected || "";
+                        wgSelect.innerHTML = '<option value="">(none)</option>';
+                        (ifaces || []).forEach(i => {
+                                const opt = document.createElement("option");
+                                opt.value = i;
+                                opt.textContent = i;
+                                if (i === keep) opt.selected = true;
+                                wgSelect.appendChild(opt);
+                        });
+                }
+
+                async function pollStatus() {
+                        try {
+                                const r = await fetch("/api/status", { cache: "no-store" });
+                                const j = await r.json();
+
+                                // checks
+                                const c = (j.checks || {});
+                                setDot(dots.project, c.project_ok ? "good" : "bad");
+                                txt.project.textContent = c.project_ok ? "Project OK" : ("Missing: " + (c.missing || []).join(", "));
+
+                                // services
+                                setDot(dots.panel, activeToState(j.panel_active));
+                                txt.panel.textContent = "Panel: " + (j.panel_active || "unknown");
+
+                                setDot(dots.bot, activeToState(j.bot_active));
+                                txt.bot.textContent = "Bot: " + (j.bot_active || "unknown");
+
+                                // wireguard
+                                const wg = j.wg || {};
+                                const ifaces = wg.ifaces || [];
+                                setDot(dots.wg, ifaces.length ? "good" : "warn");
+                                txt.wg.textContent = ifaces.length ? ("Found: " + ifaces.join(", ")) : "No .conf found";
+                                if (wgHelp) {
+                                        wgHelp.textContent = "Detected: " + (ifaces.length ? ifaces.join(", ") : "none") + "   (" + (wg.path || "") + ")";
+                                }
+                                if (wgSelect) {
+                                        // keep currently saved default from server-side ST if any
+                                        wgSelect.dataset.selected = wgSelect.dataset.selected || "{{ ST.get('wg_default_iface','') }}";
+                                        fillWgIfaces(ifaces, wgSelect.dataset.selected);
+                                }
+                        } catch (e) {
+                                // keep UI stable
+                        }
+                }
+
+                if (btnWgRefresh) {
+                        btnWgRefresh.addEventListener("click", async () => {
+                                // let user change path then refresh detection
+                                const p = (wgPathInput && wgPathInput.value) ? wgPathInput.value : "";
+                                // quick hack: reflect into env input box if present
+                                await pollStatus();
+                        });
+                }
+
+                pollStatus();
+                setInterval(pollStatus, 3500);
+
+                // ---------------- Live log stream ----------------
+                const liveLog = document.getElementById("liveLog");
+                const btnPause = document.getElementById("btnPause");
+                const btnFollow = document.getElementById("btnFollow");
+                const logSearch = document.getElementById("logSearch");
+
+                let paused = false;
+                let follow = true;
+                let pos = 0;
+                let cacheLines = [];
+
+                function classifyLine(line) {
+                        const s = line.toLowerCase();
+                        if (s.includes("$ ")) return "cmd";
+                        if (s.includes("exit=0")) return "exit0";
+                        if (s.includes("exit=") && !s.includes("exit=0")) return "exit1";
+                        if (s.includes("error") || s.includes("failed")) return "exit1";
+                        if (s.includes("warn")) return "warn";
+                        return "";
+                }
+
+                function renderLog() {
+                        const q = (logSearch && logSearch.value || "").trim().toLowerCase();
+                        const lines = q ? cacheLines.filter(x => x.toLowerCase().includes(q)) : cacheLines;
+
+                        const html = lines.map(l => {
+                                const cls = classifyLine(l);
+                                const safe = l.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+                                return `<div class="ln ${cls}">${safe}</div>`;
+                        }).join("");
+
+                        liveLog.innerHTML = html || "No output yet.";
+                        if (follow) {
+                                liveLog.scrollTop = liveLog.scrollHeight;
+                        }
+                }
+
+                async function pollLog() {
+                        if (paused) return;
+                        try {
+                                const r = await fetch(`/api/log-stream?pos=${pos}`, { cache: "no-store" });
+                                const j = await r.json();
+                                pos = j.pos || pos;
+                                const lines = j.lines || [];
+                                if (lines.length) {
+                                        cacheLines = cacheLines.concat(lines).slice(-1800); // keep last N
+                                        renderLog();
+                                } else if (cacheLines.length === 0) {
+                                        liveLog.textContent = "Waiting for output…";
+                                }
+                        } catch (e) {
+                                // ignore
+                        }
+                }
+
+                if (btnPause) {
+                        btnPause.addEventListener("click", () => {
+                                paused = !paused;
+                                btnPause.textContent = paused ? "Resume" : "Pause";
+                        });
+                }
+                if (btnFollow) {
+                        btnFollow.addEventListener("click", () => {
+                                follow = !follow;
+                                btnFollow.textContent = follow ? "Follow: ON" : "Follow: OFF";
+                                if (follow) liveLog.scrollTop = liveLog.scrollHeight;
+                        });
+                }
+                if (logSearch) {
+                        logSearch.addEventListener("input", renderLog);
+                }
+
+                pollLog();
+                setInterval(pollLog, 1200);
+        })();
+</script>
+
+{% endblock %}
