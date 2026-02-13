@@ -1,0 +1,82 @@
+{% extends "layout.html" %}
+{% block body %}
+
+<div class="card">
+        <div class="title">Health</div>
+        <div class="row" style="align-items:center; justify-content:space-between">
+                <div class="row" id="healthChips">
+                </div>
+                <button class="btn blue" type="button" id="btnRefresh">Live Refresh</button>
+        </div>
+</div>
+
+<div class="grid" style="margin-top:14px">
+        <div class="card">
+                <div class="title">System Summary</div>
+                <div class="kvs">
+                        <div class="k">Install dir</div>
+                        <div class="v">{{ st.install_dir }}</div>
+                        <div class="k">Panel service</div>
+                        <div class="v"><span class="pill">{{ panel_unit }}</span> <span class="pill" id="panelState">{{
+                                        panel_active }}</span></div>
+                        <div class="k">Bot service</div>
+                        <div class="v"><span class="pill">{{ bot_unit }}</span> <span class="pill" id="botState">{{
+                                        bot_active }}</span></div>
+                        <div class="k">Panel URL</div>
+                        <div class="v">http://&lt;server-ip&gt;:{{ st.port }}</div>
+                </div>
+
+                <div class="hr"></div>
+                <div class="small">Tip: Use Install → “Install Everything” only once; later you can run single steps.
+                </div>
+        </div>
+
+        <div class="card">
+                <div class="title">WireGuard</div>
+                <div class="small">Detected from <code>WIREGUARD_CONF_PATH</code> in .env</div>
+                <div class="hr"></div>
+                <div class="kvs">
+                        <div class="k">Conf path</div>
+                        <div class="v" id="wgPath">—</div>
+                        <div class="k">Interfaces</div>
+                        <div class="v" id="wgIfaces">—</div>
+                </div>
+
+                <div class="hr"></div>
+                <div class="small">You can change this in Install → Env (WIREGUARD_CONF_PATH).</div>
+        </div>
+</div>
+
+<script>
+        async function refreshOverview() {
+                const res = await fetch("/api/status", { cache: "no-store" });
+                const j = await res.json();
+
+                const chips = [];
+                const c = j.checks;
+
+                chips.push(`<span class="pill ${c.project_ok ? "good" : "bad"}">Project ${c.project_ok ? "OK" : "Missing"}</span>`);
+                chips.push(`<span class="pill ${c.env_ok ? "good" : "warn"}">.env ${c.env_ok ? "OK" : "Missing"}</span>`);
+                chips.push(`<span class="pill ${c.venv_ok ? "good" : "warn"}">venv ${c.venv_ok ? "OK" : "Not ready"}</span>`);
+                chips.push(`<span class="pill ${c.json_ok ? "good" : "warn"}">JSON ${c.json_ok ? "OK" : "Not ready"}</span>`);
+
+                const ps = j.panel_active === "active" ? "good" : (j.panel_active === "inactive" ? "warn" : "warn");
+                const bs = j.bot_active === "active" ? "good" : (j.bot_active === "inactive" ? "warn" : "warn");
+                document.getElementById("panelState").className = `pill ${ps}`;
+                document.getElementById("panelState").textContent = j.panel_active;
+                document.getElementById("botState").className = `pill ${bs}`;
+                document.getElementById("botState").textContent = j.bot_active;
+
+                const wg = j.wg || {};
+                document.getElementById("wgPath").textContent = wg.path || "—";
+                document.getElementById("wgIfaces").textContent = (wg.ifaces && wg.ifaces.length) ? wg.ifaces.join(", ") : "None found";
+
+                const health = document.getElementById("healthChips");
+                health.innerHTML = chips.join(" ");
+        }
+
+        document.getElementById("btnRefresh").addEventListener("click", refreshOverview);
+        refreshOverview();
+</script>
+
+{% endblock %}
