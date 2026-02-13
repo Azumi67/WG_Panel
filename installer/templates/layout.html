@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>WG Panel Installer</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/installer.css') }}">
+    <script defer src="{{ url_for('static', filename='js/installer.js') }}"></script>
+</head>
+
+<body>
+    <div class="app">
+        <aside class="sb">
+            <div class="brand">
+                <div class="logo">WG</div>
+                <div>
+                    <div class="t1">Installer</div>
+                    <div class="t2">Panel-style dashboard</div>
+                </div>
+            </div>
+
+            <nav class="nav">
+                <a href="{{ url_for('overview') }}" class="{{ 'active' if active=='overview' else '' }}"><span
+                        class="dot"></span> Overview</a>
+                <a href="{{ url_for('install') }}" class="{{ 'active' if active=='install' else '' }}"><span
+                        class="dot"></span> Install</a>
+                <a href="{{ url_for('settings') }}" class="{{ 'active' if active=='settings' else '' }}"><span
+                        class="dot"></span> Settings</a>
+                <a href="{{ url_for('files') }}" class="{{ 'active' if active=='files' else '' }}"><span
+                        class="dot"></span> Files</a>
+                <a href="{{ url_for('services') }}" class="{{ 'active' if active=='services' else '' }}"><span
+                        class="dot"></span> Services</a>
+                <a href="{{ url_for('cli') }}" class="{{ 'active' if active=='cli' else '' }}"><span class="dot"></span>
+                    CLI</a>
+                <a href="{{ url_for('logs') }}" class="{{ 'active' if active=='logs' else '' }}"><span
+                        class="dot"></span> Logs</a>
+            </nav>
+
+            <div class="foot">
+                <div><b>State:</b> /etc/wg-panel/installer.json</div>
+                <div><b>Log:</b> /etc/wg-panel/installer.log</div>
+            </div>
+        </aside>
+
+        <main class="main">
+            <div class="topbar">
+                <div>
+                    <div class="h1">{{ title }}</div>
+                    <div class="sub">{{ subtitle }}</div>
+                </div>
+                <div class="actions">
+                    <form method="post" action="{{ url_for('do', action='all') }}"><button class="btn primary"
+                            type="submit">Install Everything</button></form>
+                    <form method="post" action="{{ url_for('do', action='restart') }}"><button class="btn blue"
+                            type="submit">Restart</button></form>
+                    <form method="post" action="{{ url_for('do', action='status') }}"><button class="btn"
+                            type="submit">Refresh Status</button></form>
+                </div>
+            </div>
+
+            {% with msgs = get_flashed_messages(with_categories=true) %}
+            {% if msgs %}
+            {% for cat, m in msgs %}
+            <div class="flash {{cat}}">{{ m }}</div>
+            {% endfor %}
+            {% endif %}
+            {% endwith %}
+
+            {% block body %}{% endblock %}
+        </main>
+    </div>
+</body>
+
+</html>
