@@ -1,0 +1,11 @@
+Flask
+Flask-WTF
+Flask-SQLAlchemy
+Flask-Login
+psutil
+requests
+python-dotenv
+ipaddress
+PyMySQL
+qrcode[pil]>=7.4,<8.0
+gunicorn
