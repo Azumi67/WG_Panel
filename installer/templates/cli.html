@@ -1,0 +1,28 @@
+{% extends "layout.html" %}
+{% block body %}
+<div class="grid">
+    <div class="card">
+        <div class="title">Install CLI tool</div>
+        <div class="small">Creates /usr/local/bin/wgpanel</div>
+        <div class="hr"></div>
+        <form method="post" action="{{ url_for('do', action='cli') }}">
+            <button class="btn primary" type="submit">Install / Update wgpanel</button>
+        </form>
+        <div class="hr"></div>
+        <div class="small">
+            Examples:
+            <div class="v">wgpanel status</div>
+            <div class="v">wgpanel wg show</div>
+            <div class="v">wgpanel wg-quick up wg0</div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="title">Why this exists</div>
+        <div class="small">
+            You can manage panel/bot services and run WireGuard commands from terminal using the same configured service
+            names.
+        </div>
+    </div>
+</div>
+{% endblock %}
