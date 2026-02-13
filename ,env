@@ -1,0 +1,14 @@
+# ── REQUIRED ─────────────────────────────────────────────────────────
+FLASK_SECRET_KEY=                
+FERNET_KEY=
+API_KEY=
+DATABASE_URL=sqlite:///instance/wg_panel.db
+
+# ── RECOMMENDED (prod) ───────────────────────────────────────────────
+LOG_LEVEL=INFO                           
+SECURE_COOKIES=0                          # 1 in HTTPS, 0 in dev
+WIREGUARD_CONF_PATH=/etc/wireguard        
+
+# ── OPTIONAL / QUALITY-OF-LIFE ───────────────────────────────────────
+SETUP_TOKEN=                              # if you want to gate /register
+TG_HEARTBEAT_SEC=60                       # bot heartbeat window (default 60)
