@@ -1,0 +1,53 @@
+{% extends "layout.html" %}
+{% block body %}
+<div class="grid">
+    <div class="card">
+        <div class="title">Service Control</div>
+        <div class="row">
+            <form method="post" action="{{ url_for('do', action='start') }}"><button class="btn"
+                    type="submit">Start</button></form>
+            <form method="post" action="{{ url_for('do', action='stop') }}"><button class="btn warn"
+                    type="submit">Stop</button></form>
+            <form method="post" action="{{ url_for('do', action='restart') }}"><button class="btn blue"
+                    type="submit">Restart</button></form>
+            <form method="post" action="{{ url_for('do', action='systemd') }}"><button class="btn"
+                    type="submit">Reinstall Units</button></form>
+        </div>
+
+        <div class="hr"></div>
+        <div class="kvs">
+            <div class="k">Panel</div>
+            <div class="v"><span class="pill">{{ panel_unit }}</span>
+                <span
+                    class="pill {% if panel_active=='active' %}good{% elif panel_active=='inactive' %}warn{% else %}warn{% endif %}">{{
+                    panel_active }}</span>
+            </div>
+            <div class="k">Bot</div>
+            <div class="v"><span class="pill">{{ bot_unit }}</span>
+                <span
+                    class="pill {% if bot_active=='active' %}good{% elif bot_active=='inactive' %}warn{% else %}warn{% endif %}">{{
+                    bot_active }}</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="title">CLI</div>
+        <div class="small">
+            <div class="v">wgpanel restart</div>
+            <div class="v">wgpanel logs panel --follow</div>
+            <div class="v">wgpanel wg show</div>
+        </div>
+    </div>
+</div>
+
+<div class="card" style="margin-top:14px">
+    <div class="title">Recent journal (panel)</div>
+    <div class="log">{{ panel_tail or "No output." }}</div>
+</div>
+
+<div class="card" style="margin-top:14px">
+    <div class="title">Recent journal (bot)</div>
+    <div class="log">{{ bot_tail or "No output." }}</div>
+</div>
+{% endblock %}
