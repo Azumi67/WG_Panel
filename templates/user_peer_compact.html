@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>WG Access — Compact</title>
+
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Regular.woff2') }}" as="font" type="font/woff2"
+        crossorigin>
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-SemiBold.woff2') }}" as="font" type="font/woff2"
+        crossorigin>
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Bold.woff2') }}" as="font" type="font/woff2"
+        crossorigin>
+
+    <link rel="stylesheet" href="/static/css/userlink_compact.css" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}">
+   
+    <script defer src="{{ url_for('static', filename='js/qrcode.min.js', v='1') }}"></script>
+    <script defer src="/static/js/userlink_compact.js"></script>
+</head>
+
+<body class="ulc-body">
+    <div class="ulc-bg"><canvas id="ulc-bg"></canvas></div>
+    <main class="ulc-wrap">
+        <section class="ulc-card ulc-idcard">
+            <div class="ulc-id-main">
+                <div class="ulc-title">
+                    <i class="fas fa-shield-halved"></i>
+                    <span>WireGuard Access</span>
+                </div>
+                <div class="ulc-actions">
+                    <button id="ulc-theme" class="ulc-icon ghost" title="Toggle theme"><i
+                            class="fas fa-moon"></i></button>
+                </div>
+            </div>
+
+            <div class="ulc-grid">
+                <div class="ulc-kv">
+                    <div class="k">Peer</div>
+                    <div class="v" id="ulc-name">—</div>
+                </div>
+                <div class="ulc-kv">
+                    <div class="k">Status</div>
+                    <div class="v"><span id="ulc-status" class="ulc-badge">—</span></div>
+                </div>
+                <div class="ulc-kv">
+                    <div class="k">Address</div>
+                    <div class="v mono" id="ulc-address">—</div>
+                </div>
+                <div class="ulc-kv">
+                    <div class="k">Endpoint</div>
+                    <div class="v mono" id="ulc-endpoint">—</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="ulc-card ulc-gauges">
+            <div class="ulc-gauge">
+                <div class="radial" id="ulc-time-gauge" aria-label="Time remaining" title="Time remaining">
+                    <div class="ring"></div>
+                    <div class="center">
+                        <div class="value" id="ulc-time-left">0d 0h</div>
+                        <div class="label">Time left</div>
+                    </div>
+                </div>
+                <div class="ulc-g-caption">
+                    <i class="fas fa-hourglass-half"></i>
+                    <span id="ulc-exp-sub">Expires —</span>
+                </div>
+            </div>
+
+            <div class="ulc-gauge">
+                <div class="radial" id="ulc-data-gauge" aria-label="Data remaining" title="Data remaining">
+                    <div class="ring"></div>
+                    <div class="center">
+                        <div class="value" id="ulc-data-left">0 MiB</div>
+                        <div class="label">Remaining</div>
+                    </div>
+                </div>
+                <div class="ulc-g-caption">
+                    <i class="fas fa-database"></i>
+                    <span id="ulc-limit-sub">Limit —</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="ulc-card ulc-config">
+            <div class="ulc-row ulc-row-between">
+                <h4 class="ulc-h"><i class="fas fa-qrcode"></i> Config</h4>
+                <div class="ulc-btns">
+                    <a id="ulc-download" class="ulc-icon solid" download title="Download config"><i
+                            class="fas fa-download"></i></a>
+                    <button id="ulc-copy" class="ulc-icon ghost" title="Copy config"><i
+                            class="fas fa-clipboard"></i></button>
+                </div>
+            </div>
+
+            <div class="ulc-config-grid">
+                <div id="ulc-qr" class="ulc-qr" aria-live="polite" aria-busy="true"></div>
+                <ul class="ulc-tips">
+                    <li><i class="fas fa-mobile-screen"></i> Mobile: scan QR in WireGuard app</li>
+                    <li><i class="fas fa-laptop"></i> Desktop: import the <code>.conf</code> file</li>
+                </ul>
+            </div>
+        </section>
+
+        <section class="ulc-card ulc-contact">
+            <h4 class="ulc-h"><i class="fas fa-user-headset"></i> Support</h4>
+            <div class="ulc-contacts">
+                <!-- 
+        {% if support_telegram %}
+        <a class="ulc-chip" id="ulc-tg" href="https://t.me/{{ support_telegram }}" target="_blank">
+          <i class="fab fa-telegram"></i><span>{{ support_telegram }}</span>
+        </a>
+        {% endif %}
+        -->
+                <div id="ulc-support-slot"></div>
+            </div>
+        </section>
+    </main>
+
+    <div id="toast-container"></div>
+    <script>
+        window.USER_LINK_TOKEN = "{{ token }}";
+        window.SOCIALS = {
+            telegram: "{{ support_telegram|default('', true) }}",
+            whatsapp: "{{ support_whatsapp|default('', true) }}",
+            instagram: "{{ support_instagram|default('', true) }}",
+            phone: "{{ support_phone|default('', true) }}",
+            website: "{{ support_website|default('', true) }}",
+            email: "{{ support_email|default('', true) }}"
+        };
+    </script>
+
+
+</body>
+
+</html>

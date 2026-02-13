@@ -1,0 +1,1778 @@
+{% extends "base.html" %}
+{% block preload_flags %}
+{% set use_poppins_regular = true %}
+{% set use_poppins_semibold = true %}
+{% set use_fa_solid = true %}
+{% set use_fa_brands = true %}
+{% endblock %}
+
+
+{% block content %}
+
+<div class="page-title"><i class="fa-solid fa-gear" aria-hidden="true"></i> Settings</div>
+
+
+<div class="tabs" id="set-tabs" style="margin-bottom:10px">
+    <button class="tab active" data-tab="panel"><i class="fa-solid fa-lock"></i> Panel</button>
+    <button class="tab" data-tab="iface"><i class="fa-solid fa-network-wired"></i> Interface</button>
+    <button class="tab" data-tab="telegram"><i class="fa-brands fa-telegram"></i> Telegram</button>
+    <button class="tab" data-tab="template"><i class="fa-solid fa-palette"></i> Template</button>
+    <button class="tab" data-tab="admin"><i class="fa-solid fa-user-shield"></i> Admin</button>
+
+
+
+</div>
+<style>
+    html:not([data-tab]) #set-panels>.panel {
+        display: none;
+    }
+
+    html:not([data-tab]) #set-panels>.panel[data-panel="panel"] {
+        display: block;
+    }
+</style>
+<div id="set-panels" class="tab-panels">
+
+    <section class="panel active" data-panel="panel" id="panel-tab">
+    
+        <div class="subtabs" id="panel-subtabs" role="tablist" aria-label="Panel subtabs">
+            <button class="subtab active" role="tab" aria-selected="true" aria-controls="subpanel-tls" data-sub="tls">
+                <i class="fa-solid fa-lock"></i> TLS
+            </button>
+            <button class="subtab" role="tab" aria-selected="false" aria-controls="subpanel-runtime" data-sub="runtime">
+                <i class="fa-solid fa-gauge-simple-high"></i> Runtime
+            </button>
+        </div>
+    
+        <div class="subpanel active" id="subpanel-tls" data-subpanel="tls" role="tabpanel" aria-labelledby="TLS">
+            <div class="cards">
+                <div class="card full">
+                    <div class="card-header">
+                        <i class="fa-solid fa-lock"></i><span>Panel Security (TLS)</span>
+                        <span class="card-value">
+                            <span id="cur-scheme" class="badge gray" title="Current scheme">—</span>
+                        </span>
+                    </div>
+    
+                    <div class="card-body">
+                        <div class="section-head inline">
+                            <div class="head-text">
+                                <div class="h5">
+                                    <label class="switch sm">
+                                        <input type="checkbox" id="tls-enabled">
+                                        <span class="slider"></span>
+                                    </label>
+                                    Enable TLS (HTTPS)
+                                </div>
+                                <div class="small-text">
+                                    When enabled, the panel prefers your <b>Domain</b> and uses HTTPS. Suggested peer
+                                    endpoints will also use it.
+                                </div>
+                            </div>
+                        </div>
+    
+                        <div id="tls-advanced" class="fade-wrap" style="display:none">
+
+                            <div class="form-group">
+                                <label for="domain">Domain (e.g., <code>panel.azumi.com</code>)</label>
+                                <input class="input" id="domain" placeholder="panel.example.com">
+                                <div class="small-text">If you terminate TLS on a reverse proxy (nginx/caddy), still set
+                                    this so the app uses it.</div>
+                            </div>
+    
+                            <div class="form-grid-2">
+                                <div class="form-group">
+                                    <label for="https-port">HTTPS port</label>
+                                    <input class="input" id="https-port" type="number" min="1" max="65535"
+                                        inputmode="numeric">
+                                </div>
+    
+                                <div class="form-group">
+                                    <label for="cert-path">TLS cert path</label>
+                                    <input class="input" id="cert-path"
+                                        placeholder="/etc/letsencrypt/live/your.domain/fullchain.pem">
+                                </div>
+    
+                                <div class="form-group">
+                                    <label for="key-path">TLS key path</label>
+                                    <input class="input" id="key-path"
+                                        placeholder="/etc/letsencrypt/live/your.domain/privkey.pem">
+                                </div>
+                            </div>
+                            <div id="rt-managed-note" class="small-text muted" style="display:none;">
+                                HTTPS is enabled; listener port is managed by TLS settings.
+                            </div>
+
+    
+                            <div class="section-head inline">
+                                <div class="head-text">
+                                    <div class="h5">
+                                        <label class="switch sm">
+                                            <input type="checkbox" id="force-https">
+                                            <span class="slider"></span>
+                                        </label>
+                                        Force redirect HTTP → HTTPS
+                                    </div>
+                                </div>
+                            </div>
+    
+                            <div class="section-head inline">
+                                <div class="head-text">
+                                    <div class="h5">
+                                        <label class="switch sm">
+                                            <input type="checkbox" id="hsts">
+                                            <span class="slider"></span>
+                                        </label>
+                                        Enable HSTS
+                                    </div>
+                                    <div class="small-text">1 year, includeSubDomains, preload. Enable only after fully on
+                                        HTTPS.</div>
+                                </div>
+                            </div>
+                        </div>
+    
+                        <button class="btn" id="save-panel"><i class="fa-solid fa-check"></i> Save</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    
+        <div class="subpanel" id="subpanel-runtime" data-subpanel="runtime" role="tabpanel" aria-labelledby="Runtime" hidden>
+            <div class="cards">
+                <div class="card full">
+                    <div class="card-header">
+                        <i class="fa-solid fa-gauge-simple-high"></i><span>Runtime</span>
+                        <span class="card-value rt-actions">
+                            <span class="badge gray">Restart required after save</span>
+                            <span id="rt-managed-pill" class="badge black" style="display:none">Managed in Panel (HTTPS)</span>
+        
+                            <button id="rt-restart" class="btn sm" type="button" style="margin-left:4px">
+                                <i class="fa-solid fa-rotate-right"></i>
+                                Restart now
+                            </button>
+                            <button id="rt-hint" class="hint-chip" type="button" aria-haspopup="true" aria-expanded="false"
+                                title="Show restart command">
+                                <i class="fa-solid fa-circle-info"></i>
+                                <span class="hint-text">How do I restart?</span>
+                            </button>
+                            <div id="rt-pop" class="hint-popover" role="dialog" aria-hidden="true">
+                                <div class="hint-title"><i class="fa-solid fa-terminal"></i> Restart the panel service</div>
+                                <p class="muted" style="margin:6px 0 10px">Run this after saving runtime settings:</p>
+                                <div class="cmd-row">
+                                    <code id="rt-cmd">sudo systemctl restart wg-panel</code>
+                                    <button id="rt-copy" class="btn sm" type="button" title="Copy"><i
+                                            class="fa-regular fa-copy"></i></button>
+                                </div>
+                            </div>
+                        </span>
+                    </div>
+        
+                    <div class="card-body">
+                        <div class="rt-grid">
+                            <div class="form-group">
+                                <label>Bind (host:port)</label>
+                                <input id="rt2-bind" class="input" placeholder="e.g. 0.0.0.0:8000">
+                                <div class="small-text muted">Leave empty to use PORT on 0.0.0.0</div>
+                            </div>
+                    
+                            <div class="form-group">
+                                <label>Threads (per worker)</label>
+                                <input id="rt-threads" type="number" class="input" min="1" max="64" placeholder="4">
+                            </div>
+                    
+                            <div class="form-group">
+                                <label>PORT</label>
+                                <input id="rt2-port" type="number" class="input" min="1024" max="65535" placeholder="8000">
+                            </div>
+                    
+                            <div class="form-group">
+                                <label>Timeout (s)</label>
+                                <input id="rt-timeout" type="number" class="input" min="10" max="600" placeholder="60">
+                            </div>
+                    
+                            <div class="form-group">
+                                <label>Workers</label>
+                                <input id="rt-workers" type="number" class="input" min="0" max="16" placeholder="0 = auto">
+                            </div>
+                    
+                            <div class="form-group">
+                                <label>Graceful Timeout (s)</label>
+                                <input id="rt-gtimeout" type="number" class="input" min="5" max="600" placeholder="30">
+                            </div>
+                    
+                            <div class="form-group rt-empty"></div>
+                    
+                            <div class="form-group">
+                                <label>Log level</label>
+                                <select id="rt-loglevel" class="input">
+                                    <option>debug</option>
+                                    <option selected>info</option>
+                                    <option>warning</option>
+                                    <option>error</option>
+                                    <option>critical</option>
+                                </select>
+                            </div>
+                        </div>
+                    
+                        <div class="form-group">
+                            <label>Application</label>
+                            <div class="chips">
+                                <span class="chip">Uptime: <span id="rt-uptime">—</span></span>
+                                <span class="chip">Mode: <span id="rt-mode">—</span></span>
+                            </div>
+                        </div>
+                    
+                        <div class="savebar">
+                            <button class="btn" id="save-runtime">
+                                <i class="fa-solid fa-floppy-disk"></i> Save runtime
+                            </button>
+                            <span class="muted">Applies on next restart of the panel service.</span>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    
+<style>
+.subtabs {
+display: inline-flex;
+gap: 6px;
+margin: 4px 0 14px;
+padding: 0;
+border: 0;
+background: transparent;
+}
+    
+.subtab {
+border: 1px solid rgba(148, 163, 184, .4); 
+background: #f9fafb;
+padding: 5px 11px;
+border-radius: 999px;
+font-weight: 500;
+font-size: 0.82rem;
+color: var(--muted, #64748b);
+cursor: pointer;
+display: inline-flex;
+align-items: center;
+gap: 6px;
+}
+    
+.subtab i {
+font-size: 0.82rem;
+opacity: .8;
+}
+
+.subtab:hover {
+background: #eef2ff;               
+border-color: #c7d2fe;
+color: #1e293b;
+}
+
+.subtab.active {
+background: #e5f1ff;              
+border-color: #60a5fa;
+color: #1d4ed8;
+}
+    
+.subpanel[hidden] {
+display: none !important;
+}
+    
+.form-grid-2 {
+display: grid;
+grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+gap: 12px;
+margin: 10px 0;
+}
+    
+.hint-chip {
+border: 0;
+background: transparent;
+padding: 6px 10px;
+border-radius: 10px;
+cursor: pointer;
+}
+    
+.hint-chip:hover {
+background: rgba(0, 0, 0, .05);
+}
+
+.rt-actions{
+display:flex;
+align-items:center;
+justify-content:flex-end;
+gap:8px;
+flex-wrap:wrap;      
+min-width:0;
+}
+
+#rt-restart,
+#rt-hint{
+white-space:nowrap;
+}
+
+@media (max-width: 1200px){
+#rt-hint .hint-text{ display:none; }
+#rt-hint{
+padding:6px 8px;
+width:34px;
+justify-content:center;
+}
+}
+
+.hint-popover {
+display: none;
+position: absolute;
+right: 14px;
+margin-top: 8px;
+z-index: 40;
+background: var(--card, #fff);
+border: 1px solid var(--line, #e5e7eb);
+border-radius: 12px;
+padding: 10px 12px;
+box-shadow: 0 10px 28px rgba(0, 0, 0, .12);
+}
+    
+.cmd-row {
+display: flex;
+align-items: center;
+gap: 8px;
+}
+    
+.cmd-row code {
+padding: 6px 8px;
+border: 1px dashed var(--line, #e5e7eb);
+border-radius: 8px;
+}
+    
+.rt-grid {
+display: grid;
+grid-template-columns: 1fr 1fr;
+gap: 12px;
+}
+
+@media (max-width: 900px) {
+.rt-grid {
+grid-template-columns: 1fr;
+}
+}
+.admin-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.4fr);
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.admin-username-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.admin-username-row .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pw-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 1024px) {
+  .admin-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pw-row {
+    grid-template-columns: 1fr;
+  }
+
+  .pw-row button {
+    width: 90%;
+  }
+}
+
+.log-ts { opacity:.85; margin-right:8px; }
+.log-ts { display:inline-block; }
+.log-row .log-ts { font-variant-numeric: tabular-nums; }
+#admin-logs-modal { z-index: 1300; }
+#admin-logs-modal .modal-content { max-width: 1100px; }
+
+#admin-logs-modal .table {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+#admin-logs-modal th,
+#admin-logs-modal td {
+  padding: 8px 10px;
+  vertical-align: top;
+}
+
+#admin-logs-modal td.al-admin,
+#admin-logs-modal td.al-action {
+  white-space: nowrap;
+}
+
+#admin-logs-modal td.al-time .al-ts {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+#admin-logs-modal td.al-time .al-ago {
+  margin-top: 2px;
+  font-size: 11px;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+#admin-logs-modal td.al-details {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+#admin-logs-modal td.al-copy {
+  white-space: nowrap;
+}
+#admin-logs-modal td.al-copy .btn.sm {
+  padding: 6px 8px;
+}
+
+#tg-logs-modal    { z-index: 1200; }
+.modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 100; }
+.modal.open { display: flex; }
+.modal .modal-backdrop { position: absolute; inset: 0; }
+.modal .modal-content { position: relative; z-index: 1; }
+
+.hint-chip{
+  display:inline-flex; align-items:center; gap:6px;
+  background:#eef2ff; color:#111827; border:0; padding:6px 10px;
+  border-radius:10px; cursor:pointer; font-weight:600;
+}
+@media (prefers-color-scheme: dark){
+  .hint-chip{ background:#1f2937; color:#e5e7eb; }
+}
+.hint-chip .hint-text{ font-size:12.5px; }
+
+.hint-popover{
+  position:absolute; right:16px; top:46px; z-index:40;
+  background:var(--card, #fff); color:var(--text, #0f172a);
+  border:1px solid var(--line, #e5e7eb);
+  box-shadow:0 10px 30px rgba(0,0,0,.08); border-radius:12px; padding:12px; width:420px;
+  display:none;
+}
+.hint-title{ font-weight:700; margin-bottom:4px; display:flex; align-items:center; gap:8px; }
+
+.cmd-row{
+  display:flex; align-items:center; gap:8px;
+  background:rgba(15,23,42,.04); border-radius:8px; padding:8px 10px; overflow:auto;
+}
+.cmd-row code{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:13px; }
+.btn.sm{ height:28px; padding:0 10px; border-radius:8px; }
+.tab-panels .panel { display: none; }
+html[data-tab="panel"]    .tab-panels .panel[data-panel="panel"],
+html[data-tab="iface"]    .tab-panels .panel[data-panel="iface"],
+html[data-tab="telegram"] .tab-panels .panel[data-panel="telegram"],
+html[data-tab="template"] .tab-panels .panel[data-panel="template"],
+html[data-tab="admin"]    .tab-panels .panel[data-panel="admin"],
+html[data-tab="app"]      .tab-panels .panel[data-panel="app"] { display: block; }
+
+.ui-modal-backdrop{ background: rgba(0,0,0,.5); } 
+.ui-modal{ box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+.ui-modal{background:var(--card,#fff);color:var(--text,#111);border-radius:14px;min-width:320px;max-width:520px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+.ui-modal header{font-weight:600;margin-bottom:10px}
+.ui-modal footer{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.ui-modal pre{background:var(--chip,#f5f7fb);padding:10px;border-radius:10px;max-height:200px;overflow:auto}
+
+button.ui-btn{padding:8px 12px;border-radius:10px;border:1px solid var(--line,#e5e7eb);background:var(--card,#fff);cursor:pointer}
+button.ui-btn.primary{background:var(--accent,#4f46e5);color:#fff;border-color:transparent}
+
+.card-header i { font-size:16px; margin-right:8px; opacity:.85; }
+.card-header .card-value { display:flex; align-items:center; gap:8px; }
+
+.badge { padding:4px 8px; border-radius:999px; font-weight:700; font-size:12px; }
+.badge.red  { background:#fee2e2; color:#991b1b; }
+.badge.green{ background:#dcfce7; color:#166534; }
+.badge.gray { background:#f3f4f6; color:#374151; }
+
+.form-group > label { font-weight:600; color:#0f172a; margin-bottom:6px; display:block; }
+.input { height:38px; border-radius:10px; }
+.input::placeholder { color:#9aa4b2; }
+
+.btn { height:36px; padding:0 12px; border-radius:10px; font-weight:700; }
+.btn i { margin-right:6px; font-size:14px; }
+.btn.sm { height:32px; padding:0 10px; font-weight:600; }
+
+.tab i,
+.card .acc-bar i,
+.card .btn i { font-size:14px; }
+
+.rt-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px 16px;
+    align-items: flex-start;
+}
+
+.rt-grid .form-group {
+    margin-bottom: 0;
+}
+
+.rt-empty {
+    visibility: hidden;
+}
+
+@media (max-width:900px) {
+    .rt-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.kicker { font-weight:700; font-size:13px; color:#111827; margin:4px 0 8px; }
+
+.pw-row { display:grid; grid-template-columns: 1fr 1fr 1fr auto; gap:8px; }
+@media (max-width: 980px){ .pw-row { grid-template-columns: 1fr; } }
+
+.hr-soft { height:1px; background:var(--line,#e5e7eb); margin:14px 0; opacity:.7; }
+
+.twofa-head {
+  display:flex; align-items:center; justify-content:space-between; gap:10px; margin:2px 0 8px;
+}
+.twofa-actions { display:flex; gap:8px; align-items:center; }
+
+.qr { border-radius:12px; background:#fff; }
+
+.input + .btn i,
+.form-group .btn i { opacity:.9; }
+
+.panel[data-panel="admin"] .card-body { padding-top:14px; }
+
+.savebar{
+  position: sticky;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--card, #fff);
+  border-top: 1px solid var(--line, #e5e7eb);
+  box-shadow: 0 -6px 18px rgba(0,0,0,.05);
+  z-index: 2;
+}
+
+.muted{ opacity:.7; font-size:12px; }
+
+.tpl-preview-dock{
+  margin-top:14px;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  background:#fff;
+  box-shadow:0 10px 28px rgba(0,0,0,.06);
+  overflow:hidden;
+}
+.tpl-preview-dock .dock-header{
+  display:flex; align-items:center; justify-content:space-between;
+  padding:10px 12px;
+  border-bottom:1px dashed #e5e7eb;
+  font-weight:700; font-size:13px;
+}
+#tpl-preview-frame { height: 360px; }
+@media (max-width:1100px){ #tpl-preview-frame{ height:320px; } }
+
+.tpl-icon[title]{ pointer-events:auto; }
+.tpl-icon { 
+  position:relative;
+}
+.tpl-icon[title]::after{ display:none; }
+.tpl-preview-dock .dock-body{
+  overflow: hidden;
+  padding: 12px;              
+}
+
+#tpl-scale-wrap{
+  position: relative;
+  width: 100%;
+  height: 280px; 
+}
+
+#tpl-preview-frame{
+  position: absolute; top:0; left:0;
+  border: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+  background: transparent;
+}
+
+:root .tpl-preview-dock{ background:var(--card,#fff); border-color:var(--line,#e5e7eb); }
+
+.tpl-grid.icons-only {
+  display:grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap:12px;
+}
+
+.tpl-icon {
+  position:relative;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:8px;
+  padding:16px 12px;
+  border:1px solid #e5e7eb;
+  border-radius:14px;
+  background:#fff;
+  cursor:pointer;
+  user-select:none;
+  transition: border-color .15s, box-shadow .15s, transform .08s;
+}
+.tpl-icon:hover { border-color:#cbd5e1; box-shadow:0 6px 20px rgba(0,0,0,.06); }
+.tpl-icon:active { transform: translateY(1px); }
+.tpl-icon input { position:absolute; inset:0; opacity:0; pointer-events:none; }
+.tpl-icon .ico {
+  width:48px; height:48px; border-radius:14px;
+  display:grid; place-items:center;
+  border:1px dashed #e5e7eb; background:#f9fafb;
+  font-size:20px;
+}
+.tpl-icon .lbl { font-weight:700; font-size:13px; }
+.tpl-icon[aria-checked="true"] {
+  border-color:#a7f3d0; background:#ecfdf5;
+  box-shadow:0 6px 24px rgba(16,185,129,.15);
+}
+.tpl-icon[aria-checked="true"] .ico { border-color:#a7f3d0; background:#f0fdf4; }
+
+:root.light .tpl-icon { background:#fff; }
+:root .tpl-hoverbox { background:var(--card, #fff); border-color: var(--line,#e5e7eb); }
+
+.log-modal { padding: 16px 16px 12px; }
+.log-modal__head {
+  display:flex; align-items:center; gap:12px; margin-bottom:10px;
+}
+.log-modal__head > i { font-size:20px; color:#334155; }
+.log-modal__title { display:flex; flex-direction:column; gap:2px; margin-right:auto; }
+.log-modal__title > div { font-weight:700; font-size:14px; }
+.log-modal__title small { color:#64748b; font-weight:500; }
+.log-modal__tools { display:flex; gap:8px; align-items:center; }
+
+.input.sm { height:32px; padding:6px 10px; font-size:13px; margin-left: 25px; }
+.btn { height:32px; padding:0 12px; border-radius:10px; border:1px solid #e5e7eb; background:#111827; color:#fff; font-weight:600; }
+.btn i { margin-right:6px; }
+.btn.ghost { background:#fff; color:#111827; border-color:#e5e7eb; }
+.btn.ghost:hover { background:#f8fafc; }
+.btn:hover { filter:brightness(1.05); }
+.btn.ghost[aria-pressed="true"] {
+  background:#111827;
+  color:#fff;
+  border-color:#111827;
+}
+
+.log-surface {
+  border:1px solid #e5e7eb; border-radius:14px; background:#f8fafc;
+  box-shadow: inset 0 1px 0 rgba(0,0,0,.02);
+}
+.log-pre {
+  margin:0; padding:14px 14px 18px; max-height:56vh; overflow:auto;
+  font: 13px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color:#0f172a; background:
+    linear-gradient(#fff,#fff) padding-box,
+    radial-gradient( farthest-side at 0 0, rgba(15,23,42,.06), transparent 70% ) border-box;
+  border-radius:14px;
+  white-space:pre;  
+}
+.log-pre.is-wrapped { white-space:pre-wrap; word-break:break-word; }
+.log-pre::-webkit-scrollbar { height:12px; width:12px; }
+.log-pre::-webkit-scrollbar-thumb { background:#d1d5db; border-radius:999px; border:3px solid #f8fafc; }
+.log-pre::-webkit-scrollbar-thumb:hover { background:#c0c6cf; }
+.log-pre .hint     { color:#475569; }
+.log-pre .cmd      { color:#0b6bcb; font-weight:700; }
+.log-pre .step     { color:#16a34a; font-weight:700; }
+.log-pre .ts       { color:#64748b; }
+.log-pre mark      { background:#fde68a; border-radius:4px; padding:0 2px; }
+
+.log-line { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+.logbox{
+  max-height:56vh; overflow:auto;
+  background:#f8fafc; color:#111827;
+  border:1px solid #e5e7eb; border-radius:10px;
+  padding:10px;
+  font:12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  white-space:pre-wrap; word-break:break-word;
+}
+
+#iface-logs-modal pre{ background:#f8fafc !important; color:#111827 !important; }
+#iface-logs-modal .log-pre {
+  font-size: 12px;    
+  line-height: 1.4;    
+}
+#iface-logs-modal .log-pre.is-wrapped { white-space: pre-wrap; word-break: break-word; }
+.log-modal__foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+.section-head{
+  display:flex; align-items:center; justify-content:space-between;
+  gap:12px; padding:8px 0;
+  border-top:1px solid #f1f5f9;   
+  margin-top:8px;
+}
+.tg-chips + .section-head{       
+  margin-top:16px;
+}
+
+.section-head .head-text .h5{ font-weight:700; margin:0; color:#111827; }
+.section-head .head-text .small-text{ margin-top:2px; }
+.section-head.toggle-right .toggle-wrap{ order:2; margin-left:12px; }
+.section-head.toggle-left  .toggle-wrap{ order:-1; margin-right:12px; }
+.section-head.inline .head-text .h5{ display:flex; align-items:center; gap:10px; }
+
+.tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    border-bottom: none;
+}
+
+.tab {
+    background: #fff;
+    color: #111827;
+    font-weight: 600;
+    border: 1px solid #e5e7eb;
+    border-radius: 999px;
+    cursor: pointer;
+    padding: 8px 12px;
+    transition: color .15s, background .15s, border-color .15s;
+}
+
+.tab:hover {
+    border-color: #d1d5db;
+}
+
+.tab.active {
+    background: #111827;
+    color: #fff;
+    border-color: #111827;
+    box-shadow: none;
+}
+
+.tab-panels .panel {
+    display: none;
+}
+
+.tab-panels .panel.active {
+    display: block;
+}
+
+.between {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.label-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.label-strong {
+    font-weight: 700;
+}
+
+.switch {
+    position: relative;
+    display: inline-block;
+}
+
+.switch.sm {
+    width: 38px;
+    height: 22px;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.switch .slider {
+    position: absolute;
+    inset: 0;
+    background: #e5e7eb;
+    border-radius: 999px;
+    transition: background .18s, box-shadow .18s;
+    cursor: pointer;
+}
+
+.switch .slider:before {
+    content: "";
+    position: absolute;
+    height: 18px;
+    width: 18px;
+    left: 2px;
+    top: 2px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .15);
+    transition: transform .18s;
+}
+
+.switch input:checked+.slider {
+    background: #111827;
+}
+
+.switch input:checked+.slider:before {
+    transform: translateX(16px);
+}
+
+.switch input:focus-visible+.slider,
+.tab:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(17, 24, 39, .15);
+    border-radius: 12px;
+}
+
+.card-body {
+    padding: 16px 20px 20px;
+}
+.card-body > .section-head:first-child{
+  border-top:0; margin-top:0; padding-top:0;
+}
+
+.lvl-badge {
+    display: inline-block;
+    font-size: 12px;
+    line-height: 1;
+    padding: 4px 8px;
+    border-radius: 999px;
+    font-weight: 600;
+    margin-right: 8px;
+}
+
+.lvl-error {
+    background: #6b0f14;
+    color: #ffd7d7;
+}
+
+.lvl-warning {
+    background: #5a3e00;
+    color: #ffe6a1;
+}
+
+.lvl-info {
+    background: #15324a;
+    color: #cfe8ff;
+}
+
+.lvl-heartbeat {
+    background: #2a2a2a;
+    color: #d0d0d0;
+}
+
+.log-row {
+    padding: 6px 8px;
+    border-bottom: 1px solid #151922;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.log-ts {
+    opacity: .75;
+    margin-right: 8px;
+}
+
+#tg-acc-notify .acc-body {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.toggle-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+}
+
+.toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 10px;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    background: #f8fafc;
+}
+
+@media (max-width:640px) {
+    #tg-acc-notify .acc-body {
+        align-items: flex-start;
+    }
+}
+
+.tg-chips {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+}
+
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: #e5e7eb;
+    color: #111827;
+    font-size: .9rem;
+}
+
+.chip.green {
+    background: #e6f9ed;
+    color: #146c2e;
+}
+
+.chip.blue {
+    background: #e6f0ff;
+    color: #1f3aa5;
+}
+
+.chip.red {
+    background: #ffebe9;
+    color: #a12626;
+}
+
+.chip.gray {
+    background: #f3f4f6;
+    color: #4b5563;
+}
+
+.row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.row .flex {
+    flex: 1 1 320px;
+}
+
+.pill {
+    display: inline-block;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 0;
+    cursor: pointer;
+}
+
+.pill.green {
+    background: #e6f9ed;
+    color: #146c2e;
+}
+
+.pill.gray {
+    background: #f3f4f6;
+    color: #4b5563;
+}
+
+.logs-pre {
+    max-height: 50vh;
+    overflow: auto;
+    background: #0b0e14;
+    color: #cfd7e0;
+    padding: 12px;
+    border-radius: 10px;
+}
+
+.fade-wrap {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  visibility: hidden;            
+  transition: max-height 0.25s ease, opacity 0.25s ease;
+}
+
+.fade-wrap.open {
+  max-height: 800px;            
+  opacity: 1;
+  visibility: visible;           
+}
+
+.fade-wrap:not(.open) {
+  max-height: 0;
+  opacity: 0;
+  margin-top: 0;
+}
+
+.fade-wrap > * {
+  min-height: 0;
+}
+
+.modal .modal-content.lg { max-width: 920px; }
+
+.logsheet {
+  padding: 16px;
+  border-radius: 16px;
+}
+.logsheet__head {
+  display:flex; align-items:center; gap:12px; margin-bottom:12px;
+}
+.logsheet__titlewrap { display:flex; align-items:center; gap:12px; margin-right:auto; }
+.logsheet__title .h { font-weight:800; font-size:18px; line-height:1.1; }
+.logsheet__title small { display:block; margin-top:2px; color:#64748b; }
+.logsheet__head > .fa-solid { font-size:20px; color:#334155; }
+.logsheet__badges { display:flex; gap:8px; align-items:center; }
+
+.pill.gray { background:#f1f5f9; color:#0f172a; border:1px solid #e5e7eb; }
+
+.logsheet__toolbar {
+  display:grid; grid-template-columns: auto auto 1fr; gap:12px; align-items:center;
+  padding:10px 12px; border:1px solid #e5e7eb; border-radius:12px; background:linear-gradient(#fff,#fff);
+  margin-bottom:10px;
+}
+.tool-grid {
+  display:grid; grid-template-columns: 1fr 1fr; gap:8px; align-items:center;
+}
+@media (max-width: 760px){
+  .logsheet__toolbar { grid-template-columns: 1fr; }
+  .tool-grid { grid-template-columns: 1fr; }
+}
+
+.seg.seg--pill { display:inline-flex; gap:6px; padding:4px; border:1px solid #e5e7eb; border-radius:999px; background:#fff; }
+.seg.seg--pill > label {
+  display:inline-flex; align-items:center; gap:6px; padding:6px 12px;
+  border-radius:999px; cursor:pointer; font-weight:700; color:#0f172a;
+}
+.seg.seg--pill > input:checked + label,
+.seg.seg--pill > label[aria-selected="true"] {
+  background:#111827; color:#fff; box-shadow:0 1px 0 rgba(0,0,0,.05);
+}
+.seg.seg--pill i { font-size:14px; }
+
+.logsheet__tools { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+.tool-search {
+  position:relative; flex:1 1 320px; min-width:240px;
+}
+.tool-search > i { position:absolute; left:10px; top:50%; transform:translateY(-50%); opacity:.6; }
+.tool-search > input { padding-left:40px; width:100%; }
+.tool-search > i { pointer-events: none; }
+.tool-buttons { display:flex; gap:8px; flex-wrap:wrap; }
+.btn .btn-txt { margin-left:6px; }
+.btn.ghost { background:#fff; color:#111827; border-color:#e5e7eb; }
+.btn.ghost:hover { background:#f8fafc; }
+
+.logbox-wrap {
+  border:1px solid #e5e7eb; border-radius:14px; background:#f8fafc;
+  box-shadow: inset 0 1px 0 rgba(0,0,0,.02);
+}
+#iface-logs-modal pre.log-pre {
+  margin:0; padding:14px 14px 18px; max-height:58vh;
+  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color:#0f172a; background:
+    linear-gradient(#fff,#fff) padding-box,
+    radial-gradient(farthest-side at 0 0, rgba(15,23,42,.06), transparent 70%) border-box;
+  border-radius:14px; white-space:pre;
+}
+#iface-logs-modal pre.log-pre.is-wrapped { white-space: pre-wrap; word-break: break-word; }
+
+.logsheet__foot {
+  margin-top:12px; display:flex; align-items:center; gap:10px; justify-content:flex-end;
+}
+.logsheet__foot #iflog-last { margin-right:auto; }
+
+#iface-logs-modal .log-pre::-webkit-scrollbar { height:12px; width:12px; }
+#iface-logs-modal .log-pre::-webkit-scrollbar-thumb {
+  background:#d1d5db; border-radius:999px; border:3px solid #f8fafc;
+}
+#iface-logs-modal .log-pre::-webkit-scrollbar-thumb:hover { background:#c0c6cf; }
+</style>
+</section>
+
+    <section class="panel" data-panel="iface">
+        <div class="cards">
+            <div class="card full" id="card-iface">
+                <div class="card-header">
+                    <i class="fa-solid fa-network-wired"></i><span>WireGuard Interface</span>
+                    <span class="card-value">
+                        <span id="iface-status" class="badge gray">Unknown</span>
+                        <button class="btn secondary" id="open-logs"><i class="fa-solid fa-list"></i> Logs</button>
+                    </span>
+                </div>
+    
+                <div class="card-body">
+                    <style>
+                        .iface-row {
+                            display: flex;
+                            align-items: center;
+                            gap: 10px;
+                            margin-bottom: 10px
+                        }
+    
+                        .iface-row .input {
+                            max-width: 280px
+                        }
+    
+                        .iface-row .spacer {
+                            flex: 1
+                        }
+    
+                        .iface-grid {
+                            display: grid;
+                            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                            gap: 12px 16px;
+                            align-items: start;
+                            margin-top: 6px
+                        }
+    
+                        .iface-actions {
+                            display: flex;
+                            gap: 8px;
+                            justify-content: flex-end;
+                            margin-top: 10px
+                        }
+                    </style>
+    
+
+                    <div class="iface-row" style="margin-top: -2px;">
+                        <div class="seg seg--pill" role="tablist" aria-label="Interface scope">
+                            <input type="radio" id="iface-scope-local" name="iface-scope" value="local" checked hidden>
+                            <label for="iface-scope-local" role="tab"><i class="fa-regular fa-computer"></i> Local</label>
+                    
+                            <input type="radio" id="iface-scope-node" name="iface-scope" value="node" hidden>
+                            <label for="iface-scope-node" role="tab"><i class="fa-solid fa-server"></i> Node</label>
+                        </div>
+                    
+                        <select id="iface-node" class="input" aria-label="Select node" style="min-width:240px" hidden></select>
+                        <span class="spacer"></span>
+                    
+                        <span id="iface-scope-chip" class="badge gray" aria-hidden="true">Unknown</span>
+                    </div>
+                    <div class="iface-row">
+                        <label for="iface-select" style="margin:0">Select interface</label>
+                        <select class="input" id="iface-select" aria-label="Select interface"></select>
+                        <span class="spacer"></span>
+                    </div>
+
+    
+                    <div id="iface-view" hidden>
+                        <div class="iface-grid">
+                            <div class="form-group">
+                                <label for="i-name">Name</label>
+                                <input class="input" id="i-name" disabled>
+                            </div>
+    
+                            <div class="form-group">
+                                <label for="i-path">Path</label>
+                                <input class="input" id="i-path" disabled>
+                            </div>
+    
+                            <div class="form-group">
+                                <label for="i-address">Address</label>
+                                <input class="input" id="i-address" disabled>
+                            </div>
+    
+                            <div class="form-group">
+                                <label for="i-listen">ListenPort</label>
+                                <input class="input" id="i-listen" type="number" min="1" max="65535" inputmode="numeric">
+                            </div>
+    
+                            <div class="form-group">
+                                <label for="i-dns">DNS</label>
+                                <input class="input" id="i-dns">
+                            </div>
+    
+                            <div class="form-group">
+                                <label for="i-mtu">MTU</label>
+                                <input class="input" id="i-mtu" type="number" min="576" max="9000" inputmode="numeric">
+                            </div>
+                        </div>
+    
+                        <div class="iface-actions">
+                            <button class="btn" id="iface-save"><i class="fa-solid fa-save"></i> Save Changes</button>
+                            <button class="btn secondary" id="iface-up"><i class="fa-solid fa-play"></i> Bring Up</button>
+                            <button class="btn danger" id="iface-down"><i class="fa-solid fa-stop"></i> Bring Down</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+
+    <section class="panel" data-panel="telegram">
+        <div class="cards">
+            <div class="card full" id="card-telegram">
+                <div class="card-header">
+                    <i class="fa-brands fa-telegram"></i><span>Telegram</span>
+                    <span class="card-value">
+                        <button class="btn secondary" id="tg-test">
+                            <i class="fa-solid fa-paper-plane"></i> Send Test
+                        </button>
+                    
+                        <button class="btn secondary" id="open-logs-telegram" style="margin-left:8px">
+                            <i class="fa-brands fa-telegram"></i> Telegram Logs
+                        </button>
+                    
+                        <button class="btn secondary" id="open-logs-admin-top" style="margin-left:8px">
+                            <i class="fa-solid fa-robot"></i> Admin Logs
+                        </button>
+                    </span>
+
+                </div>
+
+                <div class="card-body">
+                    <div class="tg-chips">
+                        <span class="chip" id="tg-chip-enabled">Notifications: —</span>
+                        <span class="chip" id="tg-chip-token">Token: —</span>
+                        <span class="chip" id="tg-chip-admins">Admins: —</span>
+                        <span class="chip" id="tg-chip-bot">Bot: —</span>
+                        <span class="chip" id="tg-chip-seen">Last seen: —</span>
+                    </div>
+
+                    <div class="section-head inline">
+                        <div class="head-text">
+                            <div class="h5">
+                                <label class="switch sm">
+                                    <input type="checkbox" id="tg-enabled">
+                                    <span class="slider"></span>
+                                </label>
+                                Enable Telegram notifications
+                            </div>
+                            <div class="small-text">
+                                Sends events to all <em>non-muted</em> admins. Stored in <code>instance/telegram_settings.json</code>.
+                            </div>
+                        </div>
+                    </div>
+                    
+
+                    <div class="tg-accordion">
+
+                        <details id="tg-acc-token" class="acc">
+                            <summary class="acc-bar">
+                                <span><i class="fa-solid fa-key"></i> Bot Token</span>
+                                <span class="chev" aria-hidden="true"></span>
+                            </summary>
+                            <div class="acc-body">
+                                <form id="tg-token-form" onsubmit="event.preventDefault()" autocomplete="off">
+                                    <input type="text" id="tg-token-username" name="username" autocomplete="username"
+                                        value="telegram-bot" aria-hidden="true" tabindex="-1"
+                                        style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0;">
+                                    <div class="row gap12">
+                                        <label for="tg-token" class="sr-only"
+                                            style="position:absolute;left:-9999px;">Bot token</label>
+                                        <input class="input flex" id="tg-token" name="password" type="password"
+                                            placeholder="123456:ABC-DEF..." autocomplete="new-password"
+                                            spellcheck="false">
+                                        <button class="btn" id="tg-update-token" type="button">
+                                            <i class="fa-solid fa-save"></i> Save Token
+                                        </button>
+                                        <button class="btn secondary" id="tg-clear-token" type="button">
+                                            <i class="fa-solid fa-ban"></i> Clear
+                                        </button>
+                                    </div>
+                                    <div class="muted small">Token is never returned to the browser. Use Save/Clear to
+                                        rotate.</div>
+                                </form>
+                            </div>
+                        </details>
+
+                        <details id="tg-acc-notify" class="acc">
+                            <summary class="acc-bar">
+                                <span><i class="fa-solid fa-bell"></i> Notify on</span>
+                                <span class="chev" aria-hidden="true"></span>
+                            </summary>
+                            <div class="acc-body" id="tg-acc-notify-body">
+                                <div class="toggle-grid">
+                                    <label class="toggle-row">
+                                        <span>App start/stop</span>
+                                        <label class="switch sm">
+                                            <input type="checkbox" id="tg-n-app">
+                                            <span class="slider"></span>
+                                        </label>
+                                    </label>
+                                    <label class="toggle-row">
+                                        <span>Interface down</span>
+                                        <label class="switch sm">
+                                            <input type="checkbox" id="tg-n-iface">
+                                            <span class="slider"></span>
+                                        </label>
+                                    </label>
+                                    <label class="toggle-row">
+                                        <span>Failed login bursts</span>
+                                        <label class="switch sm">
+                                            <input type="checkbox" id="tg-n-login">
+                                            <span class="slider"></span>
+                                        </label>
+                                    </label>
+                                    <label class="toggle-row">
+                                        <span>Suspicious 4xx spikes</span>
+                                        <label class="switch sm">
+                                            <input type="checkbox" id="tg-n-4xx">
+                                            <span class="slider"></span>
+                                        </label>
+                                    </label>
+                                </div>
+                                <div class="right mt8">
+                                    <button class="btn" id="tg-save"><i class="fa-solid fa-save"></i> Save Telegram
+                                        Settings</button>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+
+                    <div class="admin-card">
+                        <div class="admin-card-head">
+                            <div class="left">
+                                <h4 class="h4 tight">Admins</h4>
+                                <div class="muted small">Tip: DM <code>/start</code> to your bot, then add your numeric
+                                    <code>chat_id</code>.</div>
+                            </div>
+                            <div class="left-actions">
+                                <button class="btn" id="tg-add-admin"><i class="fa-solid fa-plus"></i> Add Admin</button>
+                            </div>
+                        </div>
+
+                        <div class="table-wrap">
+                            <table class="table compact" id="tg-admins-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width:160px">ID</th>
+                                        <th>Username</th>
+                                        <th>Note</th>
+                                        <th style="width:120px">Status</th>
+                                        <th style="width:120px">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody><!-- rows --></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div> 
+        </div> 
+    </section>
+
+    <section class="panel" data-panel="template">
+        <div class="cards">
+            <div class="card">
+                <div class="card-header">
+                    <i class="fa-solid fa-palette"></i><span>Choose Template</span>
+                </div>
+                <div class="card-body">
+    
+                    <div id="tpl-grid" class="tpl-grid icons-only">
+                        <label class="tpl-icon" data-name="default" tabindex="0" title="Default">
+                            <input type="radio" name="tpl" value="default" />
+                            <div class="ico"><i class="fa-solid fa-layer-group"></i></div>
+                            <div class="lbl">Default</div>
+                        </label>
+    
+                        <label class="tpl-icon" data-name="compact" tabindex="0" title="Compact">
+                            <input type="radio" name="tpl" value="compact" />
+                            <div class="ico"><i class="fa-solid fa-circle-notch"></i></div>
+                            <div class="lbl">Compact</div>
+                        </label>
+    
+                        <label class="tpl-icon" data-name="minimal" tabindex="0" title="Minimal">
+                            <input type="radio" name="tpl" value="minimal" />
+                            <div class="ico"><i class="fa-solid fa-minimize"></i></div>
+                            <div class="lbl">Minimal</div>
+                        </label>
+    
+                        <label class="tpl-icon" data-name="pro" tabindex="0" title="Pro">
+                            <input type="radio" name="tpl" value="pro" />
+                            <div class="ico"><i class="fa-solid fa-bolt"></i></div>
+                            <div class="lbl">Pro</div>
+                        </label>
+                    </div>
+    
+                    <div id="tpl-preview-dock" class="tpl-preview-dock" aria-hidden="true">
+                        <div class="dock-header">
+                            <span id="tpl-preview-title">Preview</span>
+                        </div>
+                    
+                        <div class="dock-body">
+                            <div class="scale-wrap" id="tpl-scale-wrap">
+                                <iframe id="tpl-preview-frame" title="Template preview" loading="lazy" scrolling="no"
+                                    sandbox="allow-scripts allow-popups"></iframe>
+                            </div>
+                        </div>
+                    </div>
+    
+                    <div class="savebar">
+                        <small id="tpl-dirty" class="muted" style="margin-right:auto;display:none">Unsaved changes</small>
+                        <button class="btn" id="tpl-save"><i class="fa-solid fa-save"></i> Save Template</button>
+                    </div>
+
+                </div>
+            </div>
+    
+            <div class="card">
+                <div class="card-header">
+                    <i class="fa-solid fa-headset"></i><span>Support & Socials</span>
+                </div>
+                <div class="card-body">
+                    <div class="grid-2">
+                        <div class="form-group">
+                            <label>Telegram (@username or link)</label>
+                            <input id="soc-telegram" class="input" placeholder="@yourchannel">
+                        </div>
+                        <div class="form-group">
+                            <label>WhatsApp (link or number)</label>
+                            <input id="soc-whatsapp" class="input" placeholder="https://wa.me/… or +123…">
+                        </div>
+                        <div class="form-group">
+                            <label>Instagram (profile)</label>
+                            <input id="soc-instagram" class="input" placeholder="https://instagram.com/…">
+                        </div>
+                        <div class="form-group">
+                            <label>Phone</label>
+                            <input id="soc-phone" class="input" placeholder="+123456789">
+                        </div>
+                        <div class="form-group">
+                            <label>Website</label>
+                            <input id="soc-website" class="input" placeholder="https://example.com">
+                        </div>
+                        <div class="form-group">
+                            <label>Email</label>
+                            <input id="soc-email" class="input" placeholder="admin@example.com">
+                        </div>
+                    </div>
+                    <div class="savebar">
+                        <button class="btn" id="soc-save"><i class="fa-solid fa-save"></i> Save Socials</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+    <section class="panel" data-panel="admin">
+        <div class="cards">
+            <div class="card full">
+                <div class="card-header">
+                    <i class="fa-solid fa-user-shield" aria-hidden="true"></i>
+                    <span>Admin</span>
+                    <span class="card-value">
+                        <span id="admin-2fa-badge" class="badge gray">2FA: OFF</span>
+                    </span>
+                </div>
+    
+                <div class="card-body">
+                    <div class="admin-grid">
+                        <form id="admin-username-form" onsubmit="return false" class="form-group">
+                            <div class="kicker" style="font-weight:700;font-size:13px;margin:4px 0 8px">
+                                Username
+                            </div>
+                            <div class="admin-username-row">
+                                <input id="admin-username" class="input" placeholder="azumi" autocomplete="username">
+                                <button id="admin-rename" class="btn" type="submit">
+                                    <i class="fa-solid fa-save"></i> Save
+                                </button>
+                            </div>
+                        </form>
+    
+                        <form id="admin-password-form" onsubmit="return false" class="form-group">
+                            <input type="text" autocomplete="username"
+                                value="{{ current_user.username if current_user else '' }}" tabindex="-1" aria-hidden="true"
+                                style="position:absolute;left:-10000px;width:1px;height:1px;opacity:0;">
+                            <div class="kicker" style="font-weight:700;font-size:13px;margin:4px 0 8px">
+                                Change password
+                            </div>
+                            <div class="pw-row">
+                                <input id="pw-current" class="input" type="password" placeholder="Current password"
+                                    autocomplete="current-password">
+                                <input id="pw-new" class="input" type="password" placeholder="New password"
+                                    autocomplete="new-password">
+                                <input id="pw-new2" class="input" type="password" placeholder="Repeat new password"
+                                    autocomplete="new-password">
+                                <button id="pw-save" class="btn" type="submit">
+                                    <i class="fa-solid fa-key"></i> Update
+                                </button>
+                            </div>
+                            <div class="small-text" style="margin-top:6px">
+                                Tip: use 12+ characters.
+                            </div>
+                        </form>
+                    </div>
+    
+                    <div class="hr-soft" style="height:1px;background:var(--line,#e5e7eb);margin:14px 0;opacity:.7"></div>
+    
+                    <div id="twofa-section">
+                        <div class="twofa-head"
+                            style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin:2px 0 8px">
+                            <h4 class="kicker" style="margin:0;font-weight:700;font-size:13px">
+                                Two-Factor Authentication (TOTP)
+                            </h4>
+                            <span id="twofa-rcount" class="badge gray" title="Stored recovery codes count"
+                                style="display:none">
+                                codes: 0
+                            </span>
+                        </div>
+    
+                        <div id="twofa-off" style="display:none">
+                            <p class="muted" style="margin:0 0 8px">
+                                2FA is currently <strong>disabled</strong>.
+                            </p>
+                            <div class="twofa-actions" style="display:flex;gap:8px;align-items:center">
+                                <button id="twofa-begin" class="btn">
+                                    <i class="fa-solid fa-shield-halved"></i> Enable 2FA
+                                </button>
+                            </div>
+                        </div>
+    
+                        <div id="twofa-on" style="display:none">
+                            <p class="muted" style="margin:0 0 8px">
+                                2FA is <strong>enabled</strong>.
+                            </p>
+                            <div class="twofa-actions" style="display:flex;gap:8px;align-items:center">
+                                <button id="twofa-disable" class="btn secondary">
+                                    <i class="fa-solid fa-ban"></i> Disable 2FA
+                                </button>
+                            </div>
+                        </div>
+    
+                        <div id="twofa-setup" class="fade-wrap" style="display:none">
+                            <div class="cfg" style="display:flex; gap:16px; align-items:flex-start; margin-top:8px">
+                                <div class="qr" id="admin-qr" aria-label="QR code"
+                                    style="width:160px;height:160px;border:1px dashed var(--line);border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center">
+                                </div>
+                                <div style="flex:1; min-width:260px">
+                                    <div class="kicker" style="font-weight:700;font-size:13px;margin-bottom:6px">
+                                        Manual key
+                                    </div>
+                                    <input id="admin-secret" class="input" readonly>
+    
+                                    <div class="kicker" style="font-weight:700;font-size:13px;margin-top:12px">
+                                        Enter a 6-digit code to verify
+                                    </div>
+                                    <div class="row" style="gap:8px; align-items:center">
+                                        <input id="admin-otp" class="input" inputmode="numeric" pattern="[0-9]*"
+                                            maxlength="6" placeholder="123456" autocomplete="one-time-code"
+                                            style="max-width:160px">
+                                        <button id="twofa-confirm" class="btn">
+                                            <i class="fa-solid fa-check"></i> Confirm
+                                        </button>
+                                    </div>
+                                    <p class="small-text" style="margin-top:8px">
+                                        After confirming, you’ll receive one-time recovery codes.
+                                        Store them safely.
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+    
+                </div>
+            </div>
+        </div>
+    </section>
+
+    
+    <script defer src="{{ url_for('static', filename='js/settings.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/qrcode.min.js') }}"></script>
+
+
+</div> 
+
+<div id="tg-add-modal" class="modal">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-content" style="max-width:560px">
+        <h3 style="margin:0 0 10px 0">Add Telegram Admin</h3>
+        <div class="form-group"><label for="tg-new-id">Telegram numeric ID</label><input class="input" id="tg-new-id"
+                placeholder="e.g. 6325621171"></div>
+        <div class="form-group"><label for="tg-new-username">@username (optional)</label><input class="input"
+                id="tg-new-username" placeholder="@username"></div>
+        <div class="form-group"><label for="tg-new-note">Note (optional)</label><input class="input" id="tg-new-note"
+                placeholder="Owner / SRE / etc."></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:6px">
+            <button class="btn secondary" id="tg-add-cancel">Cancel</button>
+            <button class="btn" id="tg-add-save"><i class="fa-solid fa-check"></i> Save</button>
+        </div>
+    </div>
+</div>
+
+<div id="tg-logs-modal" class="modal">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-content" style="max-width:840px">
+        <h3 style="margin:0 0 .5rem 0">Telegram Logs</h3>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:.25rem 0 .5rem 0">
+            <input id="tg-q" class="input" placeholder="Search text…">
+            <select id="tg-level" class="input" style="width:180px">
+                <option value="">All levels</option>
+                <option value="error">Errors</option>
+                <option value="warning">Warnings</option>
+                <option value="info">Info</option>
+                <option value="heartbeat">Heartbeat</option>
+            </select>
+            <input id="tg-from" class="input" type="datetime-local" style="width:210px">
+            <input id="tg-to" class="input" type="datetime-local" style="width:210px">
+            <button class="btn secondary" id="tg-logs-apply"><i class="fa-solid fa-filter"></i> Apply</button>
+        </div>
+        <div id="tg-logs-list"></div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">
+            
+            <button class="btn danger" id="tg-logs-clear"><i class="fa-solid fa-trash"></i> Clear</button>
+            <button class="btn" id="tg-logs-refresh"><i class="fa-solid fa-rotate-right"></i> Refresh</button>
+            <button class="btn secondary" id="tg-logs-close" data-modal-close>Close</button>
+
+
+        </div>
+    </div>
+</div>
+
+<div id="admin-logs-modal" class="modal">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-content" style="max-width:1024px">
+        <h3 style="margin:0 0 .5rem 0">Admin Logs</h3>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:.25rem 0 .75rem 0">
+            <input id="al-q" class="input" placeholder="Search text…">
+            <select id="al-action" class="input" style="width:200px">
+                <option value="">All actions</option>
+                <option value="peer_create">peer_create</option>
+                <option value="peer_delete">peer_delete</option>
+                <option value="peer_enable">peer_enable</option>
+                <option value="peer_disable">peer_disable</option>
+                <option value="peer_reset_timer">peer_reset_timer</option>
+                <option value="peer_reset_data">peer_reset_data</option>
+                <option value="log">log</option>
+            </select>
+            <input id="al-from" class="input" type="datetime-local" style="width:210px">
+            <input id="al-to" class="input" type="datetime-local" style="width:210px">
+            <label class="toggle-row">
+                <span class="small">Auto-refresh</span>
+                <label class="switch sm">
+                    <input type="checkbox" id="al-autoref">
+                    <span class="slider"></span>
+                </label>
+            </label>
+        </div>
+
+        <div style="overflow:auto; max-height:56vh; border:1px solid #e5e7eb; border-radius:10px">
+            <table class="table" id="al-table" style="min-width:760px">
+                <thead>
+                    <tr>
+                        <th style="width:190px">Time (Local)</th>
+                        <th style="width:180px">Telegram Admin ID</th>
+                        <th style="width:140px">Action</th>
+                        <th>Details</th>
+                        <th style="width:70px">Copy</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">
+            <button type="button" class="btn danger" id="btn-clear-admin-logs">
+                <i class="fa-solid fa-trash-can"></i> Clear
+            </button>
+            <button class="btn secondary" id="al-export"><i class="fa-solid fa-download"></i> Export CSV</button>
+            <button class="btn" id="al-refresh"><i class="fa-solid fa-rotate-right"></i> Refresh</button>
+            <button type="button" class="btn secondary" data-close>Close</button>
+        </div>
+    </div>
+</div>
+
+<div id="iface-logs-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="iface-logs-title">
+    <div class="modal-backdrop" data-close></div>
+
+    <div class="modal-content lg logsheet">
+        <!-- Head -->
+        <header class="logsheet__head">
+            <div class="logsheet__titlewrap">
+                <i class="fa-solid fa-diagram-project" aria-hidden="true"></i>
+                <div class="logsheet__title">
+                    <div class="h">Interface Logs</div>
+                    <small id="iface-log-subtitle" class="muted">—</small>
+                </div>
+            </div>
+
+            <div class="logsheet__badges" aria-hidden="true">
+                <span class="pill gray" id="iflog-nodechip" style="display:none">Node</span>
+                <span class="pill gray" id="iflog-ifacechip">wg0</span>
+            </div>
+        </header>
+
+        <section class="logsheet__toolbar">
+            <div class="label-stack">
+                <span class="label-strong">Source</span>
+                <small class="muted">Pick Local or a specific Node, then interface</small>
+            </div>
+
+            <div class="seg seg--pill" role="tablist" aria-label="Log source">
+                <input type="radio" id="iflog-scope-local" name="iflog-scope" value="local" checked hidden>
+                <label for="iflog-scope-local" role="tab"><i class="fa-regular fa-computer"></i> Local</label>
+
+                <input type="radio" id="iflog-scope-node" name="iflog-scope" value="node" hidden>
+                <label for="iflog-scope-node" role="tab"><i class="fa-solid fa-server"></i> Node</label>
+            </div>
+
+            <div class="tool-grid">
+                <select id="iflog-node" class="input" aria-label="Select node" hidden></select>
+                <select id="iflog-select" class="input" aria-label="Select interface"></select>
+            </div>
+        </section>
+
+        <section class="logsheet__tools">
+            <div class="tool-search">
+                <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+                <input id="iflog-q" class="input sm" placeholder="Search logs…">
+            </div>
+
+            <div class="tool-buttons">
+                <button id="iflog-wrap" class="btn ghost" aria-pressed="true" title="Toggle wrap">
+                    <i class="fa-solid fa-align-left"></i>
+                    <span class="btn-txt">Wrap</span>
+                </button>
+                <button id="iflog-copy" class="btn ghost" title="Copy">
+                    <i class="fa-solid fa-copy"></i>
+                    <span class="btn-txt">Copy</span>
+                </button>
+                <button id="iflog-dl" class="btn ghost" title="Download">
+                    <i class="fa-solid fa-file-lines"></i>
+                    <span class="btn-txt">Download</span>
+                </button>
+                <button id="iflog-refresh" class="btn" title="Refresh">
+                    <i class="fa-solid fa-rotate"></i>
+                    <span class="btn-txt">Refresh</span>
+                </button>
+            </div>
+        </section>
+
+        <section class="logbox-wrap">
+            <pre id="iface-logs-pre" class="log-pre is-wrapped" tabindex="0" aria-label="Interface logs area"
+                style="min-height:200px">(loading…)</pre>
+        </section>
+
+        <footer class="logsheet__foot">
+            <small class="muted" id="iflog-last" aria-live="polite"></small>
+            <button class="btn secondary" data-close>Close</button>
+        </footer>
+    </div>
+</div>
+
+
+<div id="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+<div id="ui-confirm" class="ui-confirm" hidden>
+    <div class="ui-confirm__sheet">
+        <div class="ui-confirm__title" id="ui-confirm-title">Confirm</div>
+        <div class="ui-confirm__body" id="ui-confirm-body">Are you sure?</div>
+        <div class="ui-confirm__actions">
+            <button type="button" class="btn secondary" id="ui-confirm-cancel">Cancel</button>
+            <button type="button" class="btn danger" id="ui-confirm-ok">OK</button>
+        </div>
+    </div>
+</div>
+
+
+{% endblock %}

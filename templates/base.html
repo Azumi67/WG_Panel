@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <title>WG Panel</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <script defer src="{{ url_for('static', filename='js/toast.js') }}"></script>
+    <script>
+        window.toastSafe = function (msg, type = 'info', sticky = false) {
+            const map = {
+                ok: 'success', good: 'success', success: 'success',
+                bad: 'error', error: 'error',
+                warn: 'warn', warning: 'warn',
+                info: 'info'
+            };
+            return window.toast
+                ? window.toast(String(msg), map[type] || 'info', { persist: !!sticky })
+                : (type === 'error' ? console.error(msg) : console.log(msg));
+        };
+
+        window.showToast = (m, t = 'info', s = false) => toastSafe(m, t, s);
+        window.toastInfo = (m, s = false) => toastSafe(m, 'info', s);
+        window.toastWarn = (m, s = false) => toastSafe(m, 'warn', s);
+        window.toastError = (m, s = false) => toastSafe(m, 'error', s);
+        window.toastSuccess = (m, s = false) => toastSafe(m, 'success', s);
+    </script>
+
+
+    <link rel="icon" href="{{ url_for('static', filename='img/wireguard-badge.svg') }}" type="image/svg+xml" />
+    <link rel="alternate icon" href="{{ url_for('static', filename='img/wireguard-badge-32.png') }}" sizes="32x32" />
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/wireguard-badge-180.png') }}"
+        sizes="180x180" />
+    <link rel="mask-icon" href="{{ url_for('static', filename='img/wireguard-badge.svg') }}" color="#6ee7b7" />
+    <meta name="theme-color" content="#0b1020" />
+    <link rel="preload" as="image" href="{{ url_for('static', filename='img/wireguard-badge.svg') }}" />
+    
+
+    {% if current_user.is_authenticated and config is defined and config.get('API_KEY') %}
+    <meta name="api-key" content="{{ config['API_KEY'] }}">
+    {% endif %}
+
+    {# Page-provided preload flags (kept before our preloads) #}
+    {% block preload_flags %}{% endblock %}
+
+    <style>
+        @font-face {
+            font-family: "Poppins";
+            src: url("{{ url_for('static', filename='fonts/Poppins-Regular.woff2') }}") format("woff2");
+            font-weight: 400;
+            font-style: normal;
+            font-display: swap;
+        }
+
+        html {
+            font-family: "Poppins", system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial,
+                "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", sans-serif;
+        }
+    </style>
+
+    {% if not preview|default(false) %}
+    {% if use_poppins_regular|default(true) %}
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Regular.woff2') }}" as="font"
+        type="font/woff2" crossorigin />
+    {% endif %}
+    {% if use_poppins_semibold|default(false) %}
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-SemiBold.woff2') }}" as="font"
+        type="font/woff2" crossorigin />
+    {% endif %}
+    {% if use_poppins_bold|default(false) %}
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Bold.woff2') }}" as="font" type="font/woff2"
+        crossorigin />
+    {% endif %}
+    {% if use_fa_solid|default(true) %}
+    <link rel="preload" href="{{ url_for('static', filename='vendor/fa/webfonts/fa-solid-900.woff2') }}" as="font"
+        type="font/woff2" crossorigin />
+    {% endif %}
+    {% if use_fa_brands|default(true) %}
+    <link rel="preload" href="{{ url_for('static', filename='vendor/fa/webfonts/fa-brands-400.woff2') }}" as="font"
+        type="font/woff2" crossorigin />
+    {% endif %}
+    {% endif %}
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+
+    <style>
+        :root {
+            --sb2-user-name: #e2e8f0;
+        }
+    
+        .wg-logo-mask {
+            width: 22px;
+            height: 22px;
+            display: inline-block;
+            vertical-align: middle;
+            -webkit-mask: none;
+            mask: none;
+            background-color: transparent;
+            background-image:url("{{ url_for('static', filename='img/wireguard-badge.svg') }}");
+            background-repeat: no-repeat;
+            background-position: center;
+            background-size: contain;
+            filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .25));
+        }
+    
+        .wg-logo-img {
+            width: 22px;
+            height: 22px;
+            display: inline-block;
+            vertical-align: middle;
+        }
+    
+        @supports ((-webkit-mask:url("")) or (mask:url(""))) {
+            .wg-logo-img {
+                display: none;
+            }
+        }
+    
+        .icon {
+            width: 18px;
+            height: 18px;
+            display: inline-block;
+            vertical-align: middle
+        }
+    
+        .icon-wg {
+            background: currentColor;
+            -webkit-mask:url("{{ url_for('static', filename='img/wireguard-badge.svg') }}") no-repeat center/contain;
+            mask:url("{{ url_for('static', filename='img/wireguard-badge.svg') }}") no-repeat center/contain;
+            width: 18px;
+            height: 18px;
+            display: inline-block;
+            vertical-align: middle;
+        }
+    
+        :root {
+            --sb2-w: 260px;
+            --sb2-w-collapsed: 78px;
+            --sb2-gap: 14px;
+            --sb2-bg: linear-gradient(180deg, #1f2430 0%, #181b23 100%);
+            --sb2-border: rgba(255, 255, 255, .10);
+            --sb2-text: #e7eaf1;
+            --sb2-muted: #a9b1c7;
+            --sb2-accent: #6ee7b7;
+            --sb2-hover: rgba(110, 231, 183, .12);
+            --sb2-active: #6ee7b7;
+            --sb2-shadow: 0 10px 30px rgba(0, 0, 0, .18);
+        }
+    
+        .sidebar.sb2 {
+            position: fixed;
+            inset: 0 auto 0 0;
+            z-index: 60;
+            width: var(--sb2-w);
+            color: var(--sb2-text);
+            background: var(--sb2-bg);
+            border-right: 1px solid var(--sb2-border);
+            display: flex;
+            flex-direction: column;
+            box-shadow: var(--sb2-shadow);
+            transition: width .22s ease;
+            backdrop-filter: saturate(120%) blur(6px);
+        }
+    
+        .sb2.is-collapsed {
+            width: var(--sb2-w-collapsed)
+        }
+    
+        .sb2.flash {
+            animation: sbFlash .35s ease-out
+        }
+    
+        @keyframes sbFlash {
+            0% {
+                box-shadow: 0 0 0 0 rgba(110, 231, 183, .0), var(--sb2-shadow)
+            }
+    
+            40% {
+                box-shadow: 0 0 0 12px rgba(110, 231, 183, .15), var(--sb2-shadow)
+            }
+    
+            100% {
+                box-shadow: 0 0 0 0 rgba(110, 231, 183, .0), var(--sb2-shadow)
+            }
+        }
+       .logo .brand-title{ display:inline-block; }
+       .logo .brand-abbr{ display:none; font-weight:800; letter-spacing:.2px; font-size:15px; }
+       .sb2.is-collapsed .logo .brand-title{ display:none; }
+       .sb2.is-collapsed .logo .brand-abbr{ display:inline-block; }
+       .sb2.is-collapsed .logo{ gap:.4rem; padding-left: 9px; } 
+
+    
+        .sb2 .logo {
+            display: flex;
+            align-items: center;
+            gap: .65rem;
+            padding: 18px 16px;
+            border-bottom: 1px solid var(--sb2-border)
+        }
+    
+        .sb2 .logo span {
+            font-weight: 800;
+            letter-spacing: .2px;
+            font-size: 18px
+        }
+    
+    
+        .sb2 .sb2-body {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column
+        }
+    
+        .sb2 nav {
+            padding: 10px 8px;
+            overflow-y: auto;
+            scrollbar-gutter: stable both-edges
+        }
+    
+        .sb2 .sb2-link {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: .9rem;
+            height: 40px;
+            line-height: 40px;
+            padding: 0 12px;
+            margin: 4px 6px;
+            border-radius: 10px;
+            color: var(--sb2-muted);
+            text-decoration: none;
+            transition: background .15s ease, color .15s ease;
+        }
+    
+        .sb2 .sb2-link i {
+            font-size: 16px;
+            width: 22px;
+            text-align: center;
+            line-height: 1
+        }
+    
+        .sb2 .sb2-text {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis
+        }
+    
+        .sb2.is-collapsed .sb2-text{ display:none !important; }
+    
+        .sb2 .sb2-link:hover {
+            background: var(--sb2-hover);
+            color: var(--sb2-text)
+        }
+    
+        .sb2 .sb2-link.active {
+            color: var(--sb2-text);
+            background: linear-gradient(90deg, rgba(110, 231, 183, .16), transparent)
+        }
+    
+        .sb2 .sb2-link.active::before {
+            content: "";
+            position: absolute;
+            left: -6px;
+            top: 8px;
+            bottom: 8px;
+            width: 3px;
+            border-radius: 3px;
+            background: var(--sb2-active)
+        }
+    
+        .sb2 .sb2-section {
+            margin: 14px 14px 6px;
+            font-size: 11px;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+            color: #8b93ab
+        }
+    
+        .sb2.is-collapsed .sb2-section{ display:none !important; }
+    
+        .sb2 .sb2-bottom {
+            margin-top: auto;
+            border-top: 1px solid var(--sb2-border);
+            padding: 10px 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px
+        }
+    
+        .sb2 .divider {
+            height: 1px;
+            background: var(--sb2-border);
+            margin: 4px 6px;
+            border-radius: 1px
+        }
+    
+        .sb2 .github-link {
+            margin: 4px 6px
+        }
+    
+        .sb2 .github-link i {
+            font-size: 18px;
+            width: 22px;
+            text-align: center;
+            line-height: 1
+        }
+    
+        .sb2 .userbox {
+            margin: 4px 6px;
+            border: 1px solid var(--sb2-border);
+            border-radius: 10px;
+            background: transparent
+        }
+    
+        .sb2 .user-chip {
+            display: flex;
+            align-items: center;
+            gap: .9rem;
+            height: 40px;
+            padding: 0 12px
+        }
+    
+        .sb2 .user-chip i {
+            font-size: 16px;
+            width: 22px;
+            text-align: center;
+            line-height: 1;
+            color: var(--sb2-accent)
+        }
+    
+        .sb2 .user-text {
+            display: flex;
+            flex-direction: column;
+            line-height: 1.1
+        }
+    
+        .sb2 .user-name {
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--sb2-user-name)
+        }
+    
+        .sb2.is-collapsed .user-text{ display:none !important; }
+    
+        .sb2 .logout-row {
+            display: none;
+            gap: 8px;
+            align-items: center;
+            padding: 8px 8px 10px;
+            justify-content: flex-end
+        }
+    
+        .sb2 .userbox:hover .logout-row,
+        .sb2 .userbox:focus-within .logout-row {
+            display: flex
+        }
+    
+        .sb2.is-collapsed .logout-row {
+            display: none !important
+        }
+    
+        .sb2 .logout-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            border-radius: 10px;
+            border: 1px solid var(--sb2-border);
+            background: transparent;
+            color: var(--sb2-text);
+            text-decoration: none;
+            transition: background .15s ease
+        }
+    
+        .sb2 .logout-btn:hover {
+            background: var(--sb2-hover)
+        }
+    
+        .sb2 .sb2-pin-ctl {
+            display: flex;
+            align-items: center;
+            gap: .75rem;
+            height: 40px;
+            padding: 0 12px;
+            margin: 4px 6px;
+            border-radius: 12px;
+            border: 1px solid var(--sb2-border);
+            background: transparent;
+            color: var(--sb2-text);
+            cursor: pointer;
+            transition: background .15s ease
+        }
+    
+        .sb2 .sb2-pin-ctl:hover {
+            background: var(--sb2-hover)
+        }
+    
+        .sb2.is-collapsed .sb2-pin-ctl span {
+            display: none
+        }
+    
+        .sb2 .sb2-link[data-tip],
+        .sb2 .sb2-pin-ctl[data-tip] {
+            position: relative
+        }
+        .sb2.is-collapsed .sb2-link{
+        justify-content:center;
+        gap:0;
+        padding:0 10px;
+        }
+        .sb2.is-collapsed .sb2-link i{
+        width:auto;            
+        text-align:center;
+        }
+        .sb2.is-collapsed nav{
+        overflow: hidden;
+        scrollbar-width: none;              
+        }
+        .sb2.is-collapsed nav::-webkit-scrollbar{ display:none; } 
+        .sb2.is-collapsed .sb2-link.active::before{
+        left: -5px;
+        }
+        .sb2.is-collapsed .logout-row,
+        .sb2.is-collapsed .github-link .sb2-text{ display:none !important; }
+        .sb2.is-collapsed .sb2-link[data-tip]:hover::after,
+        .sb2.is-collapsed .sb2-pin-ctl[data-tip]:hover::after {
+        content: attr(data-tip);
+        position: absolute;
+        left: calc(100% + 8px);
+        top: 50%;
+        transform: translateY(-50%);
+        background: #0b1020;
+        color: #fff;
+        border: 1px solid #141a29;
+        padding: 6px 8px;
+        font-size: 12px;
+        border-radius: 8px;
+        white-space: nowrap;
+        box-shadow: 0 10px 20px rgba(0, 0, 0, .24);
+        }
+    
+        .main {
+        position: relative;
+        z-index: 0;
+        margin-left: calc(var(--sb2-w) + var(--sb2-gap));
+        transition: margin-left .22s ease;
+        }
+    
+       .sb2.is-collapsed~.main {
+        margin-left: calc(var(--sb2-w-collapsed) + var(--sb2-gap));
+        }
+       .main::before {
+       content: "";
+       position: fixed;
+       top: 0;
+       bottom: 0;
+       left: calc(var(--sb2-w) + var(--sb2-gap));
+       width: 1px;
+       background: var(--sb2-border);
+       pointer-events: none;
+        }
+    
+       .sidebar.sb2.is-collapsed~.main::before {
+        left: calc(var(--sb2-w-collapsed) + var(--sb2-gap));
+        }
+       .sidebar.sb2::after {
+       content: "";
+       position: fixed;
+       top: 0;
+       bottom: 0;
+       left: calc(var(--sb2-w) - 1px);
+       width: calc(10px + var(--sb2-gap));
+       background: transparent;
+       pointer-events: auto;
+        }
+    
+      .sidebar.sb2.is-collapsed::after {
+       left: calc(var(--sb2-w-collapsed) - 1px);
+        }
+    
+       @media (max-width:980px) {
+       .sidebar.sb2 {
+        width: var(--sb2-w-collapsed)
+            }
+    
+       .main {
+        margin-left: calc(var(--sb2-w-collapsed) + var(--sb2-gap))
+            }
+    
+       .sidebar.sb2.is-collapsed~.main::before {
+        left: calc(var(--sb2-w-collapsed) + var(--sb2-gap))
+            }
+        }
+       .wg-logo-img {
+       display: inline-block !important;   
+       width: 22px;
+       height: 22px;
+       vertical-align: middle;
+       object-fit: contain;
+       }
+
+      .wg-logo-mask { display: none !important; }
+      :root { --sb2-gap: 14px; }  
+
+      .main { 
+      margin-left: calc(var(--sb2-w) + var(--sb2-gap)) !important;
+      }
+      .sb2.is-collapsed ~ .main {
+      margin-left: calc(var(--sb2-w-collapsed) + var(--sb2-gap)) !important;
+      }
+      .sidebar.sb2::after {
+      width: calc(10px + var(--sb2-gap)) !important;
+      }
+      .sidebar.sb2.is-collapsed::after {
+      left: calc(var(--sb2-w-collapsed) - 1px) !important;
+      }
+      .sb2 .userbox[data-role="admin"]{
+      background: linear-gradient(180deg, rgba(110,231,183,.08), rgba(110,231,183,.03));
+      border-color: rgba(110,231,183,.35);
+      box-shadow: inset 0 0 0 1px rgba(110,231,183,.18);
+      }
+      .sb2 .userbox[data-role="admin"] .user-chip i{ color: var(--sb2-active); }
+
+      .sb2 .role-pill{
+      align-self: start;
+      margin-top: 2px;
+      padding: 2px 8px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      border-radius: 999px;
+      background: rgba(110,231,183,.15);
+      color: var(--sb2-active);
+      border: 1px solid rgba(110,231,183,.35);
+      }
+
+     .page-title{ margin: 6px 0 14px; display:flex; align-items:center; gap:.6rem; }
+     .card-header{ display:flex; align-items:center; gap:.6rem; margin-bottom:8px; }
+     .card-header .card-value{ margin-left:auto; }
+     .card-header + canvas{ margin-top: 6px; display:block; width:100%; height:auto; }
+     .grid-charts{ gap: 16px; }
+     .grid-info{ gap: 16px; }
+     .sb2 .github-link{ margin: 6px 6px 2px; }
+
+
+    </style>
+
+
+    {# One (and only one) head_extras block #}
+    {% block head_extras %}{% endblock %}
+
+    <script>
+        window.csrfHeaders = (json) => {
+            const h = { 'X-CSRFToken': (document.cookie.match(/csrf_token=([^;]+)/) || [])[1] || '' };
+            if (json) h['Content-Type'] = 'application/json';
+            return h;
+        };
+        window.IS_PREVIEW = {{ 'true' if preview else 'false' }};
+    </script>
+
+    {% if request.endpoint == 'index' %}
+    <script defer src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js', v='4.4.4') }}"></script>
+    {% endif %}
+    <script defer src="{{ url_for('static', filename='js/csrf.js') }}"></script>
+</head>
+
+<body>
+    <aside class="sidebar sb2" aria-label="Sidebar">
+        <div class="logo" data-tip="WG Panel">
+            <img src="{{ url_for('static', filename='img/wireguard-badge.svg') }}" alt="WireGuard badge"
+                class="wg-logo-img">
+            <span class="brand-title">WG Panel</span>
+            <span class="brand-abbr" aria-hidden="true">WG</span>
+        </div>
+    
+        <div class="sb2-body">
+            <nav role="navigation" aria-label="Primary">
+                {% set ep = request.endpoint or '' %}
+    
+                <div class="sb2-section">Overview</div>
+                <a href="{{ url_for('index') }}" class="sb2-link{{ ' active' if ep == 'index' else '' }}"
+                    data-tip="Dashboard" aria-current="{{ 'page' if ep == 'index' else '' }}">
+                    <i class="fas fa-gauge-simple"></i><span class="sb2-text">Dashboard</span>
+                </a>
+    
+                <a href="{{ url_for('users') }}" class="sb2-link{{ ' active' if ep == 'users' else '' }}" data-tip="Peers"
+                    aria-current="{{ 'page' if ep == 'users' else '' }}">
+                    <i class="fas fa-people-group"></i><span class="sb2-text">Peers</span>
+                </a>
+    
+                {% if HAS_NODES %}
+                <div class="sb2-section">Infrastructure</div>
+                <a href="{{ url_for('nodes') }}" class="sb2-link{{ ' active' if ep.startswith('nodes') else '' }}"
+                    data-tip="Nodes" aria-current="{{ 'page' if ep.startswith('nodes') else '' }}">
+                    <i class="fas fa-server"></i><span class="sb2-text">Nodes</span>
+                </a>
+                {% endif %}
+    
+                <div class="sb2-section">Admin</div>
+                <a href="{{ url_for('logs_page') }}" class="sb2-link{{ ' active' if ep.startswith('logs') else '' }}"
+                    data-tip="Logs" aria-current="{{ 'page' if ep.startswith('logs') else '' }}">
+                    <i class="fa fa-file-alt"></i><span class="sb2-text">Logs</span>
+                </a>
+    
+                <a href="{{ url_for('backup_page') }}" class="sb2-link{{ ' active' if ep.startswith('backup') else '' }}"
+                    data-tip="Backup" aria-current="{{ 'page' if ep.startswith('backup') else '' }}">
+                    <i class="fas fa-box-archive"></i><span class="sb2-text">Backup</span>
+                </a>
+    
+                {% if HAS_SETTINGS %}
+                <a href="{{ url_for('settings_page') }}"
+                    class="sb2-link{{ ' active' if ep in ['settings_page','settings'] else '' }}" data-tip="Settings"
+                    aria-current="{{ 'page' if ep in ['settings_page','settings'] else '' }}">
+                    <i class="fas fa-sliders"></i><span class="sb2-text">Settings</span>
+                </a>
+                {% endif %}
+            </nav>
+    
+            <div class="sb2-bottom">
+                <a href="https://github.com/Azumi67" target="_blank" rel="noopener" class="sb2-link github-link"
+                    data-tip="GitHub: Azumi67" aria-label="GitHub: Azumi67">
+                    <i class="fa-brands fa-github"></i><span class="sb2-text">GitHub</span>
+                </a>
+    
+                {% if current_user.is_authenticated %}
+                {% set is_admin = current_user.is_authenticated and (current_user.is_admin|default(true)) %}
+                <div class="userbox" aria-label="Account" {% if is_admin %} data-role="admin" {% endif %}>
+                    <div class="user-chip">
+                        <i class="fas fa-user-shield" aria-hidden="true"></i>
+                        <div class="user-text">
+                            <span class="user-name">{{ current_user.username or current_user.name }}</span>
+                            {% if is_admin %}
+                            <span class="role-pill">Admin</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="logout-row">
+                        <a class="logout-btn" href="{{ url_for('logout') }}"
+                            aria-label="Logout {{ current_user.username or current_user.name }}">
+                            <i class="fas fa-right-from-bracket" aria-hidden="true"></i><span>Logout</span>
+                        </a>
+                    </div>
+                </div>
+                {% endif %}
+    
+                <div class="sb2-pin-ctl" id="sb2-pin" role="button" tabindex="0" data-tip="Collapse / Expand sidebar"
+                    aria-pressed="false" aria-label="Collapse sidebar">
+                    <i class="fas fa-angles-left" aria-hidden="true"></i><span>Collapse sidebar</span>
+                </div>
+            </div>
+        </div>
+    </aside>
+
+
+    <main class="main">
+        <div id="ui-toast-container" role="status" aria-live="polite"></div>
+
+        {# Flask flashes → toasts #}
+        {% with msgs = get_flashed_messages(with_categories=true) %}
+        {% if msgs %}
+        <script>
+            document.addEventListener('DOMContentLoaded', () => {
+                {% for cat, msg in msgs %}
+                toastSafe({{ msg| tojson }}, {{ cat| tojson }});
+            {% endfor %}
+          });
+        </script>
+
+        {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    {# Page scripts #}
+    {% if request.endpoint == 'index' %}
+    <script defer src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+    {% endif %}
+    {% if request.endpoint == 'users' %}
+    <script defer src="{{ url_for('static', filename='js/peers.js') }}"></script>
+    {% endif %}
+
+    <script>
+        (function () {
+            const sb = document.querySelector('.sidebar.sb2');
+            const pin = document.getElementById('sb2-pin');
+            if (!sb || !pin) return;
+
+            const PIN_KEY = 'sb2:pinned';
+            const pinned = localStorage.getItem(PIN_KEY) === '1';
+            if (!pinned) sb.classList.add('is-collapsed');
+
+            function renderPin() {
+                const collapsed = sb.classList.contains('is-collapsed');
+                const icon = pin.querySelector('i');
+                const label = pin.querySelector('span');
+                icon.className = collapsed ? 'fas fa-angles-right' : 'fas fa-angles-left';
+                if (label) label.textContent = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+                pin.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+                pin.setAttribute('aria-pressed', (!collapsed).toString());
+            }
+            function flash() { sb.classList.remove('flash'); void sb.offsetWidth; sb.classList.add('flash'); setTimeout(() => sb.classList.remove('flash'), 420); }
+            const toggle = () => {
+                const collapsed = sb.classList.toggle('is-collapsed');
+                localStorage.setItem(PIN_KEY, collapsed ? '0' : '1');
+                flash(); renderPin();
+            };
+
+            pin.addEventListener('click', toggle);
+            pin.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+
+            renderPin();
+        })();
+    </script>
+    <div id="ui-confirm" class="ui-confirm" hidden>
+        <div class="ui-confirm__backdrop"></div>
+    
+        <div class="ui-confirm__dialog" role="dialog" aria-modal="true" aria-labelledby="ui-confirm-title">
+            <h2 id="ui-confirm-title" class="ui-confirm__title">Are you sure?</h2>
+            <p class="ui-confirm__body">This action cannot be undone.</p>
+    
+            <div class="ui-confirm__actions">
+                <button type="button" class="btn ghost" data-act="cancel">Cancel</button>
+                <button type="button" class="btn danger" data-act="ok">Delete</button>
+            </div>
+        </div>
+    </div>
+
+
+    {% block body_extras %}{% endblock %}
+</body>
+
+</html>

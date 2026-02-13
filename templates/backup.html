@@ -1,0 +1,957 @@
+{% extends "base.html" %}
+
+{# Turn OFF FA font preloads on this page to avoid "preloaded but not used" warnings. #}
+{% block preload_flags %}
+{% set use_fa_solid = false %}
+{% set use_fa_brands = false %}
+{% endblock %}
+
+{% block head_extras %}
+<style>
+.auto-enable-wrap{
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bk-panel[data-panel="auto"] .hdr{
+  gap: 10px;
+}
+
+details.hint-pop{
+  position: relative;
+  margin-left: 6px;
+}
+
+details.hint-pop > summary{
+  list-style: none;
+}
+details.hint-pop > summary::-webkit-details-marker{ display:none; }
+
+summary.hint-ico{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--muted, #64748b);
+}
+summary.hint-ico:hover{
+  background: rgba(148,163,184,.12);
+}
+
+details.hint-pop[open] .hint-card{
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  width: min(420px, 82vw);
+  background: var(--card-bg, #fff);
+  border: 1px solid rgba(148,163,184,.35);
+  border-radius: 12px;
+  padding: 10px 12px;
+  box-shadow: 0 18px 40px rgba(15,23,42,.16);
+  z-index: 50;
+}
+
+.bk-modal[hidden] { display: none; }
+.bk-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+}
+.bk-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(2,6,23,.55);
+  backdrop-filter: blur(6px);
+}
+.bk-modal-card {
+  position: relative;
+  width: min(560px, calc(100vw - 28px));
+  margin: 10vh auto 0;
+  border-radius: 16px;
+  background: #0b1220;
+  border: 1px solid rgba(148,163,184,.22);
+  box-shadow: 0 30px 80px rgba(0,0,0,.45);
+  overflow: hidden;
+}
+.bk-modal-hdr {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(148,163,184,.16);
+}
+.bk-modal-title {
+  font-weight: 800;
+  color: #e5e7eb;
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.bk-modal-x {
+  border: 0;
+  background: transparent;
+  color: rgba(226,232,240,.85);
+  cursor: pointer;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+}
+.bk-modal-x:hover { background: rgba(148,163,184,.12); }
+.bk-modal-body {
+  padding: 14px 16px 2px;
+  color: rgba(226,232,240,.92);
+  line-height: 1.45;
+  font-size: 13.5px;
+}
+.bk-modal-actions {
+  display:flex;
+  justify-content:flex-end;
+  gap:10px;
+  padding: 14px 16px 16px;
+}
+.bk-modal-body code {
+  background: rgba(148,163,184,.14);
+  border: 1px solid rgba(148,163,184,.18);
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+.hint-box {
+    margin-top: 8px;
+    border: 1px dashed var(--line);
+    border-radius: 10px;
+    padding: 6px 10px;
+    background: var(--card, #fff);
+}
+
+.hint-toggle {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 600;
+    color: var(--muted);
+}
+
+.hint-body {
+    margin-top: 6px;
+    padding-left: 4px;
+    line-height: 1.45;
+}
+.bk-shell .bk-tabs .bk-tab i {
+        font-size: 13px;
+        margin-right: 6px;
+    }
+
+    .bk-shell .icon i,
+    .bk-shell .actions .btn i,
+    .bk-shell .file-btn i,
+    .bk-shell .auto-files summary i {
+        font-size: 12px;
+    }
+
+    .bk-shell #auto-files-list .icon i {
+        font-size: 11px;
+    }
+    .bk-shell #auto-files-list {
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.bk-shell #auto-files-list .item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: var(--subcard, rgba(15, 23, 42, 0.02));
+    border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.bk-shell #auto-files-list .text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.bk-shell #auto-files-list .t1 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--fg, #0f172a);
+}
+
+.bk-shell #auto-files-list .t2 {
+    font-size: 0.78rem;
+    color: var(--muted, #64748b);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.bk-shell #auto-files-list .t2 .fname {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bk-shell #auto-files-list .t2 .dot {
+    opacity: 0.6;
+}
+
+.bk-shell #auto-files-list .icon.auto-restore-btn {
+    border: 0;
+    border-radius: 999px;
+    height: 28px;
+    width: 28px;
+    min-width: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #020617;
+    color: #f9fafb;
+    cursor: pointer;
+}
+
+.bk-shell #auto-files-list .icon.auto-restore-btn:hover {
+    filter: brightness(1.05);
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.25);
+}
+
+    .bk-shell .pill i {
+        font-size: 11px;
+        margin-right: 4px;
+    }
+
+.file-picker {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(148, 163, 184, 0.5);
+    background: rgba(15, 23, 42, 0.02);
+}
+
+.file-btn {
+    border: 0;
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.9rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    background: #111827;
+    color: #f9fafb;
+    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.25);
+    transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.08s ease;
+}
+
+.file-btn i {
+    font-size: 0.9rem;
+}
+
+.file-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 12px 24px rgba(15, 23, 42, 0.35);
+    background: #020617;
+}
+
+.file-name {
+    font-size: 0.85rem;
+    color: #0f172a;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+    width: 0;
+    height: 0;
+}
+
+.bk-shell {
+    margin-top: 10px;
+    border-radius: 18px;
+    overflow: hidden;
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.10);
+    background: var(--card-bg, #fff);
+}
+
+.bk-tabs {
+    display: flex;
+    align-items: stretch;
+    border-bottom: 1px solid var(--line, #e5e7eb);
+    background: #f9fafb;
+}
+
+.bk-tab {
+    flex: 0 0 auto;
+    padding: 12px 20px;
+    border: none;
+    background: transparent;
+    font-weight: 700;
+    font-size: 14px;
+    color: var(--muted, #6b7280);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    position: relative;
+    transition: color .12s ease, background .12s ease;
+}
+
+.bk-tab:first-child {
+    margin-left: 10px;
+}
+
+.bk-tab:last-child {
+    margin-right: 10px;
+}
+
+.bk-tab i {
+    font-size: 13px;
+}
+
+.bk-tab::after {
+    content: "";
+    position: absolute;
+    left: 16px;
+    right: 16px;
+    bottom: 0;
+    height: 2px;
+    border-radius: 999px;
+    background: transparent;
+    transition: background .12s ease;
+}
+
+.bk-tab.active {
+    color: #111827;
+    background: #ffffff;
+}
+
+.bk-tab.active::after {
+    background: #111827;
+}
+
+.bk-panels {
+    padding: 18px 20px 20px;
+}
+
+.bk-panel {
+    display: none;
+    gap: 16px;
+}
+
+.bk-panel.active {
+    display: grid;
+}
+
+.bk-panel .hdr {
+    margin-bottom: 10px;
+}
+.bk.grid {
+    display: grid;
+    gap: 20px;
+    grid-template-columns: 1.05fr .95fr
+}
+
+@media (max-width:1080px) {
+    .bk.grid {
+        grid-template-columns: 1fr
+    }
+}
+
+.bk.box {
+    display: grid;
+    gap: 16px;
+    padding: 20px
+}
+
+.hdr {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 2px
+}
+
+.title {
+    font-weight: 800;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap
+}
+
+.pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--line, #e5e7eb);
+    background: #fff;
+    font-weight: 700
+}
+
+.pill.tiny {
+    font-size: 12px;
+    padding: 2px 8px
+}
+
+.pill.ok {
+    border-color: #10b98150;
+    background: #10b98110;
+    color: #047857
+}
+
+.pill.warn {
+    border-color: #f59e0b50;
+    background: #f59e0b10;
+    color: #92400e
+}
+
+.pill.muted {
+    color: var(--muted, #64748b)
+}
+
+.small {
+    font-size: 13px
+}
+
+.tiny {
+    font-size: 12.5px
+}
+
+.list {
+    display: grid;
+    gap: 12px
+}
+
+.item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px;
+    border: 1px solid var(--line, #e5e7eb);
+    border-radius: 14px;
+    background: var(--card-bg, #fff)
+}
+
+.text {
+    display: grid;
+    gap: 6px
+}
+
+.t1 {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap
+}
+
+.t1 .label {
+    font-weight: 800
+}
+
+.t2 {
+    color: var(--muted, #64748b);
+    font-size: 12.5px
+}
+
+.icon {
+    width: 26px;
+    height: 26px;
+    border-radius: 8px;
+    border: 1px solid #0f172a22;
+    background: #111827;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform .08s ease
+}
+
+.icon i {
+    font-size: 11px
+}
+
+.icon:hover {
+    transform: translateY(-1px)
+}
+
+.opts {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 4px
+}
+
+.note {
+    margin-top: 6px;
+    line-height: 1.35
+}
+
+.sw {
+    display: inline-flex;
+    gap: 10px;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+    font-weight: 700
+}
+
+.sw input {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    overflow: hidden
+}
+
+.sw .ui {
+    width: 40px;
+    height: 20px;
+    border-radius: 999px;
+    background: #e5e7eb;
+    position: relative;
+    transition: background .15s ease
+}
+
+.sw .ui::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .12);
+    transition: transform .15s ease
+}
+
+.sw.black input:checked+.ui {
+    background: #111827
+}
+
+.sw.black input:checked+.ui::after {
+    transform: translateX(20px)
+}
+
+.form {
+    display: grid;
+    gap: 12px
+}
+
+.f {
+    display: grid;
+    gap: 6px
+}
+
+.row {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex-wrap: wrap
+}
+
+.help {
+    margin-top: 2px;
+    display: block
+}
+
+.actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap
+}
+
+.actions .btn i {
+    font-size: 12px
+}
+
+.form .f>select,
+.form .f>input[type="time"],
+.form .f>input[type="number"],
+.form .f>input[type="text"] {
+    width: 100%;
+    box-sizing: border-box;
+    height: 40px;
+    line-height: 24px;
+    padding: 8px 12px;
+    border: 1px solid var(--line, #e5e7eb);
+    border-radius: 10px;
+    background: #fff;
+    color: var(--text, #0f172a);
+    overflow: hidden;
+    appearance: none
+}
+
+.form .f>input[type="time"] {
+    height: 38px
+}
+.form .f>select {
+    background-image: linear-gradient(45deg, transparent 50%, #6b7280 50%), linear-gradient(135deg, #6b7280 50%, transparent 50%), linear-gradient(to right, transparent, transparent);
+    background-position: calc(100% - 18px) 16px, calc(100% - 12px) 16px, 100% 0;
+    background-size: 6px 6px, 6px 6px, 2.5rem 100%;
+    background-repeat: no-repeat;
+    padding-right: 38px
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+    <h1 class="page-title"><i class="fas fa-box-archive"></i> Backup</h1>
+
+    <div class="bk-shell card">
+        <div class="bk-tabs" role="tablist" aria-label="Backup sections">
+            <button class="bk-tab active" id="tab-quick" data-tab="quick" role="tab" aria-selected="true">
+                <i class="fas fa-bolt"></i> Quick backup
+            </button>
+            <button class="bk-tab" id="tab-auto" data-tab="auto" role="tab" aria-selected="false">
+                <i class="fas fa-rotate"></i> Telegram scheduled backups
+            </button>
+            <button class="bk-tab" id="tab-restore" data-tab="restore" role="tab" aria-selected="false">
+                <i class="fas fa-rotate-left"></i> Restore <span class="pill tiny warn">Advanced</span>
+            </button>
+        </div>
+
+        <div class="bk-panels">
+            <section class="bk-panel active" data-panel="quick" role="tabpanel" aria-labelledby="tab-quick">
+                <div class="hdr">
+                    <div class="title">
+                        <span>Quick backup</span>
+                        <span id="status-pill" class="pill tiny muted">Status: No backup</span>
+                    </div>
+                </div>
+
+                <div class="list">
+                    <div class="item">
+                        <div class="text">
+                            <div class="t1">
+                                <span class="label">Full backup</span>
+                                <span id="full-last" class="pill tiny muted">Last: No backup</span>
+                            </div>
+                            <div class="t2">
+                                Database + instance settings (including nodes and interface definitions) + WireGuard
+                                <code>*.conf</code> (optional).
+                            </div>
+                        </div>
+                        <button id="btn-full" class="icon" aria-label="Download full backup">
+                            <i class="fas fa-download"></i>
+                        </button>
+                    </div>
+
+                    <div class="item">
+                        <div class="text">
+                            <div class="t1">
+                                <span class="label">Database only</span>
+                                <span id="db-last" class="pill tiny muted">Last: No backup</span>
+                            </div>
+                            <div class="t2">
+                                Only the SQLite database file (users, peers, node list, interface configs, settings).
+                            </div>
+                        </div>
+                        <button id="btn-db" class="icon" aria-label="Download DB backup">
+                            <i class="fas fa-download"></i>
+                        </button>
+                    </div>
+
+                    <div class="item">
+                        <div class="text">
+                            <div class="t1">
+                                <span class="label">Settings only</span>
+                                <span id="settings-last" class="pill tiny muted">Last: No backup</span>
+                            </div>
+                            <div class="t2">
+                                Everything from <code>instance/</code> (tokens, panel settings, templates, etc.).
+                                Node definitions and interfaces live in the database / full backup.
+                            </div>
+                        </div>
+                        <button id="btn-settings" class="icon" aria-label="Download settings backup">
+                            <i class="fas fa-download"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="opts">
+                    <label class="sw black">
+                        <input id="opt-wg" type="checkbox">
+                        <span class="ui"></span>
+                        <span>Include WireGuard *.conf (local server)</span>
+                    </label>
+                    <label class="sw black">
+                        <input id="opt-tg" type="checkbox">
+                        <span class="ui"></span>
+                        <span>Send copy to Telegram</span>
+                    </label>
+                </div>
+
+                <p class="tiny note">
+                    • Backups can include secrets (tokens / keys / admin settings). Store them safely.<br>
+                    • Telegram delivery is best-effort; your browser download still completes either way.<br>
+                    • Node list, node interfaces and their metadata are always part of DB / full backups. Remote node
+                    <code>.conf</code> files themselves are not pulled automatically from agents.
+                </p>
+                </section>
+            <section class="bk-panel" data-panel="auto" role="tabpanel" aria-labelledby="tab-auto">
+                <div class="hdr">
+                    <div class="title">
+                        <span>Auto-backup</span>
+                        <span id="auto-state" class="pill tiny ok">Enabled</span>
+                        <span id="next-pill" class="pill tiny muted">Next: —</span>
+                    </div>
+            
+                    <div class="auto-enable-wrap">
+                        <label class="sw black">
+                            <input id="auto-enabled" type="checkbox">
+                            <span class="ui"></span>
+                            <span>Enabled</span>
+                        </label>
+            
+                        <details class="hint-pop" id="auto-enabled-hint">
+                            <summary class="hint-ico" aria-label="Scheduled backup info" title="Info">
+                                <i class="fas fa-circle-info"></i>
+                            </summary>
+            
+                            <div class="hint-card tiny">
+                                <p class="tiny note" style="margin:0">
+                                    • These scheduled backups are executed by the Telegram bot. The bot service must be online for
+                                    the schedule to run.<br>
+                                    • “Run once now” runs immediately and stores the ZIP in <code>instance/backups/</code> so you
+                                    can restore it.
+                                </p>
+                            </div>
+                        </details>
+                    </div>
+                </div> 
+            
+                <div class="form">
+                    <div class="f">
+                        <label>Frequency</label>
+                        <select id="freq">
+                            <option value="daily">Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="monthly">Monthly</option>
+                        </select>
+                    </div>
+            
+                    <div class="f" id="tz-row">
+                        <label>Timezone (used for scheduling)</label>
+                        <select id="timezone">
+                            <option value="UTC">UTC</option>
+                            <option value="Europe/Amsterdam">Europe/Amsterdam</option>
+                            <option value="Asia/Tehran">Asia/Tehran</option>
+                            <option value="Asia/Dubai">Asia/Dubai</option>
+                            <option value="Asia/Istanbul">Asia/Istanbul</option>
+                        </select>
+                    </div>
+            
+                    <div class="f" id="time-row">
+                        <label>Time (in selected timezone)</label>
+                        <input id="time" type="time" value="03:00" step="60">
+                    </div>
+            
+                    <div class="f" id="ret-row">
+                        <label>Retention (keep last N backups)</label>
+                        <input id="keep" type="number" min="1" value="7">
+                        <small class="help tiny">
+                            Panel keeps the most recent N auto backups and removes older ones when a new auto backup runs.
+                        </small>
+                    </div>
+            
+                    <div class="row">
+                        <label class="sw black">
+                            <input id="auto-wg" type="checkbox">
+                            <span class="ui"></span>
+                            <span>Include WG .conf (local)</span>
+                        </label>
+            
+                        <label class="sw black">
+                            <input id="auto-tg" type="checkbox">
+                            <span class="ui"></span>
+                            <span>Send to Telegram</span>
+                        </label>
+                    </div>
+            
+                    <div class="actions">
+                        <button id="save" class="btn">
+                            <i class="fas fa-floppy-disk"></i> Save schedule
+                        </button>
+                        <button id="run-now" class="btn">
+                            <i class="fas fa-play"></i> Run once now
+                        </button>
+                    </div>
+                </div>
+            
+                <details id="auto-files-details" class="auto-files" style="margin-top:16px;">
+                    <summary class="tiny" style="cursor:pointer;">
+                        <span><i class="fas fa-clock-rotate-left"></i> Recent auto backup files</span>
+                        <span class="pill tiny muted" id="auto-files-count">0 files</span>
+                    </summary>
+            
+                    <div id="auto-files-list" class="list" style="margin-top:10px;">
+                        <div class="tiny muted">No auto backups found yet.</div>
+                    </div>
+            
+                    <p class="tiny note">
+                        • These files are created automatically by the panel into <code>instance/backups/</code>.<br>
+                        • You can restore from one of them directly using the restore icons on the right.
+                    </p>
+                </details>
+            </section>
+
+
+            <section class="bk-panel" data-panel="restore" role="tabpanel" aria-labelledby="tab-restore">
+                <div class="hdr">
+                    <div class="title">
+                        <span>Restore</span>
+                        <span class="pill tiny warn">Advanced</span>
+                    </div>
+                </div>
+            
+                <form id="restore-form" class="form" autocomplete="off">
+            
+                    <div class="f">
+                        <label for="restore-file" class="row row-between">
+                            <span>Step 1 — Choose backup file (.zip)</span>
+                        </label>
+            
+                        <div class="file-picker">
+                            <button type="button" class="file-btn" id="restore-file-trigger">
+                                <i class="fas fa-folder-open"></i> <span>Select backup</span>
+                            </button>
+                            <span id="restore-file-name" class="file-name">No file chosen</span>
+                            <input id="restore-file" type="file" accept=".zip,application/zip" class="file-input">
+                        </div>
+            
+                        <details class="hint-box">
+                            <summary class="hint-toggle"><i class="fas fa-circle-info"></i> About backup files</summary>
+                            <div class="hint-body tiny">
+                                • Use backups created by this panel (DB, Settings, or Full). Current data may be overwritten.<br>
+                                • “Auto-detect” usually picks the correct restore mode based on the ZIP contents.
+                            </div>
+                        </details>
+                    </div>
+            
+                    <hr class="bk-sep">
+            
+                    <div class="f">
+                        <label>Step 2 — What do you want to restore?</label>
+            
+                        <div class="row">
+                            <label class="sw black">
+                                <input type="radio" name="restore-kind" value="auto" checked>
+                                <span class="ui"></span><span>Auto-detect (recommended)</span>
+                            </label>
+                            <label class="sw black">
+                                <input type="radio" name="restore-kind" value="db">
+                                <span class="ui"></span><span>Database only</span>
+                            </label>
+                            <label class="sw black">
+                                <input type="radio" name="restore-kind" value="settings">
+                                <span class="ui"></span><span>Settings only</span>
+                            </label>
+                            <label class="sw black">
+                                <input type="radio" name="restore-kind" value="full">
+                                <span class="ui"></span><span>Full (DB + settings)</span>
+                            </label>
+                        </div>
+            
+                        <details class="hint-box">
+                            <summary class="hint-toggle"><i class="fas fa-circle-info"></i> How auto-detect works</summary>
+                            <div class="hint-body tiny">
+                                Auto-detect checks ZIP contents:<br><br>
+                                • <code>db/</code> + <code>instance/</code> → Full restore<br>
+                                • only <code>db/</code> → Database only<br>
+                                • only <code>instance/</code> → Settings only<br><br>
+                                Database restores include peers, nodes, interface definitions, and metadata.<br>
+                                Remote node <code>.conf</code> files are never pulled automatically.
+                            </div>
+                        </details>
+                    </div>
+            
+                    <hr class="bk-sep">
+            
+                    <div class="f">
+                        <label>Step 3 — WireGuard configs (local server)</label>
+                        <label class="sw black">
+                            <input id="restore-wg" type="checkbox">
+                            <span class="ui"></span>
+                            <span>Also restore WireGuard *.conf (local server)</span>
+                        </label>
+            
+                        <details class="hint-box">
+                            <summary class="hint-toggle"><i class="fas fa-circle-info"></i> When to use this</summary>
+                            <div class="hint-body tiny">
+                                • Only applies if the backup contains a <code>wg/</code> folder.<br>
+                                • Overwrites local WireGuard configs on this server.<br>
+                                • Remote node configs are unaffected; their state is restored from the database.
+                            </div>
+                        </details>
+                    </div>
+            
+                    <div class="actions">
+                        <button id="btn-restore" type="button" class="btn danger">
+                            <i class="fas fa-rotate-left"></i> Restore now
+                        </button>
+                    </div>
+            
+                    <details class="hint-box">
+                        <summary class="hint-toggle"><i class="fas fa-circle-info"></i> Important notes</summary>
+                        <div class="hint-body tiny">
+                            • Restoring may overwrite your current database and settings. Take a fresh backup first.<br>
+                            • Restarting the panel after restore is recommended for full reload.<br>
+                            • Local server configs and remote node configs are separate to avoid confusion.
+                        </div>
+                    </details>
+                </form>
+            </section>
+
+        </div>
+    </div>
+</div>
+
+<div id="restore-confirm" class="bk-modal" hidden>
+    <div class="bk-modal-backdrop" data-close="1"></div>
+    <div class="bk-modal-card" role="dialog" aria-modal="true" aria-labelledby="bk-modal-title">
+        <div class="bk-modal-hdr">
+            <div class="bk-modal-title" id="bk-modal-title">
+                <i class="fas fa-triangle-exclamation"></i>
+                Confirm restore
+            </div>
+            <button type="button" class="bk-modal-x" data-close="1" aria-label="Close">
+                <i class="fas fa-xmark"></i>
+            </button>
+        </div>
+
+        <div class="bk-modal-body" id="bk-modal-body"></div>
+
+        <div class="bk-modal-actions">
+            <button type="button" class="btn" data-close="1">
+                Cancel
+            </button>
+            <button type="button" class="btn danger" id="bk-modal-ok">
+                <i class="fas fa-rotate-left"></i> Restore
+            </button>
+        </div>
+    </div>
+</div>
+
+<script defer src="{{ url_for('static', filename='js/backup.js') }}"></script>
+{% endblock %}

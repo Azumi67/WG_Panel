@@ -1,0 +1,941 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<style>
+.scope-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  background: var(--card, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  padding: 2px;
+  border-radius: 999px; 
+  gap: 2px;
+  box-shadow: 0 1px 0 rgba(0,0,0,.03);
+}
+
+.scope-toggle input[type="radio"] {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+  padding: 0;
+  margin: -1px;
+}
+
+.scope-toggle label {
+  cursor: pointer;
+  user-select: none;
+  font-size: 12.5px;
+  line-height: 1;
+  padding: 8px 12px;
+  border-radius: 999px;
+  color: var(--fg-muted, #475569);
+  transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.scope-toggle input[type="radio"]:checked + label {
+  background: var(--accent-weak, #e9f5ee);
+  color: var(--accent-fg, #0f5132);
+  box-shadow: inset 0 0 0 1px var(--accent, #22c55e);
+}
+
+.scope-toggle label:hover {
+  background: var(--hover, #f4f6f8);
+}
+
+.scope-toggle input[type="radio"]:focus-visible + label {
+  outline: 2px solid var(--accent, #22c55e);
+  outline-offset: 2px;
+}
+
+.card.info-pro .title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.peers-mini .pill-row {
+  margin-top: 8px;
+}
+.toggle{
+  --h: 26px; --w: 52px;
+  display:inline-flex; align-items:center; gap:10px; cursor:pointer;
+  border:0; background:transparent; padding:0;
+  font-weight:600;
+}
+.toggle .lab{ font-size:12.5px; color:var(--text,#0f172a); }
+.toggle.t-dark::before{
+  content:""; display:inline-block; width:var(--w); height:var(--h);
+  background:#0f172a; border-radius:999px; position:relative; transition:background .2s ease;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.08);
+}
+.toggle .dot{
+  width:22px; height:22px; border-radius:999px;
+  background:#fff; position:absolute; margin-left:2px; transform:translateX(0);
+  transition:transform .2s ease; box-shadow:0 2px 6px rgba(0,0,0,.2);
+}
+.toggle.t-dark.on::before{ background:#0f172a; }      
+.toggle.t-dark:not(.on)::before{ background:#9aa4b2; } 
+.toggle.t-dark.on .dot{ transform:translateX(26px); }  
+
+@media (prefers-color-scheme: dark){
+  .toggle .lab{ color:#e6e8ee; }
+  .toggle.t-dark:not(.on)::before{ background:#374151; }
+}
+
+.dash-popover{
+  position: fixed; top: 90px; right: 24px; width: 560px;
+  background: var(--card,#fff); color: var(--text,#0f172a);
+  border: 1px solid var(--line,#e5e7eb); border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.12); z-index: 60;
+}
+.dash-popover[hidden]{ display:none; }
+.dash-popover .pop-head{
+  display:flex; justify-content:space-between; align-items:center;
+   padding:8px 10px; border-bottom:1px solid var(--line,#e5e7eb);
+}
+.dash-popover .title{ font-weight:700; display:flex; gap:8px; align-items:center; }
+.dash-popover .actions{ display:flex; gap:10px; align-items:center; }
+.dash-popover .icon-btn{ border:0; background:transparent; padding:6px; border-radius:8px; cursor:pointer; }
+.dash-popover .icon-btn:hover{ background:rgba(0,0,0,.05); }
+.dash-popover .auto{ display:flex; gap:6px; align-items:center; }
+
+.dash-popover .pop-body{ max-height:300px; overflow:auto; padding:8px; display:grid; gap:6px; }
+.dlog{
+  display:grid; grid-template-columns:auto 1fr auto; gap:10px; align-items:start;
+  font-size:12px;   line-height:1.3;
+  padding:5px 7px;  gap:8px;
+  background: color-mix(in oklab, var(--card), #000 2%);
+  border: 1px dashed color-mix(in oklab, var(--line), transparent 30%);
+  border-radius:8px; padding:6px 8px;
+}
+.dlog .when{ color: var(--muted,#64748b); white-space:nowrap; font-variant-numeric: tabular-nums; }
+.dlog .msg{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dlog .lvl{ font-size:11px; font-weight:700; border-radius:999px; padding:2px 8px; border:1px solid var(--line); }
+.lvl.error{ background:#fee2e2; color:#991b1b } .lvl.warn{ background:#fef3c7; color:#92400e }
+.lvl.info{ background:#e0f2fe; color:#075985 } .lvl.debug{ background:#ede9fe; color:#5b21b6 }
+@media (prefers-color-scheme: dark){
+  .dash-popover{ position:fixed; top:84px; right:20px; width:460px; }
+  .dlog .msg{ color:#e6e8ee; }
+  .lvl.error{ background:#7f1d1d; color:#fecaca } .lvl.warn{ background:#78350f; color:#fde68a }
+  .lvl.info{ background:#0c4a6e; color:#bae6fd } .lvl.debug{ background:#4c1d95; color:#ddd6fe }
+}
+
+.badge { padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+.badge.ok  { background: #dcfce7; color: #166534; }  
+.badge.bad { background: #fee2e2; color: #991b1b; }   
+@media (prefers-color-scheme: dark) {
+  .badge.ok  { background:#064e3b; color:#bbf7d0; }
+  .badge.bad { background:#7f1d1d; color:#fecaca; }
+}
+
+.card.metric-pro .sub { font-size: 11px; gap: 6px; }
+.card.metric-pro .pill { padding: 1px 6px; }
+.card.metric-pro .pill b { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.card.metric-pro.net .pill.rx,
+.card.metric-pro.net .chip.rx {
+  background:#eaf2ff; border:1px solid #cfe0ff; color:#1e40af;
+}
+.card.metric-pro.net .pill.tx,
+.card.metric-pro.net .chip.tx {
+  background:#ffeaf4; border:1px solid #ffd0e6; color:#9d174d;
+}
+.card.metric-pro.net .pill.rx .dot,
+.card.metric-pro.net .chip.rx .dot { background:#3b82f6; }
+.card.metric-pro.net .pill.tx .dot,
+.card.metric-pro.net .chip.tx .dot { background:#f472b6; }
+.card.metric-pro.net .pill,
+.card.metric-pro.net .chip { padding:2px 10px; border-radius:999px; font-weight:700; }
+.card.metric-pro.net .pill b,
+.card.metric-pro.net .chip b { margin-left:6px; }
+
+.chip.rx   { background: #eaf2ff; border-color: #cfe0ff; color: #1e40af; } /* blue */
+.chip.tx   { background: #ffeaf4; border-color: #ffd0e6; color: #9d174d; } /* pink */
+
+.chip.rx .dot { background:#3b82f6; }
+.chip.tx .dot { background:#f472b6; }
+
+.card.metric-pro.net .chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-weight: 700;
+}
+.card.metric-pro.net .chip b { margin-left: 6px; }
+.legend-pills{display:flex;gap:8px;align-items:center;margin:2px 0 6px 36px;flex-wrap:wrap}
+.pill.legend{padding:2px 8px;border-radius:999px;background:var(--bgchip);border:1px solid var(--line);
+  display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600}
+
+.popover.open{opacity:1;transform:translateY(0);pointer-events:auto}
+
+:root {
+    --card: #fff;
+    --line: #e9edf3;
+    --text: #0f172a;
+    --muted: #64748b;
+    --ok: #16a34a;
+    --warn: #ef4444;
+    --blk: #111827;
+    --bgchip: #f8fafc;
+    }
+
+.small {
+    font-size: 12px;
+    color: var(--muted)
+    }
+
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
+    }
+
+.card.metric-pro {
+    position: relative;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--card);
+    box-shadow: 0 4px 12px rgba(2, 6, 23, .06);
+    padding: 10px 10px 12px;
+    overflow: hidden
+    }
+
+.card.metric-pro .head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0 6px;
+    margin: 0 4px 6px;
+    border-bottom: 1px solid color-mix(in oklab, var(--line), transparent 12%)
+    }
+
+.card.metric-pro .icon {
+    width: 22px;
+    height: 22px;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    background: color-mix(in oklab, var(--m-accent), white 88%);
+    color: color-mix(in oklab, var(--m-accent), black 20%);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--m-accent), black 92%)
+    }
+
+.card.metric-pro h4 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700
+    }
+
+.card.metric-pro .value {
+    margin-left: auto;
+    font-weight: 800;
+    font-size: 13px;
+    letter-spacing: .2px
+    }
+
+.card.metric-pro .sub {
+    display: flex;
+    gap: 8px;
+    margin: 2px 0 6px 30px;
+    color: var(--muted);
+    font-size: 11.5px;
+    flex-wrap: wrap
+    }
+
+.card.metric-pro .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--bgchip);
+    border: 1px solid var(--line)
+    }
+
+.card.metric-pro .pill .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    display: inline-block
+    }
+
+.card.metric-pro .util {
+    height: 5px;
+    border-radius: 999px;
+    background: #f2f4f8;
+    position: relative;
+    overflow: hidden;
+    margin: 0 6px 6px 30px
+    }
+
+.card.metric-pro .util>i {
+    position: absolute;
+    inset: 0 0 0 0;
+    width: 0;
+    background: var(--m-accent);
+    border-radius: 999px;
+    transition: width .25s ease;
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--m-accent), black 80%)
+    }
+
+.card.metric-pro canvas {
+    height: 100px !important;
+    max-height: 100px
+    }
+
+.card.metric-pro.cpu {
+    --m-accent: #3b82f6
+    }
+
+.card.metric-pro.mem {
+    --m-accent: #8b5cf6
+    }
+
+.card.metric-pro.disk {
+    --m-accent: #f59e0b
+    }
+
+.card.metric-pro.net {
+    --m-accent: #10b981
+    }
+
+.card.info-pro {
+    position: relative;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--card);
+    box-shadow: 0 4px 12px rgba(2, 6, 23, .06);
+    padding: 10px
+    }
+
+.card.info-pro .title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0 6px;
+    margin: 0 2px 6px;
+    border-bottom: 1px dashed color-mix(in oklab, var(--line), transparent 12%);
+    font-weight: 700;
+    font-size: 13px
+    }
+
+.chip-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 7px;
+    display: grid;
+    place-items: center;
+    background: #f3f4f6;
+    color: #111827;
+    font-size: 11px
+    }
+
+.kv-grid {
+    display: grid;
+    gap: 6px
+    }
+
+.kv-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 28px
+    }
+
+.kv-row+.kv-row {
+    border-top: 1px dashed color-mix(in oklab, var(--line), transparent 15%);
+    padding-top: 6px
+    }
+
+.kv-k {
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 12.5px
+    }
+
+.kv-v {
+    font-weight: 700;
+    font-size: 12.5px
+    }
+
+.kv-row.hidden {
+    display: none
+    }
+
+.copyable {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 6px;
+    border-radius: 7px;
+    background: var(--bgchip);
+    border: 1px solid var(--line)
+    }
+
+.copyable .copy-ico{
+  opacity: .7;
+  transition: opacity .15s;
+}
+.copyable:hover .copy-ico{
+  opacity: .9;
+}
+.copyable{ cursor:pointer; }
+
+.pill-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap
+    }
+
+.pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 12px;
+    line-height: 1
+    }
+
+.dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    display: inline-block;
+    box-shadow: 0 0 0 2px #fff inset
+    }
+
+.pill.ok {
+    background: #dcfce7;
+    color: #166534
+    }
+
+.dot.ok {
+    background: #16a34a
+    }
+
+.pill.warn {
+    background: #fee2e2;
+    color: #991b1b
+    }
+
+.dot.warn {
+    background: #ef4444
+    }
+
+.pill.mut {
+    background: #e5e7eb;
+    color: #374151
+    }
+
+.dot.mut {
+    background: #6b7280
+    }
+
+.more-wrap {
+    position: relative;
+    display: inline-block;
+    margin-left: auto
+    }
+
+.more-pop {
+    border: 0;
+    background: #eef2f6;
+    color: #111827;
+    font-weight: 700;
+    padding: 4px 8px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 12.5px
+    }
+
+.more-pop:hover {
+    background: #e5e7eb
+    }
+
+.popover {
+    position: fixed;
+    z-index: 10050;
+    width: 280px;
+    max-width: calc(100vw - 20px);
+    padding: 8px;
+    border-radius: 10px;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 12px 28px rgba(2, 8, 23, .14), 0 2px 6px rgba(2, 8, 23, .08);
+    opacity: 0;
+    transform: translateY(-6px);
+    pointer-events: none;
+    transition: opacity .12s, transform .12s
+    }
+
+.more-wrap[data-open="true"] .popover,
+.more-wrap:hover .popover {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto
+    }
+
+.popover::after {
+    content: "";
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    background: #fff;
+    border-left: 1px solid #e5e7eb;
+    border-top: 1px solid #e5e7eb;
+    transform: rotate(45deg)
+    }
+
+@media(hover:none) {
+    .more-wrap:hover .popover {
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(-6px)
+        }
+    }
+.dash-popover{ top:84px; right:20px; width:460px; font-size:12px }
+.toggle{ --h:22px; --w:44px; gap:8px }
+.toggle .lab{ font-size:11.5px }
+.toggle .dot{ width:18px; height:18px; margin-left:2px }
+.toggle.t-dark.on .dot{ transform:translateX(22px) }
+
+</style>
+
+<h1 class="page-title">
+    <i class="fa-solid fa-chart-simple"></i> Dashboard
+</h1>
+<div class="nav-sep"></div>
+
+<div class="grid-charts">
+    <section class="card metric-pro cpu">
+        <div class="head">
+            <div class="icon"><i class="fas fa-microchip"></i></div>
+            <h4>CPU Usage</h4>
+            <div id="cpu-val" class="value">--%</div>
+        </div>
+
+        <div class="sub">
+            <span class="pill"><span class="small">Cores</span> <b id="cores">—</b></span>
+            <span class="pill"><span class="small">Threads</span> <b id="threads">—</b></span>
+            <span class="pill" title="1m / 5m / 15m">
+                <span class="small">Load</span>
+                <b id="cpu-load">—%</b>
+                <small class="muted">(<span id="load1-top">—</span>/<span id="load5-top">—</span>/<span
+                        id="load15-top">—</span>)</small>
+            </span>
+        </div>
+
+        <canvas id="cpuChart"></canvas>
+    </section>
+
+    <section class="card metric-pro mem">
+        <div class="head">
+            <div class="icon"><i class="fas fa-memory"></i></div>
+            <h4>Memory Usage</h4>
+            <div id="mem-val" class="value">--%</div>
+        </div>
+
+        <div class="sub">
+            <span class="pill"><span class="dot" style="background:#8b5cf6"></span><span class="small">Used</span> <b
+                    id="mem-used">—</b></span>
+            <span class="pill"><span class="dot" style="background:#e5e7eb"></span><span class="small">Free</span> <b
+                    id="mem-free">—</b></span>
+            <span class="pill"><span class="small">Total</span> <b id="mem-total">—</b></span>
+            <span class="pill" title="Swap used / total">
+                <span class="small">Swap</span> <b id="swap-used">—</b><small class="muted"> / </small><b
+                    id="swap-total">—</b>
+            </span>
+        </div>
+
+        <div class="util" data-util-from="#mem-val"><i></i></div>
+        <canvas id="memChart"></canvas>
+    </section>
+
+    <section class="card metric-pro disk">
+        <div class="head">
+            <div class="icon"><i class="fas fa-hdd"></i></div>
+            <h4>Disk Usage</h4>
+            <div id="disk-val" class="value">--%</div>
+        </div>
+
+        <div class="sub">
+            <span class="pill"><span class="dot" style="background:#f59e0b"></span><span class="small">Used</span> <b
+                    id="disk-used">—</b></span>
+            <span class="pill"><span class="dot" style="background:#e5e7eb"></span><span class="small">Free</span> <b
+                    id="disk-free">—</b></span>
+            <span class="pill"><span class="small">Total</span> <b id="disk-total">—</b></span>
+        </div>
+
+        <div class="util" data-util-from="#disk-val"><i></i></div>
+        <canvas id="diskChart"></canvas>
+    </section>
+
+    <section class="card metric-pro net wide">
+        <div class="head">
+            <div class="icon"><i class="fas fa-network-wired"></i></div>
+            <h4>Network I/O</h4>
+            <div id="net-val" class="value">--/-- MB/s</div>
+        </div>
+
+        <div class="sub">
+            <span class="pill"><span class="dot" style="background:#3b82f6"></span><span class="small">RX</span> <b
+                    id="rx-last">—</b></span>
+            <span class="pill"><span class="dot" style="background:#f472b6"></span><span class="small">TX</span> <b
+                    id="tx-last">—</b></span>
+            <span class="pill"><span class="small">RX total</span> <b id="rx-total">—</b></span>
+            <span class="pill"><span class="small">TX total</span> <b id="tx-total">—</b></span>
+            <span class="pill"><span class="small">Conn</span> <b id="conn-total">0</b></span>
+            <span class="pill"><span class="small">Unique</span> <b id="conn-uniq">0</b></span>
+            <span class="pill">
+                <span class="small">Unique public IPs</span>
+                <b id="uniq-pub-count">0</b>
+            </span>
+        </div>
+        
+
+        <canvas id="netChart"></canvas>
+    </section>
+</div>
+
+
+<div class="grid-info">
+    <section class="card info-pro sys-card">
+        <div class="title">
+            <span class="chip-icon"><i class="fas fa-microchip"></i></span><span>System Info</span>
+            <span class="more-wrap">
+                <button class="more-pop" type="button" aria-haspopup="dialog" aria-expanded="false">
+                    <i class="fas fa-circle-info"></i> More information
+                </button>
+                <div class="popover" role="dialog" aria-label="More system information">
+                    <div class="kv-grid">
+                        <div class="kv-row">
+                            <div class="kv-k">OS</div>
+                            <div class="kv-v" id="platform">—</div>
+                        </div>
+                        <div class="kv-row">
+                            <div class="kv-k">Kernel</div>
+                            <div class="kv-v" id="kernel">—</div>
+                        </div>
+                        <div class="kv-row">
+                            <div class="kv-k">Arch</div>
+                            <div class="kv-v" id="arch">—</div>
+                        </div>
+                    </div>
+                </div>
+            </span>
+        </div>
+        <div class="kv-grid">
+            <div class="kv-row">
+                <div class="kv-k">Hostname</div>
+                <div class="kv-v">
+                    <span class="copyable" data-copy-target="#hostname"><span id="hostname" class="mono">—</span><i
+                            class="far fa-copy copy-ico"></i></span>
+                </div>
+            </div>
+            <div class="kv-row">
+                <div class="kv-k">Uptime</div>
+                <div class="kv-v" id="uptime">—</div>
+            </div>
+            <div class="kv-row">
+                <div class="kv-k">CPU Cores</div>
+                <div class="kv-v" id="cores">—</div>
+            </div>
+            <div class="kv-row">
+                <div class="kv-k">Load Avg</div>
+                <div class="kv-v"><span id="load1">—</span> / <span id="load5">—</span> / <span id="load15">—</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="card info-pro ip-card">
+        <div class="title"><span class="chip-icon"><i class="fas fa-globe"></i></span><span>Public IPs</span></div>
+        <div class="kv-grid">
+            <div class="kv-row">
+                <div class="kv-k">IPv4</div>
+                <div class="kv-v"><span class="copyable" data-copy-target="#ipv4"><span id="ipv4"
+                            class="mono">—</span><i class="fas fa-copy copy-ico"></i></span></div>
+            </div>
+            <div class="kv-row">
+                <div class="kv-k">IPv6</div>
+                <div class="kv-v"><span class="copyable" data-copy-target="#ipv6"><span id="ipv6"
+                            class="mono">—</span><i class="fas fa-copy copy-ico"></i></span></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="card info-pro peers-mini">
+        <div class="title">
+            <span class="chip-icon"><i class="fas fa-users"></i></span>
+            <span>Peers</span>
+    
+            <div class="scope-toggle" role="tablist" aria-label="Peer scope" style="margin-left:auto;">
+                <input type="radio" id="ps-local" name="peer-scope" value="local" checked>
+                <label for="ps-local" role="tab" aria-selected="true">Local</label>
+    
+                <input type="radio" id="ps-nodes" name="peer-scope" value="nodes">
+                <label for="ps-nodes" role="tab" aria-selected="false">Nodes</label>
+    
+                <input type="radio" id="ps-total" name="peer-scope" value="total">
+                <label for="ps-total" role="tab" aria-selected="false">Total</label>
+            </div>
+        </div>
+    
+        <div class="pill-row">
+            <span class="pill ok"><span class="dot ok"></span>Online <span id="count-online">0</span></span>
+            <span class="pill warn"><span class="dot warn"></span>Offline <span id="count-offline">0</span></span>
+            <span class="pill mut"><span class="dot mut"></span>Blocked <span id="count-blocked">0</span></span>
+        </div>
+    </section>
+
+
+
+    <section class="card info-pro">
+        <div class="title">
+            <span class="chip-icon"><i class="fas fa-heartbeat"></i></span>
+            <span>App & Telegram</span>
+            <a href="/logs" data-open="dash-logs" class="muted small" style="margin-left:auto">
+                <i class="far fa-file-alt"></i> Logs
+            </a>
+        </div>
+        
+    
+        <div class="kv-grid">
+            <div class="kv-row">
+                <div class="kv-k">App</div>
+                <div class="kv-v">
+                    <span id="app-status" class="badge">—</span>
+                    <span class="muted small">since </span>
+                    <span id="app-since" class="small">—</span>
+                </div>
+            </div>
+    
+            <div class="kv-row">
+                <div class="kv-k">Telegram</div>
+                <div class="kv-v">
+                    <span id="tg-status" class="badge">—</span>
+                    <span class="muted small">last </span>
+                    <span id="tg-last" class="small">—</span>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+<div id="dash-logs-pop" class="dash-popover" hidden aria-hidden="true" role="dialog" aria-label="Recent logs">
+    <div class="pop-head">
+        <div class="title"><i class="far fa-file-alt"></i> Recent Logs</div>
+        <div class="actions">
+            <button id="dash-logs-auto" class="toggle t-dark on" type="button" role="switch" aria-checked="true"
+                title="Auto-refresh">
+                <span class="dot"></span>
+                <span class="lab">Auto-refresh</span>
+            </button>
+
+            <a href="/logs" class="small muted" title="Open full logs">Open full</a>
+            <button id="dash-logs-close" class="icon-btn" title="Close"><i class="fas fa-times"></i></button>
+        </div>
+    </div>
+    <div id="dash-logs-list" class="pop-body"></div>
+    <div id="dash-logs-empty" class="muted small" style="display:none;padding:8px 10px;">No recent entries.</div>
+</div>
+
+<script>
+    document.addEventListener('click', async (e) => {
+            const host = e.target.closest('[data-copy-target]');
+            if (!host) return;
+
+            if (host.classList && host.classList.contains('copyable')) return;
+
+            const sel = host.getAttribute('data-copy-target');
+            const node = sel && document.querySelector(sel);
+            const text = node ? node.textContent.trim() : '';
+            if (!text) return;
+
+            try {
+                await navigator.clipboard.writeText(text);
+            } catch {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                ta.remove();
+            }
+
+            const notify = window.toastSafe || window.toast;
+            if (typeof notify === 'function') notify('Copied', 'success', 1200);
+        });
+
+
+    function updateUtil() {
+        document.querySelectorAll('.util[data-util-from]').forEach(el => {
+            const sel = el.getAttribute('data-util-from'), vEl = document.querySelector(sel); if (!vEl) return;
+            const m = String(vEl.textContent || '').match(/([\d.]+)/), pct = m ? Math.max(0, Math.min(100, parseFloat(m[1]))) : 0;
+            el.firstElementChild.style.width = pct + '%';
+        });
+    }
+    new MutationObserver(updateUtil).observe(document.body, { subtree: true, childList: true, characterData: true });
+    updateUtil();
+
+    function hideRows() {
+        document.querySelectorAll('.kv-row').forEach(row => {
+            const v = row.querySelector('.kv-v'); if (!v) return;
+            row.classList.toggle('hidden', /^\s*(—|)$/.test(v.textContent));
+        });
+    }
+    new MutationObserver(hideRows).observe(document.body, { subtree: true, childList: true, characterData: true });
+    hideRows();
+
+    document.querySelectorAll('.more-wrap .more-pop').forEach(btn => {
+        const wrap = btn.closest('.more-wrap'), pop = wrap.querySelector('.popover');
+        const set = (open) => { wrap.dataset.open = open ? 'true' : 'false'; btn.setAttribute('aria-expanded', open); if (open) place(btn, pop); };
+
+        function place(anchor, box) {
+            const SAFE = 10, r = anchor.getBoundingClientRect();
+            const pw = Math.min(280, window.innerWidth - SAFE * 2);
+            box.style.width = pw + 'px';
+            let left = Math.min(Math.max(r.right - pw, SAFE), window.innerWidth - SAFE - pw);
+            const below = window.innerHeight - r.bottom, above = r.top;
+            let top;
+            if (above > below && above > 140) { top = Math.max(r.top - box.offsetHeight - 10, SAFE); box.dataset.arrow = 'bottom'; }
+            else { top = Math.max(r.bottom + 8, SAFE); box.dataset.arrow = 'top'; }
+            box.style.left = left + 'px'; box.style.top = top + 'px';
+
+            const arrowLeft = Math.min(Math.max(r.left + r.width / 2 - left, 12), pw - 12);
+            box.style.setProperty('--arrowLeft', arrowLeft + 'px');
+            if (box.dataset.arrow === 'top') { box.style.setProperty('--arrowTop', '-6px'); box.style.setProperty('--arrowRot', '45deg'); }
+            else { box.style.setProperty('--arrowTop', (box.offsetHeight - 4) + 'px'); box.style.setProperty('--arrowRot', '225deg'); }
+            box.style.setProperty('--arrowVis', '1');
+        }
+
+        const style = document.createElement('style');
+        style.textContent = '.popover::after{top:var(--arrowTop,-6px);left:var(--arrowLeft,20px);transform:rotate(var(--arrowRot,45deg));opacity:var(--arrowVis,0);}';
+        document.head.appendChild(style);
+
+        btn.addEventListener('click', e => { e.stopPropagation(); set(!(wrap.dataset.open === 'true')); });
+        wrap.addEventListener('mouseenter', () => place(btn, pop));
+        document.addEventListener('click', e => { if (!wrap.contains(e.target)) set(false); });
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') set(false); });
+        window.addEventListener('resize', () => { if (wrap.dataset.open === 'true') place(btn, pop); });
+        window.addEventListener('scroll', () => { if (wrap.dataset.open === 'true') place(btn, pop); }, { passive: true });
+    });
+    (() => {
+        const $ = (s, r = document) => r.querySelector(s);
+        const pop = $('#dash-logs-pop');
+        const list = $('#dash-logs-list');
+        const empty = $('#dash-logs-empty');
+        const autoBtn = $('#dash-logs-auto');
+        const closeBtn = $('#dash-logs-close');
+        const LIMIT = 30;
+        const POLL = 5000;
+        let timer = null;
+
+        function lvlClass(s) {
+            s = (s || '').toLowerCase();
+            if (s.includes('error') || s.includes('exception')) return 'error';
+            if (s.includes('warn')) return 'warn';
+            if (s.includes('debug')) return 'debug';
+            return 'info';
+        }
+        function toEpoch(v) {
+            if (v == null) return null;
+            if (typeof v === 'number') return v > 1e12 ? Math.floor(v / 1000) : v;
+            const d = new Date(v); return isNaN(d) ? null : Math.floor(d.getTime() / 1000);
+        }
+        function fmtLocal(ts) {
+            const d = new Date(ts * 1000);
+            const pad = n => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        }
+        function humanTime(raw) { const e = toEpoch(raw); return e ? fmtLocal(e) : (raw ?? ''); }
+
+        function render(items) {
+            list.innerHTML = '';
+            if (!items || !items.length) { empty.style.display = 'block'; return; }
+            empty.style.display = 'none';
+            for (const it of items.slice(-LIMIT)) {
+                const when = humanTime(it.time || it.ts || '');
+                const orig = it.time || it.ts || '';
+                const row = document.createElement('div'); row.className = 'dlog';
+                row.innerHTML =
+                    `<div class="when" title="${orig}">${when}</div>
+       <div class="msg">${(it.msg || it.message || it.line || '')}</div>
+       <div class="lvl ${lvlClass(it.level || it.lvl || it.sev || 'info')}">${(it.level || it.lvl || it.sev || 'INFO').toUpperCase()}</div>`;
+                list.append(row);
+            }
+        }
+
+        function textTail(text) {
+            const lines = (text || '').trim().split('\n').filter(Boolean).slice(-LIMIT);
+            return lines.map(line => {
+                const m = line.match(/^(\d{4}-\d{2}-\d{2}[\sT]\d{2}:\d{2}:\d{2}(?:[.,]\d{3})?)\s+([A-Z]+)\s+(.*)$/);
+                return { time: m ? m[1] : '', level: m ? m[2] : (line.includes('ERROR') ? 'ERROR' : line.includes('WARN') ? 'WARN' : 'INFO'), msg: m ? m[3] : line };
+            });
+        }
+
+        async function getLogs() {
+            try {
+                let r = await fetch('/api/app_logs?format=json&limit=' + LIMIT, { credentials: 'same-origin', cache: 'no-store' });
+                if (r.ok) {
+                    const j = await r.json().catch(() => null);
+                    const arr = j ? (Array.isArray(j) ? j : (j.items || j.logs || [])) : [];
+                    if (arr.length) { render(arr); return; }
+                }
+                const r2 = await fetch('/api/app_logs', { credentials: 'same-origin', cache: 'no-store' });
+                const t = await r2.text();
+                render(textTail(t));
+            } catch { }
+        }
+
+        function stopAuto() { if (timer) { clearInterval(timer); timer = null; } }
+        function startAuto() { stopAuto(); timer = setInterval(getLogs, POLL); }
+        function autoOn() { return autoBtn?.classList.contains('on'); }
+        function setAuto(on) {
+            if (!autoBtn) return;
+            autoBtn.classList.toggle('on', !!on);
+            autoBtn.setAttribute('aria-checked', on ? 'true' : 'false');
+            on ? startAuto() : stopAuto();
+        }
+
+        function toggleAuto() { setAuto(!autoOn()); }
+
+        function openPop() {
+            pop.hidden = false; pop.setAttribute('aria-hidden', 'false');
+            getLogs();
+            if (autoOn()) startAuto();
+        }
+        function closePop() {
+            pop.hidden = true; pop.setAttribute('aria-hidden', 'true');
+            stopAuto();
+        }
+
+        autoBtn?.addEventListener('click', toggleAuto);
+        closeBtn?.addEventListener('click', closePop);
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hidden) closePop(); });
+        document.addEventListener('click', (e) => {
+            if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('[data-open="dash-logs"]')) closePop();
+        });
+
+        document.addEventListener('click', (e) => {
+            const a = e.target.closest('a');
+            if (!a) return;
+            if (a.dataset.open === 'dash-logs' ||
+                (a.textContent.trim().toLowerCase() === 'logs' && a.closest('.grid-info, .cards, .card'))) {
+                e.preventDefault(); openPop();
+            }
+        });
+
+        setAuto(true);
+    })();
+</script>
+
+
+{% endblock %}

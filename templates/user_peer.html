@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Your WireGuard Access</title>
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}">
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Regular.woff2') }}" as="font"
+        type="font/woff2" crossorigin>
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-SemiBold.woff2') }}" as="font"
+        type="font/woff2" crossorigin>
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Bold.woff2') }}" as="font" type="font/woff2"
+        crossorigin>
+
+    <link rel="stylesheet" href="/static/css/userlink.css" />
+
+<style>
+#bg-canvas{
+  position:fixed; inset:0; width:100%; height:100%;
+  display:block; z-index:0; pointer-events:none;
+}
+
+.wrap{ position:relative; z-index:1; }
+:root {
+    --auth-bg: #0b1a30;
+    --auth-bg2: #14233e;
+    --particles-rgb: 43,52,83;
+    --particles-alpha: .90;
+    }
+:root.dark,
+:root[data-theme="dark"],
+body.dark,
+html.dark{
+  --auth-bg: #0b1020;
+  --auth-bg2: #141b2f;
+  --particles-rgb: 170,188,230;
+  --particles-alpha: .55;
+}
+
+@media (prefers-color-scheme: light) {
+    :root {
+        --auth-bg: #eef2f7;
+        --auth-bg2: #dde6f2;
+        --particles: #7b8a9f;
+    }
+}
+html,
+body {
+    height: 100%
+}
+
+body {
+    margin: 0;
+    background: linear-gradient(145deg, var(--auth-bg), var(--auth-bg2));
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+#particles-bg {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    pointer-events: none;
+}
+
+#particles-bg>canvas {
+    width: 100% !important;
+    height: 100% !important;
+    display: block
+}
+
+.bg-glow::before,
+.bg-glow::after {
+    content: "";
+    position: fixed;
+    inset: -10% -10% auto -10%;
+    height: 60%;
+    background: radial-gradient(600px 400px at 20% 15%, rgba(255, 255, 255, .10), transparent 70%);
+    z-index:-1 !important;
+    pointer-events: none;
+    mix-blend-mode: screen;
+}
+
+.bg-glow::after {
+    inset: auto -10% -10% -10%;
+    height: 70%;
+    background: radial-gradient(800px 500px at 85% 85%, rgba(255, 255, 255, .08), transparent 70%);
+}
+
+.wrap {
+    position: relative;
+    z-index: 1;
+}
+
+.card {
+    border-radius: 18px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, .20), 0 6px 18px rgba(0, 0, 0, .10);
+    backdrop-filter: saturate(110%);
+}
+
+.meter.animated span {
+    transition: width .35s ease
+}
+</style>
+
+<script defer src="/static/js/qrcode.min.js"></script>
+<script defer src="/static/js/userlink.js"></script>
+</head>
+
+<body class="bg-glow">
+    <canvas id="bg-canvas" aria-hidden="true"></canvas>
+
+    <div class="wrap">
+        <div class="card">
+
+            <div class="hdr">
+                <div class="hdr-title">
+                    <i class="fas fa-shield-halved"></i>
+                    <span>Your WireGuard Access</span>
+                </div>
+                <button id="theme-toggle" class="icon-btn ghost small" title="Toggle theme">
+                    <i class="fas fa-moon"></i>
+                </button>
+            </div>
+
+            <div class="subgrid">
+                <div>
+                    <div class="k">Peer</div>
+                    <div class="v" id="name">—</div>
+                </div>
+                <div>
+                    <div class="k">Status</div>
+                    <div class="v status-chip" id="status">
+                        <span class="status-indicator"></span>
+                        <span class="status-label">—</span>
+                    </div>
+                </div>
+                <div>
+                    <div class="k">Address</div>
+                    <div class="v mono" id="address">—</div>
+                </div>
+                <div>
+                    <div class="k">Endpoint</div>
+                    <div class="v mono" id="endpoint">—</div>
+                </div>
+            </div>
+
+            <div class="sep"></div>
+
+            <div class="stats">
+                <section class="stat">
+                    <h4><i class="fas fa-clock"></i> Time</h4>
+                    <div class="row mb6">
+                        <div class="big" id="time-left">00d 00h 00m</div>
+                        <div class="sub" id="expires-at">Expires —</div>
+                    </div>
+                    <div class="meter animated">
+                        <span id="time-bar"></span>
+                        <div class="pct" id="time-pct">0%</div>
+                    </div>
+                    <div class="row mt6">
+                        <div class="sub" id="time-sub">Countdown to expiry</div>
+                    </div>
+                </section>
+
+                <section class="stat">
+                    <h4><i class="fas fa-database"></i> Data</h4>
+                    <div class="row mb6">
+                        <div class="big" id="data-left">0 MiB</div>
+                        <div class="sub" id="limit-human">0 MiB</div>
+                    </div>
+                    <div class="meter animated">
+                        <span id="usage-bar"></span>
+                        <div class="pct" id="data-pct">0%</div>
+                    </div>
+                    <div class="row mt6">
+                        <div class="sub"><span id="used-human">0 MiB</span> used</div>
+                    </div>
+                </section>
+            </div>
+
+            <section class="stat">
+                <div class="row row-between">
+                    <h4><i class="fas fa-qrcode"></i> Config</h4>
+                    <div class="cfg-actions">
+                        <a class="icon-btn solid" id="dl" href="#" download title="Download config">
+                            <i class="fas fa-download"></i>
+                        </a>
+                        <button class="icon-btn ghost" id="copy-config" title="Copy config">
+                            <i class="fas fa-clipboard"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="cfg-row">
+                    <div class="qr" id="qr"></div>
+                    <ul class="tips">
+                        <li><i class="fas fa-mobile-screen"></i> Scan on mobile WireGuard</li>
+                        <li><i class="fas fa-laptop"></i> Desktop: import the <code>.conf</code></li>
+                    </ul>
+                </div>
+            </section>
+
+            <section class="stat">
+                <h4><i class="fas fa-plug"></i> Clients</h4>
+                <div class="clients">
+                    <a class="client chip" href="https://www.wireguard.com/install/" target="_blank">
+                        <i class="fab fa-windows"></i> Windows
+                    </a>
+                    <a class="client chip" href="https://play.google.com/store/apps/details?id=com.wireguard.android"
+                        target="_blank">
+                        <i class="fab fa-android"></i> Android
+                    </a>
+                    <a class="client chip" href="https://apps.apple.com/app/wireguard/id1441195209" target="_blank">
+                        <i class="fab fa-apple"></i> iOS
+                    </a>
+                </div>
+            </section>
+
+            <section class="support">
+                <h4><i class="fas fa-life-ring"></i> Support</h4>
+                <div class="support-row">
+                    {% if support_telegram %}
+                    <a class="support-item compact" href="https://t.me/{{ support_telegram | replace('@','') }}"
+                        target="_blank" aria-label="Telegram">
+                        <span class="icon-box"><i class="fab fa-telegram"></i></span>
+                        <span class="label-box">{{ support_telegram }}</span>
+                    </a>
+                    {% endif %}
+
+                    {% if support_whatsapp %}
+                    <a class="support-item compact"
+                        href="{{ 'https://wa.me/' + support_whatsapp|replace('+','') if support_whatsapp|trim|startswith('+') else support_whatsapp }}"
+                        target="_blank" aria-label="WhatsApp">
+                        <span class="icon-box"><i class="fab fa-whatsapp"></i></span>
+                        <span class="label-box">{{ support_whatsapp if support_whatsapp|trim|startswith('http') else '+'
+                            ~ support_whatsapp|replace('+','') }}</span>
+                    </a>
+                    {% endif %}
+
+                    {% if support_instagram %}
+                    <a class="support-item compact"
+                        href="{{ support_instagram if support_instagram|trim|startswith('http') else 'https://instagram.com/' ~ support_instagram|replace('@','') }}"
+                        target="_blank" aria-label="Instagram">
+                        <span class="icon-box"><i class="fab fa-instagram"></i></span>
+                        <span class="label-box">{{ support_instagram }}</span>
+                    </a>
+                    {% endif %}
+
+                    {% if support_phone %}
+                    <a class="support-item compact" href="tel:{{ support_phone|replace(' ','') }}" aria-label="Phone">
+                        <span class="icon-box"><i class="fas fa-phone"></i></span>
+                        <span class="label-box">{{ support_phone }}</span>
+                    </a>
+                    {% endif %}
+
+                    {% if support_website %}
+                    <a class="support-item compact" href="{{ support_website }}" target="_blank" aria-label="Website">
+                        <span class="icon-box"><i class="fas fa-globe"></i></span>
+                        <span class="label-box">{{ support_website }}</span>
+                    </a>
+                    {% endif %}
+
+                    {% if support_email %}
+                    <a class="support-item compact" href="mailto:{{ support_email }}" aria-label="Email">
+                        <span class="icon-box"><i class="fas fa-envelope"></i></span>
+                        <span class="label-box">{{ support_email }}</span>
+                    </a>
+                    {% endif %}
+
+                    {% if not (support_telegram or support_whatsapp or support_instagram or support_phone or
+                    support_website or support_email) %}
+                    <div class="support-empty sub">No support contacts configured.</div>
+                    {% endif %}
+                </div>
+            </section>
+
+        </div>
+    </div>
+
+    <div id="toast-container"></div>
+    <script>window.USER_LINK_TOKEN = "{{ token }}";</script>
+
+<script>
+    (() => {
+        const cv = document.getElementById('bg-canvas');
+        if (!cv) return;
+        const cx = cv.getContext('2d');
+
+        const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+        let pts = [];
+        const C = { n: 160, r: 2.6, link: 160, v: 0.26 };
+
+        const FORCE = true;
+        const reduce = !FORCE && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+        let PR = 43, PG = 52, PB = 83, AL = 0.9; 
+        function readParticle() {
+            const cs = getComputedStyle(document.documentElement);
+            const rgb = cs.getPropertyValue('--particles-rgb').trim();  
+            const a = parseFloat(cs.getPropertyValue('--particles-alpha')) || AL;
+            const [r, g, b] = rgb.split(',').map(n => parseInt(n, 10));
+            if ([r, g, b].every(Number.isFinite)) { PR = r; PG = g; PB = b; }
+            AL = Math.max(0, Math.min(1, a));
+        }
+        readParticle();
+
+        const mo = new MutationObserver(readParticle);
+        mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme'] });
+        matchMedia('(prefers-color-scheme: dark)').addEventListener('change', readParticle);
+        document.getElementById('theme-toggle')?.addEventListener('click', () => setTimeout(readParticle, 0));
+
+        function size() {
+            const W = Math.floor(innerWidth * dpr);
+            const H = Math.floor(innerHeight * dpr);
+            cv.width = W; cv.height = H;
+            cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            pts = Array.from({ length: C.n }, () => ({
+                x: Math.random() * innerWidth,
+                y: Math.random() * innerHeight,
+                vx: (Math.random() * 2 - 1) * C.v,
+                vy: (Math.random() * 2 - 1) * C.v,
+                r: Math.random() * C.r + .6
+            }));
+        }
+        addEventListener('resize', size, { passive: true });
+        size();
+
+        function frame() {
+            if (reduce) return;
+            const w = innerWidth, h = innerHeight;
+            cx.clearRect(0, 0, w, h);
+
+            const g = cx.createRadialGradient(w * .85, h * .2, 10, w * .85, h * .2, w);
+            g.addColorStop(0, 'rgba(255,255,255,.08)');
+            g.addColorStop(1, 'rgba(255,255,255,0)');
+            cx.fillStyle = g; cx.fillRect(0, 0, w, h);
+
+            cx.fillStyle = `rgba(${PR},${PG},${PB},${AL})`;
+            for (const p of pts) {
+                p.x += p.vx; p.y += p.vy;
+                if (p.x < -10) p.x = w + 10; else if (p.x > w + 10) p.x = -10;
+                if (p.y < -10) p.y = h + 10; else if (p.y > h + 10) p.y = -10;
+                cx.beginPath(); cx.arc(p.x, p.y, p.r, 0, Math.PI * 2); cx.fill();
+            }
+
+            cx.lineWidth = 1;
+            for (let i = 0; i < pts.length; i++) {
+                for (let j = i + 1; j < pts.length; j++) {
+                    const a = pts[i], b = pts[j];
+                    const d = Math.hypot(a.x - b.x, a.y - b.y);
+                    if (d < C.link) {
+                        const alpha = (1 - d / C.link) * (0.30 * AL / 0.9); 
+                        cx.strokeStyle = `rgba(${PR},${PG},${PB},${alpha})`;
+                        cx.beginPath(); cx.moveTo(a.x, a.y); cx.lineTo(b.x, b.y); cx.stroke();
+                    }
+                }
+            }
+            requestAnimationFrame(frame);
+        }
+        requestAnimationFrame(frame);
+    })();
+
+    window.SOCIALS = {
+        telegram: "{{ support_telegram|default('', true) }}",
+        whatsapp: "{{ support_whatsapp|default('', true) }}",
+        instagram: "{{ support_instagram|default('', true) }}",
+        phone: "{{ support_phone|default('', true) }}",
+        website: "{{ support_website|default('', true) }}",
+        email: "{{ support_email|default('', true) }}"
+    };
+</script>
+</body>
+
+</html>

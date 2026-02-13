@@ -1,0 +1,450 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="nodes-page">
+    <div class="page-header">
+        <h1 class="page-title"><i class="fas fa-server"></i> Nodes</h1>
+    </div>
+
+    <div class="nodes-actions">
+        <button id="open-node-modal" class="btn">
+            <i class="fas fa-plus"></i> New node
+        </button>
+    </div>
+
+    <div class="nodes-card">
+        <div class="nodes-table-wrap">
+            <table class="nodes-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>URL</th>
+                        <th>Enabled</th>
+                        <th>Peers</th>
+                        <th>Interfaces</th>
+                        <th>Status</th>
+                        <th>Last seen</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="nodes-body"></tbody>
+            </table>
+
+
+            <div id="nodes-empty" class="nodes-empty" style="display:none">
+                No nodes yet. Click “New node” to add one.
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="node-mini-modal" class="modal nodes-modal">
+    <div class="modal-backdrop" data-close="1"></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="node-mini-title">
+        <div class="modal-header">
+            <h2 id="node-mini-title" class="modal-title">
+                <i class="fas fa-circle-plus"></i> Add node
+            </h2>
+            <button class="icon-btn" id="node-mini-close" aria-label="Close" type="button">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+
+        <form id="node-form" class="nodes-form" autocomplete="off">
+            <div class="modal-body">
+                <label for="n-name">
+                    <div class="label">Name</div>
+                    <input id="n-name" name="name" class="input" placeholder="e.g. azumi" autocomplete="organization"
+                        required>
+                </label>
+
+                <label for="n-url">
+                    <div class="label">Base URL</div>
+                    <input id="n-url" name="base_url" class="input" type="url" placeholder="https://example.com:8443"
+                        spellcheck="false" autocapitalize="off" required>
+                    <p class="field-help">Full URL of the node agent, including scheme and port.</p>
+                </label>
+
+                <label for="n-key">
+                    <div class="label">API key</div>
+                    <input id="n-key" name="api_key" class="input" type="password" autocomplete="off" spellcheck="false"
+                        autocapitalize="off" required>
+                    <p class="field-help">Secret key configured on the node agent.</p>
+                </label>
+            </div>
+
+            <div class="modal-footer nodes-modal-footer">
+                <button type="button" class="btn ghost" id="node-mini-cancel">Cancel</button>
+                <button class="btn" type="submit">
+                    <i class="fas fa-save"></i> Save
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+
+<div id="ui-confirm" class="ui-confirm" hidden>
+    <div class="ui-confirm__sheet">
+        <div class="ui-confirm__title"></div>
+        <div class="ui-confirm__body"></div>
+        <div class="ui-confirm__actions">
+            <button class="btn ghost" data-act="cancel">Cancel</button>
+            <button class="btn danger" data-act="ok">OK</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.showToast = (m, t = 'info', sticky = false) => toastSafe(m, t, sticky);
+    window.toastInfo = (m, s = false) => toastSafe(m, 'info', s);
+    window.toastWarn = (m, s = false) => toastSafe(m, 'warn', s);
+    window.toastError = (m, s = false) => toastSafe(m, 'error', s);
+    window.toastSuccess = (m, s = false) => toastSafe(m, 'success', s);
+
+    (function setupUiConfirm() {
+        if (window.uiConfirm) return;  
+
+        const root = document.getElementById('ui-confirm');
+        if (!root) {
+            window.uiConfirm = (opts = {}) =>
+                Promise.resolve(confirm(opts.body || 'Are you sure?'));
+            return;
+        }
+
+        const titleEl = root.querySelector('.ui-confirm__title');
+        const bodyEl = root.querySelector('.ui-confirm__body');
+        const okBtn = root.querySelector('[data-act="ok"]');
+        const cancelBtn = root.querySelector('[data-act="cancel"]');
+
+        window.uiConfirm = function (opts = {}) {
+            const {
+                title = 'Are you sure?',
+                body = '',
+                okText = 'OK',
+                cancelText = 'Cancel'
+            } = opts;
+
+            titleEl.textContent = title;
+            bodyEl.textContent = body;
+
+            okBtn.textContent = okText;
+            cancelBtn.textContent = cancelText;
+
+            root.hidden = false;
+            root.classList.add('open');
+
+            return new Promise((resolve) => {
+                function cleanup(result) {
+                    root.classList.remove('open');
+                    root.hidden = true;
+                    okBtn.removeEventListener('click', onOk);
+                    cancelBtn.removeEventListener('click', onCancel);
+                    root.removeEventListener('click', onBackdrop);
+                    document.removeEventListener('keydown', onKey);
+                    resolve(result);
+                }
+
+                function onOk(e) {
+                    e.preventDefault();
+                    cleanup(true);
+                }
+
+                function onCancel(e) {
+                    e.preventDefault();
+                    cleanup(false);
+                }
+
+                function onBackdrop(e) {
+                    if (e.target === root) cleanup(false);
+                }
+
+                function onKey(e) {
+                    if (e.key === 'Escape') cleanup(false);
+                }
+
+                okBtn.addEventListener('click', onOk);
+                cancelBtn.addEventListener('click', onCancel);
+                root.addEventListener('click', onBackdrop);
+                document.addEventListener('keydown', onKey);
+            });
+        };
+    })();
+</script>
+
+
+<script defer src="/static/js/nodes.js"></script>
+
+<style>
+    .nodes-modal .modal-card {
+        width: min(520px, 96vw);
+        max-height: 90vh;
+        padding: 0;
+        border-radius: 14px;
+    }
+
+    .nodes-modal .nodes-form {
+        display: block;
+        padding: 0;
+    }
+
+    .nodes-modal .modal-header {
+        padding: 14px 18px;
+        border-bottom: 1px solid #eef2f7;
+    }
+
+    .nodes-modal .modal-title {
+        font-size: 17px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .nodes-modal .modal-title i {
+        width: 24px;
+        height: 24px;
+        border-radius: 999px;
+        display: inline-grid;
+        place-items: center;
+        background: #f3f4f6;
+        color: #111827;
+        font-size: 12px;
+    }
+
+    .nodes-modal .modal-body {
+        padding: 12px 18px 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .nodes-modal .nodes-form label {
+        display: block;
+        margin: 0;
+    }
+
+    .nodes-modal .nodes-form .label {
+        font-size: 13px;
+        font-weight: 600;
+        color: #0f172a;
+        margin-bottom: 4px;
+    }
+
+    .nodes-modal .nodes-form .input {
+        width: 100%;
+        height: 40px;
+        padding: 8px 10px;
+        font-size: 14px;
+        border-radius: 9px;
+        border: 1px solid #d0d5dd;
+        background: #f9fafb;
+        transition: border-color .15s, box-shadow .15s;
+    }
+
+    .nodes-modal .nodes-form .input:focus {
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, .16);
+        outline: none;
+        background: #ffffff;
+    }
+
+    .nodes-modal .nodes-form .field-help {
+        margin: 4px 0 0;
+        font-size: 12px;
+        color: #6b7280;
+        line-height: 1.4;
+    }
+
+    .nodes-modal-footer {
+        padding: 10px 18px 16px;
+        border-top: 1px solid #eef2f7;
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 10px;
+    }
+
+    .nodes-modal-footer .btn {
+        height: 36px;
+        padding: 8px 14px;
+        font-size: 13px;
+        border-radius: 9px;
+    }
+
+    .nodes-modal-footer .btn.ghost {
+        background: #fff;
+        color: #111827;
+        border: 1px solid #e5e7eb;
+    }
+
+    .nodes-modal-footer .btn.ghost:hover {
+        background: #f3f4f6;
+    }
+
+    @media (max-width: 640px) {
+        .nodes-modal .modal-card {
+            width: 94vw;
+            margin: 0 8px;
+        }
+
+        .nodes-modal .modal-header,
+        .nodes-modal .modal-body,
+        .nodes-modal-footer {
+            padding-left: 14px;
+            padding-right: 14px;
+        }
+    }
+
+    .page-header {
+        display: flex;
+        align-items: center;
+    }
+
+    .page-title {
+        margin: 0;
+        display: flex;
+        gap: .5rem;
+        align-items: center;
+    }
+
+    .nodes-actions {
+        margin: 8px 0 12px 0;
+        display: flex;
+        justify-content: flex-start;
+    }
+
+    @media (max-width:640px) {
+        .nodes-actions .btn {
+            width: 100%;
+        }
+    }
+
+    .node-peers,
+    .node-ifaces {
+        font-size: 0.85rem;
+        color: #6b7280;
+        white-space: nowrap;
+    }
+
+    .status-pill.status-disabled {
+        background: rgba(148, 163, 184, 0.14);
+        color: #6b7280;
+    }
+
+    .status-pill.status-disabled .dot {
+        background: #f42a2a;
+    }
+
+    .nodes-table-wrap table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    .nodes-table-wrap th,
+    .nodes-table-wrap td {
+        padding: 12px 16px;
+    }
+
+    .nodes-table-wrap th {
+        font-size: 0.8rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .04em;
+        color: #6b7280;
+        background: #f9fafb;
+    }
+
+    .nodes-table-wrap tr:nth-child(even) td {
+        background: #f9fafb;
+    }
+
+    .nodes-table-wrap tr:hover td {
+        background: #f3f4f6;
+    }
+
+    .nodes-actions-cell {
+        text-align: right;
+        white-space: nowrap;
+    }
+
+    .nodes-actions-cell .icon-btn {
+        border-radius: 999px;
+        padding: 6px 9px;
+        font-size: 0.8rem;
+        border: none;
+        cursor: pointer;
+    }
+
+    .nodes-actions-cell .icon-btn+.icon-btn {
+        margin-left: 4px;
+    }
+
+    .nodes-actions-cell .icon-btn.ghost {
+        background: #eff1f5;
+        color: #4b5563;
+    }
+
+    .nodes-actions-cell .icon-btn.ghost:hover {
+        background: #e5e7eb;
+    }
+
+    .nodes-actions-cell .icon-btn.danger {
+        background: #fee2e2;
+        color: #b91c1c;
+    }
+
+    .nodes-actions-cell .icon-btn.danger:hover {
+        background: #fecaca;
+    }
+
+    .toggle-switch {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 40px;
+        height: 22px;
+        cursor: pointer;
+    }
+
+    .toggle-switch input {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        margin: 0;
+        cursor: pointer;
+    }
+
+    .toggle-switch-track {
+        position: absolute;
+        inset: 0;
+        border-radius: 999px;
+        background: #e5e7eb;
+        box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.6);
+        transition: background 150ms ease-out, box-shadow 150ms ease-out;
+    }
+
+    .toggle-switch-thumb {
+        position: absolute;
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        background: #ffffff;
+        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.35);
+        transform: translateX(-9px);
+        transition: transform 150ms ease-out;
+    }
+
+    .toggle-switch input:checked+.toggle-switch-track {
+        background: rgba(16, 185, 129, 0.85);
+        box-shadow: inset 0 0 0 1px rgba(5, 150, 105, 0.9);
+    }
+
+    .toggle-switch input:checked+.toggle-switch-track+.toggle-switch-thumb {
+        transform: translateX(9px);
+    }
+</style>
+
+
+{% endblock %}

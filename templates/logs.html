@@ -1,0 +1,1019 @@
+{% extends "base.html" %}
+{% block content %}
+
+<style>
+    .ret-meta {
+        margin-top: 4px;
+        font-size: 12px;
+        color: #6b7280;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .ret-meta-value {
+        font-weight: 600;
+        color: #111827;
+        white-space: nowrap;
+    }
+
+    .auto-label span {
+        display: block;
+        font-size: 12px;
+        font-weight: 500;
+    }
+
+    .auto-label small {
+        display: block;
+        font-size: 11px;
+        color: #6b7280;
+    }
+
+    #pane-view .switch.sw-black input:checked+.track,
+    #pane-settings .switch.sw-black input:checked+.track,
+    #pane-retention .switch.sw-black input:checked+.track {
+        background: #111827 !important;
+    }
+
+    #pane-settings .src-pill.src-toggle input:checked+.track {
+        background: #111827 !important;
+    }
+
+    #log-tabs {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    #log-tabs .tab {
+        padding: 4px 10px;
+        font-size: 12px;
+        line-height: 1.2;
+    }
+
+    #log-tabs .tab i {
+        display: none;
+        
+    }
+
+    #iface-picker {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+        padding: 4px 6px;
+        border-radius: 12px;
+        background: var(--chip-bg, #f6f8fb);
+        border: 1px solid var(--line, #e5e7eb);
+    }
+
+    #iface-picker .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        border-radius: 10px;
+        background: #f9fafb;
+        box-shadow: none;
+    }
+    #iface-picker .pill.scope-pill {
+        background: #e0f2fe;
+        border: 1px solid #38bdf8;
+    }
+
+    #iface-picker .pill.scope-pill label.muted {
+        color: #0f172a;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+
+    #iface-picker .pill.scope-pill select {
+        background: #f9fbff;
+        border-color: #38bdf8;
+        font-weight: 600;
+    }
+
+
+    #iface-picker .pill i {
+        display: none;
+    }
+
+    #iface-picker .pill label.muted {
+        font-size: 11.5px;
+        font-weight: 600;
+        color: #111827;
+    }
+
+    #iface-picker .input.sm {
+        height: 26px;
+        font-size: 12px;
+        padding: 2px 6px;
+        border-radius: 8px;
+        border: 1px solid var(--border, #e5e7eb);
+        background: var(--surface, #fff);
+    }
+
+
+    .logs-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 12px;
+        margin-bottom: 4px;
+    }
+
+    .logs-toolbar-main {
+        display: flex;
+        flex: 1 1 auto;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+    }
+
+    .logs-toolbar #level,
+    .logs-toolbar #q {
+        height: 36px;
+        padding: 6px 12px;
+        font-size: 13px;
+        line-height: 1.35;
+        border-radius: 10px;
+    }
+
+    .logs-toolbar #q::placeholder {
+        color: #475569;
+        opacity: 1;
+        font-size: 13px;
+    }
+
+    .logs-toolbar #level {
+        background-position: right 10px center;
+        font-weight: 500;
+    }
+
+    .logs-toolbar,
+    .logs-toolbar * {
+        color: #1f2937;
+    }
+
+    .logs-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .btn.btn-icon {
+        min-width: auto;
+        padding: 0 10px;
+        height: 36px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+    }
+
+    .btn.btn-icon i {
+        font-size: 13px;
+    }
+
+    .logs-export {
+        position: relative;
+    }
+
+    .logs-export .btn.btn-icon .caret {
+        margin-left: 4px;
+        font-size: 10px;
+    }
+
+    .logs-export-menu {
+        position: absolute;
+        right: 0;
+        top: calc(100% + 6px);
+        min-width: 150px;
+        background: #ffffff;
+        border-radius: 10px;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.18);
+        border: 1px solid #e5e7eb;
+        padding: 4px;
+        z-index: 30;
+    }
+
+    .logs-export-menu[hidden] {
+        display: none;
+    }
+
+    .logs-export-menu button {
+        width: 100%;
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: none;
+        background: transparent;
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        text-align: left;
+        cursor: pointer;
+    }
+
+    .logs-export-menu button i {
+        font-size: 13px;
+    }
+
+    .logs-export-menu button:hover {
+        background: #f3f4f6;
+    }
+
+    .logs-switches {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        margin: 4px 0 2px;
+    }
+
+    .logs-switches .auto-label span {
+        font-size: 12px;
+    }
+
+    .logs-switches .auto-label small {
+        font-size: 10.5px;
+    }
+
+    .switch.sw-black .track {
+        height: 16px;
+        width: 32px;
+    }
+
+    .switch.sw-black .thumb {
+        width: 14px;
+        height: 14px;
+    }
+
+    #filters-toggle {
+        font-size: 12px;
+        padding: 0;
+    }
+
+    #filters-toggle i {
+        font-size: 10px;
+        margin-left: 4px;
+    }
+
+    .filters-advanced .group .gtitle {
+        font-size: 11px;
+    }
+
+    .filters-advanced .field .input,
+    .filters-advanced select.input {
+        height: 28px;
+        font-size: 12px;
+        padding: 2px 8px;
+    }
+
+    #pane-settings .src-pill i {
+        display: none;
+    }
+
+    #pane-settings .src-pill {
+        padding: 4px 10px;
+        gap: 6px;
+        font-size: 12px;
+    }
+
+    .logs-toolbar i.fa-solid,
+    .logs-toolbar i.fas,
+    .logs-toolbar i.fab,
+    .logs-toolbar i.fa {
+        font-size: 11px;
+    }
+
+    #pane-settings .card.full {
+        margin-bottom: 12px;
+        border-radius: 12px;
+        box-shadow: 0 10px 25px rgba(15, 23, 42, 0.04);
+    }
+
+    #pane-settings .card-header {
+        padding: 8px 16px;
+        font-size: 13px;
+        font-weight: 600;
+    }
+
+    #pane-settings .card-header span:first-child i {
+        margin-right: 6px;
+        font-size: 13px;
+    }
+
+    #pane-settings .card-header .btn {
+        padding: 4px 14px;
+        font-size: 12px;
+        border-radius: 999px;
+    }
+
+    #pane-settings .card-body {
+        padding: 10px 16px 14px;
+    }
+
+    #pane-settings .settings-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+        align-items: center;
+        gap: 8px 14px;
+    }
+
+    #pane-settings .switch.sw-black {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #f9fafb;
+        border: 1px solid #e5e7eb;
+    }
+
+    #pane-settings .switch.sw-black .track {
+        transform: scale(0.85);
+        transform-origin: left center;
+        margin-right: 2px;
+    }
+
+    #pane-settings .switch.sw-black .lbl {
+        font-size: 12px;
+        font-weight: 500;
+        color: #111827;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+
+    #pane-settings .switch.sw-black .lbl i {
+        font-size: 12px;
+    }
+
+    #pane-settings .chip.keepn {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: #f9fafb;
+        border: 1px dashed #e5e7eb;
+        font-size: 12px;
+    }
+
+    #pane-settings .chip.keepn .k {
+        font-weight: 500;
+        color: #111827;
+        white-space: nowrap;
+    }
+
+    #pane-settings .chip.keepn i {
+        font-size: 12px;
+    }
+
+    #pane-settings .chip.keepn .input.sm {
+        height: 26px;
+        min-width: 80px;
+        font-size: 12px;
+        padding: 2px 8px;
+    }
+
+    #pane-settings .card.full .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    #pane-settings .src-pill {
+        padding: 4px 9px;
+        gap: 6px;
+        font-size: 12px;
+        border-radius: 999px;
+    }
+
+    #pane-settings .src-pill i {
+        font-size: 11px;
+    }
+
+    #pane-settings .src-pill span {
+        font-size: 12px;
+    }
+
+   .log-msg{
+    display:flex;
+    flex-direction:column;
+    gap:2px;
+    min-width:0;
+    }
+
+    .log-msg__main{
+    font-weight:650;
+    line-height:1.2;
+    color: var(--text, #111827);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+   }
+
+   .log-msg__sub{
+    font-size:12px;
+    line-height:1.2;
+    color: var(--muted, #6b7280);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+    }
+
+    .log-table {
+    max-height: 58vh;
+    overflow: auto;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    }
+
+    @media (max-width: 720px) { 
+    .logs-toolbar-main {
+        flex-basis: 100%;
+        }
+
+    .logs-actions {
+        margin-left: auto;
+        }
+
+    .logs-switches {
+        margin-top: 6px;
+        }
+    }
+
+    #clear.btn.btn-icon {
+    background: #f97373;         
+    color: #111827;               
+    box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.12);
+    }
+
+    #clear.btn.btn-icon:hover:not(:disabled) {
+    background: #ef4444;
+    color: #ffffff;
+    }
+
+    #clear.btn.btn-icon:disabled {
+    background: #e5e7eb;
+    color: #9ca3af;
+    box-shadow: none;
+    cursor: not-allowed;
+    }
+
+    .page-title {
+    padding-right: 12px;             
+    }
+
+    #source-chip {
+    max-width: 160px;               
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;        
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    }
+</style>
+
+
+<div class="page-title" style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px">
+    <div>
+        <div style="font-size:22px;font-weight:700;line-height:1">Logs</div>
+        <div class="muted" style="font-size:12.5px;margin-top:4px">
+            Panel (web UI) = browser actions · Admins (Telegram) = bot admin activity
+        </div>
+    </div>
+    <div id="source-chip" class="chip"></div>
+</div>
+
+<div class="card full" style="margin-bottom:10px">
+    <div class="card-body" style="padding-bottom:8px">
+        <div id="top-tabs" style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="top-tab active" data-pane="view">View</button>
+            <button class="top-tab" data-pane="settings">Settings</button>
+            <button class="top-tab" data-pane="retention">Retention &amp; Backup</button>
+        </div>
+    </div>
+</div>
+
+<section id="pane-view" class="pane active">
+    <div class="cards">
+
+        <div class="card full">
+            <div class="card-body" style="padding:10px 12px">
+
+                <div id="log-tabs">
+                    <button class="tab" data-source="app">
+                        <i class="fas fa-cubes"></i> Application
+                    </button>
+                    <button class="tab" data-source="tg_app">
+                        <i class="fab fa-telegram"></i> Telegram (bot app)
+                    </button>
+                    <button class="tab" data-source="tg_admin">
+                        <i class="fa fa-user-shield"></i> Admins (Telegram)
+                    </button>
+                    <button class="tab" data-source="iface">
+                        <i class="fas fa-network-wired"></i> Interface
+                    </button>
+                </div>
+
+                <div id="iface-picker" class="filters-main">
+                    <span class="pill scope-pill">
+                        <i class="fa-solid fa-diagram-project"></i>
+                        <label class="muted" for="iface-scope" style="margin-right:6px">Scope</label>
+                        <select id="iface-scope" class="input sm">
+                            <option value="local">Local</option>
+                            <option value="node">Node</option>
+                        </select>
+                    </span>
+
+                    <span class="pill" id="node-select-label" hidden>
+                        <i class="fa-solid fa-server"></i>
+                        <label class="muted" for="node-select" style="margin-right:6px">Node</label>
+                        <select id="node-select" class="input sm" hidden></select>
+                    </span>
+
+                    <span class="pill">
+                        <i class="fa-solid fa-network-wired"></i>
+                        <label class="muted" for="iface-select" style="margin-right:6px">Interface</label>
+                        <select id="iface-select" class="input sm"></select>
+                    </span>
+                </div>
+
+                <div class="logs-toolbar">
+                    <div class="logs-toolbar-main">
+                        <select id="level" class="input sm">
+                            <option value="">Level (all)</option>
+                            <option value="error">Error</option>
+                            <option value="warning">Warning</option>
+                            <option value="info">Info</option>
+                            <option value="debug">Debug</option>
+                            <option value="heartbeat">Heartbeat</option>
+                        </select>
+
+                        <input id="q" class="input sm" placeholder="Search message, source, keyword…">
+                    </div>
+
+                    <div class="logs-actions">
+                        <button class="btn secondary btn-icon" id="refresh" title="Refresh logs"
+                            aria-label="Refresh logs">
+                            <i class="fa-solid fa-rotate-right"></i>
+                        </button>
+
+                        <button class="btn danger btn-icon" id="clear" title="Clear logs" aria-label="Clear logs">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+
+                        <div class="logs-export">
+                            <button class="btn secondary btn-icon" type="button" id="logs-export-btn"
+                                aria-haspopup="true" aria-expanded="false" title="Export logs" aria-label="Export logs">
+                                <i class="fa-solid fa-download"></i>
+                                <i class="fa-solid fa-angle-down caret"></i>
+                            </button>
+                            <div class="logs-export-menu" id="logs-export-menu" hidden>
+                                <button type="button" data-format="csv">
+                                    <i class="fa-solid fa-file-csv"></i> CSV
+                                </button>
+                                <button type="button" data-format="ndjson">
+                                    <i class="fa-solid fa-code"></i> NDJSON
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="logs-switches">
+                    <div class="auto-label">
+                        <span>Humanize</span>
+                        <small>Pretty messages</small>
+                        <label class="switch sw-black">
+                            <input id="friendly-mode" type="checkbox" aria-label="Humanize messages">
+                            <span class="track"><span class="thumb"></span></span>
+                        </label>
+                    </div>
+
+                    <div class="auto-label">
+                        <span>Local time</span>
+                        <small>Convert UTC → local</small>
+                        <label class="switch sw-black">
+                            <input id="local-time" type="checkbox" aria-label="Show local time">
+                            <span class="track"><span class="thumb"></span></span>
+                        </label>
+                    </div>
+
+                    <div class="auto-label">
+                        <span>Auto refresh</span>
+                        <small>Every 4 seconds</small>
+                        <label class="switch sw-black">
+                            <input id="auto-refresh" type="checkbox" aria-label="Auto refresh">
+                            <span class="track"><span class="thumb"></span></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="filters">
+                    <div class="filters-head" style="padding:0">
+                        <button class="link" id="filters-toggle" type="button" aria-expanded="false">
+                            More filters <i class="fas fa-chevron-down" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                    <div class="filters-advanced" hidden>
+                        <div class="row groups">
+                            <div class="group">
+                                <span class="gtitle">From</span>
+                                <div class="field">
+                                    <i class="far fa-calendar" aria-hidden="true"></i>
+                                    <input id="from" class="input" type="datetime-local" title="From">
+                                </div>
+                            </div>
+
+                            <div class="group">
+                                <span class="gtitle">To</span>
+                                <div class="field">
+                                    <i class="far fa-calendar" aria-hidden="true"></i>
+                                    <input id="to" class="input" type="datetime-local" title="To">
+                                </div>
+                            </div>
+
+                            <div class="group">
+                                <span class="gtitle">Limit</span>
+                                <select id="limit" class="input">
+                                    <option value="200">200</option>
+                                    <option value="500" selected>500</option>
+                                    <option value="1000">1000</option>
+                                    <option value="2000">2000</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div> 
+        </div> 
+
+        <div class="card full" style="box-shadow:none;margin-top:10px">
+            <div class="card-header" style="display:flex;align-items:center;gap:8px">
+                <span id="table-title">Entries</span>
+                <span class="count-badge" id="count-badge">0</span>
+            </div>
+            <div class="card-body">
+                <div class="log-table">
+                    <table class="table compact" id="logs-table" style="width:100%;min-width:0">
+                        <thead>
+                            <tr>
+                                <th style="width:200px">Time (UTC)</th>
+                                <th style="width:110px">Level</th>
+                                <th style="width:140px">Source</th>
+                                <th>Message</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logs-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</section>
+
+<section id="pane-settings" class="pane" hidden>
+    <div class="cards">
+
+        <div class="card full">
+            <div class="card-header">
+                <span><i class="fas fa-gear"></i> Global</span>
+                <span class="card-value"><button class="btn" id="settings-save">Save</button></span>
+            </div>
+            <div class="card-body">
+                <div class="settings-row">
+                    <label class="switch sw-black">
+                        <input type="checkbox" id="s-enabled">
+                        <span class="track"><span class="thumb"></span></span>
+                        <span class="lbl"><i class="fas fa-play-circle"></i> Enable logging</span>
+                    </label>
+
+                    <label class="switch sw-black">
+                        <input type="checkbox" id="s-persist">
+                        <span class="track"><span class="thumb"></span></span>
+                        <span class="lbl"><i class="fas fa-floppy-disk"></i> Persist to file</span>
+                    </label>
+
+                    <label class="switch sw-black">
+                        <input type="checkbox" id="s-mute-save">
+                        <span class="track"><span class="thumb"></span></span>
+                        <span class="lbl"><i class="fas fa-volume-xmark"></i> Mute (stop saving)</span>
+                    </label>
+
+                    <label class="chip keepn">
+                        <i class="fas fa-list-ol"></i>
+                        <span class="k">Keep last N lines</span>
+                        <input id="s-keep-lines" class="input sm" type="number" min="0" step="100" placeholder="1000">
+                        <span class="hint tip" tabindex="0"
+                            aria-label="If > 0, server keeps only the last N lines for each log file."></span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <div class="card full">
+            <div class="card-header">
+                <span><i class="fas fa-stream"></i> Sources</span>
+            </div>
+            <div class="card-body">
+                <div class="chips">
+                    <label class="src-pill src-toggle">
+                        <input type="checkbox" id="s-app">
+                        <span class="track" aria-hidden="true"><span class="knob"></span></span>
+                        <i class="fa-brands fa-octopus-deploy" aria-hidden="true"></i>
+                        <span>Application</span>
+                    </label>
+
+                    <label class="src-pill src-toggle">
+                        <input type="checkbox" id="s-tg-app">
+                        <span class="track" aria-hidden="true"><span class="knob"></span></span>
+                        <i class="fa-brands fa-telegram" aria-hidden="true"></i>
+                        <span>Telegram (bot app)</span>
+                    </label>
+
+                    <label class="src-pill src-toggle">
+                        <input type="checkbox" id="s-tg-admin">
+                        <span class="track" aria-hidden="true"><span class="knob"></span></span>
+                        <i class="fa-solid fa-user-group" aria-hidden="true"></i>
+                        <span>Admins (Telegram)</span>
+                    </label>
+
+                    <label class="src-pill src-toggle">
+                        <input type="checkbox" id="s-iface">
+                        <span class="track" aria-hidden="true"><span class="knob"></span></span>
+                        <i class="fa-solid fa-network-wired" aria-hidden="true"></i>
+                        <span>Interface</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</section>
+
+<section id="pane-retention" class="pane" hidden>
+    <div class="cards">
+        <div class="card full">
+            <div class="card-header">
+                <span><i class="fas fa-recycle"></i> Auto-clear rules</span>
+                <span class="card-value"><button class="btn" id="ret-save">Save retention</button></span>
+            </div>
+
+            <div class="card-body">
+                <p class="help">
+                    Keep it simple: turn a source <strong>on</strong>, set size/age (0 disables),
+                    optionally clear daily.
+                </p>
+
+                <div class="ret-grid">
+                    <div class="ret-card" id="ret-card-app">
+                        <div class="hd">
+                            <span>Application</span>
+                            <div class="h-actions"><button class="btn ghost sm" id="bk-app">Backup</button></div>
+                        </div>
+                        <div class="bd">
+                            <div class="toggle-line">
+                                <span class="label">Enable auto-clear</span>
+                                <label class="switch sw-black">
+                                    <input id="ret-app-on" type="checkbox">
+                                    <span class="track"><span class="thumb"></span></span>
+                                </label>
+                            </div>
+
+                            <div class="input-row">
+                                <label class="help" for="ret-app-mb" style="min-width:110px">Max size (MB)</label>
+                                <input id="ret-app-mb" class="input" type="number" min="0" step="50" placeholder="0">
+                            </div>
+
+                            <div class="input-row">
+                                <label class="help" for="ret-app-days" style="min-width:110px">Max age (days)</label>
+                                <input id="ret-app-days" class="input" type="number" min="0" step="1" placeholder="0">
+                            </div>
+
+                            <div class="form-row">
+                                <label class="mini-label" for="ret-app-daily">Clear daily (03:00)</label>
+                                <label class="switch sw-black">
+                                    <input id="ret-app-daily" type="checkbox">
+                                    <span class="track"><span class="thumb"></span></span>
+                                </label>
+                            </div>
+
+                            <div class="ret-meta">
+                                <span class="mini-label">Last clear</span>
+                                <span class="ret-meta-value" id="ret-app-last">Never</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="ret-card" id="ret-card-tgapp">
+                        <div class="hd">
+                            <span>Telegram (bot app)</span>
+                            <div class="h-actions"><button class="btn ghost sm" id="bk-tg">Backup</button></div>
+                        </div>
+                        <div class="bd">
+                            <div class="toggle-line">
+                                <span class="label">Enable auto-clear</span>
+                                <label class="switch sw-black">
+                                    <input id="ret-tgapp-on" type="checkbox">
+                                    <span class="track"><span class="thumb"></span></span>
+                                </label>
+                            </div>
+
+                            <div class="input-row">
+                                <label class="help" for="ret-tgapp-mb" style="min-width:110px">Max size (MB)</label>
+                                <input id="ret-tgapp-mb" class="input" type="number" min="0" step="50" placeholder="0">
+                            </div>
+
+                            <div class="input-row">
+                                <label class="help" for="ret-tgapp-days" style="min-width:110px">Max age (days)</label>
+                                <input id="ret-tgapp-days" class="input" type="number" min="0" step="1" placeholder="0">
+                            </div>
+
+                            <div class="toggle-line">
+                                <span class="label">Clear daily (03:00)</span>
+                                <label class="switch sw-black">
+                                    <input id="ret-tgapp-daily" type="checkbox">
+                                    <span class="track"><span class="thumb"></span></span>
+                                </label>
+                            </div>
+
+                            <div class="ret-meta">
+                                <span class="mini-label">Last clear</span>
+                                <span class="ret-meta-value" id="ret-tgapp-last">Never</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="ret-card" id="ret-card-tgadmin">
+                        <div class="hd">
+                            <span>Admins (Telegram)</span>
+                            <div class="h-actions"><button class="btn ghost sm" id="bk-admin">Backup</button></div>
+                        </div>
+                        <div class="bd">
+                            <div class="toggle-line">
+                                <span class="label">Enable auto-clear</span>
+                                <label class="switch sw-black">
+                                    <input id="ret-tgadmin-on" type="checkbox">
+                                    <span class="track"><span class="thumb"></span></span>
+                                </label>
+                            </div>
+
+                            <div class="input-row">
+                                <label class="help" for="ret-tgadmin-mb" style="min-width:110px">Max size (MB)</label>
+                                <input id="ret-tgadmin-mb" class="input" type="number" min="0" step="50"
+                                    placeholder="0">
+                            </div>
+
+                            <div class="input-row">
+                                <label class="help" for="ret-tgadmin-days" style="min-width:110px">Max age
+                                    (days)</label>
+                                <input id="ret-tgadmin-days" class="input" type="number" min="0" step="1"
+                                    placeholder="0">
+                            </div>
+
+                            <div class="toggle-line">
+                                <span class="label">Clear daily (03:00)</span>
+                                <label class="switch sw-black">
+                                    <input id="ret-tgadmin-daily" type="checkbox">
+                                    <span class="track"><span class="thumb"></span></span>
+                                </label>
+                            </div>
+
+                            <div class="ret-meta">
+                                <span class="mini-label">Last clear</span>
+                                <span class="ret-meta-value" id="ret-tgadmin-last">Never</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="ret-card" id="ret-card-iface">
+                        <div class="hd">
+                            <span>Interface</span>
+                            <div class="h-actions"><button class="btn ghost sm" id="bk-iface">Backup</button></div>
+                        </div>
+                        <div class="bd">
+                            <div class="toggle-line">
+                                <span class="label">Enable auto-clear</span>
+                                <label class="switch sw-black">
+                                    <input id="ret-iface-on" type="checkbox">
+                                    <span class="track"><span class="thumb"></span></span>
+                                </label>
+                            </div>
+
+                            <div class="input-row">
+                                <label class="help" for="ret-iface-mb" style="min-width:110px">Max size (MB)</label>
+                                <input id="ret-iface-mb" class="input" type="number" min="0" step="50" placeholder="0">
+                            </div>
+
+                            <div class="input-row">
+                                <label class="help" for="ret-iface-days" style="min-width:110px">Max age (days)</label>
+                                <input id="ret-iface-days" class="input" type="number" min="0" step="1" placeholder="0">
+                            </div>
+
+                            <div class="toggle-line">
+                                <span class="label">Clear daily (03:00)</span>
+                                <label class="switch sw-black">
+                                    <input id="ret-iface-daily" type="checkbox">
+                                    <span class="track"><span class="thumb"></span></span>
+                                </label>
+                            </div>
+
+                            <div class="ret-meta">
+                                <span class="mini-label">Last clear</span>
+                                <span class="ret-meta-value" id="ret-iface-last">Never</span>
+                            </div>
+                        </div>
+                    </div>
+
+                </div> 
+            </div>
+        </div>
+    </div>
+</section>
+
+<div id="ui-confirm" class="ui-confirm" hidden>
+    <div class="ui-confirm__sheet">
+        <div class="ui-confirm__title"></div>
+        <div class="ui-confirm__body"></div>
+        <div class="ui-confirm__actions">
+            <button class="btn ghost" data-act="cancel">Cancel</button>
+            <button class="btn danger" data-act="ok">OK</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.showToast = (m, t = 'info', s = false) => toastSafe(m, t, s);
+    window.toastInfo = (m, s = false) => toastSafe(m, 'info', s);
+    window.toastWarn = (m, s = false) => toastSafe(m, 'warn', s);
+    window.toastError = (m, s = false) => toastSafe(m, 'error', s);
+    window.toastSuccess = (m, s = false) => toastSafe(m, 'success', s);
+
+    (() => {
+        const $ = (s, r = document) => r.querySelector(s);
+        const localToggle = $('#local-time');
+        const tbody = $('#logs-body');
+        const thTime = document.querySelector('th:nth-child(1)');
+
+        function toEpoch(v) {
+            if (v == null) return null;
+            if (typeof v === 'number') return v > 1e12 ? Math.floor(v / 1000) : v;
+            const d = new Date(v); return isNaN(d) ? null : Math.floor(d.getTime() / 1000);
+        }
+        function pad(n) { return String(n).padStart(2, '0'); }
+        function fmtLocal(ts) {
+            const d = new Date(ts * 1000);
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        }
+        function fmtUTC(ts) {
+            const d = new Date(ts * 1000);
+            return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())} UTC`;
+        }
+        function showTime(rawTs) {
+            const e = toEpoch(rawTs);
+            if (!e) return rawTs ?? '—';
+            return localToggle?.checked ? fmtLocal(e) : fmtUTC(e);
+        }
+
+        window.renderLogRow = function (rec) {
+            const tr = document.createElement('tr');
+
+            const tdT = document.createElement('td');
+            const raw = rec.ts || rec.time || rec.when || rec.date || '';
+            tdT.textContent = showTime(raw);
+            tdT.title = String(raw);
+
+            const lvl = (rec.level || rec.kind || rec.lvl || 'info').toLowerCase();
+            const tdL = document.createElement('td'); tdL.innerHTML = `<span class="pill ${lvl}">${lvl.toUpperCase()}</span>`;
+            const tdS = document.createElement('td'); tdS.textContent = rec.source || rec.src || rec.channel || '—';
+            const tdM = document.createElement('td'); tdM.textContent = rec.msg || rec.message || rec.text || rec.line || '';
+
+            tr.append(tdT, tdL, tdS, tdM);
+            return tr;
+        };
+
+        localToggle?.addEventListener('change', () => {
+            if (thTime) thTime.textContent = localToggle.checked ? 'Time (local)' : 'Time (UTC)';
+            tbody.querySelectorAll('tr').forEach(tr => {
+                const td = tr.firstElementChild; if (!td) return;
+                const raw = td.title || td.textContent;
+                td.textContent = showTime(raw);
+            });
+        });
+
+        if (thTime && localToggle) thTime.textContent = localToggle.checked ? 'Time (local)' : 'Time (UTC)';
+    })();
+</script>
+
+<script defer src="{{ url_for('static', filename='js/logs.js') }}"></script>
+
+{% endblock %}

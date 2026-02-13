@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>WG Access — Minimal</title>
+
+  <link rel="stylesheet" href="/static/css/userlink_minimal.css"/>
+
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}">
+
+  <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Regular.woff2') }}" as="font" type="font/woff2"
+    crossorigin>
+  <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-SemiBold.woff2') }}" as="font" type="font/woff2"
+    crossorigin>
+  <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Bold.woff2') }}" as="font" type="font/woff2"
+    crossorigin>
+
+
+  <script defer src="/static/js/qrcode.min.js"></script>
+  <script defer src="/static/js/userlink_minimal.js"></script>
+</head>
+
+<body class="ulm-body">
+  <div class="ulm-bg"><canvas id="ulm-bg" aria-hidden="true"></canvas></div>
+  <main class="ulm-wrap">
+    <header class="ulm-strip" role="banner">
+      <div class="brand"><i class="fas fa-shield-halved" aria-hidden="true"></i><span>WireGuard Access</span></div>
+      <div class="actions">
+        <button id="ulm-theme" class="ic ghost" title="Toggle theme" aria-label="Toggle theme">
+          <i class="fas fa-moon" aria-hidden="true"></i>
+        </button>
+      </div>
+    </header>
+
+    <section class="card id" aria-labelledby="peer-title">
+      <div class="row">
+        <div class="kv">
+          <div class="k">Peer</div>
+          <div id="peer-title" class="v" data-field="name">
+            <span id="ulm-name" class="peer-name" aria-live="polite">—</span>
+          </div>
+        </div>
+        <div class="kv">
+          <div class="k">Status</div>
+          <div class="v">
+            <span id="ulm-status" class="chip" aria-live="polite">
+              <i class="dot" aria-hidden="true"></i><b>—</b>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="kv grow">
+          <div class="k">Address</div>
+          <div class="v mono" id="ulm-address">—</div>
+        </div>
+        <div class="kv grow">
+          <div class="k">Endpoint</div>
+          <div class="v mono" id="ulm-endpoint">—</div>
+        </div>
+      </div>
+    </section>
+
+
+    <section class="card meters" aria-label="Usage and time">
+      <div class="meter" aria-live="polite">
+        <div class="m-head">
+          <i class="fas fa-clock" aria-hidden="true"></i>
+          <span>Time left</span>
+          <span class="muted" id="ulm-exp">—</span>
+        </div>
+        <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Time remaining">
+          <div class="fill" id="ulm-time-bar" style="width:0%"></div>
+        </div>
+        <div class="m-foot"><span id="ulm-time-left">—</span></div>
+      </div>
+
+      <div class="meter" aria-live="polite">
+        <div class="m-head">
+          <i class="fas fa-database" aria-hidden="true"></i>
+          <span>Data</span>
+          <span class="muted" id="ulm-limit">—</span>
+        </div>
+        <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Data remaining">
+          <div class="fill green" id="ulm-data-bar" style="width:0%"></div>
+        </div>
+        <div class="m-foot">
+          <span id="ulm-data-left">—</span>
+          <span class="muted" id="ulm-used">— used</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card cfg" aria-label="Configuration">
+      <div class="cfg-head">
+        <h4><i class="fas fa-qrcode" aria-hidden="true"></i> Config</h4>
+        <div class="btns">
+          <a id="ulm-dl" class="ic solid" title="Download config (.conf)" aria-label="Download config" download>
+            <i class="fas fa-download" aria-hidden="true"></i>
+          </a>
+          <button id="ulm-copy" class="ic ghost" title="Copy config to clipboard" aria-label="Copy config">
+            <i class="fas fa-clipboard" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+      <div class="cfg-grid">
+        <div id="ulm-qr" class="qr" aria-live="polite" aria-busy="true"></div>
+        <ul class="tips">
+          <li><i class="fas fa-mobile-screen" aria-hidden="true"></i> Scan in the WireGuard app</li>
+          <li><i class="fas fa-laptop" aria-hidden="true"></i> Or import the <code>.conf</code> file</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="card support" aria-label="Support">
+      <h4><i class="fas fa-user-headset" aria-hidden="true"></i> Support</h4>
+      <div class="chips" id="ulm-support-slot"></div>
+    </section>
+  </main>
+
+  <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <script>
+    window.USER_LINK_TOKEN = "{{ token }}";
+    window.SOCIALS = {
+      telegram:  "{{ support_telegram|default('', true) }}",
+      whatsapp:  "{{ support_whatsapp|default('', true) }}",
+      instagram: "{{ support_instagram|default('', true) }}",
+      phone:     "{{ support_phone|default('', true) }}",
+      website:   "{{ support_website|default('', true) }}",
+      email:     "{{ support_email|default('', true) }}"
+    };
+  </script>
+
+</body>
+</html>

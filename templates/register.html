@@ -1,0 +1,929 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>WG Panel — Register</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    
+    <link rel="preload" href="{{ url_for('static', filename='img/wireguard-badge.svg') }}" as="image">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}">
+
+<style>
+#twofa-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+}
+.modal-head { padding-right: 36px; } 
+.btn i, .icon-btn i { color: var(--text); }
+.icon-btn i { font-size: 14px; line-height: 1; }
+#twofa-recovery .btn i { font-size: 14px; line-height: 1; }
+.twofa-row{margin-top:10px;padding:12px;border:1px dashed var(--line);border-radius:14px;background:var(--card-bg);
+display:flex;align-items:center;justify-content:space-between;gap:12px}
+.twofa-title{font-weight:700}
+.twofa-sub{font-size:12.5px}
+.twofa-row-right{display:flex;align-items:center;gap:8px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--line);font-weight:600}
+.pill .dot{width:8px;height:8px;border-radius:999px;background:#94a3b8}
+.pill--off{background:#f1f5f9;color:#475569}
+.pill--on{background:#ecfdf5;color:#065f46;border-color:#a7f3d0}
+.pill--on .dot{background:#10b981}
+
+.modal { 
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: none;               
+}
+.modal.open {
+  display: flex;              
+  align-items: center;
+  justify-content: center;
+}
+.modal[hidden] {
+  display: none !important;      
+}
+.modal-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,.45);
+  backdrop-filter: saturate(120%) blur(2px);
+}
+.modal-card {
+  position: relative;
+  width: min(880px, calc(100vw - 32px));
+  margin: 0;
+  background: var(--card-bg);
+  border-radius: 16px;
+  box-shadow: 0 20px 50px rgba(0,0,0,.25);
+  padding: 16px;
+  border: 1px solid var(--line);
+}
+
+.icon-btn{border:1px solid var(--line);background:transparent;border-radius:10px;padding:6px 10px;cursor:pointer}
+.wizard{display:grid;gap:12px}
+.wiz-card{background:var(--chip, #f3f4f6);border:1px solid var(--chip-border, #e5e7eb);border-radius:12px;padding:12px}
+.wiz-step{font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px}
+.wiz-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.qr-box{display:flex;align-items:center;justify-content:center;min-height:180px;background:#fff;border:1px dashed var(--line);border-radius:10px}
+.key-box .label{margin-bottom:4px}
+.key-row{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.recovery-list{background:#0b1020; color:#e6e8ee; border-radius:10px; padding:10px; overflow:auto; max-height:200px}
+.verify-row{display:flex;gap:8px;align-items:center}
+
+@media (max-width:900px){ .wiz-grid{grid-template-columns:1fr} }
+
+.qr-skel {
+  position: relative;
+  width: 100%;
+  min-height: 180px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background:
+    linear-gradient(0deg, rgba(0,0,0,0.02), rgba(0,0,0,0.02)) padding-box,
+    linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.35) 50%, rgba(255,255,255,0) 100%) content-box;
+  animation: skel-sheen 1.4s infinite;
+}
+@keyframes skel-sheen { 0% { background-position:-200% 0 } 100% { background-position:200% 0 } }
+.qr-skel .skel-inner {
+  position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  color: var(--muted); font-weight:600; opacity:.7;
+}
+
+#ptc {                              
+  position: fixed; right: 14px; top: 14px; z-index: 1000;
+  display: flex; flex-direction: column; gap: 8px;
+  max-width: 320px; pointer-events: none;
+}
+.pt {                                  
+  pointer-events: auto;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--card-bg); color: var(--text);
+  font-weight: 600; font-size: 13px; line-height: 1.25;
+  box-shadow: 0 10px 22px rgba(0,0,0,.12);
+  transform: translateY(-6px); opacity: 0; animation: pt-in .18s ease forwards;
+}
+.pt .dot { width: 8px; height: 8px; border-radius: 999px; background: #94a3b8; flex: 0 0 auto; }
+.pt.ok   { border-color: #a7f3d0; }
+.pt.ok   .dot { background: #10b981; }
+.pt.warn { border-color: #facc15; }
+.pt.warn .dot { background: #f59e0b; }
+.pt.bad  { border-color: #fecaca; }
+.pt.bad  .dot { background: #ef4444; }
+
+@keyframes pt-in { to { transform: translateY(0); opacity: 1; } }
+
+.input.invalid { outline: 2px solid #ef4444; border-color: #ef4444; }
+:root {
+    --auth-bg: #0b1a30;
+    --auth-bg2: #14233e;
+    --card-bg: #fff;
+    --text: #0f172a;
+    --muted: #64748b;
+    --line: #e5e7eb;
+    --btn: #111827;
+    --btn-text: #fff;
+    --chip: #f3f4f6;
+    --chip-border: #e5e7eb;
+    --ok: #16a34a;
+    --bad: #dc2626;
+    --accent: #4338ca
+}
+#twofa-status {
+  color: var(--accent);
+  font-weight: 600;
+  opacity: .95;
+}
+.twofa-head .chip {
+  background: #000;           
+  color: #fff !important;     
+  border-color: #000;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.14);
+}
+.twofa-head .chip * {
+  color: #fff !important;     
+  opacity: 1 !important;
+  text-shadow: none !important;
+}
+
+.twofa-head .chip strong { color: inherit; opacity: 1; }
+@media (prefers-color-scheme: dark) {
+  .twofa-head .chip {
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.16);
+  }
+}
+
+.twofa-head .chip{
+  background:#0b1020;          
+  color:#fff !important;       
+  border-color:#0b1020;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.14);
+}
+.twofa-head .chip *, 
+.twofa-head .chip strong{
+  color:#fff !important;
+  opacity:1 !important;
+  text-shadow:none !important;
+}
+
+.twofa-wrap { border-style: solid; }
+.twofa-head { border-bottom: 1px solid var(--line); }
+#twofa-status.ok { color: var(--ok); }
+#twofa-status.bad { color: var(--bad); }
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --card-bg: #111830;
+        --text: #e6e8ee;
+        --muted: #9aa4b2;
+        --line: #22314f;
+        --btn: #e6e8ee;
+        --btn-text: #0b1020;
+        --chip: #1a2342;
+        --chip-border: #2b3553;
+        --accent: #4f46e5
+    }
+}
+
+html, body {
+  min-height: 100%;
+  height: auto;
+}
+html {
+  background: linear-gradient(145deg, var(--auth-bg), var(--auth-bg2));
+  background-attachment: fixed;
+}
+
+body {
+    margin: 0;
+    color: var(--text);
+    font-family: Poppins, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    background: transparent;
+    overflow-x: hidden;
+}
+
+#bg-canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    z-index: 0;
+    pointer-events: none
+}
+.bg-glow::before,
+.bg-glow::after {
+    content: "";
+    position: fixed;
+    inset: -10% -10% auto -10%;
+    height: 60%;
+    background: radial-gradient(600px 400px at 20% 15%, rgba(255, 255, 255, .10), transparent 70%);
+    z-index: 0;
+    pointer-events: none;
+    mix-blend-mode: screen;
+}
+.bg-glow::after {
+    inset: auto -10% -10% -10%;
+    height: 70%;
+    background: radial-gradient(800px 500px at 85% 85%, rgba(255, 255, 255, .08), transparent 70%)
+}
+
+.auth-center {
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: 28px 16px;
+    position: relative;
+    z-index: 1
+}
+
+.auth-card {
+    width: 100%;
+    max-width: 860px;
+    background: var(--card-bg);
+    border-radius: 18px;
+    padding: 24px 22px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, .20), 0 6px 18px rgba(0, 0, 0, .10);
+    backdrop-filter: saturate(110%)
+}
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 auto 8px;
+    justify-content: center
+}
+.brand img {
+    width: 48px;
+    height: 48px
+}
+.brand .t {
+    font-weight: 700;
+    font-size: 20px;
+    letter-spacing: .2px
+}
+h2 {
+    margin: 6px 0 4px;
+    text-align: center;
+    font-weight: 700
+}
+.hint {
+    color: var(--muted);
+    text-align: center;
+    margin: 0 0 10px;
+    font-size: .82em
+}
+form {
+    margin-top: 8px
+}
+.form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px
+}
+.form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px
+}
+label {
+    font-weight: 600
+}
+input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text);
+    outline: none
+}
+
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear{
+  display: none;
+}
+
+input[type="password"]::-webkit-credentials-auto-fill-button{
+  visibility: hidden;
+  pointer-events: none;
+  position: absolute;
+}
+*, *::before, *::after { box-sizing: border-box; }
+.actions {
+    margin-top: 16px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap
+}
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: .5em;
+    padding: 10px 16px;
+    border-radius: 12px;
+    border: 1px solid var(--btn);
+    background: var(--btn);
+    color: var(--btn-text);
+    cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .08)
+}
+.btn.ghost {
+    background: transparent;
+    color: var(--btn);
+    border-color: var(--line)
+}
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: .5em;
+    background: var(--chip);
+    border: 1px solid var(--chip-border);
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: .9em
+}
+.twofa-wrap {
+    margin-top: 14px;
+    border: 1px dashed var(--line);
+    border-radius: 14px;
+    overflow: hidden
+}
+.twofa-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 12px 14px;
+    background: transparent;
+    cursor: pointer
+}
+.twofa-head .left {
+    display: flex;
+    align-items: center;
+    gap: 10px
+}
+.twofa-head .left .ttl {
+    font-weight: 700
+}
+.twofa-body {
+    max-height: 0;
+    opacity: .0;
+    overflow: hidden;
+    transition: max-height .28s ease, opacity .28s ease, transform .28s ease;
+    transform: translateY(-4px)
+}
+.twofa-wrap.open .twofa-body {
+    max-height: 520px;
+    opacity: 1;
+    transform: translateY(0)
+}
+.twofa-inner {
+    padding: 12px 14px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px
+}
+.twofa-col {
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px
+}
+.twofa-col h4 {
+    margin: 0 0 8px
+}
+.muted {
+    color: var(--muted)
+}
+.qrbox {
+    display: grid;
+    place-items: center;
+    min-height: 180px;
+    border: 1px dashed var(--line);
+    border-radius: 12px;
+    padding: 10px
+}
+.codes {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 8px
+}
+.code {
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--chip-border);
+    background: var(--chip);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
+}
+.ok {
+    color: var(--ok);
+    font-weight: 600
+}
+.bad {
+    color: var(--bad);
+    font-weight: 600
+}
+.accent {
+    color: var(--accent);
+    font-weight: 600
+}
+@media (max-width:820px) {
+    .form-row {
+        grid-template-columns: 1fr
+    }
+.twofa-inner {
+        grid-template-columns: 1fr
+    }
+}
+</style>
+</head>
+
+<body class="bg-glow">
+    <canvas id="bg-canvas" aria-hidden="true"></canvas>
+
+    <div class="auth-center">
+        <main class="auth-card">
+            <div class="brand">
+                <img src="{{ url_for('static', filename='img/wireguard-badge.svg') }}" alt="" />
+                <div class="t">WG Panel</div>
+            </div>
+
+            <h2>Create Admin Account</h2>
+            <p class="hint">Set up your administrator credentials.</p>
+
+            <form method="post" action="{{ url_for('register') }}" autocomplete="on">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+                {% if require_token %}
+                <div class="form-group">
+                    <label for="setup_token">Setup token</label>
+                    <input id="setup_token" name="setup_token" type="text" placeholder="Enter provided one-time token"
+                        required>
+                </div>
+                {% endif %}
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input id="username" name="username" type="text" maxlength="64" placeholder="Enter username"
+                            autocomplete="username" autocapitalize="none" spellcheck="false" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="email">Email (optional)</label>
+                        <input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <input id="password" name="password" type="password" placeholder="Create password"
+                            autocomplete="new-password" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="password2">Confirm password</label>
+                        <input id="password2" name="password2" type="password" placeholder="Repeat password"
+                            autocomplete="new-password" required>
+                    </div>
+                </div>
+
+                <section class="twofa-row">
+                    <div class="twofa-row-left">
+                        <div class="twofa-title">2-Step Verification (TOTP)</div>
+                        <div class="twofa-sub muted">Add an extra layer of security to your admin account.</div>
+                    </div>
+                    <div class="twofa-row-right">
+                        <span id="twofa-status-pill" class="pill pill--off"><span class="dot"></span> Disabled</span>
+                        <button type="button" class="btn" id="twofa-open">Set up</button>
+                    </div>
+                </section>
+
+                <div class="modal" id="twofa-modal" hidden aria-hidden="true">
+                    <div class="modal-backdrop"></div>
+                    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="twofa-heading">
+                        <div class="modal-head">
+                            <div>
+                                <div id="twofa-heading" class="modal-title">Set up 2-Step Verification</div>
+                                <div class="muted">Use an authenticator app to generate login codes.</div>
+                            </div>
+                            <button class="icon-btn" id="twofa-close" aria-label="Close">✕</button>
+                        </div>
+                
+                        <div class="wizard">
+                            <div class="wiz-card">
+                                <div class="wiz-step">Step 1</div>
+                                <h3>Add to authenticator</h3>
+                                <p class="muted">
+                                    Click <b>Generate</b>, then scan the QR with Google Authenticator, 1Password, or any TOTP app.
+                                    <br>Can’t scan? Enter the key manually.
+                                </p>
+                
+                                <div class="wiz-grid">
+                                    <div class="qr-box" id="twofa-qr">
+                                        <button type="button" class="btn" id="twofa-generate">Generate</button>
+                                    </div>
+                
+                                    <div class="key-box">
+                                        <div class="label muted">Secret key</div>
+                                        <div class="key-row">
+                                            <code id="twofa-secret">—</code>
+                                            <button class="icon-btn" id="twofa-copy" title="Copy secret" aria-label="Copy secret">
+                                                <i class="fas fa-copy"></i>
+                                            </button>
+                                        </div>
+                                        <div class="hint muted">
+                                            Manual entry: Time-based, 6 digits, SHA-1, 30-second period.
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                
+                            <div class="wiz-card">
+                                <div class="wiz-step">Step 2</div>
+                                <h3>Verify &amp; enable</h3>
+                                <div class="verify-row">
+                                    <input id="twofa-code" class="input" placeholder="6-digit code" inputmode="numeric" maxlength="6"
+                                        autocomplete="one-time-code">
+                                    <button class="btn" id="twofa-verify">Enable</button>
+                                </div>
+                                <p class="muted">After enabling, you’ll enter a 6-digit code each time you log in.</p>
+                            </div>
+                
+                            <div class="wiz-card" id="twofa-recovery" hidden>
+                                <div class="wiz-step">Step 3</div>
+                                <h3>Recovery codes</h3>
+                                <p class="muted">Store these single-use codes in a safe place. They let you in if you lose your phone.
+                                </p>
+                                <pre class="recovery-list" id="twofa-recovery-list"></pre>
+                                <div class="row">
+                                    <button class="btn" id="twofa-download" title="Save recovery codes" aria-label="Save recovery codes">
+                                        <i class="fas fa-save" style="margin-right:6px"></i> Save
+                                    </button>
+                                    <button class="btn" id="twofa-copy-recovery" title="Copy recovery codes" aria-label="Copy recovery codes">
+                                        <i class="fas fa-copy" style="margin-right:6px"></i> Copy
+                                    </button>
+
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+
+                <div class="actions">
+                    <button type="submit" class="btn">Create Account</button>
+                    <a href="{{ url_for('login') }}" class="btn ghost">Back to login</a>
+                </div>
+
+                {% with msgs = get_flashed_messages(with_categories=true) %}
+                {% if msgs %}
+                <div class="flash-container" style="margin-top:12px">
+                    {% for cat,msg in msgs %}<div class="flash {{ cat }}">{{ msg }}</div>{% endfor %}
+                </div>
+                {% endif %}
+                {% endwith %}
+            </form>
+        </main>
+    </div>
+
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+    <script>
+        (() => {
+            const cv = document.getElementById('bg-canvas'); if (!cv) return;
+            const cx = cv.getContext('2d'); const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+            let W = 0, H = 0, pts = [];
+            const C = { n: 130, r: 2.4, link: 140, v: 0.28 };
+            function size() {
+                W = Math.floor(innerWidth * dpr); H = Math.floor(innerHeight * dpr);
+                cv.width = W; cv.height = H; cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                pts = Array.from({ length: C.n }, () => ({
+                    x: Math.random() * innerWidth, y: Math.random() * innerHeight,
+                    vx: (Math.random() * 2 - 1) * C.v, vy: (Math.random() * 2 - 1) * C.v, r: Math.random() * C.r + 0.6
+                }));
+            }
+            addEventListener('resize', size, { passive: true }); size();
+            (function frame() {
+                const w = innerWidth, h = innerHeight; cx.clearRect(0, 0, w, h);
+                const g = cx.createRadialGradient(w * .85, h * .2, 10, w * .85, h * .2, w); g.addColorStop(0, 'rgba(255,255,255,.08)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+                cx.fillStyle = g; cx.fillRect(0, 0, w, h);
+                cx.fillStyle = 'rgba(255,255,255,.95)';
+                for (const p of pts) {
+                    p.x += p.vx; p.y += p.vy;
+                    if (p.x < -10) p.x = w + 10; else if (p.x > w + 10) p.x = -10;
+                    if (p.y < -10) p.y = h + 10; else if (p.y > h + 10) p.y = -10;
+                    cx.beginPath(); cx.arc(p.x, p.y, p.r, 0, Math.PI * 2); cx.fill();
+                }
+                cx.lineWidth = 1;
+                for (let i = 0; i < pts.length; i++) {
+                    for (let j = i + 1; j < pts.length; j++) {
+                        const a = pts[i], b = pts[j], dx = a.x - b.x, dy = a.y - b.y, d = Math.hypot(dx, dy);
+                        if (d < C.link) { cx.strokeStyle = `rgba(255,255,255,${(1 - d / C.link) * 0.25})`; cx.beginPath(); cx.moveTo(a.x, a.y); cx.lineTo(b.x, b.y); cx.stroke(); }
+                    }
+                }
+                requestAnimationFrame(frame);
+            })();
+        })();
+        function toastPanel(msg, type = 'ok', ms = 2400) {
+            const old = document.getElementById('toast-container');
+            if (old) old.remove();
+
+            const host = document.getElementById('ptc') || (() => {
+                const d = document.createElement('div'); d.id = 'ptc'; document.body.appendChild(d); return d;
+            })();
+            const t = document.createElement('div'); t.className = `pt ${type}`;
+            t.innerHTML = `<span class="dot"></span><span>${msg}</span>`;
+            host.appendChild(t);
+
+            setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateY(-4px)'; }, ms);
+            setTimeout(() => t.remove(), ms + 280);
+        }
+ 
+        document.addEventListener('DOMContentLoaded', () => {
+            const $ = (s, r = document) => r.querySelector(s);
+            const csrfInput = document.querySelector('input[name="csrf_token"]');
+            const CSRF = csrfInput ? csrfInput.value : null;
+
+            function toastPanel(msg, type = 'ok', ms = 2400) {
+                if (window.toastSafe) { window.toastSafe(msg, type); return; }
+                const host = document.getElementById('ptc') || (() => {
+                    const d = document.createElement('div'); d.id = 'ptc'; document.body.appendChild(d); return d;
+                })();
+                const t = document.createElement('div'); t.className = `pt ${type}`;
+                t.innerHTML = `<span class="dot"></span><span>${msg}</span>`;
+                host.appendChild(t);
+                setTimeout(() => { t.style.opacity = '0'; t.style.transform = 'translateY(-4px)'; }, ms);
+                setTimeout(() => t.remove(), ms + 280);
+            }
+
+            const API = {
+                init: '/register/twofa_begin',
+                verify: '/register/twofa_confirm'
+            };
+
+            const openBtn = $('#twofa-open');
+            const modal = $('#twofa-modal');
+            const closeBtn = $('#twofa-close');
+
+            const qrBox = $('#twofa-qr');
+            const genBtn = $('#twofa-generate');
+            const secretEl = $('#twofa-secret');
+            const copyBtn = $('#twofa-copy');
+
+            const codeEl = $('#twofa-code');
+            const verifyBtn = $('#twofa-verify');
+            const pill = $('#twofa-status-pill');
+
+            const recWrap = $('#twofa-recovery');
+            const recList = $('#twofa-recovery-list');
+            const recCopy = $('#twofa-copy-recovery');
+            const recDl = $('#twofa-download');
+
+            let inFlight = false;
+
+            function setUI(on) {
+                pill.classList.toggle('pill--on', on);
+                pill.classList.toggle('pill--off', !on);
+                pill.innerHTML = `<span class="dot"></span> ${on ? 'Enabled' : 'Disabled'}`;
+                if (on) openBtn.textContent = 'Manage';
+            }
+
+            function openModal() {
+                qrBox.innerHTML = `
+                <button type="button" class="btn" id="twofa-generate">Generate</button>
+                `;
+                const regenBtn = document.getElementById('twofa-generate');
+                regenBtn?.addEventListener('click', onGen);
+
+                secretEl.textContent = '—';
+                codeEl.value = '';
+                if (recWrap) recWrap.hidden = true;
+
+                modal.removeAttribute('hidden');
+                modal.classList.add('open');
+                modal.setAttribute('aria-hidden', 'false');
+            }
+            async function onGen() {
+                if (inFlight) return;
+                inFlight = true;
+                const genBtn = document.getElementById('twofa-generate');
+                if (genBtn) { genBtn.disabled = true; genBtn.textContent = 'Generating…'; }
+
+                qrBox.innerHTML = `
+                <div class="qr-skel">
+                <div class="skel-inner">Preparing secret…</div>
+                </div>
+                `;
+
+                const userInp = document.querySelector('#username');
+                const username = (userInp?.value || 'admin').trim();
+
+                try {
+                    const r = await fetch(API.init, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(CSRF ? { 'X-CSRFToken': CSRF } : {}) },
+                        credentials: 'same-origin',
+                        body: JSON.stringify({ username })
+                    });
+                    if (!r.ok) throw new Error('init failed');
+                    const j = await r.json();
+
+                    const issuer = j.issuer || 'WG Panel';
+                    let uri = j.otp_uri || '';
+
+                    if (!uri && j.secret) {
+                        const enc = encodeURIComponent;
+                        uri = `otpauth://totp/${enc(issuer)}:${enc(username)}?secret=${enc(j.secret)}&issuer=${enc(issuer)}&digits=6&period=30&algorithm=SHA1`;
+                    }
+
+                    const hasQR = Boolean(j.qr_svg || j.qr_png || uri);
+                    if (!hasQR) {
+                        qrBox.innerHTML = `
+                    <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
+                    <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
+                    <div class="muted" style="margin-bottom:10px">Server didn’t return a QR or TOTP URI. Please try again.</div>
+                    <button type="button" class="btn" id="qr-retry">Try again</button>
+                    </div>`;
+                        document.getElementById('qr-retry')?.addEventListener('click', onGen);
+                        toastPanel('Could not generate TOTP key', 'bad');
+                        return;
+                    }
+
+                    secretEl.textContent = j.secret || '—';
+                    if (j.qr_svg) {
+                        qrBox.innerHTML = j.qr_svg;
+                    } else if (j.qr_png) {
+                        qrBox.innerHTML = `<img src="${j.qr_png}" alt="QR">`;
+                    } else {
+                        qrBox.innerHTML = '';
+                        if (window.QRCode) new QRCode(qrBox, { text: uri, width: 180, height: 180 });
+                        else qrBox.textContent = uri;
+                    }
+                    toastPanel('TOTP secret generated', 'ok');
+                } catch (err) {
+                    qrBox.innerHTML = `
+                   <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
+                   <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
+                   <div class="muted" style="margin-bottom:10px">Server didn’t return a TOTP secret. Please try again.</div>
+                   <button type="button" class="btn" id="qr-retry">Try again</button>
+                   </div>`;
+                    document.getElementById('qr-retry')?.addEventListener('click', onGen);
+                    toastPanel('Could not generate TOTP key', 'bad');
+                } finally {
+                    if (genBtn) { genBtn.disabled = false; genBtn.textContent = 'Generate'; }
+                    inFlight = false;
+                }
+            }
+
+            function closeModal() {
+                modal.classList.remove('open');
+                modal.setAttribute('hidden', '');
+                modal.setAttribute('aria-hidden', 'true');
+            }
+
+            openBtn?.addEventListener('click', (e) => { e.preventDefault(); openModal(); });
+            closeBtn?.addEventListener('click', closeModal);
+            modal?.addEventListener('click', (e) => {
+                if (e.target === modal || e.target.classList.contains('modal-backdrop')) closeModal();
+            });
+            document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && modal && !modal.hasAttribute('hidden')) closeModal();
+            });
+
+            genBtn?.addEventListener('click', async () => {
+                if (inFlight) return;
+                inFlight = true;
+                genBtn.disabled = true; genBtn.textContent = 'Generating…';
+
+                qrBox.innerHTML = `
+                <div class="qr-skel">
+                <div class="skel-inner">Preparing secret…</div>
+                </div>
+                `;
+
+                const userInp = document.querySelector('#username');
+                const username = (userInp?.value || 'admin').trim();
+
+                try {
+                    const r = await fetch(API.init, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(CSRF ? { 'X-CSRFToken': CSRF } : {}) },
+                        credentials: 'same-origin',
+                        body: JSON.stringify({ username })
+                    });
+                    if (!r.ok) throw new Error('init failed');
+                    const j = await r.json();
+                    const issuer = j.issuer || 'WG Panel';
+                    let uri = j.otp_uri || '';
+
+                    if (!uri && j.secret) {
+                        const enc = encodeURIComponent;
+                        uri = `otpauth://totp/${enc(issuer)}:${enc(username)}?secret=${enc(j.secret)}&issuer=${enc(issuer)}&digits=6&period=30&algorithm=SHA1`;
+                    }
+
+                    const hasQR = Boolean(j.qr_svg || j.qr_png || uri);
+                    if (!hasQR) {
+                        qrBox.innerHTML = `
+                        <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
+                        <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
+                        <div class="muted" style="margin-bottom:10px">Server didn’t return a QR or TOTP URI. Please try again.</div>
+                        <button type="button" class="btn" id="qr-retry">Try again</button>
+                        </div>`;
+                        $('#qr-retry')?.addEventListener('click', () => genBtn.click());
+                        toastPanel('Could not generate TOTP key', 'bad');
+                        return;
+                    }
+
+                    secretEl.textContent = j.secret || '—';
+                    if (j.qr_svg) {
+                        qrBox.innerHTML = j.qr_svg;
+                    } else if (j.qr_png) {
+                        qrBox.innerHTML = `<img src="${j.qr_png}" alt="QR">`;
+                    } else {
+                        qrBox.innerHTML = '';
+                        if (window.QRCode) new QRCode(qrBox, { text: uri, width: 180, height: 180 });
+                        else qrBox.textContent = uri; 
+                    }
+                    toastPanel('TOTP secret generated', 'ok');
+                } catch (err) {
+                    qrBox.innerHTML = `
+                    <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
+                    <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
+                    <div class="muted" style="margin-bottom:10px">Server didn’t return a TOTP secret. Please try again.</div>
+                    <button type="button" class="btn" id="qr-retry">Try again</button>
+                    </div>`;
+                    $('#qr-retry')?.addEventListener('click', () => genBtn.click());
+                    toastPanel('Could not generate TOTP key', 'bad');
+                } finally {
+                    genBtn.disabled = false; genBtn.textContent = 'Generate';
+                    inFlight = false;
+                }
+            });
+
+            copyBtn?.addEventListener('click', async () => {
+                const t = (secretEl.textContent || '').trim();
+                if (!t || t === '—') return;
+                try { await navigator.clipboard.writeText(t); toastPanel('Secret copied'); } catch { }
+            });
+
+            verifyBtn?.addEventListener('click', async () => {
+                const code = (codeEl.value || '').trim();
+                if (!/^[0-9]{6}$/.test(code)) {
+                    codeEl.classList.add('invalid');
+                    toastPanel('Enter the 6-digit code', 'warn');
+                    return;
+                }
+                codeEl.classList.remove('invalid');
+                if (inFlight) return;
+
+                inFlight = true; verifyBtn.disabled = true; verifyBtn.textContent = 'Enabling…';
+                try {
+                    const r = await fetch(API.verify, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...(CSRF ? { 'X-CSRFToken': CSRF } : {}) },
+                        credentials: 'same-origin',
+                        body: JSON.stringify({ code })
+                    });
+                    const j = await r.json().catch(() => ({}));
+                    if (!r.ok || j.error) throw new Error(j.error || 'verify failed');
+
+                    setUI(true);
+                    toastPanel('Two-factor enabled', 'ok');
+
+                    if (Array.isArray(j.recovery_codes) && j.recovery_codes.length) {
+                        recList.textContent = j.recovery_codes.join('\n');
+                        recWrap.hidden = false;
+
+                        recCopy?.addEventListener('click', async () => {
+                            try { await navigator.clipboard.writeText(j.recovery_codes.join('\n')); toastPanel('Recovery codes copied'); } catch { }
+                        });
+                        recDl?.addEventListener('click', () => {
+                            const blob = new Blob([j.recovery_codes.join('\n')], { type: 'text/plain' });
+                            const url = URL.createObjectURL(blob);
+                            const a = Object.assign(document.createElement('a'), { href: url, download: 'wgpanel-recovery-codes.txt' });
+                            document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+                        });
+                    } else {
+                        closeModal();
+                    }
+                } catch (err) {
+                    codeEl.classList.add('invalid');
+                    toastPanel('Invalid code — please try again', 'bad');
+                } finally {
+                    inFlight = false; verifyBtn.disabled = false; verifyBtn.textContent = 'Enable';
+                }
+            });
+        });
+</script>
+
+
+</body>
+
+</html>

@@ -1,0 +1,1096 @@
+{% extends 'base.html' %}
+{% block content %}
+<script defer src="{{ url_for('static', filename='js/csrf.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/toast.js') }}"></script>
+
+<h1 class="page-title"><i class="fas fa-user-friends"></i> Peers</h1>
+
+<div id="scope-row" style="display:flex;gap:8px;align-items:center;margin:8px 0;flex-wrap:wrap;">
+    <label for="peer-scope" style="font-weight:600;">Scope</label>
+    <select id="peer-scope" class="input" style="min-width:220px;">
+        <option value="">Local (this server)</option>
+    </select>
+</div>
+<style>
+
+.more-toggle.icon-only{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:28px;
+  height:28px;
+  padding:0;
+  border-radius:999px;
+  border:1px solid #e5e7eb;
+  background:#f3f4f6;
+  flex:0 0 auto; 
+}
+.more-toggle.icon-only i{
+  margin:0; 
+}
+
+.dropdown-panel .menu-item{
+  width:100%;
+  padding:8px 12px;
+  display:flex;
+  gap:8px;
+  align-items:center;
+  background:transparent;
+  border:0;
+  text-align:left;
+  cursor:pointer;
+  font-size:.92rem;
+}
+.dropdown-panel .menu-item:hover{ background:#f8fafc; }
+.dropdown-panel .menu-item.danger{ color:#b91c1c; }
+.dropdown-panel .menu-sep{
+  height:1px;
+  background:var(--border,#e5e7eb);
+  margin:4px 0;
+}
+
+.peer-toolbar-compact{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  justify-content:flex-end;
+  margin:2px 0 10px;
+}
+.peer-toolbar-compact .divider{
+  width:1px;
+  height:20px;
+  background:var(--border,#e5e7eb);
+}
+
+.profile-picker{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:4px 8px;
+  border:1px solid var(--border,#e5e7eb);
+  border-radius:999px;
+  background:var(--card,#fff);
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
+}
+.profile-picker i{ opacity:.85; }
+.profile-picker select{
+  max-width:180px;
+  min-width:140px;
+  height:26px;
+  border:0;
+  background:transparent;
+  outline:0;
+  font-size:.9rem;
+}
+
+.icon-btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:26px;
+  height:26px;
+  border-radius:999px;
+  border:1px solid #e5e7eb;
+  background:#fff;
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
+}
+.icon-btn:hover{
+  background:#f8fafc;
+  border-color:#d1d5db;
+}
+.icon-btn i{ font-size:.9rem; }
+.toggle{ position:relative; } 
+
+.toggle input{
+  position:absolute;
+  opacity:0;
+  width:28px;   
+  height:16px; 
+  margin:0;
+  left:0;
+  top:50%;
+  transform:translateY(-50%);
+  cursor:pointer;
+}
+
+.toggle .track{
+  display:inline-block !important;
+  width:28px !important;
+  height:16px !important;
+  border-radius:999px !important;
+  position:relative !important;
+  background:#d1d5db !important;
+  flex:0 0 auto !important;
+}
+
+.toggle .track::after{
+  content:'';
+  position:absolute !important;
+  top:2px !important;
+  left:2px !important;
+  width:12px !important;
+  height:12px !important;
+  border-radius:50% !important;
+  background:#fff !important;
+  box-shadow:0 1px 2px rgba(0,0,0,.25) !important;
+  transition:transform .18s ease !important;
+}
+
+.toggle.mini.black input:checked + .track{ background:#111 !important; }
+.toggle.mini.black input:checked + .track::after{ transform:translateX(12px) !important; }
+
+.toggle .label{
+  font-size:.9rem;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+}
+.toggle .label i{ opacity:.9; }
+
+.peer-info-wrap{
+  margin-left:auto;
+  display:flex;
+  align-items:center;
+}
+.peer-info-wrap .icon-only{
+  width:34px;
+  height:34px;
+  border-radius:999px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+}
+
+.peer-card{
+  position:relative;
+  overflow:visible;
+}
+
+.peer-more-section{
+  margin:10px 0 0;
+  padding:10px 12px;
+  border:1px solid var(--border,#e5e7eb);
+  border-radius:14px;
+  background:var(--card,#fff);
+  box-shadow:0 8px 24px rgba(0,0,0,.08);
+}
+.peer-more-hdr{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:8px;
+}
+.peer-more-title{ font-weight:700; }
+.peer-more-hdr .more-close{
+  width:30px;
+  height:30px;
+  border-radius:999px;
+  border:1px solid var(--border,#e5e7eb);
+  background:transparent;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+}
+.peer-more-hdr .more-close:hover{ background:rgba(0,0,0,.04); }
+
+.peer-more-line{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:10px 12px;
+  font-size:.92rem;
+  color:var(--muted,#374151);
+}
+.peer-more-line .sep{ opacity:.45; }
+.peer-more-line strong{ font-weight:700; color:var(--text,#111827); }
+
+@media (max-width: 800px){
+  .peer-more-line{ font-size:.9rem; }
+}
+
+.peer-actions-row{
+  width:100%;
+  box-sizing:border-box;
+  padding:0 14px 10px;
+  display:block !important;   
+  max-height:0;
+  opacity:0;
+  transform:translateY(-6px);
+  overflow:hidden;
+  pointer-events:none;
+  transition:max-height .18s ease, opacity .18s ease, transform .18s ease;
+}
+
+.peer-card:hover .peer-actions-row,
+.peer-card:focus-within .peer-actions-row{
+  max-height:72px;
+  opacity:1;
+  transform:translateY(0);
+  pointer-events:auto;
+}
+.peer-card.force-hide-actions .peer-actions-row{
+  opacity: 0 !important;
+  transform: translateY(2px) !important;
+  max-height: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+
+.peer-actions{
+  display:flex !important;
+  justify-content:flex-end;
+  gap:.6em;
+  padding:.35rem 0 .25rem 0;
+  width:100%;
+}
+
+.peer-actions > button{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:30px;
+  height:30px;
+  border-radius:10px;
+  border:1px solid var(--border,#e5e7eb);
+  background:var(--card,#fff);
+  box-shadow:0 1px 2px rgba(0,0,0,.04);
+}
+.peer-actions > button:hover{ background:rgba(0,0,0,.03); }
+.peer-actions > button i{ margin:0; }
+
+@media (max-width: 900px){
+  .peer-actions-row{
+    max-height:none;
+    opacity:1;
+    transform:none;
+    pointer-events:auto;
+    overflow:visible;
+    padding-bottom:8px;
+  }
+}
+
+.peers-loading{
+  position: relative;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:10px 12px;
+  margin:10px 0;
+  border:1px solid var(--border,#e5e7eb);
+  border-radius:14px;
+  background:var(--card,#fff);
+  box-shadow:0 8px 24px rgba(0,0,0,.06);
+  overflow:hidden;
+}
+.peers-loading[hidden]{ display:none !important; }
+
+.peers-loading::before{
+  content:'';
+  position:absolute;
+  top:0; left:-35%;
+  width:35%; height:2px;
+  background: linear-gradient(90deg, transparent, rgba(0,0,0,.18), transparent);
+  animation: peersLoadBar 1.05s ease-in-out infinite;
+}
+@keyframes peersLoadBar{
+  0%{ transform: translateX(0); }
+  100%{ transform: translateX(300%); }
+}
+
+.peers-loading .pl-left{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-width:0;
+}
+.peers-loading .pl-spinner{
+  width:18px;
+  height:18px;
+  border-radius:999px;
+  border:2px solid rgba(0,0,0,.15);
+  border-top-color: rgba(0,0,0,.55);
+  animation: peersSpin .8s linear infinite;
+  flex:0 0 auto;
+}
+@keyframes peersSpin{ to{ transform: rotate(360deg); } }
+
+.peers-loading .pl-text{ min-width:0; }
+.peers-loading .pl-title{
+  font-weight:800;
+  line-height:1.2;
+}
+.peers-loading .pl-sub{
+  font-size:.88rem;
+  color:var(--muted,#64748b);
+  line-height:1.2;
+  margin-top:2px;
+}
+
+.peer-skeleton-card{
+  border:1px solid var(--border,#e5e7eb);
+  border-radius:14px;
+  background:var(--card,#fff);
+  padding:16px;
+  margin:12px 0;
+  box-shadow:0 8px 24px rgba(0,0,0,.06);
+}
+.peer-skel-row{ display:flex; gap:10px; align-items:center; }
+.peer-skel-line{
+  height:12px;
+  border-radius:999px;
+  background: rgba(0,0,0,.08);
+  position:relative;
+  overflow:hidden;
+}
+.peer-skel-line::after{
+  content:'';
+  position:absolute;
+  inset:0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent);
+  transform: translateX(-100%);
+  animation: peersSkel 1.1s ease-in-out infinite;
+}
+@keyframes peersSkel{ to{ transform: translateX(100%); } }
+
+</style>
+
+<script>
+    (async () => {
+        const sel = document.getElementById('peer-scope');
+
+        try {
+            const r = await fetch('/ui/nodes', { credentials: 'same-origin' });
+            if (r.ok) {
+                const payload = await r.json();
+                const nodes = Array.isArray(payload) ? payload : (payload.nodes || []);
+                for (const n of nodes) {
+                    const opt = document.createElement('option');
+                    opt.value = n.id;
+                    opt.textContent = n.name || n.id;
+                    sel.appendChild(opt);
+                }
+            }
+        } catch (_) { /* will stay Local */ }
+
+        try {
+            const saved = localStorage.getItem('peer_scope') || '';
+            if ([...sel.options].some(o => o.value === saved)) sel.value = saved;
+        } catch (_) { }
+
+        sel.addEventListener('change', async () => {
+            try { localStorage.setItem('peer_scope', sel.value); } catch (_) { }
+            if (window.refreshInterfacesUI) await window.refreshInterfacesUI({ keepSelection: false });
+            if (window.refreshPeers) window.refreshPeers({ abortPrev: true });
+        });
+    })();
+</script>
+
+<div id="iface-bar" class="iface-bar" style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0;"></div>
+
+<div style="display:flex;align-items:center;gap:8px;margin:6px 0 12px 0;">
+    <div id="active-iface-chip" class="iface-chip" aria-live="polite" style="display:none;"></div>
+</div>
+
+<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+    <button id="create-peer-btn" class="btn" type="button">
+        <i class="fas fa-plus"></i> Create Peer
+    </button>
+    <button id="bulk-btn" class="btn secondary" type="button">
+        <i class="fas fa-layer-group"></i> Bulk create
+    </button>
+</div>
+
+<div id="spinner-peers" class="peers-loading" hidden aria-live="polite">
+    <div class="pl-left">
+        <span class="pl-spinner" aria-hidden="true"></span>
+        <div class="pl-text">
+            <div class="pl-title" id="peers-loading-title">Loading peers…</div>
+            <div class="pl-sub" id="peers-loading-sub">Getting latest state..</div>
+        </div>
+    </div>
+</div>
+
+<div class="peers-container"></div>
+
+<div id="peer-modal" class="modal" aria-hidden="true" aria-labelledby="peer-modal-title" role="dialog">
+    <div class="modal-backdrop" tabindex="-1"></div>
+
+    <div class="modal-content" role="document">
+        <button id="modal-close" class="modal-close" aria-label="Close">&times;</button>
+        <h2 id="peer-modal-title"><i class="fas fa-user-plus"></i> New Peer</h2>
+
+        <form id="create-peer-form" method="post" autocomplete="off">
+            {{ form.hidden_tag() }}
+
+            <input type="hidden" id="create-iface-id" name="iface">
+
+            <div class="peer-toolbar-compact">
+                <label class="toggle mini black" title="Apply saved defaults to this form">
+                    <input id="use-profile-toggle" type="checkbox">
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="label"><i class="fas fa-user-gear"></i> Use profile</span>
+                </label>
+
+                <div class="divider"></div>
+
+                <div class="profile-picker" style="position:relative;">
+                    <i class="fas fa-layer-group" aria-hidden="true"></i>
+
+                    <select id="profile-select" title="Choose a saved profile"><!-- JS Population--></select>
+
+                    <button id="save-profile-btn" type="button" class="icon-btn" title="Save to this profile">
+                        <i class="fas fa-floppy-disk"></i>
+                    </button>
+
+                    <button id="profile-menu-btn" type="button" class="icon-btn" title="More actions"
+                        aria-haspopup="true" aria-expanded="false">
+                        <i class="fas fa-ellipsis-vertical"></i>
+                    </button>
+
+                    <div id="profile-menu" class="dropdown-panel" style="
+                    position:absolute; right:0; top:110%;
+                    background:var(--card,#fff); border:1px solid var(--border,#e5e7eb);
+                    border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,.08);
+                    display:none; min-width:180px; overflow:hidden; z-index:10;">
+                        <button type="button" data-act="new" class="menu-item">
+                            <i class="fas fa-plus"></i> New profile
+                        </button>
+                        <button type="button" data-act="saveas" class="menu-item">
+                            <i class="fas fa-copy"></i> Save as…
+                        </button>
+                        <div class="menu-sep"></div>
+                        <button type="button" data-act="activate" class="menu-item">
+                            <i class="fas fa-star"></i> Set active
+                        </button>
+                        <button type="button" data-act="rename" class="menu-item">
+                            <i class="fas fa-i-cursor"></i> Rename
+                        </button>
+                        <button type="button" data-act="delete" class="menu-item danger">
+                            <i class="fas fa-trash"></i> Delete
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                {{ form.name.label }} {{ form.name(class="input", placeholder="e.g. azumi") }}
+            </div>
+
+            <div class="form-group">
+                <label for="create-address-select">IP Address</label>
+                <select id="create-address-select" class="input"></select>
+            </div>
+            <input type="hidden" id="create-address" name="address">
+
+            <div class="form-group">
+                {{ form.allowed_ips.label }}
+                {{ form.allowed_ips(class="input", id="peer-allowed-ips", placeholder="0.0.0.0/0, ::/0") }}
+            </div>
+
+            <div class="form-group">
+                {{ form.endpoint.label }}
+                {{ form.endpoint(class="input", placeholder="host:port") }}
+            </div>
+
+            <div class="form-group">
+                {{ form.persistent_keepalive.label }}
+                {{ form.persistent_keepalive(class="input", id="peer-keepalive", placeholder="25") }}
+            </div>
+
+            <div class="form-group">
+                {{ form.mtu.label }} {{ form.mtu(class="input", id="peer-mtu", placeholder="1280") }}
+            </div>
+
+            <div class="form-group">
+                {{ form.dns.label }}
+                <div class="input-with-icon">
+                    {{ form.dns(class="input", id="peer-dns", placeholder="DNS (e.g., 1.1.1.1, 1.0.0.1)") }}
+                </div>
+            </div>
+
+            <div class="form-group">
+                {{ form.data_limit.label }}
+                {{ form.data_limit(class="input", id="peer-data-limit-value", placeholder="e.g. 10") }}
+            </div>
+
+            <div class="form-group">
+                {{ form.limit_unit.label }} {{ form.limit_unit(class="input", id="peer-data-limit-unit") }}
+            </div>
+
+            <div class="form-group">
+                <label>Active Time</label>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                    <label style="display:flex;flex-direction:column;gap:4px;">
+                        <span style="font-size:.9em;font-weight:600;color:#475569;">days</span>
+                        {{ form.time_limit_days(class="input", id="time_limit_days", min="0", placeholder="0") }}
+                    </label>
+                    <label style="display:flex;flex-direction:column;gap:4px;">
+                        <span style="font-size:.9em;font-weight:600;color:#475569;">hours</span>
+                        {{ form.time_limit_hours(class="input", id="time_limit_hours", min="0", max="23",
+                        placeholder="0–23") }}
+                    </label>
+                </div>
+                <small class="hint">Leave both as 0 for no timer (or tick “Start on first use” to defer start).</small>
+            </div>
+
+            <div class="form-group">
+                <label class="toggle mini black" title="Start countdown when the peer is first used">
+                    {{ form.start_on_first_use(id="peer-start-first-use") }}
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="label">
+                        <i class="fas fa-hourglass-start" aria-hidden="true"></i>
+                        Start timer on first connection
+                    </span>
+                </label>
+            </div>
+            
+            <div class="form-group">
+                <label class="toggle mini black" title="Ignore data & time limits">
+                    {{ form.unlimited(id="peer-unlimited") }}
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="label">
+                        <i class="fas fa-infinity" aria-hidden="true"></i>
+                        Unlimited (ignores data & timer)
+                    </span>
+                </label>
+            </div>
+
+
+            <div class="form-group">
+                {{ form.phone_number.label }} {{ form.phone_number(class="input", placeholder="+31...") }}
+            </div>
+
+            <div class="form-group">
+                {{ form.telegram_id.label }} {{ form.telegram_id(class="input", placeholder="@username or ID") }}
+            </div>
+
+            <footer class="modal-footer" style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:10px;">
+                <button type="button" class="btn secondary" id="create-cancel">Cancel</button>
+                <button type="submit" class="btn">
+                    <i class="fas fa-save"></i> {{ form.submit.label }}
+                </button>
+            </footer>
+        </form>
+    </div>
+</div>
+
+<div id="edit-peer-modal" class="modal" aria-hidden="true" aria-labelledby="edit-peer-title" role="dialog">
+    <div class="modal-backdrop" tabindex="-1"></div>
+
+    <div class="modal-content" role="document">
+        <button id="edit-close" class="modal-close" aria-label="Close">&times;</button>
+        <h2 id="edit-peer-title"><i class="fas fa-edit"></i> Edit Peer</h2>
+
+        <form id="edit-peer-form" autocomplete="off">
+            <div class="form-group">
+                <label>Name</label>
+                <input name="name" class="input" placeholder="Friendly name">
+            </div>
+
+            <div class="form-group">
+                <label>IP Address</label>
+                <select name="address" class="input"></select>
+            </div>
+
+            <div class="form-group">
+                <label>Allowed IPs</label>
+                <input name="allowed_ips" class="input" placeholder="0.0.0.0/0, ::/0">
+            </div>
+
+            <div class="form-group">
+                <label>Endpoint</label>
+                <input name="endpoint" class="input" placeholder="host:port">
+            </div>
+
+            <div class="form-group">
+                <label>Keepalive (s)</label>
+                <input name="persistent_keepalive" type="number" class="input">
+            </div>
+
+            <div class="form-group">
+                <label>MTU</label>
+                <input name="mtu" type="number" class="input">
+            </div>
+
+            <div class="form-group">
+                <label>DNS</label>
+                <input name="dns" class="input" placeholder="1.1.1.1, 8.8.8.8">
+            </div>
+
+            <div class="form-group">
+                <label>Traffic Limit</label>
+                <input name="data_limit_value" class="input" placeholder="e.g. 10">
+            </div>
+
+            <div class="form-group">
+                <label>Unit</label>
+                <select name="data_limit_unit" class="input">
+                    <option value="Mi">MiB</option>
+                    <option value="Gi">GiB</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Active Time</label>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                    <label style="display:flex;flex-direction:column;gap:4px;">
+                        <span style="font-size:.9em;font-weight:600;color:#475569;">days</span>
+                        <input name="time_limit_days" type="number" class="input" min="0" placeholder="0">
+                    </label>
+                    <label style="display:flex;flex-direction:column;gap:4px;">
+                        <span style="font-size:.9em;font-weight:600;color:#475569;">hours</span>
+                        <input name="time_limit_hours" type="number" class="input" min="0" max="23" placeholder="0–23">
+                    </label>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label><input type="checkbox" name="start_on_first_use"> Start timer on first connection</label>
+            </div>
+
+            <div class="form-group">
+                <label><input type="checkbox" name="unlimited"> Unlimited</label>
+            </div>
+
+            <div class="form-group">
+                <label>Phone Number</label>
+                <input name="phone_number" class="input" placeholder="+31...">
+            </div>
+
+            <div class="form-group">
+                <label>Telegram ID</label>
+                <input name="telegram_id" class="input" placeholder="@username or ID">
+            </div>
+
+            <button type="submit" class="btn"><i class="fas fa-save"></i> Save</button>
+        </form>
+    </div>
+</div>
+
+<div id="bulk-modal" class="modal" aria-hidden="true" aria-labelledby="bulk-title" role="dialog">
+    <div class="modal-backdrop" tabindex="-1"></div>
+
+    <div class="modal-content" role="document">
+        <button id="bulk-close" class="modal-close" aria-label="Close">&times;</button>
+        <h2 id="bulk-title"><i class="fas fa-layer-group"></i> Bulk create</h2>
+
+        <form id="bulk-form" autocomplete="off" novalidate>
+            <div class="form-group" style="display:none;">
+                <label for="bulk-iface">Interface</label>
+                <select id="bulk-iface" name="iface" class="input"></select>
+            </div>
+
+            <div class="form-group">
+                <label>How many peers?</label>
+                <input id="bulk-count" name="count" type="number" min="1" class="input" placeholder="e.g. 5" required>
+                <small class="hint">Available IPs on this interface: <strong id="bulk-available-ips">–</strong></small>
+            </div>
+
+            <div class="form-group">
+                <label>Name prefix</label>
+                <input id="bulk-prefix" name="prefix" class="input" placeholder="e.g. b" value="b">
+            </div>
+
+            <div class="form-group">
+                <label>Allowed IPs</label>
+                <input id="bulk-allowed_ips" name="allowed_ips" class="input" placeholder="0.0.0.0/0, ::/0"
+                    value="0.0.0.0/0, ::/0">
+            </div>
+
+            <div class="form-group">
+                <label>Endpoint</label>
+                <input id="bulk-endpoint" name="endpoint" class="input" placeholder="host:port">
+            </div>
+
+            <div class="form-group">
+                <label>Keepalive (s)</label>
+                <input id="bulk-keepalive" name="persistent_keepalive" type="number" class="input"
+                    placeholder="e.g. 25">
+            </div>
+
+            <div class="form-group">
+                <label>MTU</label>
+                <input id="bulk-mtu" name="mtu" type="number" class="input">
+            </div>
+
+            <div class="form-group">
+                <label>DNS</label>
+                <input id="bulk-dns" name="dns" class="input" placeholder="1.1.1.1, 8.8.8.8">
+            </div>
+
+            <div class="form-group">
+                <label>Traffic Limit</label>
+                <input id="bulk-data_limit_value" name="data_limit_value" class="input" placeholder="e.g. 10">
+            </div>
+
+            <div class="form-group">
+                <label>Unit</label>
+                <select id="bulk-data_limit_unit" name="data_limit_unit" class="input">
+                    <option value="Mi">MiB</option>
+                    <option value="Gi" selected>GiB</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label>Active Time</label>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                    <label style="display:flex;flex-direction:column;gap:4px;">
+                        <span style="font-size:.9em;font-weight:600;color:#475569;">days</span>
+                        <input id="bulk-time-days" name="time_limit_days" type="number" class="input" min="0"
+                            placeholder="0">
+                    </label>
+                    <label style="display:flex;flex-direction:column;gap:4px;">
+                        <span style="font-size:.9em;font-weight:600;color:#475569;">hours</span>
+                        <input id="bulk-time-hours" name="time_limit_hours" type="number" class="input" min="0" max="23"
+                            placeholder="0–23">
+                    </label>
+                </div>
+                <small class="hint">Leave both 0 for no timer (or tick “Start on first use”).</small>
+            </div>
+
+            <div class="form-group">
+                <label class="toggle mini black">
+                    <input id="bulk-start-first" type="checkbox" name="start_on_first_use">
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="label"><i class="fas fa-hourglass-start" aria-hidden="true"></i> Start timer on first
+                        connection</span>
+                </label>
+            </div>
+
+            <div class="form-group">
+                <label class="toggle mini black">
+                    <input id="bulk-unlimited" type="checkbox" name="unlimited">
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="label"><i class="fas fa-infinity" aria-hidden="true"></i> Unlimited</span>
+                </label>
+            </div>
+
+            <div class="form-group" style="grid-column:1/-1">
+                <label>Phone numbers (one per line or comma-separated)</label>
+                <textarea id="bulk-phone_numbers" name="phone_numbers" rows="3" class="input"
+                    placeholder="+15551234567, +15557654321"></textarea>
+            </div>
+
+            <div class="form-group" style="grid-column:1/-1">
+                <label>Telegram IDs (one per line or comma-separated)</label>
+                <textarea id="bulk-telegram_ids" name="telegram_ids" rows="3" class="input"
+                    placeholder="@alice, @bob"></textarea>
+            </div>
+
+            <div style="display:flex;gap:.5rem;justify-content:flex-end;">
+                <button type="button" id="bulk-close-btn" class="btn secondary">Cancel</button>
+                <button type="submit" class="btn"><i class="fas fa-save"></i> Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+
+<script>
+
+    (() => {
+        'use strict';
+
+        const $ = (s, r = document) => r.querySelector(s);
+
+        const onReady = (fn) => {
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once: true });
+            else fn();
+        };
+
+        window.toastSafe = (msg, type = 'info', ms = 2200) => {
+            if (typeof window.toast === 'function') {
+                try {
+                    const id = window.toast(msg, type, { timeout: ms });
+                    setTimeout(() => {
+                        if (window.toast && typeof window.toast.dismiss === 'function') window.toast.dismiss(id);
+                    }, ms + 120);
+                    return;
+                } catch (_) { /* fallback  */ }
+            }
+
+            let host = document.getElementById('toast-container');
+            if (!host) {
+                host = document.createElement('div');
+                host.id = 'toast-container';
+                document.body.appendChild(host);
+            }
+
+            const t = document.createElement('div');
+            t.className = `toast ${type}`;
+            t.setAttribute('role', 'status');
+            t.setAttribute('aria-live', 'polite');
+            t.innerHTML = `
+            <span class="toast-icon"><i class="fas fa-info-circle" aria-hidden="true"></i></span>
+            <span class="msg"></span>
+            <button class="action" type="button" aria-label="Dismiss">OK</button>
+            <div class="progress" style="--pct:1"></div>
+            `;
+            t.querySelector('.msg').textContent = String(msg ?? '');
+            host.appendChild(t);
+
+            let raf = 0;
+            const start = performance.now();
+
+            const hide = () => {
+                if (raf) cancelAnimationFrame(raf);
+                t.classList.add('hiding');
+                setTimeout(() => t.remove(), 200);
+            };
+
+            t.querySelector('.action')?.addEventListener('click', hide, { once: true });
+
+            const tick = (now) => {
+                const pct = Math.max(0, 1 - (now - start) / ms);
+                t.style.setProperty('--pct', String(pct));
+                if (pct > 0) raf = requestAnimationFrame(tick);
+                else hide();
+            };
+            raf = requestAnimationFrame(tick);
+        };
+
+        const on = (el, evt, selector, fn) => {
+            el.addEventListener(evt, (e) => {
+                const t = e.target.closest(selector);
+                if (t) fn(e, t);
+            });
+        };
+
+        const copyToClipboard = async (text) => {
+            const val = String(text ?? '').trim();
+            if (!val) return;
+
+            try {
+                await navigator.clipboard.writeText(val);
+                window.toastSafe?.('Copied to clipboard', 'success', 1200);
+                return;
+            } catch (_) {
+                
+                const ta = document.createElement('textarea');
+                ta.value = val;
+                ta.setAttribute('readonly', 'true');
+                ta.style.position = 'fixed';
+                ta.style.left = '-9999px';
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand('copy'); } catch (_) { /* ignore */ }
+                ta.remove();
+                window.toastSafe?.('Copied to clipboard', 'success', 1200);
+            }
+        };
+
+        on(document, 'click', '[data-copy], .copy-shortlink', (_e, el) => {
+            const val =
+                el.dataset.copy ||
+                el.getAttribute('data-url') ||
+                el.value ||
+                el.textContent;
+            if (val) copyToClipboard(val);
+        });
+
+        const ensureBackdrop = (modal) => {
+            let bd = modal.querySelector('.modal-backdrop');
+            if (!bd) {
+                bd = document.createElement('div');
+                bd.className = 'modal-backdrop';
+                bd.tabIndex = -1;
+                modal.prepend(bd);
+            }
+            return bd;
+        };
+
+        const getFocusable = (root) => {
+            const sel = [
+                'a[href]',
+                'button:not([disabled])',
+                'input:not([disabled])',
+                'select:not([disabled])',
+                'textarea:not([disabled])',
+                '[tabindex]:not([tabindex="-1"])'
+            ].join(',');
+            return [...root.querySelectorAll(sel)].filter(el => el.offsetParent !== null);
+        };
+
+        const openModal = (modal) => {
+            if (!modal) return;
+            ensureBackdrop(modal);
+
+            modal.__prevFocus = document.activeElement;
+
+            modal.classList.add('open');
+            modal.setAttribute('aria-hidden', 'false');
+            document.body.classList.add('modal-open');
+
+            const focusables = getFocusable(modal);
+            (focusables[0] || modal).focus?.({ preventScroll: true });
+        };
+
+        const closeModal = (modal) => {
+            if (!modal) return;
+            modal.classList.remove('open');
+            modal.setAttribute('aria-hidden', 'true');
+            document.body.classList.remove('modal-open');
+
+            const prev = modal.__prevFocus;
+            if (prev && typeof prev.focus === 'function') {
+                try { prev.focus({ preventScroll: true }); } catch (_) { /* ignore */ }
+            }
+        };
+
+        window.__ui = Object.assign(window.__ui || {}, { openModal, closeModal });
+
+        on(document, 'click', '.modal.open .modal-backdrop', (e, bd) => {
+            const modal = bd.closest('.modal');
+            if (modal) closeModal(modal);
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape') return;
+            const open = [...document.querySelectorAll('.modal.open')].pop();
+            if (open) closeModal(open);
+        });
+
+        onReady(() => {
+            const peerModal = $('#peer-modal');
+            const editModal = $('#edit-peer-modal');
+            const bulkModal = $('#bulk-modal');
+
+            $('#create-peer-btn')?.addEventListener('click', () => openModal(peerModal));
+            $('#modal-close')?.addEventListener('click', () => closeModal(peerModal));
+            $('#create-cancel')?.addEventListener('click', () => closeModal(peerModal));
+
+            $('#edit-close')?.addEventListener('click', () => closeModal(editModal));
+
+            $('#bulk-btn')?.addEventListener('click', () => openModal(bulkModal));
+            $('#bulk-close')?.addEventListener('click', () => closeModal(bulkModal));
+            $('#bulk-close-btn')?.addEventListener('click', () => closeModal(bulkModal));
+        });
+
+        const splitRe = /[,\n]+/g;
+
+        const normPhone = (s) => {
+            let v = String(s || '').replace(/[^\d+]/g, '');
+            if (!v) return null;
+            if (v[0] !== '+') v = '+' + v;
+            return /^\+\d{7,15}$/.test(v) ? v : null;
+        };
+
+        const normTg = (s) => {
+            let v = String(s || '').trim();
+            if (!v) return null;
+            if (v[0] !== '@') v = '@' + v;
+            const u = v.slice(1);
+            return /^[a-zA-Z0-9_]{5,32}$/.test(u) ? v : null;
+        };
+
+        function attachChips(textarea, kind /* 'phone' | 'tg' */) {
+            if (!textarea) return;
+
+            textarea.style.display = 'none';
+
+            const wrap = document.createElement('div');
+            wrap.className = 'chips-wrap';
+            wrap.setAttribute('role', 'group');
+            textarea.parentNode.insertBefore(wrap, textarea.nextSibling);
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.placeholder =
+                textarea.getAttribute('placeholder') ||
+                (kind === 'phone' ? '+15551234567' : '@alice');
+            input.className = 'chips-placeholder';
+            wrap.appendChild(input);
+
+            const values = new Set();
+
+            const syncTextarea = () => {
+                textarea.value = Array.from(values).join(', ');
+                input.classList.toggle('chips-placeholder', values.size === 0 && !input.value.trim());
+            };
+
+            const addChip = (raw) => {
+                const token = String(raw).trim();
+                if (!token) return;
+
+                const normalized = (kind === 'phone' ? normPhone : normTg)(token);
+                const value = normalized || token;
+
+                if (values.has(value)) return;
+                values.add(value);
+
+                const chip = document.createElement('span');
+                chip.className = 'chip' + (normalized ? '' : ' bad');
+                chip.innerHTML = `${value}<button type="button" class="x" aria-label="remove">&times;</button>`;
+                wrap.insertBefore(chip, input);
+
+                chip.querySelector('.x')?.addEventListener('click', () => {
+                    values.delete(value);
+                    chip.remove();
+                    syncTextarea();
+                });
+            };
+
+            const addTokens = (raw) => {
+                const parts = String(raw).split(splitRe).filter(Boolean);
+                for (const p of parts) addChip(p);
+                syncTextarea();
+            };
+
+            const commitInput = () => {
+                const t = input.value.trim();
+                if (t) addTokens(t);
+                input.value = '';
+                syncTextarea();
+            };
+
+            if ((textarea.value || '').trim()) addTokens(textarea.value);
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ',') {
+                    e.preventDefault();
+                    commitInput();
+                    return;
+                }
+                if (e.key === 'Backspace' && !input.value) {
+                    const last = wrap.querySelector('.chip:last-of-type');
+                    if (last) {
+                        const label = last.textContent.replace('×', '').trim();
+                        values.delete(label);
+                        last.remove();
+                        syncTextarea();
+                    }
+                }
+            });
+
+            input.addEventListener('paste', (e) => {
+                const text = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+                if (text && splitRe.test(text)) {
+                    e.preventDefault();
+                    addTokens(text);
+                }
+            });
+
+            input.addEventListener('blur', commitInput);
+            input.addEventListener('focus', () => input.classList.remove('chips-placeholder'));
+
+            syncTextarea();
+        }
+
+        onReady(() => {
+            attachChips(document.getElementById('bulk-phone_numbers'), 'phone');
+            attachChips(document.getElementById('bulk-telegram_ids'), 'tg'); // <- fixed typo
+
+            // attachChips(document.getElementById('create-phone_numbers'), 'phone');
+            // attachChips(document.getElementById('create-telegram_ids'), 'tg');
+
+            window.toastSafe?.('Peers page ready', 'info', 1200);
+        });
+
+    })();
+</script>
+
+
+{% endblock %}

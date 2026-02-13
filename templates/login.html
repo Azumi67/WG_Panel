@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <title>WG Panel — Login</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+
+    <link rel="preload" href="{{ url_for('static', filename='img/wireguard-badge.svg') }}" as="image">
+
+    <style>
+
+:root{
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+               "Apple Color Emoji","Segoe UI Emoji";
+  --font-display: var(--font-sans);
+}
+
+html, body{
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+input, button, textarea, select{
+  font-family: inherit;
+  font-size: 15px;
+}
+
+.field.has-icon{
+  position: relative;
+  overflow: hidden;        
+  border-radius: 10px;    
+}
+
+.field.has-icon .input { padding-right: 44px; }
+.pwd-toggle{
+  position: absolute;
+  right: 8px; top: 50%; transform: translateY(-50%);
+  width: 34px; height: 34px;
+  display: inline-grid; place-items: center;
+  border: 1px solid transparent; border-radius: 8px;
+  background: transparent; color: var(--muted, #64748b);
+  cursor: pointer; transition: background .15s, color .15s, border-color .15s;
+}
+.pwd-toggle:hover{
+  background: color-mix(in oklab, var(--line, #e5e7eb), transparent 75%);
+  color: var(--text, #0f172a);
+  border-color: color-mix(in oklab, var(--line, #e5e7eb), transparent 50%);
+}
+.pwd-toggle:focus-visible{
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(99,102,241,.18);
+  border-color: #6366f1;
+}
+.pwd-toggle .eye-off { display: none; }
+.pwd-toggle[aria-pressed="true"] .eye { display: none; }
+.pwd-toggle[aria-pressed="true"] .eye-off { display: block; }
+.auth-wrap {
+    min-height: 100svh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    background: linear-gradient(140deg, var(--auth-bg, #0b1a30), var(--auth-bg2, #14233e));
+}
+
+.bg-glow {
+    position: absolute;
+    inset: -20%;
+    background:
+        radial-gradient(60% 50% at 85% 20%, rgba(255, 255, 255, .08), rgba(255, 255, 255, 0)),
+        radial-gradient(40% 40% at 20% 80%, rgba(255, 255, 255, .06), rgba(255, 255, 255, 0));
+    pointer-events: none;
+    z-index: 0;
+}
+
+#bg-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    z-index: 0;
+}
+
+.auth-card {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 720px;
+    background: var(--card-bg, #fff);
+    color: var(--text, #0f172a);
+    border: 1px solid color-mix(in oklab, var(--line, #e5e7eb), transparent 70%);
+    border-radius: 16px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .10);
+    backdrop-filter: saturate(120%) blur(8px);
+    padding: 24px;
+}
+
+.brand-badge {
+    display: grid;
+    place-items: center;
+    margin-bottom: 8px;
+}
+
+.brand-badge img {
+    width: 72px;
+    height: 72px;
+    filter: drop-shadow(0 1px 4px rgba(0, 0, 0, .18));
+}
+
+.auth-header {
+    text-align: center;
+    margin-bottom: 12px;
+}
+
+.auth-header h2{
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  margin: 6px 0 4px;
+}
+
+.form-group label{
+  font-size: 14px;
+  letter-spacing: .01em;
+}
+
+
+.auth-header .muted {
+    color: var(--muted, #64748b);
+    font-size: 14px;
+    letter-spacing: .01em;
+}
+
+.form-grid {
+    display: grid;
+    gap: 12px;
+    margin-top: 14px;
+}
+
+.form-group label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.input {
+    width: 100%;
+    border: 1px solid var(--line, #e5e7eb);
+    background: var(--card-bg, #fff);
+    color: var(--text, #0f172a);
+    border-radius: 10px;
+    padding: 11px 12px;
+    transition: border-color .15s, box-shadow .15s;
+}
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear{
+  display: none;
+}
+
+input[type="password"]::-webkit-credentials-auto-fill-button{
+  visibility: hidden;
+  pointer-events: none;
+  position: absolute;
+}
+
+.input::placeholder {
+    color: color-mix(in oklab, var(--muted, #64748b), transparent 20%);
+}
+
+.input:focus {
+     outline: none;
+     border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, .15);
+}
+
+input:-webkit-autofill {
+    transition: background-color 9999s ease-in-out 0s;
+    -webkit-text-fill-color: var(--text, #0f172a) !important;
+}
+
+.row-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 4px;
+}
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: var(--btn, #111827);
+    color: var(--btn-text, #fff);
+    border: none;
+    border-radius: 10px;
+    padding: 11px 14px;
+    font-weight: 600;
+    transition: transform .12s ease, filter .12s ease, opacity .12s ease;
+    cursor: pointer;
+}
+
+.btn:hover:not([disabled]) {
+    transform: translateY(-1px);
+}
+
+.btn[disabled] {
+    opacity: .7;
+    cursor: default;
+    filter: saturate(.6);
+}
+
+.btn.secondary {
+    background: color-mix(in oklab, var(--line, #e5e7eb), transparent 5%);
+    color: var(--text, #0f172a);
+    border: 1px solid var(--line, #e5e7eb);
+}
+
+.hint {
+    color: var(--muted, #64748b);
+    font-size: 13px;
+}
+
+.flash {
+    padding: 10px 12px;
+    border-radius: 10px;
+    margin: 10px 0;
+    font-size: 14px;
+    line-height: 1.35;
+}
+
+.flash.error {
+    background: rgba(239, 68, 68, .10);
+    color: #b91c1c;
+    border: 1px solid rgba(239, 68, 68, .25);
+}
+
+.flash.success {
+    background: rgba(22, 163, 74, .10);
+    color: #166534;
+    border: 1px solid rgba(22, 163, 74, .25);
+}
+
+.flash.info {
+    background: rgba(37, 99, 235, .10);
+    color: #1e3a8a;
+    border: 1px solid rgba(37, 99, 235, .25);
+}
+
+.flash.warn {
+    background: rgba(217, 119, 6, .12);
+    color: #92400e;
+    border: 1px solid rgba(217, 119, 6, .28);
+}
+
+#twofa_code {
+    transition: .15s ease;
+    opacity: .85;
+}
+
+#twofa_code:placeholder-shown {
+    opacity: .6;
+}
+
+#twofa_code:focus {
+    opacity: 1;
+}
+
+.auth-footer {
+    text-align: center;
+    margin-top: 14px;
+}
+
+.spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    display: inline-block;
+    animation: spin .9s linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #bg-canvas {
+        display: none;
+    }
+}
+</style>
+</head>
+
+<body>
+    <div class="auth-wrap">
+        <canvas id="bg-canvas" aria-hidden="true"></canvas>
+        <div class="bg-glow" aria-hidden="true"></div>
+
+        <main class="auth-card" role="main">
+            <div class="brand-badge">
+                <img src="{{ url_for('static', filename='img/wireguard-badge.svg') }}" alt="WireGuard badge">
+            </div>
+
+            <header class="auth-header">
+                <h2>Welcome back</h2>
+                <div class="muted">Sign in to your WG Panel</div>
+            </header>
+
+            {% with msgs = get_flashed_messages(with_categories=true) %}
+            {% if msgs %}
+            {% for category, message in msgs %}
+            <div class="flash {{ category|lower }}">{{ message|safe }}</div>
+            {% endfor %}
+            {% endif %}
+            {% endwith %}
+
+            <form id="login-form" method="post" action="{{ url_for('login') }}" novalidate>
+                {% if csrf_token is defined %}
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                {% endif %}
+
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input class="input" id="username" name="username" type="text" placeholder="Your admin username"
+                            autocomplete="username" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <div class="field has-icon">
+                            <input class="input" id="password" name="password" type="password" placeholder="••••••••"
+                                autocomplete="current-password" required>
+                            <button type="button" id="pwd-toggle" class="pwd-toggle" aria-label="Show password" aria-pressed="false">
+                                <svg class="eye" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                                    <path d="M12 5c5.5 0 9.5 4.5 10.5 6-1 1.5-5 6-10.5 6S2.5 12.5 1.5 11C2.5 9.5 6.5 5 12 5Z"
+                                        fill="currentColor" fill-opacity=".15" />
+                                    <path d="M12 9a3 3 0 1 1 0 6a3 3 0 0 1 0-6Z" fill="currentColor" />
+                                </svg>
+                                <svg class="eye-off" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                                    <path d="M3 3l18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                                    <path
+                                        d="M10 6.3a9.8 9.8 0 0 1 2-.3c5.5 0 9.5 4.5 10.5 6c-.33.5-1.27 1.7-2.7 3M6.2 6.9C3.8 8.6 2.2 10.6 1.5 11c1 1.5 5 6 10.5 6c1.4 0 2.7-.2 3.9-.6"
+                                        stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none" />
+                                    <circle cx="12" cy="12" r="3" fill="currentColor" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+
+                    <div class="form-group">
+                        <label for="twofa_code">Two-factor code (optional)</label>
+                        <input class="input" id="twofa_code" name="twofa_code" type="text" inputmode="numeric"
+                            pattern="[0-9]*" maxlength="8" placeholder="Enter your 6-digit code">
+                        <div class="hint">If 2FA is enabled on your account, enter your current code.</div>
+                    </div>
+
+                    <div class="row-actions">
+                        <span class="hint">You can use a password manager; paste is allowed.</span>
+                        <button type="submit" class="btn" id="submit-btn">
+                            Sign in
+                        </button>
+                    </div>
+                </div>
+            </form>
+
+            {% if config and config.get('SUPPORT_TELEGRAM') %}
+            <div class="auth-footer">
+                <p class="hint">
+                    Trouble signing in?
+                    <a href="https://t.me/{{ config['SUPPORT_TELEGRAM']|replace('@','') }}" target="_blank"
+                        rel="noopener">
+                        Contact {{ config['SUPPORT_TELEGRAM'] }}
+                    </a>
+                </p>
+            </div>
+            {% endif %}
+        </main>
+    </div>
+
+    <script>
+        (() => {
+            const cv = document.getElementById('bg-canvas');
+            if (!cv) return;
+            const cx = cv.getContext('2d');
+            const dpr = Math.min(2, window.devicePixelRatio || 1);
+            const prefersReduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+            const CFG = { count: prefersReduce ? 40 : 120, radius: 2.2, speed: prefersReduce ? 0.08 : 0.28 };
+            let W = 0, H = 0, pts = [];
+
+            function resize() {
+                const w = innerWidth, h = innerHeight;
+                W = Math.floor(w * dpr); H = Math.floor(h * dpr);
+                cv.width = W; cv.height = H;
+                cv.style.width = w + 'px'; cv.style.height = h + 'px';
+                cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+                pts = Array.from({ length: CFG.count }, () => ({
+                    x: Math.random() * w, y: Math.random() * h,
+                    vx: (Math.random() * 2 - 1) * CFG.speed,
+                    vy: (Math.random() * 2 - 1) * CFG.speed,
+                    r: Math.random() * CFG.radius + .6
+                }));
+            }
+
+            function frame() {
+                const w = innerWidth, h = innerHeight;
+                cx.clearRect(0, 0, w, h);
+
+                const g = cx.createRadialGradient(w * .85, h * .2, 10, w * .85, h * .2, w);
+                g.addColorStop(0, 'rgba(255,255,255,.08)');
+                g.addColorStop(1, 'rgba(255,255,255,0)');
+                cx.fillStyle = g; cx.fillRect(0, 0, w, h);
+
+                cx.fillStyle = 'rgba(255,255,255,.95)';
+                for (const p of pts) {
+                    p.x += p.vx; p.y += p.vy;
+                    if (p.x < -10) p.x = w + 10; else if (p.x > w + 10) p.x = -10;
+                    if (p.y < -10) p.y = h + 10; else if (p.y > h + 10) p.y = -10;
+                    cx.beginPath(); cx.arc(p.x, p.y, p.r, 0, Math.PI * 2); cx.fill();
+                }
+                requestAnimationFrame(frame);
+            }
+
+            addEventListener('resize', resize, { passive: true });
+            resize(); if (!prefersReduce) frame();
+        })();
+        (() => {
+            const form = document.getElementById('login-form');
+            const btn = document.getElementById('submit-btn');
+            const pwd = document.getElementById('password');
+            const tog = document.getElementById('pwd-toggle'); 
+
+            if (form && btn) {
+                form.addEventListener('submit', () => {
+                    btn.disabled = true;
+                    btn.dataset.label = btn.textContent;
+                    btn.innerHTML = '<span class="spinner" aria-hidden="true"></span> Signing in…';
+                }, { passive: true });
+
+                form.addEventListener('invalid', () => {
+                    btn.disabled = false;
+                    btn.textContent = btn.dataset.label || 'Sign in';
+                }, true);
+            }
+
+            if (tog && pwd) {
+                tog.addEventListener('mousedown', e => e.preventDefault());
+                tog.addEventListener('click', () => {
+                    const isVisible = pwd.type === 'text';
+                    pwd.type = isVisible ? 'password' : 'text';
+                    tog.setAttribute('aria-pressed', String(!isVisible));
+                    tog.setAttribute('aria-label', isVisible ? 'Show password' : 'Hide password');
+                    pwd.focus({ preventScroll: true });
+                });
+            }
+        })();
+    </script>
+
+</body>
+
+</html>
