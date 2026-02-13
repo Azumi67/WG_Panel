@@ -1,0 +1,17 @@
+Flask
+Flask-WTF
+Flask-SQLAlchemy
+Flask-Login
+psutil
+python-dotenv
+ipaddress
+PyMySQL
+qrcode[pil]>=7.4,<8.0
+gunicorn
+python-telegram-bot>=22.5
+requests>=2.31.0
+bcrypt>=4.1
+passlib[bcrypt]>=1.7
+pyotp>=2.9
+cryptography>=42
+Flask-Limiter>=3.5   
