@@ -1,0 +1,79 @@
+{% extends "layout.html" %}
+{% block body %}
+
+<div class="grid">
+    <div class="card">
+        <div class="title">File Editor</div>
+        <div class="small">Safe edit of installer-managed files. Validate JSON before saving.</div>
+        <div class="hr"></div>
+
+        <div class="row">
+            <a class="btn" href="{{ url_for('files', file='env') }}">.env</a>
+            <a class="btn" href="{{ url_for('files', file='installer') }}">installer.json</a>
+            <a class="btn" href="{{ url_for('files', file='runtime') }}">runtime.json</a>
+            <a class="btn" href="{{ url_for('files', file='backup_schedule') }}">backup_schedule.json</a>
+            <a class="btn" href="{{ url_for('files', file='telegram_settings') }}">telegram_settings.json</a>
+            <a class="btn" href="{{ url_for('files', file='telegram_admins') }}">telegram_admins.json</a>
+        </div>
+
+        <div class="hr"></div>
+        <div class="kvs">
+            <div class="k">Path</div>
+            <div class="v">{{ path }}</div>
+            <div class="k">Mode</div>
+            <div class="v"><span class="pill">{{ file_key }}</span></div>
+        </div>
+
+        <div class="hr"></div>
+
+        <form method="post" action="{{ url_for('files_save') }}" id="fileForm">
+            <input type="hidden" name="path" value="{{ path }}">
+            <textarea name="content" id="editor">{{ content }}</textarea>
+
+            <div class="hr"></div>
+
+            <div class="row">
+                <button class="btn primary" type="submit">Save</button>
+                <button class="btn" type="button" id="btnValidate">Validate JSON</button>
+                <button class="btn blue" type="button" id="btnSaveRestart">Save & Restart</button>
+                <span class="pill" id="valChip">—</span>
+            </div>
+        </form>
+    </div>
+
+    <div class="card">
+        <div class="title">Notes</div>
+        <div class="small">
+            For JSON files, always validate first.<br><br>
+            If you edit <b>installer.json</b>, go to Install/Settings and re-run <b>systemd</b> step.
+        </div>
+    </div>
+</div>
+
+<script>
+    async function validateJson() {
+        const text = document.getElementById("editor").value;
+        const res = await fetch("/api/validate-json", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text })
+        });
+        const j = await res.json();
+        const chip = document.getElementById("valChip");
+        if (j.ok) {
+            chip.className = "pill good";
+            chip.textContent = "JSON OK";
+        } else {
+            chip.className = "pill bad";
+            chip.textContent = (j.error || "Invalid JSON").slice(0, 120);
+        }
+    }
+
+    document.getElementById("btnValidate").addEventListener("click", validateJson);
+
+    document.getElementById("btnSaveRestart").addEventListener("click", async () => {
+        document.getElementById("fileForm").submit();
+    });
+</script>
+
+{% endblock %}
