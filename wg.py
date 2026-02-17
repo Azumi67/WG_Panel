@@ -516,7 +516,10 @@ def render_status(root: Path) -> str:
                 (c("exists", BR_GRN) if rt_json_path.exists() else c("not created", BR_YEL)))
     rows.append(f"{('✓' if tg_json_path.exists() else '!')} telegram_settings.json: " +
                 (c("exists", BR_GRN) if tg_json_path.exists() else c("not created", BR_YEL)))
-
+    
+    urls = _panel_urls(root)
+    rows.append("")
+    rows.append(f"{TAG_INFO} Panel:  {c(str(urls.get('base') or 'unknown'), BR_WHT)}")
     rows.append("")
     rows.append(f"{TAG_INFO} Modes:  {panel_mode(root)}  |  {telegram_mode(root)}")
     rows.append("")
@@ -2480,25 +2483,102 @@ def information_page(root: Path):
     else:
         pause()
 
+def update_project(root: Path):
+
+    if not isitroot():
+        err("Update requires sudo.")
+        pause()
+        return
+
+    if not _cmd("git"):
+        err("git not installed. Install system requirements first.")
+        pause()
+        return
+
+    if not _cmd("rsync"):
+        err("rsync not installed. Install: sudo apt-get install -y rsync")
+        pause()
+        return
+
+    dest = root.resolve()
+    if not dest.exists():
+        err("Project root not found. Clone first.")
+        pause()
+        return
+
+    tmp = Path("/tmp") / f"wgpanel_update_{int(time.time())}"
+    try:
+        if tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
+
+        info("Downloading latest update from GitHub...")
+        rc = _live(["git", "clone", "--depth", "1", REPO_URL, str(tmp)], "git clone (temp)")
+        if rc != 0:
+            pause()
+            return
+
+        info("Overwriting project files (keeping backups/instance/.env/venv)...")
+
+        excludes = [
+            "--exclude", ".git/",
+            "--exclude", ".env",
+            "--exclude", "venv/",
+            "--exclude", "instance/",
+            "--exclude", "backups/",
+            "--exclude", "db/",
+            "--exclude", "*.db",
+            "--exclude", "__pycache__/",
+        ]
+
+        rc = _live(
+            ["rsync", "-a"] + excludes + [str(tmp) + "/", str(dest) + "/"],
+            "rsync overwrite (safe)"
+        )
+        if rc != 0:
+            pause()
+            return
+
+        ok("Update applied.")
+
+        vpy = dest / "venv" / "bin" / "python"
+        req = dest / "requirements.txt"
+        if vpy.exists() and req.exists():
+            info("Updating Python requirements in venv...")
+            _live([str(vpy), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], "pip upgrade tools")
+            _live([str(vpy), "-m", "pip", "install", "-r", str(req)], "pip install -r requirements.txt")
+            ok("Requirements updated.")
+        else:
+            warn("venv/requirements.txt not found. Skipping pip update.")
+
+        pause()
+
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
 
 def update_menu():
     while True:
         root = get_project()
         clear()
-        header("Update", "safe git updates")
+        header("Update", "download updates safely (keep your backups and settings)")
         print(render_status(root))
         print()
 
         items = [
-            c("1) Git pull project (fast-forward only)", BR_YEL),
-            c("2) Show git status", BR_CYN),
+            c("1) Update project (overwrite code, keep backups/settings)", BR_GRN),
+            c("2) Git pull (fast-forward only)", BR_YEL),
+            c("3) Show git status", BR_CYN),
             "",
             c("0) Back", DIM),
         ]
         print(box("Update Menu", items, border_color=BR_YEL))
 
         ch = _menu_input()
+
         if ch == "1":
+            update_project(root)
+
+        elif ch == "2":
             if not _cmd("git"):
                 err("git not installed.")
                 pause()
@@ -2508,19 +2588,24 @@ def update_menu():
                 pause()
                 continue
             _live(["git", "-C", str(root), "pull", "--ff-only"], "git pull --ff-only")
+            ok("Git pull completed.")
             pause()
-        elif ch == "2":
+
+        elif ch == "3":
             if not _cmd("git") or not (root / ".git").exists():
                 warn("Not a git repo.")
                 pause()
                 continue
             _live(["git", "-C", str(root), "status"], "git status")
             pause()
+
         elif ch == "0":
             return
+
         else:
             warn("Invalid option.")
             time.sleep(0.25)
+
 
 def _disable_remove_service(name: str):
     if not _cmd("systemctl"):
@@ -2536,6 +2621,37 @@ def _disable_remove_service(name: str):
         except Exception:
             warn(f"Could not remove unit: {_paths(str(unit))}")
     _quick_bar(["systemctl", "daemon-reload"], "systemctl daemon-reload")
+
+def wg_cleanup_confs(root: Path, delete_confs: bool = False) -> int:
+
+    conf_dir = Path("/etc/wireguard")
+    confs = []
+    try:
+        if conf_dir.exists():
+            confs = sorted(conf_dir.glob("*.conf"))
+    except Exception:
+        confs = []
+
+    if not confs:
+        warn(f"No WireGuard configs found in {_paths(str(conf_dir))}.")
+        return 0
+
+    for conf in confs:
+        iface = conf.stem
+
+        if _cmd("wg-quick"):
+            _quick_bar(["wg-quick", "down", iface], f"wg-quick down {iface}")
+
+        if _cmd("systemctl"):
+            _quick_bar(["systemctl", "disable", "--now", f"wg-quick@{iface}.service"], f"Disable wg-quick@{iface}")
+
+        if delete_confs:
+            try:
+                conf.unlink()
+            except Exception:
+                pass
+
+    return len(confs)
 
 def uninstall_menu():
     while True:
@@ -2555,40 +2671,43 @@ def uninstall_menu():
             c("  4) Remove venv only", BR_YEL),
             c("  5) Remove instance configs only (instance/*.json)", BR_YEL),
             c("  6) Clear saved root marker (~/.wg_panel_root.json)", BR_YEL),
+            c("  7) WireGuard cleanup (bring down + disable; optional delete confs)", BR_YEL),
             "",
             c("  0) Back", DIM),
         ]
         print(box("Uninstall Menu", items, border_color=BR_RED))
 
-        ch = _menu_input()
+        ch = _menu_input().strip()
 
         if ch == "0":
             return
 
-        if ch == "2" or ch == "1":
+        if ch == "7":
             if not isitroot():
-                err("Service removal requires sudo.")
+                err("WireGuard cleanup requires sudo.")
                 pause()
                 continue
-            if confirm("Remove wg-panel.service and wg-panel-bot.service?", default_yes=True):
-                _disable_remove_service("wg-panel.service")
-                _disable_remove_service("wg-panel-bot.service")
-            pause()
-            if ch == "2":
-                continue
 
-        if ch == "4":
-            venv_dir = root / "venv"
-            if venv_dir.exists() and confirm(f"Delete {_paths(str(venv_dir))} ?", True):
-                shutil.rmtree(venv_dir, ignore_errors=True)
-                ok("venv removed.")
+            if confirm("Bring down all wg-quick interfaces and disable wg-quick@ units?", True):
+                delete_confs = confirm("Also delete /etc/wireguard/*.conf files?", False)
+                wg_cleanup_confs(root, delete_confs=delete_confs)
+                if delete_confs:
+                    ok("WireGuard interfaces + configs removed.")
+                else:
+                    ok("WireGuard interfaces stopped/disabled (configs kept).")
             pause()
             continue
 
         if ch == "5":
             inst = root / "instance"
             if inst.exists() and confirm(f"Delete instance configs in {_paths(str(inst))} ?", False):
-                for p in ["panel_settings.json", "runtime.json", "telegram_settings.json", "backup_schedule.json", "tg_backup_state.json"]:
+                for p in [
+                    "panel_settings.json",
+                    "runtime.json",
+                    "telegram_settings.json",
+                    "backup_schedule.json",
+                    "tg_backup_state.json",
+                ]:
                     try:
                         fp = inst / p
                         if fp.exists():
@@ -2609,7 +2728,27 @@ def uninstall_menu():
             pause()
             continue
 
-        if ch == "3" or ch == "1":
+        if ch == "4":
+            venv_dir = root / "venv"
+            if venv_dir.exists() and confirm(f"Delete {_paths(str(venv_dir))} ?", True):
+                shutil.rmtree(venv_dir, ignore_errors=True)
+                ok("venv removed.")
+            pause()
+            continue
+
+        if ch == "2":
+            if not isitroot():
+                err("Service removal requires sudo.")
+                pause()
+                continue
+            if confirm("Remove wg-panel.service and wg-panel-bot.service?", default_yes=True):
+                _disable_remove_service("wg-panel.service")
+                _disable_remove_service("wg-panel-bot.service")
+                ok("Services removed.")
+            pause()
+            continue
+
+        if ch == "3":
             if root.exists():
                 if confirm(f"Delete project folder {_paths(str(root))} ?", default_yes=False):
                     shutil.rmtree(root, ignore_errors=True)
@@ -2618,13 +2757,38 @@ def uninstall_menu():
                     warn("Canceled.")
             else:
                 warn("Project folder not found.")
-            if ch == "1":
-                try:
-                    if ROOT_MARKER.exists():
-                        ROOT_MARKER.unlink()
-                except Exception:
-                    pass
-                ok("Uninstall EVERYTHING completed.")
+            pause()
+            continue
+
+        if ch == "1":
+            if not isitroot():
+                err("Uninstall EVERYTHING requires sudo.")
+                pause()
+                continue
+
+            if confirm("Remove wg-panel.service and wg-panel-bot.service?", default_yes=True):
+                _disable_remove_service("wg-panel.service")
+                _disable_remove_service("wg-panel-bot.service")
+
+            if confirm("Also clean WireGuard (bring down interfaces + disable units)?", False):
+                delete_confs = confirm("Also delete /etc/wireguard/*.conf files?", False)
+                wg_cleanup_confs(root, delete_confs=delete_confs)
+
+            if root.exists():
+                if confirm(f"Delete project folder {_paths(str(root))} ?", default_yes=False):
+                    shutil.rmtree(root, ignore_errors=True)
+                else:
+                    warn("Project folder kept.")
+            else:
+                warn("Project folder not found.")
+
+            try:
+                if ROOT_MARKER.exists():
+                    ROOT_MARKER.unlink()
+            except Exception:
+                pass
+
+            ok("Uninstall EVERYTHING completed.")
             pause()
             continue
 
@@ -2670,21 +2834,37 @@ def _wg_binary():
 
 
 def _wgpanel_command(root: Path):
-
     target = Path("/usr/local/bin/wgpanel")
     script_path = Path(__file__).resolve()
 
     if _already_installed(target, script_path):
         return
-
     if not isitroot():
         return
 
     vpy = root / "venv" / "bin" / "python"
-    py = str(vpy) if vpy.exists() else "/usr/bin/env python3"
 
+    # A resilient wrapper:
+    #  - Prefer venv python if present
+    #  - Else use system python3 if available
+    #  - Else print a clear install hint
     wrapper = f"""#!/usr/bin/env bash
-exec "{py}" "{script_path}" "$@"
+set -euo pipefail
+
+VENV_PY="{vpy}"
+SCRIPT="{script_path}"
+
+if [ -x "$VENV_PY" ]; then
+  exec "$VENV_PY" "$SCRIPT" "$@"
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+  exec python3 "$SCRIPT" "$@"
+fi
+
+echo "ERROR: python3 not found."
+echo "Install it (Debian/Ubuntu): sudo apt-get update && sudo apt-get install -y python3"
+exit 127
 """
 
     try:
