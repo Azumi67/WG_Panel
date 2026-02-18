@@ -1651,22 +1651,8 @@ WantedBy=multi-user.target
 
 def _bot_service(root: Path) -> bool:
     tg_path = root / "instance" / "telegram_settings.json"
-    bot_py = root / "telegram_bot.py"
-
     if not tg_path.exists():
-        err("telegram_settings.json missing. Create it first.")
-        return False
-    tg = load_json(tg_path, {})
-    enabled = bool(tg.get("enabled"))
-    token_ok = bool((tg.get("bot_token") or "").strip())
-    if not enabled:
-        err("Telegram is disabled in telegram_settings.json.")
-        return False
-    if not token_ok:
-        err("bot_token is empty in telegram_settings.json.")
-        return False
-    if not bot_py.exists():
-        err("telegram_bot.py missing in project root.")
+        err("telegram_settings.json not found. Run Telegram settings first.")
         return False
 
     vpy = root / "venv" / "bin" / "python"
@@ -1692,10 +1678,53 @@ LimitNOFILE=1048576
 [Install]
 WantedBy=multi-user.target
 """
-    path = Path("/etc/systemd/system/wg-panel-bot.service")
-    _write(path, unit)
-    ok(f"Wrote: {_paths(str(path))}")
+    svc_path = Path("/etc/systemd/system/wg-panel-bot.service")
+    _write(svc_path, unit)
+    ok(f"Wrote: {_paths(str(svc_path))}")
+
+    ps = load_json(root / "instance" / "panel_settings.json", {})
+    tls_enabled = bool(ps.get("tls_enabled", False))
+    https_port = int(ps.get("https_port") or 443)
+    http_port  = int(ps.get("http_port") or 8000)
+
+    host = str(ps.get("domain") or "").strip()
+    if not host:
+        ipf = root / "instance" / "last_public_ipv4.txt"
+        host = ipf.read_text(encoding="utf-8").strip() if ipf.exists() else "127.0.0.1"
+
+    scheme = "https" if tls_enabled else "http"
+    port = https_port if tls_enabled else http_port
+    default_url = f"{scheme}://{host}"
+    if not ((scheme == "https" and port == 443) or (scheme == "http" and port == 80)):
+        default_url += f":{port}"
+
+    panel_base_url = ask("Panel base URL (bot -> panel)", default=default_url, show_default=True).strip() or default_url
+
+    env = parse_env((root / ".env").read_text(encoding="utf-8") if (root / ".env").exists() else "")
+    default_api_key = (env.get("API_KEY") or "").strip()
+    panel_api_key = ask("Panel API key (bot heartbeat)", default=default_api_key, show_default=True).strip() or default_api_key
+
+    override_dir = Path("/etc/systemd/system/wg-panel-bot.service.d")
+    override_path = override_dir / "override.conf"
+    override = (
+        "[Service]\n"
+        f'Environment="PANEL_BASE_URL={panel_base_url}"\n'
+        f'Environment="PANEL_API_KEY={panel_api_key}"\n'
+    )
+    _write(override_path, override)
+    try:
+        os.chmod(override_path, 0o600)
+    except Exception:
+        pass
+    ok(f"Wrote: {_paths(str(override_path))}")
+
+    hb_path = root / "instance" / "telegram_heartbeat.json"
+    if not hb_path.exists():
+        _writejson(hb_path, {"ts": 0})
+        ok(f"Created: {_paths(str(hb_path))}")
+
     return True
+
 
 def _service_option(root: Path):
     if not isitroot():
@@ -3013,10 +3042,6 @@ def _wgpanel_command(root: Path):
 
     vpy = root / "venv" / "bin" / "python"
 
-    # A resilient wrapper:
-    #  - Prefer venv python if present
-    #  - Else use system python3 if available
-    #  - Else print a clear install hint
     wrapper = f"""#!/usr/bin/env bash
 set -euo pipefail
 
