@@ -1382,48 +1382,217 @@ def runtime(root: Path):
         warn("Skipped saving runtime.json.")
     pause()
 
+TELEGRAM_ADMINS_DEFAULT = []
 
 def telegram_settings(root: Path):
     instance_dir = root / "instance"
     instance_dir.mkdir(parents=True, exist_ok=True)
-    path = instance_dir / "telegram_settings.json"
+
+    settings_path = instance_dir / "telegram_settings.json"
+    admins_path   = instance_dir / "telegram_admins.json"
 
     tg = json.loads(json.dumps(TELEGRAM_SETTINGS_DEFAULT))
-    cur = load_json(path, {})
+    cur = load_json(settings_path, {})
     if isinstance(cur, dict):
         tg["enabled"] = bool(cur.get("enabled", tg["enabled"]))
         tg["bot_token"] = str(cur.get("bot_token", tg["bot_token"]) or "")
         if isinstance(cur.get("notify"), dict):
             tg["notify"].update(cur["notify"])
 
+    admins = load_json(admins_path, TELEGRAM_ADMINS_DEFAULT)
+    if not isinstance(admins, list):
+        admins = []
+
+    def _norm_admin(x: dict) -> dict:
+        return {
+            "id": str((x or {}).get("id") or (x or {}).get("tg_id") or "").strip(),
+            "username": str((x or {}).get("username") or "").lstrip("@").strip(),
+            "note": str((x or {}).get("note") or "").strip(),
+            "muted": bool((x or {}).get("muted", False)),
+        }
+
+    admins = [_norm_admin(a) for a in admins if isinstance(a, dict)]
+    admins = [a for a in admins if a.get("id", "").isdigit()]
+
+    def _admins_box(adm_list: list) -> None:
+        if not adm_list:
+            print(box("Current admins", [c("None set yet.", BR_RED)], border_color=BR_CYN))
+            return
+        lines = []
+        for i, a in enumerate(adm_list, 1):
+            u = f"@{a['username']}" if a.get("username") else "(no username)"
+            m = c("muted", BR_RED) if a.get("muted") else c("active", BR_GRN)
+            n = f" — {a['note']}" if a.get("note") else ""
+            lines.append(f"{c(str(i)+')', DIM)} {c(a['id'], BR_WHT)}  {c(u, DIM)}  {m}{n}")
+        print(box("Current admins", lines, border_color=BR_CYN))
+
+    def _find_admin_index(adm_list: list, tg_id: str) -> int:
+        tg_id = (tg_id or "").strip()
+        for i, a in enumerate(adm_list):
+            if str(a.get("id", "")).strip() == tg_id:
+                return i
+        return -1
+
     clear()
     header("Telegram Settings", _paths("instance/telegram_settings.json"))
-    print(box("Tips", [
-        c("Telegram is optional; you can configure later.", BR_WHT),
-        c("Bot service requires: enabled=true AND bot_token set.", BR_GRN),
+    print(box("Important", [
+        c("Bot token = connect to Telegram.", BR_WHT),
+        c("Admins list = who can use the bot.", BR_GRN),
+        c("Without admins, everyone will be 'not authorized'.", BR_RED),
+        "",
+        c("Tip: Use @userinfobot to get your numeric Telegram ID.", DIM),
     ], border_color=BR_YEL))
+    print()
 
     tg["enabled"] = confirm("Enable Telegram integration?", default_yes=bool(tg.get("enabled", False)))
-    if tg["enabled"]:
-        tg["bot_token"] = ask("Bot token", default=str(tg.get("bot_token") or ""), show_default=True).strip()
-        tg["notify"]["app_down"] = confirm("Notify: app_down?", default_yes=bool(tg["notify"]["app_down"]))
-        tg["notify"]["iface_down"] = confirm("Notify: iface_down?", default_yes=bool(tg["notify"]["iface_down"]))
-        tg["notify"]["login_fail"] = confirm("Notify: login_fail?", default_yes=bool(tg["notify"]["login_fail"]))
-        tg["notify"]["suspicious_4xx"] = confirm("Notify: suspicious_4xx?", default_yes=bool(tg["notify"]["suspicious_4xx"]))
-        if not tg["bot_token"]:
-            warn("Telegram enabled but token is empty. Bot service cannot run.")
-    else:
+    if not tg["enabled"]:
         info("Telegram disabled.")
+        if confirm("Save telegram_settings.json now?", default_yes=True):
+            _writejson(settings_path, tg)
+            ok(f"Saved: {_paths(str(settings_path))}")
+        pause()
+        return
 
-    clear()
-    header("Preview telegram_settings.json", "Review before saving")
-    print(box("telegram_settings.json Preview", [c(json.dumps(tg, indent=2, ensure_ascii=False), BR_WHT)], border_color=BR_CYN))
+    tg["bot_token"] = ask("Bot token", default=tg.get("bot_token") or "", show_default=True).strip()
 
-    if confirm("Save telegram_settings.json now?", default_yes=True):
-        _writejson(path, tg)
-        ok(f"Saved: {_paths(str(path))}")
+    tg["notify"]["app_down"] = confirm("Notify: app_down?", default_yes=bool(tg["notify"].get("app_down", True)))
+    tg["notify"]["iface_down"] = confirm("Notify: iface_down?", default_yes=bool(tg["notify"].get("iface_down", True)))
+    tg["notify"]["login_fail"] = confirm("Notify: login_fail?", default_yes=bool(tg["notify"].get("login_fail", True)))
+    tg["notify"]["suspicious_4xx"] = confirm("Notify: suspicious_4xx?", default_yes=bool(tg["notify"].get("suspicious_4xx", True)))
+
+    print()
+    header("Telegram Admins", _paths("instance/telegram_admins.json"))
+    _admins_box(admins)
+
+    if confirm("Edit admins now?", default_yes=True):
+        while True:
+            print()
+            print(box("Admins Menu", [
+                c("1) Add admin", BR_GRN),
+                c("2) Remove admin", BR_RED),
+                c("3) Toggle mute", BR_YEL),
+                c("4) List admins", BR_CYN),
+                "",
+                c("0) Done / continue", DIM),
+            ], border_color=BR_CYN))
+
+            ch = ask("Select", default="0", show_default=True).strip() or "0"
+
+            if ch == "0":
+                break
+
+            if ch == "4":
+                print()
+                _admins_box(admins)
+                continue
+
+            if ch == "1":
+                print()
+                tg_id = ask("Admin Telegram numeric ID", default="", show_default=False).strip()
+                if not tg_id.isdigit():
+                    warn("ID must be numeric.")
+                    continue
+
+                idx = _find_admin_index(admins, tg_id)
+                if idx != -1:
+                    warn("This admin ID already exists (updating fields).")
+                    existing = admins[idx]
+                else:
+                    existing = {"id": tg_id, "username": "", "note": "", "muted": False}
+
+                username = ask(
+                    "Admin username (optional, without @)",
+                    default=existing.get("username") or "",
+                    show_default=True
+                ).strip().lstrip("@")
+
+                note = ask(
+                    "Note (optional)",
+                    default=existing.get("note") or "",
+                    show_default=True
+                ).strip()
+
+                muted = confirm("Muted?", default_yes=bool(existing.get("muted", False)))
+
+                new_obj = {"id": tg_id, "username": username, "note": note, "muted": muted}
+
+                if idx == -1:
+                    admins.append(new_obj)
+                    ok("Admin added.")
+                else:
+                    admins[idx] = new_obj
+                    ok("Admin updated.")
+                continue
+
+            if ch == "2":
+                if not admins:
+                    warn("No admins to remove.")
+                    continue
+
+                print()
+                _admins_box(admins)
+                sel = ask("Remove which admin? (number or tg_id)", default="", show_default=False).strip()
+                if not sel:
+                    warn("Nothing selected.")
+                    continue
+
+                removed = False
+
+                if sel.isdigit():
+                    n = int(sel)
+                    if 1 <= n <= len(admins):
+                        admins.pop(n - 1)
+                        ok("Admin removed.")
+                        removed = True
+                    else:
+                        idx = _find_admin_index(admins, sel)
+                        if idx != -1:
+                            admins.pop(idx)
+                            ok("Admin removed.")
+                            removed = True
+
+                if not removed:
+                    warn("Invalid selection.")
+                continue
+
+            if ch == "3":
+                if not admins:
+                    warn("No admins to toggle.")
+                    continue
+
+                print()
+                _admins_box(admins)
+                sel = ask("Toggle mute for which admin? (number or tg_id)", default="", show_default=False).strip()
+                if not sel:
+                    warn("Nothing selected.")
+                    continue
+
+                idx = -1
+                if sel.isdigit():
+                    n = int(sel)
+                    if 1 <= n <= len(admins):
+                        idx = n - 1
+                    else:
+                        idx = _find_admin_index(admins, sel)
+
+                if idx == -1:
+                    warn("Invalid selection.")
+                    continue
+
+                admins[idx]["muted"] = not bool(admins[idx].get("muted", False))
+                ok(f"Muted = {admins[idx]['muted']}")
+                continue
+
+            warn("Invalid option.")
+
+    if confirm("Save Telegram settings now?", default_yes=True):
+        _writejson(settings_path, tg)
+        _writejson(admins_path, admins)
+        ok(f"Saved: {_paths(str(settings_path))}")
+        ok(f"Saved: {_paths(str(admins_path))}")
     else:
-        warn("Skipped saving telegram_settings.json.")
+        warn("Skipped saving.")
+
     pause()
 
 
