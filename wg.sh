@@ -73,18 +73,25 @@ _venv() {
 }
 
 install_requirements() {
-  local req="$SCRIPT_DIR/requirements.txt"
-  if [ ! -f "$req" ]; then
-    warn "requirements.txt not found in $SCRIPT_DIR (skipping pip install)."
-    return 0
-  fi
+  [ -f "$WG_PY" ] || die "wg.py not found at: $WG_PY"
 
   log "Updating pip tools..."
   "$PY" -m pip install -U pip setuptools wheel
 
-  log "Installing/updating requirements.txt..."
-  "$PY" -m pip install -r "$req"
-  ok "Requirements installed."
+  local pkgs=()
+
+  if grep -qE '(^|[[:space:]])from[[:space:]]+passlib\.|(^|[[:space:]])import[[:space:]]+passlib\b' "$WG_PY"; then
+    pkgs+=("passlib[bcrypt]>=1.7" "bcrypt>=4.1")
+  fi
+
+  if [ "${#pkgs[@]}" -eq 0 ]; then
+    ok "wg.py has no external pip dependencies (stdlib only)."
+    return 0
+  fi
+
+  log "Installing wg.py requirements: ${pkgs[*]}"
+  "$PY" -m pip install -U "${pkgs[@]}"
+  ok "wg.py imports installed."
 }
 
 _wg() {
