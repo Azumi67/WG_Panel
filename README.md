@@ -86,5 +86,6 @@ sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get i
     <img src="https://github.com/user-attachments/assets/5671ed52-9135-4184-b3e6-7f18e80ea059" alt="menu screen" />
   </p>
 </details>
+
 ---------------------------------------------------------------
  
