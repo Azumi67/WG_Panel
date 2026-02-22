@@ -683,6 +683,27 @@ def tls_certbot(root: Path):
     ok("TLS paths written to agent/.env")
     pause()
 
+def _parse_bind(bind: str, fallback: str = "0.0.0.0:9898") -> tuple[str, str]:
+
+    b = (bind or "").strip() or fallback
+
+    if b.startswith("["):
+        try:
+            host = b.split("]", 1)[0].lstrip("[")
+            port = b.split("]:", 1)[1]
+            return host.strip(), port.strip()
+        except Exception:
+            return "0.0.0.0", fallback.split(":")[-1]
+
+    try:
+        host, port = b.rsplit(":", 1)
+    except ValueError:
+        return "0.0.0.0", fallback.split(":")[-1]
+
+    host = (host or "").strip() or "0.0.0.0"
+    port = (port or "").strip() or fallback.split(":")[-1]
+    return host, port
+
 def _wizard(root: Path) -> dict:
     a = agent_dir(root)
     env_path = a / ".env"
