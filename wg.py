@@ -801,31 +801,58 @@ def __wg_serverconf(
     if enable_nat and wan_iface:
         lines.append("")
         lines.append("# NAT + forwarding (auto-generated)")
-        lines.append(f"PostUp   = iptables -A FORWARD -i %i -j ACCEPT; iptables -A FORWARD -o %i -j ACCEPT; iptables -t nat -A POSTROUTING -o {wan_iface} -j MASQUERADE")
-        lines.append(f"PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o {wan_iface} -j MASQUERADE")
+                # Idempotent rules (avoid duplicates on restart/crash)
+        lines.append(
+            f"PostUp   = "
+            f"iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %i -j ACCEPT; "
+            f"iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -o %i -j ACCEPT; "
+            f"iptables -t nat -C POSTROUTING -o {wan_iface} -j MASQUERADE 2>/dev/null || "
+            f"iptables -t nat -A POSTROUTING -o {wan_iface} -j MASQUERADE"
+        )
+        lines.append(
+            f"PostDown = "
+            f"iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; "
+            f"iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; "
+            f"iptables -t nat -D POSTROUTING -o {wan_iface} -j MASQUERADE 2>/dev/null || true"
+        )
+
         if enable_ipv6_fwd and _cmd("ip6tables"):
-            lines.append(f"PostUp   = ip6tables -A FORWARD -i %i -j ACCEPT; ip6tables -A FORWARD -o %i -j ACCEPT")
-            lines.append(f"PostDown = ip6tables -D FORWARD -i %i -j ACCEPT; ip6tables -D FORWARD -o %i -j ACCEPT")
+            lines.append(
+                "PostUp   = "
+                "ip6tables -C FORWARD -i %i -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -i %i -j ACCEPT; "
+                "ip6tables -C FORWARD -o %i -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -o %i -j ACCEPT"
+            )
+            lines.append(
+                "PostDown = "
+                "ip6tables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; "
+                "ip6tables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true"
+            )
 
     lines.append("")
     return "\n".join(lines) + "\n"
 
 def _sysctl_forwarding(enable_ipv6: bool = False) -> bool:
+    if not isitroot():
+        return False
+
+    sysctl_path = Path("/etc/sysctl.d/99-wg-panel.conf")
+    lines = ["net.ipv4.ip_forward=1\n"]
+    if enable_ipv6:
+        lines.append("net.ipv6.conf.all.forwarding=1\n")
+
+    try:
+        sysctl_path.write_text("".join(lines), encoding="utf-8")
+    except Exception:
+        return False
+
     if not _cmd("sysctl"):
         return False
-    ok_all = True
+
     try:
-        p = subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], capture_output=True, text=True)
-        ok_all = ok_all and (p.returncode == 0)
+        p = subprocess.run(["sysctl", "-p", str(sysctl_path)], capture_output=True, text=True)
+        return p.returncode == 0
     except Exception:
-        ok_all = False
-    if enable_ipv6:
-        try:
-            p6 = subprocess.run(["sysctl", "-w", "net.ipv6.conf.all.forwarding=1"], capture_output=True, text=True)
-            ok_all = ok_all and (p6.returncode == 0)
-        except Exception:
-            ok_all = False
-    return ok_all
+        return False
 
 def wireguard_setup(root: Optional[Path] = None):
     if not isitroot():
