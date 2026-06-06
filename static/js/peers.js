@@ -1287,11 +1287,27 @@ async function postEdit(path, okMsg, failMsg) {
 }
 
   async function getShortLink(id) {
-    const r = await fetch(api(`/api/peer/${id}/shortlink`), { credentials: 'same-origin' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const j = await r.json();
-    return j.url;
+  const apiKey = document.querySelector('meta[name="api-key"]')?.content?.trim() || '';
+
+  const headers = {};
+  if (apiKey) {
+    headers['X-API-KEY'] = apiKey;
   }
+
+  const r = await fetch(api(`/api/peer/${id}/shortlink`), {
+    method: 'GET',
+    credentials: 'same-origin',
+    headers
+  });
+
+  if (!r.ok) {
+    const txt = await r.text().catch(() => '');
+    throw new Error(`HTTP ${r.status}: ${txt}`);
+  }
+
+  const j = await r.json();
+  return j.url;
+}
   async function userLink(e, id) {
     try {
       const url = await getShortLink(id);
