@@ -3040,7 +3040,6 @@ def tg_adminlog():
 # _____________
 
 @app.route('/u/<token>')
-@require_api_key_or_login
 def user_peer_page(token):
     m = _load_shortlinks()
     if token not in m:
@@ -3165,7 +3164,6 @@ def preview_template(name):
     return resp
 
 @app.route('/api/u/<token>')
-@require_api_key_or_login
 def user_peer(token):
     m = _load_shortlinks()
     rec = m.get(token)
@@ -3217,7 +3215,6 @@ def user_peer(token):
     })
 
 @app.route('/api/u/<token>/config')
-@require_api_key_or_login
 def userpeer_config(token):
     m = _load_shortlinks()
     rec = m.get(token)
