@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-NODE_PY="$SCRIPT_DIR/node.py"
-VENV_DIR="$SCRIPT_DIR/venv"
+REPO_URL="https://github.com/Azumi67/WG_Panel.git"
+RAW_BASE="https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main"
+INSTALL_DIR="/usr/local/bin/wg_panel"
+AGENT_DIR="$INSTALL_DIR/agent"
+NODE_PY="$AGENT_DIR/node.py"
+VENV_DIR="$AGENT_DIR/venv"
 PY="$VENV_DIR/bin/python"
 
 NO_APT=0
@@ -15,151 +18,154 @@ die()  { printf '\033[91m[FAIL]\033[0m %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<EOF
-Usage: $0 [options] [-- node.py args...]
+WG Panel Node Installer
+
+Usage:
+  sudo bash node.sh [options]
 
 Options:
-  --no-apt     Skip apt install of python3/venv/pip
-  -h, --help   Show help
+  --dir PATH     Install/update WG_Panel in PATH
+  --no-apt       Skip apt package installation
+  -h, --help     Show this help
 
-Example:
-  sudo ./node.sh
+Examples:
+  sudo bash node.sh
+  sudo bash node.sh --dir /opt/wg_panel
 EOF
 }
 
-while [ $# -gt 0 ]; do
+while [ "${1:-}" != "" ]; do
   case "$1" in
-    --no-apt) NO_APT=1; shift ;;
-    -h|--help) usage; exit 0 ;;
-    --) shift; break ;;
-    *) break ;;
+    --dir)
+      shift
+      [ "${1:-}" != "" ] || die "--dir requires a path"
+      INSTALL_DIR="$1"
+      AGENT_DIR="$INSTALL_DIR/agent"
+      NODE_PY="$AGENT_DIR/node.py"
+      VENV_DIR="$AGENT_DIR/venv"
+      PY="$VENV_DIR/bin/python"
+      ;;
+    --no-apt)
+      NO_APT=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "Unknown option: $1"
+      ;;
   esac
+  shift
 done
 
 apt_install() {
-  if [ "$NO_APT" -eq 1 ]; then
-    warn "Skipping apt (--no-apt)."
-    return 0
-  fi
-  command -v apt-get >/dev/null 2>&1 || { warn "apt-get not found; skipping OS deps."; return 0; }
-  [ "$(id -u)" -eq 0 ] || die "Run with sudo (or use --no-apt)."
+  [ "$NO_APT" -eq 1 ] && return 0
 
-  log "Installing OS deps (python3, venv, pip)..."
+  command -v apt-get >/dev/null 2>&1 || {
+    warn "apt-get not found; skipping OS deps."
+    return 0
+  }
+
+  [ "$(id -u)" -eq 0 ] || die "Run with sudo/root, or use --no-apt."
+
+  log "Installing OS dependencies..."
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
-  apt-get install -y --no-install-recommends python3 python3-venv python3-pip ca-certificates
-  ok "OS deps installed."
+  apt-get install -y --no-install-recommends \
+    git curl ca-certificates python3 python3-venv python3-pip wireguard-tools iproute2 iptables
+
+  ok "OS dependencies installed."
 }
 
-_venv() {
+fetch_repo() {
+  mkdir -p "$(dirname "$INSTALL_DIR")"
+
+  if [ -d "$INSTALL_DIR/.git" ]; then
+    log "Updating existing repository: $INSTALL_DIR"
+    git -C "$INSTALL_DIR" fetch --all --prune
+    git -C "$INSTALL_DIR" reset --hard origin/main
+    ok "Repository updated."
+    return 0
+  fi
+
+  if [ -e "$INSTALL_DIR" ] && [ -n "$(ls -A "$INSTALL_DIR" 2>/dev/null || true)" ]; then
+    die "Install directory exists and is not empty: $INSTALL_DIR"
+  fi
+
+  log "Cloning WG_Panel into: $INSTALL_DIR"
+  git clone "$REPO_URL" "$INSTALL_DIR"
+  ok "Repository cloned."
+}
+
+fallback_download_agent() {
+  mkdir -p "$AGENT_DIR"
+
+  if [ ! -f "$NODE_PY" ]; then
+    log "Downloading node.py directly..."
+    curl -fsSL "$RAW_BASE/agent/node.py" -o "$NODE_PY"
+  fi
+
+  if [ -f "$RAW_BASE/agent/requirements.txt" ]; then
+    :
+  fi
+}
+
+validate_files() {
+  [ -f "$NODE_PY" ] || die "node.py not found: $NODE_PY"
+
+  python3 -m py_compile "$NODE_PY" || {
+    die "node.py has a Python syntax error. Check that the file was uploaded to GitHub with proper line breaks."
+  }
+
+  ok "node.py found and syntax check passed."
+}
+
+venv_install() {
   command -v python3 >/dev/null 2>&1 || die "python3 not found."
+
   if [ ! -x "$PY" ]; then
-    log "Creating venv: $VENV_DIR"
+    log "Creating Python venv: $VENV_DIR"
     python3 -m venv "$VENV_DIR"
     ok "Venv created."
   fi
-}
 
-_imports() {
-  python3 - "$NODE_PY" <<'PY'
-import ast, sys
-path = sys.argv[1]
-src = open(path, "r", encoding="utf-8", errors="ignore").read()
-t = ast.parse(src, filename=path)
-mods = set()
-for n in ast.walk(t):
-    if isinstance(n, ast.Import):
-        for a in n.names:
-            mods.add(a.name.split(".")[0])
-    elif isinstance(n, ast.ImportFrom):
-        if n.module:
-            mods.add(n.module.split(".")[0])
-# Print one per line
-for m in sorted(mods):
-    print(m)
-PY
-}
-
-pip__node() {
-  log "Inspecting imports in: $NODE_PY"
-
-  mapfile -t mods < <(_imports || true)
-
-  if [ "${#mods[@]}" -eq 0 ]; then
-    warn "Could not detect imports (or none found). Skipping pip install."
-    return 0
-  fi
-
-  local_exclude=(auth config models forms telegram_bot app)
-  stdlib_exclude=(
-    argparse ast base64 binascii collections contextlib csv ctypes datetime errno
-    functools getpass glob hashlib hmac http importlib io ipaddress json
-    logging math os pathlib queue random re secrets shutil signal socket ssl
-    sqlite3 string subprocess sys tempfile textwrap threading time traceback
-    typing urllib uuid warnings zipfile
-  )
-
-  declare -A pip_map=(
-    [yaml]="PyYAML"
-    [dotenv]="python-dotenv"
-    [PIL]="Pillow"
-    [Crypto]="pycryptodome"
-    [cryptography]="cryptography"
-    [requests]="requests"
-    [flask]="Flask"
-    [werkzeug]="Werkzeug"
-    [jinja2]="Jinja2"
-    [sqlalchemy]="SQLAlchemy"
-    [psutil]="psutil"
-    [telegram]="python-telegram-bot"
-  )
-
-  pkgs=()
-  for m in "${mods[@]}"; do
-    skip=0
-    for x in "${local_exclude[@]}"; do
-      [ "$m" = "$x" ] && skip=1
-    done
-    for x in "${stdlib_exclude[@]}"; do
-      [ "$m" = "$x" ] && skip=1
-    done
-    [ "$skip" -eq 1 ] && continue
-
-    if [ -n "${pip_map[$m]+x}" ]; then
-      pkgs+=("${pip_map[$m]}")
-    else
-      pkgs+=("$m")
-    fi
-  done
-
-  if [ "${#pkgs[@]}" -eq 0 ]; then
-    ok "No third-party imports detected. Nothing to pip install."
-    return 0
-  fi
-
-  uniq_pkgs=()
-  for p in "${pkgs[@]}"; do
-    found=0
-    for q in "${uniq_pkgs[@]}"; do
-      [ "$p" = "$q" ] && found=1
-    done
-    [ "$found" -eq 0 ] && uniq_pkgs+=("$p")
-  done
-
-  log "Installing node.py imports: ${uniq_pkgs[*]}"
+  log "Upgrading pip..."
   "$PY" -m pip install -U pip setuptools wheel
-  "$PY" -m pip install "${uniq_pkgs[@]}" || warn "Some packages failed to install; node.py may still run if they weren't needed."
-  ok "Pip install step completed."
+
+  if [ -f "$AGENT_DIR/requirements.txt" ]; then
+    log "Installing agent requirements..."
+    "$PY" -m pip install -r "$AGENT_DIR/requirements.txt"
+  elif [ -f "$INSTALL_DIR/requirements.txt" ]; then
+    log "Installing project requirements..."
+    "$PY" -m pip install -r "$INSTALL_DIR/requirements.txt"
+  else
+    warn "No requirements.txt found. Installing common agent dependencies."
+    "$PY" -m pip install requests psutil flask werkzeug cryptography python-dotenv
+  fi
+
+  ok "Python dependencies installed."
+}
+
+create_launcher() {
+  cat >/usr/local/bin/node <<EOF
+#!/usr/bin/env bash
+exec "$PY" "$NODE_PY" "\$@"
+EOF
+
+  chmod +x /usr/local/bin/node
+  ok "Command installed: node"
 }
 
 main() {
-  [ -f "$NODE_PY" ] || die "node.py not found: $NODE_PY"
-
   apt_install
-  _venv
-  pip__node
+  fetch_repo
+  validate_files
+  venv_install
+  create_launcher
 
-  log "Starting node.py..."
-  exec "$PY" "$NODE_PY" "$@"
+  log "Starting node menu..."
+  exec "$PY" "$NODE_PY"
 }
 
-main
+main "$@"
