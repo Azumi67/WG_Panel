@@ -560,6 +560,9 @@ AGENT_ENV_KEYS = [
     "TIMEOUT",
     "GRACEFUL_TIMEOUT",
     "LOGLEVEL",
+    "WG_ONLINE_PROBE_FIRST",
+    "WG_ONLINE_HANDSHAKE_FALLBACK",
+    "WG_ONLINE_HANDSHAKE_WINDOW",
 ]
 
 def _env(text: str) -> Dict[str, str]:
@@ -602,11 +605,20 @@ def make_env(v: Dict[str, str]) -> str:
         "TIMEOUT",
         "GRACEFUL_TIMEOUT",
         "LOGLEVEL",
+        "WG_ONLINE_PROBE_FIRST",
+        "WG_ONLINE_HANDSHAKE_FALLBACK",
+        "WG_ONLINE_HANDSHAKE_WINDOW",
     ]
+
+    defaults = {
+        "WG_ONLINE_PROBE_FIRST": "1",
+        "WG_ONLINE_HANDSHAKE_FALLBACK": "0",
+        "WG_ONLINE_HANDSHAKE_WINDOW": "45",
+    }
 
     lines: List[str] = []
     for k in order:
-        val = (v.get(k, "") or "").strip()
+        val = (v.get(k, defaults.get(k, "")) or "").strip()
         lines.append(f"{k}={val}")
     return "\n".join(lines) + "\n"
 
@@ -721,6 +733,9 @@ def _wizard(root: Path) -> dict:
     v = {k: cur.get(k, "") for k in AGENT_ENV_KEYS}
 
     v["WIREGUARD_CONF_PATH"] = (v.get("WIREGUARD_CONF_PATH") or "/etc/wireguard").strip()
+    v["WG_ONLINE_PROBE_FIRST"] = (v.get("WG_ONLINE_PROBE_FIRST") or "1").strip()
+    v["WG_ONLINE_HANDSHAKE_FALLBACK"] = (v.get("WG_ONLINE_HANDSHAKE_FALLBACK") or "0").strip()
+    v["WG_ONLINE_HANDSHAKE_WINDOW"] = (v.get("WG_ONLINE_HANDSHAKE_WINDOW") or "45").strip()
 
     api_raw = (v.get("API_KEY") or "").strip()
     api_low = api_raw.lower().lstrip("#").strip()
@@ -1445,16 +1460,22 @@ def svc_quick() -> str:
 
 def _re_bind(bind: str, fallback: str = "0.0.0.0:9898") -> tuple[str, str]:
     b = (bind or "").strip() or fallback
-    if b.startswith("["): 
+
+    fallback_port = fallback.rsplit(":", 1)[-1]
+
+    if b.startswith("["):
         try:
             host = b.split("]", 1)[0].lstrip("[")
-            port = b.split("]:", 1)[1]
+            port = b.rsplit(":", 1)[1]
             return host.strip(), port.strip()
         except Exception:
-            return "0.0.0.0", fallback.split(":")[-1]
-    host, port = (b.split(":", 1) + [fallback.split(":")[-1]])[:2]
-    return (host.strip() or "0.0.0.0"), (port.strip() or fallback.split(":")[-1])
+            return "0.0.0.0", fallback_port
 
+    if ":" in b:
+        host, port = b.rsplit(":", 1)
+        return (host.strip() or "0.0.0.0"), (port.strip() or fallback_port)
+
+    return (b.strip() or "0.0.0.0"), fallback_port
 
 def _cert_domain(cert_path: str) -> str:
 
