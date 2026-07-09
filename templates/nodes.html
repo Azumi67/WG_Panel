@@ -1,450 +1,578 @@
 {% extends 'base.html' %}
 {% block content %}
 
-<div class="nodes-page">
-    <div class="page-header">
-        <h1 class="page-title"><i class="fas fa-server"></i> Nodes</h1>
+<div class="nodes-page np-pro">
+  <section class="np-hero">
+    <div class="np-title-wrap">
+      <div class="np-icon"><i class="fas fa-server"></i></div>
+      <div>
+        <h1 class="np-title">Nodes</h1>
+        <p class="np-subtitle">Monitor remote WireGuard nodes, health, interfaces, peers, and actions from one compact workspace.</p>
+      </div>
     </div>
 
-    <div class="nodes-actions">
-        <button id="open-node-modal" class="btn">
-            <i class="fas fa-plus"></i> New node
-        </button>
+    <div class="np-actions">
+      <button id="nodes-refresh" class="btn secondary np-refresh" type="button">
+        <i class="fas fa-rotate-right"></i>
+        <span>Refresh</span>
+      </button>
+      <button id="open-node-modal" class="btn np-primary" type="button">
+        <i class="fas fa-plus"></i>
+        <span>New node</span>
+      </button>
+    </div>
+  </section>
+
+  <section class="np-stats" aria-label="Node summary">
+    <article class="np-stat accent">
+      <div class="np-stat-icon"><i class="fas fa-server"></i></div>
+      <div>
+        <div class="np-stat-label">Nodes</div>
+        <div class="np-stat-value" id="nodes-total">0</div>
+        <div class="np-stat-note">registered agents</div>
+      </div>
+    </article>
+    <article class="np-stat">
+      <div class="np-stat-icon ok"><i class="fas fa-signal"></i></div>
+      <div>
+        <div class="np-stat-label">Online</div>
+        <div class="np-stat-value" id="nodes-online">0</div>
+        <div class="np-stat-note">healthy now</div>
+      </div>
+    </article>
+    <article class="np-stat">
+      <div class="np-stat-icon blue"><i class="fas fa-toggle-on"></i></div>
+      <div>
+        <div class="np-stat-label">Enabled</div>
+        <div class="np-stat-value" id="nodes-enabled">0</div>
+        <div class="np-stat-note">active in panel</div>
+      </div>
+    </article>
+    <article class="np-stat">
+      <div class="np-stat-icon purple"><i class="fas fa-users"></i></div>
+      <div>
+        <div class="np-stat-label">Peers</div>
+        <div class="np-stat-value" id="nodes-peers">0</div>
+        <div class="np-stat-note">across nodes</div>
+      </div>
+    </article>
+    <article class="np-stat np-status-card">
+      <div class="np-status-dot idle" id="nodes-sync-dot"></div>
+      <div>
+        <div class="np-stat-label">Sync</div>
+        <div class="np-stat-note strong" id="nodes-sync-text">Waiting</div>
+      </div>
+    </article>
+  </section>
+
+  <section class="np-panel">
+    <div class="np-panel-head">
+      <div>
+        <h2><i class="fas fa-diagram-project"></i> Node inventory</h2>
+        <p>Search, filter, and manage remote agents without opening each node.</p>
+      </div>
+      <div class="np-legend" aria-label="Legend">
+        <span><i class="dot online"></i>Online</span>
+        <span><i class="dot offline"></i>Offline</span>
+        <span><i class="dot disabled"></i>Disabled</span>
+      </div>
     </div>
 
-    <div class="nodes-card">
-        <div class="nodes-table-wrap">
-            <table class="nodes-table">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>URL</th>
-                        <th>Enabled</th>
-                        <th>Peers</th>
-                        <th>Interfaces</th>
-                        <th>Status</th>
-                        <th>Last seen</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody id="nodes-body"></tbody>
-            </table>
-
-
-            <div id="nodes-empty" class="nodes-empty" style="display:none">
-                No nodes yet. Click “New node” to add one.
-            </div>
-        </div>
+    <div class="np-toolbar" id="nodes-toolbar">
+      <div class="np-search">
+        <i class="fas fa-search"></i>
+        <input id="nodes-search" class="input" placeholder="Search node name, endpoint, ID, or status">
+      </div>
+      <div class="np-filters" aria-label="Node filters">
+        <button type="button" class="active" data-node-filter="all">All</button>
+        <button type="button" data-node-filter="online">Online</button>
+        <button type="button" data-node-filter="offline">Offline</button>
+        <button type="button" data-node-filter="enabled">Enabled</button>
+        <button type="button" data-node-filter="disabled">Disabled</button>
+        <button type="button" data-node-filter="with-peers">With peers</button>
+      </div>
     </div>
+
+    <div class="np-table-wrap">
+      <table class="nodes-table np-table">
+        <thead>
+          <tr>
+            <th>Node</th>
+            <th>Endpoint</th>
+            <th>Health</th>
+            <th>Peers</th>
+            <th>Interfaces</th>
+            <th>Last seen</th>
+            <th class="np-actions-th">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="nodes-body"></tbody>
+      </table>
+
+      <div id="nodes-empty" class="np-empty" style="display:none">
+        <div class="np-empty-icon"><i class="fas fa-diagram-project"></i></div>
+        <h3>No nodes found</h3>
+        <p>Add your first remote node, or clear the search and filters.</p>
+        <button id="empty-add-node" class="btn" type="button"><i class="fas fa-plus"></i> Add node</button>
+      </div>
+    </div>
+
+    <div id="nodes-pagination" class="np-pagination" hidden></div>
+  </section>
 </div>
 
 <div id="node-mini-modal" class="modal nodes-modal">
-    <div class="modal-backdrop" data-close="1"></div>
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="node-mini-title">
-        <div class="modal-header">
-            <h2 id="node-mini-title" class="modal-title">
-                <i class="fas fa-circle-plus"></i> Add node
-            </h2>
-            <button class="icon-btn" id="node-mini-close" aria-label="Close" type="button">
-                <i class="fas fa-times"></i>
-            </button>
-        </div>
-
-        <form id="node-form" class="nodes-form" autocomplete="off">
-            <div class="modal-body">
-                <label for="n-name">
-                    <div class="label">Name</div>
-                    <input id="n-name" name="name" class="input" placeholder="e.g. azumi" autocomplete="organization"
-                        required>
-                </label>
-
-                <label for="n-url">
-                    <div class="label">Base URL</div>
-                    <input id="n-url" name="base_url" class="input" type="url" placeholder="https://example.com:8443"
-                        spellcheck="false" autocapitalize="off" required>
-                    <p class="field-help">Full URL of the node agent, including scheme and port.</p>
-                </label>
-
-                <label for="n-key">
-                    <div class="label">API key</div>
-                    <input id="n-key" name="api_key" class="input" type="password" autocomplete="off" spellcheck="false"
-                        autocapitalize="off" required>
-                    <p class="field-help">Secret key configured on the node agent.</p>
-                </label>
-            </div>
-
-            <div class="modal-footer nodes-modal-footer">
-                <button type="button" class="btn ghost" id="node-mini-cancel">Cancel</button>
-                <button class="btn" type="submit">
-                    <i class="fas fa-save"></i> Save
-                </button>
-            </div>
-        </form>
+  <div class="modal-backdrop" data-close="1"></div>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="node-mini-title">
+    <div class="modal-header">
+      <div>
+        <h2 id="node-mini-title" class="modal-title"><i class="fas fa-circle-plus"></i> Add node</h2>
+        <p class="modal-subtitle">Connect a remote WireGuard node agent.</p>
+      </div>
+      <button class="icon-btn" id="node-mini-close" aria-label="Close" type="button"><i class="fas fa-times"></i></button>
     </div>
+
+    <form id="node-form" class="nodes-form" autocomplete="off">
+      <div class="modal-body np-form-grid">
+        <label for="n-name">
+          <div class="label">Node name</div>
+          <input id="n-name" name="name" class="input" placeholder="e.g. Netherlands-1" autocomplete="organization" required>
+        </label>
+
+        <label for="n-url">
+          <div class="label">Base URL</div>
+          <input id="n-url" name="base_url" class="input" type="url" placeholder="https://node.example.com:9109" spellcheck="false" autocapitalize="off" required>
+          <p class="field-help">Include scheme and port. Example: <b>https://node.example.com:9109</b></p>
+        </label>
+
+        <label for="n-key" class="np-full">
+          <div class="label">API key</div>
+          <input id="n-key" name="api_key" class="input" type="password" autocomplete="off" spellcheck="false" autocapitalize="off" required>
+          <p class="field-help">When editing, leave this empty to keep the existing key.</p>
+        </label>
+      </div>
+
+      <div class="modal-footer nodes-modal-footer">
+        <button type="button" class="btn ghost" id="node-mini-cancel">Cancel</button>
+        <button class="btn" type="submit"><i class="fas fa-save"></i> Save node</button>
+      </div>
+    </form>
+  </div>
 </div>
 
-
 <div id="ui-confirm" class="ui-confirm" hidden>
-    <div class="ui-confirm__sheet">
-        <div class="ui-confirm__title"></div>
-        <div class="ui-confirm__body"></div>
-        <div class="ui-confirm__actions">
-            <button class="btn ghost" data-act="cancel">Cancel</button>
-            <button class="btn danger" data-act="ok">OK</button>
-        </div>
+  <div class="ui-confirm__sheet">
+    <div class="ui-confirm__title"></div>
+    <div class="ui-confirm__body"></div>
+    <div class="ui-confirm__actions">
+      <button class="btn ghost" data-act="cancel">Cancel</button>
+      <button class="btn danger" data-act="ok">OK</button>
     </div>
+  </div>
 </div>
 
 <script>
-    window.showToast = (m, t = 'info', sticky = false) => toastSafe(m, t, sticky);
-    window.toastInfo = (m, s = false) => toastSafe(m, 'info', s);
-    window.toastWarn = (m, s = false) => toastSafe(m, 'warn', s);
-    window.toastError = (m, s = false) => toastSafe(m, 'error', s);
-    window.toastSuccess = (m, s = false) => toastSafe(m, 'success', s);
+  window.showToast = (m, t = 'info', sticky = false) => toastSafe(m, t, sticky);
+  window.toastInfo = (m, s = false) => toastSafe(m, 'info', s);
+  window.toastWarn = (m, s = false) => toastSafe(m, 'warn', s);
+  window.toastError = (m, s = false) => toastSafe(m, 'error', s);
+  window.toastSuccess = (m, s = false) => toastSafe(m, 'success', s);
 
-    (function setupUiConfirm() {
-        if (window.uiConfirm) return;  
-
-        const root = document.getElementById('ui-confirm');
-        if (!root) {
-            window.uiConfirm = (opts = {}) =>
-                Promise.resolve(confirm(opts.body || 'Are you sure?'));
-            return;
+  (function setupUiConfirm() {
+    if (window.uiConfirm) return;
+    const root = document.getElementById('ui-confirm');
+    if (!root) {
+      window.uiConfirm = (opts = {}) => Promise.resolve(confirm(opts.body || 'Are you sure?'));
+      return;
+    }
+    const titleEl = root.querySelector('.ui-confirm__title');
+    const bodyEl = root.querySelector('.ui-confirm__body');
+    const okBtn = root.querySelector('[data-act="ok"]');
+    const cancelBtn = root.querySelector('[data-act="cancel"]');
+    window.uiConfirm = function (opts = {}) {
+      const { title = 'Are you sure?', body = '', okText = 'OK', cancelText = 'Cancel' } = opts;
+      titleEl.textContent = title;
+      bodyEl.textContent = body;
+      okBtn.textContent = okText;
+      cancelBtn.textContent = cancelText;
+      root.hidden = false;
+      root.classList.add('open');
+      return new Promise((resolve) => {
+        function cleanup(result) {
+          root.classList.remove('open');
+          root.hidden = true;
+          okBtn.removeEventListener('click', onOk);
+          cancelBtn.removeEventListener('click', onCancel);
+          root.removeEventListener('click', onBackdrop);
+          document.removeEventListener('keydown', onKey);
+          resolve(result);
         }
-
-        const titleEl = root.querySelector('.ui-confirm__title');
-        const bodyEl = root.querySelector('.ui-confirm__body');
-        const okBtn = root.querySelector('[data-act="ok"]');
-        const cancelBtn = root.querySelector('[data-act="cancel"]');
-
-        window.uiConfirm = function (opts = {}) {
-            const {
-                title = 'Are you sure?',
-                body = '',
-                okText = 'OK',
-                cancelText = 'Cancel'
-            } = opts;
-
-            titleEl.textContent = title;
-            bodyEl.textContent = body;
-
-            okBtn.textContent = okText;
-            cancelBtn.textContent = cancelText;
-
-            root.hidden = false;
-            root.classList.add('open');
-
-            return new Promise((resolve) => {
-                function cleanup(result) {
-                    root.classList.remove('open');
-                    root.hidden = true;
-                    okBtn.removeEventListener('click', onOk);
-                    cancelBtn.removeEventListener('click', onCancel);
-                    root.removeEventListener('click', onBackdrop);
-                    document.removeEventListener('keydown', onKey);
-                    resolve(result);
-                }
-
-                function onOk(e) {
-                    e.preventDefault();
-                    cleanup(true);
-                }
-
-                function onCancel(e) {
-                    e.preventDefault();
-                    cleanup(false);
-                }
-
-                function onBackdrop(e) {
-                    if (e.target === root) cleanup(false);
-                }
-
-                function onKey(e) {
-                    if (e.key === 'Escape') cleanup(false);
-                }
-
-                okBtn.addEventListener('click', onOk);
-                cancelBtn.addEventListener('click', onCancel);
-                root.addEventListener('click', onBackdrop);
-                document.addEventListener('keydown', onKey);
-            });
-        };
-    })();
+        function onOk(e) { e.preventDefault(); cleanup(true); }
+        function onCancel(e) { e.preventDefault(); cleanup(false); }
+        function onBackdrop(e) { if (e.target === root) cleanup(false); }
+        function onKey(e) { if (e.key === 'Escape') cleanup(false); }
+        okBtn.addEventListener('click', onOk);
+        cancelBtn.addEventListener('click', onCancel);
+        root.addEventListener('click', onBackdrop);
+        document.addEventListener('keydown', onKey);
+      });
+    };
+  })();
 </script>
-
 
 <script defer src="/static/js/nodes.js"></script>
 
 <style>
-    .nodes-modal .modal-card {
-        width: min(520px, 96vw);
-        max-height: 90vh;
-        padding: 0;
-        border-radius: 14px;
-    }
+.nodes-page.np-pro{display:grid;gap:14px;padding-bottom:16px}
+.np-hero{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 18px;border:1px solid #e2e8f0;border-radius:24px;background:radial-gradient(circle at 0% 0%,rgba(20,184,166,.16),transparent 32%),linear-gradient(180deg,#fff,#f8fafc);box-shadow:0 18px 46px rgba(15,23,42,.075);overflow:hidden}
+.np-title-wrap{display:flex;align-items:center;gap:14px;min-width:0}.np-icon{width:54px;height:54px;border-radius:19px;display:grid;place-items:center;background:linear-gradient(135deg,#0f172a,#0f766e);color:#fff;box-shadow:0 16px 34px rgba(15,23,42,.18);flex:0 0 auto}.np-title{font-size:clamp(26px,3vw,36px);letter-spacing:-.045em;line-height:1;margin:0;color:#0f172a}.np-subtitle{margin:6px 0 0;color:#64748b;font-size:14px;line-height:1.45}.np-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.np-actions .btn{height:40px;border-radius:14px!important;padding:0 14px!important;gap:8px!important}.np-primary{box-shadow:0 12px 24px rgba(15,23,42,.16)}.np-refresh i.syncing{animation:npSpin .8s linear infinite}@keyframes npSpin{to{transform:rotate(360deg)}}
+.np-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.np-stat{min-height:78px;padding:12px 14px;border:1px solid #e2e8f0;border-radius:20px;background:linear-gradient(180deg,#fff,#f8fafc);display:flex;align-items:center;gap:12px;box-shadow:0 12px 30px rgba(15,23,42,.055);overflow:hidden}.np-stat.accent{background:radial-gradient(circle at 100% 0%,rgba(45,212,191,.25),transparent 40%),linear-gradient(135deg,#0f172a,#115e59);border-color:transparent;color:#fff}.np-stat-icon{width:42px;height:42px;border-radius:15px;display:grid;place-items:center;background:#f1f5f9;color:#0f172a;flex:0 0 auto}.np-stat.accent .np-stat-icon{background:rgba(255,255,255,.16);color:#fff}.np-stat-icon.ok{background:#dcfce7;color:#047857}.np-stat-icon.blue{background:#dbeafe;color:#1d4ed8}.np-stat-icon.purple{background:#ede9fe;color:#7c3aed}.np-stat-label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;font-weight:900;color:#64748b}.np-stat.accent .np-stat-label{color:rgba(255,255,255,.78)}.np-stat-value{font-size:26px;line-height:1;font-weight:950;color:#0f172a;font-variant-numeric:tabular-nums;letter-spacing:-.035em}.np-stat.accent .np-stat-value{color:#fff}.np-stat-note{font-size:12px;color:#64748b;margin-top:3px}.np-stat-note.strong{font-weight:850;color:#475569}.np-status-card{min-width:0}.np-status-dot{width:11px;height:11px;border-radius:999px;box-shadow:0 0 0 5px rgba(148,163,184,.14);flex:0 0 11px}.np-status-dot.idle{background:#94a3b8}.np-status-dot.loading{background:#3b82f6;animation:npPulse 1s infinite}.np-status-dot.ok{background:#10b981}.np-status-dot.bad{background:#ef4444}@keyframes npPulse{50%{opacity:.45;transform:scale(.9)}}
+.np-panel{border:1px solid #e2e8f0;border-radius:24px;background:linear-gradient(180deg,#fff,#f8fafc);box-shadow:0 20px 52px rgba(15,23,42,.075);overflow:hidden}.np-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:16px 18px 10px}.np-panel-head h2{margin:0;font-size:19px;display:flex;gap:9px;align-items:center;color:#0f172a}.np-panel-head p{margin:6px 0 0;color:#64748b;font-size:13px}.np-legend{display:flex;align-items:center;gap:12px;color:#64748b;font-size:12px;white-space:nowrap;flex-wrap:wrap}.np-legend span{display:inline-flex;align-items:center;gap:6px}.dot{width:9px;height:9px;border-radius:999px;display:inline-block}.dot.online{background:#10b981}.dot.offline{background:#94a3b8}.dot.disabled{background:#f59e0b}
+.np-toolbar{display:grid;grid-template-columns:minmax(260px,1fr) auto;gap:10px;align-items:center;padding:0 18px 12px}.np-search{position:relative;min-width:0}.np-search i{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:13px}.np-search .input{height:40px;width:100%;border-radius:15px;padding-left:38px;border:1px solid #e2e8f0;background:#fff;box-shadow:0 8px 18px rgba(15,23,42,.035)}.np-filters{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}.np-filters button{height:34px;border:1px solid #e2e8f0;background:#fff;color:#475569;border-radius:999px;padding:0 11px;font-size:12px;font-weight:900;cursor:pointer;box-shadow:0 6px 14px rgba(15,23,42,.03);transition:.14s}.np-filters button:hover{transform:translateY(-1px);background:#f8fafc}.np-filters button.active{background:#111827;color:#fff;border-color:#111827}
+.np-table-wrap{padding:0 18px 12px;overflow-x:auto}.np-table{width:100%;min-width:980px;border-collapse:separate;border-spacing:0 8px}.np-table thead th{padding:0 12px 4px;text-align:left;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#64748b}.np-table tbody tr{background:#fff;box-shadow:0 10px 26px rgba(15,23,42,.045);transition:transform .14s ease,box-shadow .14s ease}.np-table tbody tr:hover{transform:translateY(-1px);box-shadow:0 16px 36px rgba(15,23,42,.075)}.np-table tbody td{padding:11px 12px;border-top:1px solid #eef2f7;border-bottom:1px solid #eef2f7;vertical-align:middle}.np-table tbody td:first-child{border-left:1px solid #eef2f7;border-radius:16px 0 0 16px}.np-table tbody td:last-child{border-right:1px solid #eef2f7;border-radius:0 16px 16px 0}
+.node-title{display:flex;align-items:center;gap:10px;min-width:180px}.node-avatar{width:38px;height:38px;border-radius:14px;background:linear-gradient(135deg,#eef2ff,#ecfeff);color:#0f172a;display:grid;place-items:center;border:1px solid #e2e8f0;flex:0 0 auto}.node-name{font-weight:950;color:#0f172a;line-height:1.1;font-size:15px}.node-id{font-size:11.5px;color:#94a3b8;margin-top:3px}.node-url{max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#475569;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;padding:8px 10px;border:1px solid #e2e8f0;border-radius:12px;background:#f8fafc}.np-badges,.node-peer-tags{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.np-pill,.peer-tag{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:4px 8px;font-size:11.5px;font-weight:900;border:1px solid #e5e7eb;background:#f8fafc;color:#475569;white-space:nowrap}.np-pill.online,.peer-tag.online{background:#ecfdf5;border-color:#bbf7d0;color:#047857}.np-pill.offline,.peer-tag.offline{background:#f1f5f9;border-color:#e2e8f0;color:#475569}.np-pill.enabled,.peer-tag.enabled{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}.np-pill.disabled,.peer-tag.disabled{background:#fffbeb;border-color:#fde68a;color:#92400e}.np-pill.blocked,.peer-tag.blocked{background:#fef2f2;border-color:#fecaca;color:#b91c1c}.np-pill.depleting,.peer-tag.depleting{background:#fff7ed;border-color:#fed7aa;color:#c2410c}.np-pill b,.peer-tag b{font-variant-numeric:tabular-nums}.node-last{font-size:12.5px;color:#64748b;white-space:nowrap}.nodes-actions-cell{display:flex;align-items:center;justify-content:flex-end;gap:7px;white-space:nowrap}.nodes-actions-cell .icon-btn{width:32px!important;height:32px!important;min-width:32px!important;min-height:32px!important;padding:0!important;border-radius:12px!important;display:inline-grid!important;place-items:center!important}.nodes-actions-cell .icon-btn i{font-size:13px!important;line-height:1!important;width:13px!important;height:13px!important;display:inline-grid!important;place-items:center!important}.toggle-switch{position:relative;display:inline-flex;width:44px!important;height:26px!important;align-items:center;cursor:pointer}.toggle-switch input{position:absolute;opacity:0}.toggle-switch-track{position:absolute;inset:0;border-radius:999px;background:#cbd5e1;transition:.16s}.toggle-switch-thumb{position:absolute;width:22px!important;height:22px!important;border-radius:999px;background:#fff;left:2px;box-shadow:0 2px 6px rgba(15,23,42,.25);transition:.16s}.toggle-switch input:checked+.toggle-switch-track{background:#111827}.toggle-switch input:checked+.toggle-switch-track+.toggle-switch-thumb{transform:translateX(18px)!important}
+.np-empty{border:1px dashed #cbd5e1;border-radius:18px;padding:34px 18px;text-align:center;background:#fff;color:#64748b}.np-empty-icon{width:60px;height:60px;margin:0 auto 12px;border-radius:20px;background:#cffafe;color:#0f172a;display:grid;place-items:center;font-size:22px}.np-empty h3{margin:0 0 7px;color:#0f172a}.np-empty p{max-width:520px;margin:0 auto 16px}.np-pagination{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 18px 16px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:18px;background:#fff;box-shadow:0 10px 24px rgba(15,23,42,.04)}.np-page-info{color:#64748b;font-size:12px;font-weight:900}.np-page-controls{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}.np-page-controls button{width:34px;height:34px;border-radius:12px;border:1px solid #e2e8f0;background:#fff;color:#0f172a;display:grid;place-items:center;cursor:pointer}.np-page-controls button:disabled{opacity:.45;cursor:not-allowed}.np-page-controls span{color:#475569;font-size:12px;font-weight:900;padding:0 4px}.np-page-controls select{width:auto;min-width:108px;height:34px;border-radius:12px;padding:0 9px;font-size:12px;font-weight:850}
+.nodes-modal .modal-card{width:min(560px,calc(100vw - 32px));max-width:560px;overflow:hidden}.nodes-modal .modal-header{padding:20px 22px 14px;border-bottom:1px solid #e5e7eb}.nodes-modal .modal-title{display:flex;align-items:center;gap:10px;margin:0}.nodes-modal .modal-title i{width:24px;height:24px;border-radius:999px;display:inline-grid;place-items:center;background:#111827;color:#fff;font-size:12px}.modal-subtitle{margin:5px 0 0;color:#64748b;font-size:12.5px}.nodes-modal .nodes-form{display:flex;flex-direction:column}.nodes-modal .np-form-grid{display:grid!important;grid-template-columns:1fr;gap:16px;padding:20px 22px 22px}.nodes-modal .np-form-grid label{display:block;min-width:0}.nodes-modal .np-form-grid .label{margin-bottom:7px;font-size:13px;font-weight:900;color:#172033}.nodes-modal .np-form-grid .input{width:100%;max-width:none;box-sizing:border-box}.nodes-modal .np-form-grid .field-help{margin:7px 0 0;font-size:12.5px;line-height:1.45;color:#64748b}.nodes-modal-footer{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:16px 22px;border-top:1px solid #e5e7eb;background:#f8fafc}.nodes-modal-footer .btn{min-width:118px;height:42px;justify-content:center}.nodes-modal-footer .btn[type=submit]{font-weight:900;box-shadow:0 10px 20px rgba(15,23,42,.14)}
+.ui-confirm{position:fixed;inset:0;z-index:1500;display:grid;place-items:center;background:rgba(15,23,42,.36);backdrop-filter:blur(3px)}.ui-confirm[hidden]{display:none}.ui-confirm__sheet{width:min(420px,calc(100vw - 30px));background:#fff;border-radius:18px;border:1px solid #e5e7eb;padding:18px;box-shadow:0 24px 60px rgba(15,23,42,.24)}.ui-confirm__title{font-weight:900;font-size:17px;color:#111827}.ui-confirm__body{margin-top:7px;color:#64748b;font-size:13px;line-height:1.45}.ui-confirm__actions{margin-top:16px;display:flex;justify-content:flex-end;gap:8px}
+@media(max-width:1160px){.np-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.np-status-card{grid-column:1/-1}.np-toolbar{grid-template-columns:1fr}.np-filters{justify-content:flex-start}.np-panel-head{display:grid}.np-legend{justify-content:flex-start}}
+@media(max-width:760px){.np-hero{align-items:stretch;flex-direction:column}.np-title-wrap{align-items:flex-start}.np-actions{width:100%}.np-actions .btn{flex:1}.np-stats{grid-template-columns:1fr}.np-table{min-width:860px}.np-table-wrap{padding:0 10px 12px}.np-panel-head{padding:14px}.np-toolbar{padding:0 14px 12px}.np-filters{overflow:auto;flex-wrap:nowrap;padding-bottom:2px}.np-filters button{white-space:nowrap}.np-pagination{display:grid;margin:0 10px 12px}.np-page-controls{justify-content:flex-start}.nodes-modal .modal-card{width:calc(100vw - 20px)}.nodes-modal .modal-header{padding:18px 16px 12px}.nodes-modal .np-form-grid{padding:16px;gap:14px}.nodes-modal-footer{flex-direction:column-reverse;align-items:stretch;padding:14px 16px}.nodes-modal-footer .btn{width:100%;min-width:0}}
+@media(prefers-color-scheme:dark){.np-title,.np-panel-head h2,.node-name,.np-stat-value,.np-empty h3{color:#e5e7eb}.np-subtitle,.np-panel-head p,.np-stat-label,.np-stat-note,.node-last{color:#94a3b8}.np-hero,.np-panel,.np-stat,.np-table tbody tr,.np-search .input,.np-filters button,.np-pagination,.ui-confirm__sheet{background:#111827;border-color:#273244}.np-table tbody td{border-color:#273244}.node-avatar,.np-stat-icon{background:#1f2937;color:#e5e7eb;border-color:#334155}.node-url{color:#cbd5e1;background:#0f172a;border-color:#334155}.np-empty{background:#0f172a;border-color:#334155}.np-empty-icon{background:#164e63;color:#e5e7eb}.nodes-modal .modal-header,.nodes-modal-footer{border-color:#273244}.nodes-modal-footer{background:#0f172a}.nodes-modal .np-form-grid .label{color:#e5e7eb}}
 
-    .nodes-modal .nodes-form {
-        display: block;
-        padding: 0;
-    }
 
-    .nodes-modal .modal-header {
-        padding: 14px 18px;
-        border-bottom: 1px solid #eef2f7;
-    }
+.nodes-page.np-pro{
+  gap:10px !important;
+  padding-bottom:10px !important;
+}
 
-    .nodes-modal .modal-title {
-        font-size: 17px;
-        font-weight: 700;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
+.np-hero{
+  padding:12px 16px !important;
+  border-radius:20px !important;
+  min-height:86px !important;
+}
 
-    .nodes-modal .modal-title i {
-        width: 24px;
-        height: 24px;
-        border-radius: 999px;
-        display: inline-grid;
-        place-items: center;
-        background: #f3f4f6;
-        color: #111827;
-        font-size: 12px;
-    }
+.np-icon{
+  width:46px !important;
+  height:46px !important;
+  border-radius:16px !important;
+  box-shadow:0 10px 22px rgba(15,23,42,.14) !important;
+}
 
-    .nodes-modal .modal-body {
-        padding: 12px 18px 8px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-    }
+.np-title{
+  font-size:clamp(25px,2.6vw,32px) !important;
+}
 
-    .nodes-modal .nodes-form label {
-        display: block;
-        margin: 0;
-    }
+.np-subtitle{
+  margin-top:4px !important;
+  font-size:13px !important;
+  line-height:1.35 !important;
+}
 
-    .nodes-modal .nodes-form .label {
-        font-size: 13px;
-        font-weight: 600;
-        color: #0f172a;
-        margin-bottom: 4px;
-    }
+.np-actions .btn{
+  height:36px !important;
+  min-height:36px !important;
+  border-radius:12px !important;
+  padding:0 12px !important;
+  font-size:13px !important;
+}
 
-    .nodes-modal .nodes-form .input {
-        width: 100%;
-        height: 40px;
-        padding: 8px 10px;
-        font-size: 14px;
-        border-radius: 9px;
-        border: 1px solid #d0d5dd;
-        background: #f9fafb;
-        transition: border-color .15s, box-shadow .15s;
-    }
+.np-stats{
+  grid-template-columns:repeat(5,minmax(0,1fr)) !important;
+  gap:8px !important;
+}
 
-    .nodes-modal .nodes-form .input:focus {
-        border-color: #3b82f6;
-        box-shadow: 0 0 0 3px rgba(59, 130, 246, .16);
-        outline: none;
-        background: #ffffff;
-    }
+.np-stat{
+  min-height:64px !important;
+  padding:9px 11px !important;
+  border-radius:16px !important;
+  gap:10px !important;
+  box-shadow:0 8px 20px rgba(15,23,42,.045) !important;
+}
 
-    .nodes-modal .nodes-form .field-help {
-        margin: 4px 0 0;
-        font-size: 12px;
-        color: #6b7280;
-        line-height: 1.4;
-    }
+.np-stat-icon{
+  width:34px !important;
+  height:34px !important;
+  border-radius:12px !important;
+  font-size:13px !important;
+}
 
-    .nodes-modal-footer {
-        padding: 10px 18px 16px;
-        border-top: 1px solid #eef2f7;
-        display: flex;
-        justify-content: flex-end;
-        gap: 8px;
-        margin-top: 10px;
-    }
+.np-stat-label{
+  font-size:10px !important;
+  letter-spacing:.07em !important;
+}
 
-    .nodes-modal-footer .btn {
-        height: 36px;
-        padding: 8px 14px;
-        font-size: 13px;
-        border-radius: 9px;
-    }
+.np-stat-value{
+  font-size:22px !important;
+  line-height:.95 !important;
+  margin-top:1px !important;
+}
 
-    .nodes-modal-footer .btn.ghost {
-        background: #fff;
-        color: #111827;
-        border: 1px solid #e5e7eb;
-    }
+.np-stat-note{
+  display:none !important;
+}
 
-    .nodes-modal-footer .btn.ghost:hover {
-        background: #f3f4f6;
-    }
+.np-status-card{
+  gap:9px !important;
+}
 
-    @media (max-width: 640px) {
-        .nodes-modal .modal-card {
-            width: 94vw;
-            margin: 0 8px;
-        }
+.np-status-card .np-stat-note.strong{
+  display:block !important;
+  font-size:12px !important;
+  margin-top:2px !important;
+}
 
-        .nodes-modal .modal-header,
-        .nodes-modal .modal-body,
-        .nodes-modal-footer {
-            padding-left: 14px;
-            padding-right: 14px;
-        }
-    }
+.np-status-dot{
+  width:9px !important;
+  height:9px !important;
+  flex-basis:9px !important;
+  box-shadow:0 0 0 4px rgba(148,163,184,.13) !important;
+}
 
-    .page-header {
-        display: flex;
-        align-items: center;
-    }
+.np-panel{
+  border-radius:20px !important;
+  box-shadow:0 14px 36px rgba(15,23,42,.06) !important;
+}
 
-    .page-title {
-        margin: 0;
-        display: flex;
-        gap: .5rem;
-        align-items: center;
-    }
+.np-panel-head{
+  padding:12px 16px 8px !important;
+  align-items:center !important;
+}
 
-    .nodes-actions {
-        margin: 8px 0 12px 0;
-        display: flex;
-        justify-content: flex-start;
-    }
+.np-panel-head h2{
+  font-size:17px !important;
+  gap:8px !important;
+}
 
-    @media (max-width:640px) {
-        .nodes-actions .btn {
-            width: 100%;
-        }
-    }
+.np-panel-head p{
+  margin-top:4px !important;
+  font-size:12.5px !important;
+}
 
-    .node-peers,
-    .node-ifaces {
-        font-size: 0.85rem;
-        color: #6b7280;
-        white-space: nowrap;
-    }
+.np-legend{
+  font-size:12px !important;
+  gap:10px !important;
+}
 
-    .status-pill.status-disabled {
-        background: rgba(148, 163, 184, 0.14);
-        color: #6b7280;
-    }
+.np-toolbar{
+  padding:0 16px 9px !important;
+  gap:8px !important;
+}
 
-    .status-pill.status-disabled .dot {
-        background: #f42a2a;
-    }
+.np-search .input{
+  height:36px !important;
+  border-radius:13px !important;
+  font-size:13px !important;
+}
 
-    .nodes-table-wrap table {
-        width: 100%;
-        border-collapse: collapse;
-    }
+.np-search i{
+  font-size:12px !important;
+}
 
-    .nodes-table-wrap th,
-    .nodes-table-wrap td {
-        padding: 12px 16px;
-    }
+.np-filters{
+  gap:5px !important;
+}
 
-    .nodes-table-wrap th {
-        font-size: 0.8rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: .04em;
-        color: #6b7280;
-        background: #f9fafb;
-    }
+.np-filters button{
+  height:31px !important;
+  padding:0 10px !important;
+  border-radius:12px !important;
+  font-size:11.5px !important;
+  box-shadow:none !important;
+}
 
-    .nodes-table-wrap tr:nth-child(even) td {
-        background: #f9fafb;
-    }
+.np-table-wrap{
+  padding:0 16px 10px !important;
+}
 
-    .nodes-table-wrap tr:hover td {
-        background: #f3f4f6;
-    }
+.np-table{
+  border-spacing:0 6px !important;
+}
 
-    .nodes-actions-cell {
-        text-align: right;
-        white-space: nowrap;
-    }
+.np-table thead th{
+  padding:0 10px 3px !important;
+  font-size:10.5px !important;
+}
 
-    .nodes-actions-cell .icon-btn {
-        border-radius: 999px;
-        padding: 6px 9px;
-        font-size: 0.8rem;
-        border: none;
-        cursor: pointer;
-    }
+.np-table tbody td{
+  padding:8px 10px !important;
+}
 
-    .nodes-actions-cell .icon-btn+.icon-btn {
-        margin-left: 4px;
-    }
+.np-table tbody tr{
+  box-shadow:0 5px 16px rgba(15,23,42,.035) !important;
+}
 
-    .nodes-actions-cell .icon-btn.ghost {
-        background: #eff1f5;
-        color: #4b5563;
-    }
+.np-table tbody tr:hover{
+  box-shadow:0 8px 22px rgba(15,23,42,.06) !important;
+}
 
-    .nodes-actions-cell .icon-btn.ghost:hover {
-        background: #e5e7eb;
-    }
+.node-title{
+  min-width:160px !important;
+  gap:9px !important;
+}
 
-    .nodes-actions-cell .icon-btn.danger {
-        background: #fee2e2;
-        color: #b91c1c;
-    }
+.node-avatar{
+  width:32px !important;
+  height:32px !important;
+  border-radius:12px !important;
+  font-size:12px !important;
+}
 
-    .nodes-actions-cell .icon-btn.danger:hover {
-        background: #fecaca;
-    }
+.node-name{
+  font-size:14px !important;
+}
 
-    .toggle-switch {
-        position: relative;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 40px;
-        height: 22px;
-        cursor: pointer;
-    }
+.node-id{
+  font-size:11px !important;
+  margin-top:2px !important;
+}
 
-    .toggle-switch input {
-        position: absolute;
-        inset: 0;
-        opacity: 0;
-        margin: 0;
-        cursor: pointer;
-    }
+.node-url{
+  max-width:260px !important;
+  padding:6px 9px !important;
+  border-radius:10px !important;
+  font-size:12px !important;
+}
 
-    .toggle-switch-track {
-        position: absolute;
-        inset: 0;
-        border-radius: 999px;
-        background: #e5e7eb;
-        box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.6);
-        transition: background 150ms ease-out, box-shadow 150ms ease-out;
-    }
+.np-pill,
+.peer-tag{
+  padding:3px 7px !important;
+  font-size:11px !important;
+  gap:4px !important;
+}
 
-    .toggle-switch-thumb {
-        position: absolute;
-        width: 18px;
-        height: 18px;
-        border-radius: 999px;
-        background: #ffffff;
-        box-shadow: 0 1px 3px rgba(15, 23, 42, 0.35);
-        transform: translateX(-9px);
-        transition: transform 150ms ease-out;
-    }
+.np-badges,
+.node-peer-tags{
+  gap:4px !important;
+}
 
-    .toggle-switch input:checked+.toggle-switch-track {
-        background: rgba(16, 185, 129, 0.85);
-        box-shadow: inset 0 0 0 1px rgba(5, 150, 105, 0.9);
-    }
+.node-last{
+  font-size:12px !important;
+}
 
-    .toggle-switch input:checked+.toggle-switch-track+.toggle-switch-thumb {
-        transform: translateX(9px);
-    }
+.nodes-actions-cell{
+  gap:5px !important;
+}
+
+.nodes-actions-cell .icon-btn{
+  width:29px !important;
+  height:29px !important;
+  min-width:29px !important;
+  min-height:29px !important;
+  border-radius:10px !important;
+}
+
+.nodes-actions-cell .icon-btn i{
+  font-size:12px !important;
+  width:12px !important;
+  height:12px !important;
+}
+
+.toggle-switch{
+  width:40px !important;
+  height:23px !important;
+}
+
+.toggle-switch-thumb{
+  width:19px !important;
+  height:19px !important;
+}
+
+.toggle-switch input:checked + .toggle-switch-track + .toggle-switch-thumb{
+  transform:translateX(17px) !important;
+}
+
+.np-pagination{
+  margin:0 16px 12px !important;
+  padding:8px 10px !important;
+  border-radius:15px !important;
+  box-shadow:0 6px 16px rgba(15,23,42,.035) !important;
+}
+
+.np-page-info,
+.np-page-controls span{
+  font-size:11.5px !important;
+}
+
+.np-page-controls{
+  gap:5px !important;
+}
+
+.np-page-controls button{
+  width:30px !important;
+  height:30px !important;
+  border-radius:10px !important;
+}
+
+.np-page-controls select{
+  height:30px !important;
+  min-width:96px !important;
+  border-radius:10px !important;
+  font-size:11.5px !important;
+}
+
+.np-empty{
+  padding:24px 14px !important;
+}
+
+.np-empty-icon{
+  width:48px !important;
+  height:48px !important;
+  border-radius:16px !important;
+  font-size:18px !important;
+}
+
+@media(max-width:1160px){
+  .np-stats{
+    grid-template-columns:repeat(3,minmax(0,1fr)) !important;
+  }
+
+  .np-status-card{
+    grid-column:auto !important;
+  }
+}
+
+@media(max-width:760px){
+  .np-hero{
+    padding:12px !important;
+    border-radius:18px !important;
+  }
+
+  .np-icon{
+    width:42px !important;
+    height:42px !important;
+  }
+
+  .np-stats{
+    grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+  }
+
+  .np-actions .btn{
+    flex:1 !important;
+  }
+
+  .np-panel-head{
+    display:grid !important;
+    align-items:start !important;
+  }
+
+  .np-toolbar{
+    padding:0 12px 8px !important;
+  }
+
+  .np-table-wrap{
+    padding:0 10px 10px !important;
+  }
+
+  .np-pagination{
+    margin:0 10px 10px !important;
+  }
+}
+
+@media(max-width:460px){
+  .np-stats{
+    grid-template-columns:1fr !important;
+  }
+}
+
 </style>
-
 
 {% endblock %}
