@@ -1,0 +1,445 @@
+{% extends 'base.html' %}
+{% block content %}
+<script defer src="{{ url_for('static', filename='js/csrf.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/toast.js') }}"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/subscriptions.css') }}">
+
+<style>
+.subx-interface-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;align-items:stretch}
+.subx-interface-card{position:relative;display:grid;gap:10px;border:1px solid var(--line,#e5e7eb);border-radius:16px;background:linear-gradient(180deg,var(--card-bg,#fff),#fbfdff);padding:12px;cursor:pointer;min-width:0;transition:border-color .14s,box-shadow .14s,transform .14s}
+.subx-interface-card:hover{transform:translateY(-1px);box-shadow:0 10px 26px rgba(15,23,42,.08);border-color:#94a3b8}
+.subx-interface-card input{position:absolute;opacity:0;pointer-events:none}
+.subx-interface-card .ifc-check{position:absolute;right:10px;bottom:10px;width:24px;height:24px;border-radius:999px;border:1px solid #cbd5e1;background:#fff;color:#fff;display:grid;place-items:center;font-size:11px;transition:.14s}
+.subx-interface-card:has(input:checked){border-color:#10b981;background:#ecfdf5;box-shadow:0 12px 28px rgba(16,185,129,.14)}
+.subx-interface-card:has(input:checked) .ifc-check{background:#10b981;border-color:#10b981;color:#fff}
+.ifc-top{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:9px;align-items:center;min-width:0}.ifc-icon{width:34px;height:34px;border-radius:12px;background:#111827;color:#fff;display:grid;place-items:center;flex:0 0 auto}.ifc-title-wrap{display:grid;gap:1px;min-width:0}.ifc-title-wrap b{font-size:13px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ifc-title-wrap small{font-size:11px;color:var(--muted,#64748b)}.ifc-state{font-style:normal;font-size:10.5px;border-radius:999px;padding:3px 7px;white-space:nowrap;font-weight:900}.ifc-state.ok{background:#dcfce7;color:#166534}.ifc-state.warn{background:#fffbeb;color:#92400e;border:1px solid #f59e0b55}.ifc-main{display:grid;gap:5px;padding-right:30px}.ifc-name{font-size:13px;font-weight:950;display:flex;gap:6px;align-items:center;min-width:0}.ifc-meta{display:flex;gap:6px;flex-wrap:wrap;color:var(--muted,#64748b);font-size:11.5px}.ifc-meta span{border:1px solid var(--line,#e5e7eb);background:#fff;border-radius:999px;padding:3px 7px;max-width:100%;overflow-wrap:anywhere}.subx-group-v2 summary{gap:8px}.group-source{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line,#e5e7eb);border-radius:999px;padding:4px 8px;background:#f8fafc;color:#334155;font-size:11.5px;font-weight:900}.group-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}@media(max-width:560px){.subx-interface-grid{grid-template-columns:1fr}.ifc-top{grid-template-columns:auto minmax(0,1fr)}.ifc-state{grid-column:2}.ifc-main{padding-right:0}}
+.subx-existing-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;border:1px solid var(--line,#e5e7eb);background:#f8fafc;border-radius:14px;padding:10px 12px;margin-bottom:10px}.subx-existing-toolbar b{font-size:13px}.subx-existing-toolbar span{font-size:12px;color:var(--muted,#64748b)}.subx-existing-sections{display:grid;gap:10px}.subx-existing-section{border:1px solid var(--line,#e5e7eb);border-radius:16px;background:var(--card-bg,#fff);overflow:hidden}.subx-existing-head{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 12px;background:linear-gradient(180deg,#fff,#f8fafc);border-bottom:1px solid var(--line,#e5e7eb)}.subx-existing-head-main{min-width:0;display:grid;gap:2px}.subx-existing-head-main b{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.subx-existing-head-main small{font-size:11.5px;color:var(--muted,#64748b);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.subx-existing-head-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end}.subx-existing-list.compact{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:8px;padding:10px}.subx-existing-list.compact .current-row{margin:0;min-width:0}.subx-existing-more{display:flex;justify-content:center;padding:0 10px 10px}.subx-existing-more .group-btn{background:#fff}.group-selected:not(:empty){border:1px solid #10b98155;background:#ecfdf5;color:#047857;border-radius:999px;padding:3px 7px;font-size:11px;font-weight:900}@media(max-width:620px){.subx-existing-head{grid-template-columns:1fr}.subx-existing-head-actions{justify-content:flex-start}.subx-existing-list.compact{grid-template-columns:1fr}}
+.subx-current-selected{border:1px solid #bfdbfe;background:#eff6ff;border-radius:15px;padding:10px 12px;margin-bottom:10px;display:grid;gap:8px}
+.subx-current-selected.empty{display:none!important}
+.subx-current-selected-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.subx-current-selected-head b{font-size:13px}.subx-current-chips{display:flex;gap:7px;flex-wrap:wrap}.subx-current-chip{display:inline-flex;align-items:center;gap:6px;border:1px solid #cbd5e1;background:#fff;border-radius:999px;padding:6px 8px;font-size:12px;max-width:100%}.subx-current-chip b{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.subx-current-chip small{color:#64748b;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.subx-current-chip button{border:0;background:#f1f5f9;color:#334155;border-radius:999px;width:20px;height:20px;display:grid;place-items:center;cursor:pointer}.subx-existing-toolbar.friendly{margin-top:0}.subx-current-source-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:10px}.subx-current-source-card{border:1px solid var(--line,#e5e7eb);background:linear-gradient(180deg,#fff,#f8fafc);border-radius:16px;padding:12px;text-align:left;display:grid;gap:10px;cursor:pointer;transition:.14s;min-width:0}.subx-current-source-card:hover{transform:translateY(-1px);border-color:#94a3b8;box-shadow:0 10px 24px rgba(15,23,42,.08)}.subx-current-source-card .src-top{display:flex;align-items:center;gap:9px;min-width:0}.subx-current-source-card .src-top>span:nth-child(2){display:grid;gap:1px;min-width:0}.subx-current-source-card .src-top b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.subx-current-source-card .src-top small{font-size:11px;color:#64748b}.subx-current-source-card .src-top em{margin-left:auto;border:1px solid #10b98155;background:#ecfdf5;color:#047857;border-radius:999px;padding:3px 7px;font-style:normal;font-weight:900;font-size:11px;white-space:nowrap}.src-icon{width:32px;height:32px;border-radius:11px;background:#111827;color:#fff;display:grid;place-items:center;flex:0 0 auto}.src-main{display:grid;gap:3px}.src-main strong{font-size:13.5px;display:flex;align-items:center;gap:7px;min-width:0}.src-main small{font-size:11.5px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.src-foot{display:flex;justify-content:space-between;gap:10px;align-items:center;color:#64748b;font-size:11.5px}.src-foot span:last-child{font-weight:900;color:#111827;white-space:nowrap}.subx-current-picker-overlay{position:fixed;inset:0;z-index:1350;background:rgba(15,23,42,.48);backdrop-filter:blur(2px);display:grid;place-items:center;padding:18px;opacity:0;transition:.12s}.subx-current-picker-overlay.show{opacity:1}.subx-current-picker{width:min(760px,100%);max-height:min(760px,calc(100vh - 34px));background:var(--card-bg,#fff);border:1px solid var(--line,#e5e7eb);border-radius:18px;box-shadow:0 28px 80px rgba(0,0,0,.28);display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;overflow:hidden}.subx-current-picker-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;padding:14px 16px;border-bottom:1px solid var(--line,#e5e7eb)}.subx-current-picker-head h3{margin:0;font-size:16px;display:flex;gap:8px;align-items:center}.subx-current-picker-head p{margin:4px 0 0;color:#64748b;font-size:12.5px}.subx-current-picker-close{border:0;background:#f8fafc;border-radius:10px;width:34px;height:34px;display:grid;place-items:center;cursor:pointer;color:#111827}.subx-current-picker-search{margin:12px 16px;position:relative}.subx-current-picker-search i{position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#64748b}.subx-current-picker-search .input{padding-left:36px}.subx-current-picker-list{overflow:auto;padding:0 16px 12px;display:grid;gap:8px}.subx-current-mini-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;border:1px solid #e2e8f0;background:#fff;border-radius:13px;padding:9px 10px;cursor:pointer}.subx-current-mini-row:hover{border-color:#94a3b8}.subx-current-mini-row.disabled{opacity:.55;cursor:not-allowed;background:#f8fafc}.subx-current-mini-row input{width:18px;height:18px}.mini-main{display:grid;gap:2px;min-width:0}.mini-main b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mini-main small{font-size:11.5px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mini-tags{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}.mini-tags em{font-style:normal;border:1px solid #e2e8f0;background:#f8fafc;border-radius:999px;padding:3px 6px;font-size:10.5px;color:#475569}.mini-tags em.locked{border-color:#f59e0b55;background:#fffbeb;color:#92400e}.subx-current-picker-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;padding:12px 16px;border-top:1px solid var(--line,#e5e7eb);background:#f8fafc}@media(max-width:620px){.subx-current-source-grid{grid-template-columns:1fr}.subx-current-mini-row{grid-template-columns:auto minmax(0,1fr)}.mini-tags{grid-column:2/3;justify-content:flex-start}.subx-current-picker-actions .btn{flex:1}.subx-current-chip b,.subx-current-chip small{max-width:110px}}
+.subx-existing-toolbar.compact{padding:9px 10px;border-radius:13px;margin-bottom:10px}
+.subx-current-source-card.empty{opacity:.62;cursor:not-allowed;background:#f8fafc;box-shadow:none}
+.subx-current-source-card.empty:hover{transform:none;border-color:var(--line,#e5e7eb);box-shadow:none}
+.subx-current-source-card.empty .src-foot span:last-child{color:#94a3b8}
+#sub-modal:not(.edit-mode) #new-defaults:not([open]) summary{
+  position:relative;
+  border-color:#f59e0b66;
+  animation:subxAdvGlow 2.4s ease-in-out infinite;
+}
+#sub-modal:not(.edit-mode) #new-defaults:not([open]) summary .adv-arrow{
+  animation:subxAdvArrow 1.15s ease-in-out infinite;
+  box-shadow:0 0 0 0 rgba(245,158,11,.34);
+}
+#sub-modal:not(.edit-mode) #new-defaults:not([open]) summary::after{
+  content:"Optional";
+  margin-left:auto;
+  border:1px solid #f59e0b55;
+  background:#fffbeb;
+  color:#92400e;
+  border-radius:999px;
+  padding:3px 8px;
+  font-size:10.5px;
+  font-weight:900;
+  letter-spacing:.02em;
+}
+#sub-modal:not(.edit-mode) #new-defaults[open] summary::after{display:none}
+@keyframes subxAdvGlow{
+  0%,100%{box-shadow:0 0 0 rgba(245,158,11,0);background:#fff}
+  50%{box-shadow:0 0 0 4px rgba(245,158,11,.10);background:#fffbeb}
+}
+@keyframes subxAdvArrow{
+  0%,100%{transform:translateY(0)}
+  50%{transform:translateY(3px)}
+}
+@media (prefers-reduced-motion: reduce){
+  #sub-modal:not(.edit-mode) #new-defaults:not([open]) summary,
+  #sub-modal:not(.edit-mode) #new-defaults:not([open]) summary .adv-arrow{animation:none}
+}
+.subx-current-source-card mark,.subx-current-mini-row mark{background:#fef3c7;color:inherit;border-radius:5px;padding:0 2px}
+.src-match{border:1px solid #dbeafe;background:#eff6ff;color:#1d4ed8;border-radius:999px;padding:3px 7px;font-size:11px;font-weight:900;white-space:nowrap}
+  .subx-confirm-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1400;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    background: rgba(15, 23, 42, .46);
+    backdrop-filter: blur(4px) saturate(120%);
+    opacity: 0;
+    transition: opacity .14s ease;
+  }
+
+  .subx-confirm-overlay.show {
+    opacity: 1;
+  }
+
+  .subx-confirm-card {
+    width: min(460px, calc(100vw - 28px));
+    border: 1px solid rgba(203, 213, 225, .85);
+    border-radius: 20px;
+    background: linear-gradient(180deg, #fff, #f8fafc);
+    color: #0f172a;
+    box-shadow: 0 24px 70px rgba(15, 23, 42, .28);
+    padding: 18px;
+    display: grid;
+    grid-template-columns: 46px 1fr;
+    gap: 14px;
+    transform: translateY(8px) scale(.98);
+    transition: transform .14s ease;
+  }
+
+  .subx-confirm-overlay.show .subx-confirm-card {
+    transform: translateY(0) scale(1);
+  }
+
+  .subx-confirm-icon {
+    width: 46px;
+    height: 46px;
+    border-radius: 16px;
+    display: grid;
+    place-items: center;
+    background: #eef2ff;
+    color: #1e293b;
+    border: 1px solid #e2e8f0;
+  }
+
+  .subx-confirm-icon.danger {
+    background: #fee2e2;
+    color: #991b1b;
+    border-color: #fecaca;
+  }
+
+  .subx-confirm-copy h3 {
+    margin: 0 0 6px;
+    font-size: 17px;
+    font-weight: 950;
+    letter-spacing: -.02em;
+  }
+
+  .subx-confirm-copy p {
+    margin: 0;
+    color: #64748b;
+    font-size: 13px;
+    line-height: 1.45;
+    font-weight: 650;
+  }
+
+  .subx-confirm-actions {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+    gap: 9px;
+    margin-top: 4px;
+  }
+
+  .subx-confirm-actions .btn {
+    min-width: 106px;
+  }
+
+  @media (prefers-color-scheme:dark) {
+    .subx-confirm-card {
+      background: linear-gradient(180deg, #111827, #0f172a);
+      border-color: #263244;
+      color: #e5e7eb;
+    }
+
+    .subx-confirm-copy p {
+      color: #94a3b8;
+    }
+
+    .subx-confirm-icon {
+      background: #172033;
+      border-color: #263244;
+      color: #e5e7eb;
+    }
+
+    .subx-confirm-icon.danger {
+      background: rgba(127, 29, 29, .38);
+      color: #fecaca;
+      border-color: rgba(248, 113, 113, .35);
+    }
+  }
+</style>
+
+
+  <div class="subx-page subx-redesign">
+  <section class="subx-hero-panel">
+    <div class="subx-hero-left">
+      <div class="subx-orb"><i class="fas fa-layer-group"></i></div>
+      <div class="subx-title-wrap">
+        <div class="subx-title-line">
+          <h1>Subscriptions</h1>
+          <div class="subx-livebar" aria-live="polite">
+            <span class="live-dot" aria-hidden="true"></span>
+            <b>Live</b>
+            <span id="subx-live-state">Waiting for first refresh…</span>
+          </div>
+        </div>
+        <p>Manage multi-location clients in one place. Shared data, time limits, first-use rules, inbounds, QR codes, and config actions all stay together in a clean workspace.</p>
+      </div>
+    </div>
+    <div class="subx-top-actions">
+      <button id="open-sub-settings" class="btn secondary subx-action-btn" type="button" title="Public template settings"><i class="fas fa-sliders"></i><span>Templates</span></button>
+      <button id="open-sub-modal" class="btn subx-action-btn" type="button"><i class="fas fa-plus"></i><span>New client</span></button>
+    </div>
+  </section>
+
+  <section class="subx-mini-stats" aria-label="Subscription summary">
+    <article><i class="fas fa-users"></i><span>Clients</span><b id="st-total">0</b></article>
+    <article><i class="fas fa-network-wired"></i><span>Inbounds</span><b id="st-inbounds">0</b></article>
+    <article><i class="fas fa-ban"></i><span>Blocked</span><b id="st-blocked">0</b></article>
+  </section>
+
+  <div id="subs-list" class="subx-list"></div>
+
+  <div id="subs-empty" class="subx-empty" hidden>
+    <i class="fas fa-inbox"></i>
+    <b>No subscriptions yet</b>
+    <span>Create a client, then add local or node inbounds, or attach configs you already have.</span>
+  </div>
+</div>
+
+<div id="sub-modal" class="modal" aria-hidden="true" role="dialog" aria-labelledby="sub-modal-title">
+  <div class="modal-backdrop" data-close="1"></div>
+  <div class="subx-modal">
+    <form id="sub-form" autocomplete="off">
+      <input type="hidden" name="sid" id="sub-sid">
+      <div class="subx-modal-head">
+        <div>
+          <h2 id="sub-modal-title"><i class="fas fa-user-plus"></i> Create client subscription</h2>
+          <p>Create a client in one simple form. Just choose a name, set the limits, and decide where this client should work.</p>
+        </div>
+        <button class="subx-close" id="sub-close" type="button" aria-label="Close"><i class="fas fa-times"></i></button>
+      </div>
+
+      <div class="subx-modal-body">
+        <section class="subx-client-card">
+          <div class="subx-section-title"><i class="fas fa-id-card"></i> Client information</div>
+          <p class="subx-step-hint">Only the client name is required. Contact fields are optional.</p>
+          <div class="subx-form-grid">
+            <label><span>Client name</span><input class="input" name="name" placeholder="e.g. ali-premium" required></label>
+            <label><span>Note</span><input class="input" name="note" placeholder="internal note"></label>
+            <div class="two">
+              <label><span>Data limit</span><input class="input" name="data_limit_value" type="number" min="0" value="0"></label>
+              <label><span>Unit</span><select class="input" name="data_limit_unit"><option value="Mi">MiB</option><option value="Gi" selected>GiB</option></select></label>
+            </div>
+            <div class="three" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px">
+              <label><span>Days</span><input class="input" name="time_limit_days" type="number" min="0" value="0"></label>
+              <label><span>Hours</span><input class="input" name="time_limit_hours" type="number" min="0" max="23" value="0"></label>
+              <label><span>Minutes</span><input class="input" name="time_limit_minutes" type="number" min="0" max="59" value="0"></label>
+            </div>
+            <div class="two">
+              <label><span>Phone</span><input class="input" name="phone_number" placeholder="+31..."></label>
+              <label><span>Telegram</span><input class="input" name="telegram_id" placeholder="@username or ID"></label>
+            </div>
+            <label class="subx-switch"><input type="checkbox" name="start_on_first_use"><span></span><b>Start timer on first use</b></label>
+            <label class="subx-switch"><input type="checkbox" name="unlimited"><span></span><b>Unlimited client</b></label>
+          </div>
+        </section>
+
+        <section class="subx-edit-clean-card" id="sub-edit-clean-card" hidden>
+          <div class="subx-edit-clean-icon"><i class="fas fa-circle-check"></i></div>
+          <div class="subx-edit-clean-text">
+            <div class="subx-section-title">Existing configs stay attached</div>
+            <p>You are editing client details, shared limits, and optional WireGuard defaults only. The linked local/node configs stay connected automatically.</p>
+            <small>Use <b>More information</b> after saving when you want to review configs, labels, flags, or ordering.</small>
+          </div>
+        </section>
+
+        <section class="subx-inbound-card" id="sub-inbound-section">
+          <div class="subx-inbound-head subx-inbound-head-v2">
+            <div>
+              <div class="subx-section-title"><i class="fas fa-network-wired"></i> Configs for this client</div>
+              <p id="inbound-mode-help">Choose where this client should work. The subscription can create new configs or use configs that already exist.</p>
+            </div>
+            <div class="subx-mode subx-mode-v2" role="tablist" aria-label="Config source">
+              <button type="button" class="active" data-mode="new"><i class="fas fa-circle-plus"></i><span>Create new<br><small>recommended</small></span></button>
+              <button type="button" data-mode="current"><i class="fas fa-user-check"></i><span>Use existing<br><small>already created</small></span></button>
+            </div>
+          </div>
+
+          <div class="subx-current-sync" id="sync-box" hidden>
+            <label>
+              <input type="checkbox" id="sync-existing" checked>
+              <span>
+                <b>Let this subscription manage selected existing configs</b>
+                <small>The selected configs will use this client’s shared data limit, timer, and first-use policy.</small>
+              </span>
+            </label>
+          </div>
+
+          <details class="subx-new-defaults" id="new-defaults">
+            <summary><span class="adv-title"><i class="fas fa-sliders"></i><b>Advanced options</b><small>Optional WireGuard values</small></span><span class="adv-arrow" aria-hidden="true"><i class="fas fa-chevron-down"></i></span></summary>
+            <div class="subx-section-subtitle">Optional WireGuard values. Most users can leave these unchanged.</div>
+            <div class="subx-form-grid compact">
+              <label><span>Name prefix</span><input class="input" name="peer_name_prefix" placeholder="empty = client-name-1, 2, 3"></label>
+              <label><span>Allowed IPs</span><input class="input" name="allowed_ips" value="0.0.0.0/0, ::/0"></label>
+              <label><span>Endpoint override</span><input class="input" name="endpoint" placeholder="optional host:port"></label>
+              <div class="two">
+                <label><span>Keepalive</span><input class="input" name="persistent_keepalive" type="number" min="0" placeholder="25"></label>
+                <label><span>MTU</span><input class="input" name="mtu" type="number" min="576" max="65535" placeholder="1280"></label>
+              </div>
+              <label><span>DNS</span><input class="input" name="dns" placeholder="1.1.1.1, 1.0.0.1"></label>
+            </div>
+          </details>
+
+          <div class="subx-filter-tools">
+            <div class="subx-filters">
+              <button type="button" class="active" data-scope="all">All</button>
+              <button type="button" data-scope="local">Local</button>
+              <button type="button" data-scope="node">Nodes</button>
+            </div>
+            <div class="subx-searchbox">
+              <i class="fas fa-search"></i>
+              <input id="inbound-search" class="input" placeholder="Search peer name, IP, phone, Telegram, endpoint…">
+            </div>
+            <div class="subx-bulkpick">
+              
+              
+            </div>
+          </div>
+
+          <div class="subx-picker-head">
+            <span id="picker-count">0 available</span>
+            <span id="picker-hint">Select one or more interfaces. The client will share one data and time policy across all configs.</span>
+          </div>
+          <div id="inbound-list" class="subx-picker"></div>
+
+          <div class="subx-selected">
+            <div><b id="selected-count">0</b> selected</div>
+            <div id="selected-preview">No inbound selected</div>
+          </div>
+        </section>
+      </div>
+
+      <div class="subx-modal-foot">
+        <button type="button" class="btn secondary" id="sub-cancel">Cancel</button>
+        <button type="submit" class="btn" id="sub-submit"><i class="fas fa-check"></i> Create subscription</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+
+<div id="sub-settings-modal" class="modal" aria-hidden="true" role="dialog" aria-labelledby="sub-settings-title">
+  <div class="modal-backdrop" data-close-settings="1"></div>
+  <div class="subx-settings-modal template-studio">
+    <div class="subx-modal-head">
+      <div>
+        <h2 id="sub-settings-title"><i class="fas fa-wand-magic-sparkles"></i> Subscription template studio</h2>
+        <p>Choose the public page style, stat visualization, subscription label, icon, and support links.</p>
+      </div>
+      <button class="subx-close" id="settings-close" type="button" aria-label="Close"><i class="fas fa-times"></i></button>
+    </div>
+
+    <div class="subx-settings-body studio-grid">
+      <section class="settings-panel studio-panel">
+        <div class="subx-section-title"><i class="fas fa-palette"></i> Public template</div>
+        <div class="layout-options studio-options">
+          <label class="layout-option"><input type="radio" name="sub-layout" value="aurora"><span><b>Aurora</b><small>Glass, particles, premium hero</small></span></label>
+          <label class="layout-option"><input type="radio" name="sub-layout" value="compact"><span><b>Compact</b><small>Best for many configs on mobile</small></span></label>
+          <label class="layout-option"><input type="radio" name="sub-layout" value="cards"><span><b>Cards</b><small>Wide location cards and strong stats</small></span></label>
+          <label class="layout-option"><input type="radio" name="sub-layout" value="minimal"><span><b>Minimal</b><small>Low motion, clean and light</small></span></label>
+        </div>
+
+        <div class="subx-section-title mt"><i class="fas fa-chart-simple"></i> Stats style</div>
+        <div class="subx-choice-row" role="radiogroup" aria-label="Public stats style">
+          <label><input type="radio" name="sub-display-mode" value="bars"><span><i class="fas fa-bars-progress"></i><b>Bars</b></span></label>
+          <label><input type="radio" name="sub-display-mode" value="rings"><span><i class="fas fa-circle-notch"></i><b>Circles</b></span></label>
+          <label><input type="radio" name="sub-display-mode" value="hybrid"><span><i class="fas fa-gauge-high"></i><b>Hybrid</b></span></label>
+        </div>
+
+        <div class="subx-section-title mt"><i class="fas fa-id-badge"></i> Subscription identity</div>
+        <div class="support-form identity-form">
+          <label><span>Header label</span><input class="input" id="portal-label" placeholder="Premium WireGuard access"></label>
+          <label><span>Custom title</span><input class="input" id="portal-title" placeholder="Empty = client name"></label>
+          <label class="wide"><span>Subtitle</span><input class="input" id="portal-subtitle" placeholder="Install WireGuard, then scan QR or import config."></label>
+          <label><span>Header icon</span><select class="input" id="portal-icon">
+            <option value="fas fa-bolt">Bolt</option><option value="fas fa-shield-halved">Shield</option><option value="fas fa-crown">Crown</option><option value="fas fa-rocket">Rocket</option><option value="fas fa-globe">Globe</option><option value="fas fa-headset">Headset</option><option value="fas fa-wifi">Wi‑Fi</option><option value="fas fa-gamepad">Gamepad</option><option value="fas fa-server">Server</option><option value="fas fa-lock">Lock</option><option value="fas fa-star">Star</option>
+          </select></label>
+          <label><span>Animation</span><select class="input" id="portal-animation"><option value="rich">Rich</option><option value="soft">Soft</option><option value="minimal">Minimal</option></select></label>
+        </div>
+
+        <div class="subx-section-title mt"><i class="fas fa-headset"></i> Support links</div>
+        <div class="support-form">
+          <label><span>Telegram</span><input class="input" id="sup-telegram" placeholder="@channel or https://t.me/..."></label>
+          <label><span>WhatsApp</span><input class="input" id="sup-whatsapp" placeholder="+123... or https://wa.me/..."></label>
+          <label><span>Phone</span><input class="input" id="sup-phone" placeholder="+123456789"></label>
+          <label><span>Email</span><input class="input" id="sup-email" placeholder="support@example.com"></label>
+          <label><span>Website</span><input class="input" id="sup-website" placeholder="https://example.com"></label>
+          <label><span>Instagram</span><input class="input" id="sup-instagram" placeholder="@profile or URL"></label>
+        </div>
+      </section>
+
+      <section class="settings-preview studio-preview">
+        <div class="subx-section-title"><i class="fas fa-eye"></i> Live preview</div>
+        <div id="layout-preview" class="preview-card layout-aurora mode-hybrid">
+          <div class="preview-bg"></div>
+          <div class="preview-hero">
+            <div class="preview-icon"><i class="fas fa-bolt"></i></div>
+            <div><small id="preview-label">Secure WireGuard portal</small><b id="preview-title">premium-user</b><span id="preview-subtitle">Your WireGuard access is ready.</span></div>
+          </div>
+          <div class="preview-stats">
+            <div><small>Data remaining</small><b>8.4 GiB</b><i></i></div>
+            <div><small>Time remaining</small><b>12d 4h</b><i></i></div>
+          </div>
+          <div class="preview-rings"><span>78%</span><span>42%</span></div>
+          <div class="preview-configs">
+            <div><span>🇳🇱 Amsterdam</span><button><i class="fas fa-qrcode"></i></button><button><i class="fas fa-download"></i></button></div>
+            <div><span>🇩🇪 Frankfurt</span><button><i class="fas fa-qrcode"></i></button><button><i class="fas fa-download"></i></button></div>
+          </div>
+          <div class="preview-support"><i class="fab fa-telegram"></i><i class="fab fa-whatsapp"></i><i class="fas fa-envelope"></i></div>
+        </div>
+      </section>
+    </div>
+
+    <div class="subx-modal-foot">
+      <button type="button" class="btn secondary" id="settings-cancel">Cancel</button>
+      <button type="button" class="btn" id="settings-save"><i class="fas fa-save"></i> Save settings</button>
+    </div>
+  </div>
+</div>
+
+<div id="details-modal" class="modal" aria-hidden="true" role="dialog">
+  <div class="modal-backdrop" data-close-details="1"></div>
+  <div class="subx-details">
+    <div class="subx-modal-head">
+      <div>
+        <h2 id="details-title"><i class="fas fa-circle-info"></i> Subscription details</h2>
+        <p>Manage inbounds, labels, flags, and ordering.</p>
+      </div>
+      <button class="subx-close" id="details-close" type="button"><i class="fas fa-times"></i></button>
+    </div>
+    <div id="details-body" class="subx-details-body"></div>
+  </div>
+</div>
+
+<div id="label-edit-modal" class="modal" aria-hidden="true" role="dialog" aria-labelledby="label-edit-title">
+  <div class="modal-backdrop" data-close-label="1"></div>
+  <div class="subx-label-modal">
+    <div class="subx-modal-head compact-head">
+      <div>
+        <h2 id="label-edit-title"><i class="fas fa-pen"></i> Edit display label</h2>
+        <p>This changes only the name shown for this config/location in the subscription page.</p>
+      </div>
+      <button class="subx-close" id="label-edit-close" type="button" aria-label="Close"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="subx-label-body">
+      <label>
+        <span>Display label</span>
+        <input id="label-edit-input" class="input" placeholder="Example: Netherlands, Amsterdam, Backup server">
+      </label>
+      <div class="subx-label-hint">Leave it empty to use the automatic name based on local server or node.</div>
+    </div>
+    <div class="subx-modal-foot compact-foot">
+      <button type="button" class="btn secondary" id="label-edit-cancel">Cancel</button>
+      <button type="button" class="btn" id="label-edit-save"><i class="fas fa-save"></i> Save label</button>
+    </div>
+  </div>
+</div>
+
+
+<script defer src="{{ url_for('static', filename='js/subscriptions.js') }}"></script>
+{% endblock %}
