@@ -28,12 +28,15 @@ const API_BASE = document.documentElement.getAttribute('data-api-base') || '';
 const api = (p) => (API_BASE + p).replace(/\/{2,}/g, '/');
 
 function peerKey(p) {
-  return (window.NODE_ID ? (p.public_key || p.id) : p.id);
+  const hasNodeScope = (typeof getScopeId === 'function' && !!getScopeId()) || !!window.NODE_ID;
+  return hasNodeScope ? (p.public_key || p.id) : p.id;
 }
 function apiPeerPath(idOrPeer, suffix = '') {
   const key = (typeof idOrPeer === 'object') ? peerKey(idOrPeer) : idOrPeer;
-  if (window.NODE_ID) {
-    return `/api/nodes/${window.NODE_ID}/peer/${encodeURIComponent(String(key))}${suffix}`;
+  const scopeId = (typeof getScopeId === 'function' && getScopeId()) ? getScopeId() : '';
+  const nodeId = window.NODE_ID || scopeId;
+  if (nodeId) {
+    return `/api/nodes/${encodeURIComponent(String(nodeId))}/peer/${encodeURIComponent(String(key))}${suffix}`;
   }
   return `/api/peer/${encodeURIComponent(String(key))}${suffix}`;
 }
@@ -64,27 +67,187 @@ function fmtDaysOrHours(d) { return fmtDaysHours(d); }
   const numOrNull = (x) => { const n = Number(x); return (x === '' || Number.isNaN(n)) ? null : n; };
   const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
   const cap = s => s ? s[0].toUpperCase() + s.slice(1) : '';
-  const statusIcon = s => s === 'online' ? 'fa-check-circle' : (s === 'blocked' ? 'fa-ban' : 'fa-times-circle');
-  const SEL = {
-  allowed_ips:         ['#allowed_ips', '#peer-allowed-ips'],
-  endpoint:            ['#endpoint', '#peer-endpoint'],
-  dns:                 ['#dns', '#peer-dns'],
-  mtu:                 ['#mtu', '#peer-mtu'],
-  keepalive:           ['#persistent_keepalive', '#peer-keepalive'],
-  data_limit_value:    ['#data_limit', '#peer-data-limit-value'],
-  data_limit_unit:     ['#limit_unit', '#peer-data-limit-unit'],
-  start_on_first_use:  ['#start_on_first_use', '#peer-start-first-use'],
-  unlimited:           ['#unlimited', '#peer-unlimited'],
-  time_days:           ['#time_limit_days', '#peer-time-days'],
-  time_hours:          ['#time_limit_hours', '#peer-time-hours'],
-  use_profile_toggle:  ['#use-profile-toggle'],
-  save_profile_btn:    ['#save-profile-btn'],
-  profile_select:      ['#profile-select'],
+  const statusIcon = s => (
+  s === 'online' ? 'fa-signal' :
+  s === 'enabled' ? 'fa-toggle-on' :
+  s === 'disabled' ? 'fa-toggle-off' :
+  s === 'blocked' ? 'fa-ban' :
+  s === 'depleting' ? 'fa-hourglass-half' :
+  'fa-times-circle'
+);
+
+function panelStatus(p) {
+  return String(p.panel_status || p.status || 'offline').toLowerCase();
+}
+
+function connStatus(p) {
+  return String(p.conn_status || p.connection_status || 'offline').toLowerCase() === 'online'
+    ? 'online'
+    : 'offline';
+}
+
+function isBlocked(p) {
+  return panelStatus(p) === 'blocked';
+}
+
+function isEnabled(p) {
+  return panelStatus(p) === 'online';
+}
+
+function isDisabled(p) {
+  return !isEnabled(p);
+}
+
+function isDepleting(p) {
+  if (isBlocked(p) || p.unlimited) return false;
+
+  const remMiB = remainingMiB(p);
+  const limMiB = toMiB(p.data_limit, p.limit_unit);
+
+  const dataLow =
+    Number.isFinite(remMiB) &&
+    Number.isFinite(limMiB) &&
+    limMiB > 0 &&
+    remMiB <= Math.max(50, limMiB * 0.15);
+
+  const ttl = Number(p.ttl_seconds);
+  const timeLow =
+    Number.isFinite(ttl) &&
+    ttl > 0 &&
+    ttl <= 24 * 3600;
+
+  return dataLow || timeLow;
+}
+
+function peerTagsHTML(p) {
+  const c = connStatus(p);
+  const pStatus = panelStatus(p);
+  const reason = String(p.conn_reason || '').replace(/_/g, ' ');
+
+  const tags = [
+    `<span class="peer-tag live-tag live-${c}" title="Live connection: ${cap(c)}${reason ? ' · ' + reason : ''}">
+      <span class="live-dot" aria-hidden="true"></span>
+      <span class="live-word">Live</span>
+      <b>${c === 'online' ? 'Online' : 'Offline'}</b>
+    </span>`
+  ];
+
+  if (pStatus === 'online') {
+    tags.push(`
+      <span class="peer-tag enabled" title="Panel state: enabled">
+        <i class="fas ${statusIcon('enabled')}"></i> Enabled
+      </span>
+    `);
+  } else if (pStatus === 'blocked') {
+    tags.push(`
+      <span class="peer-tag blocked" title="Panel state: blocked">
+        <i class="fas ${statusIcon('blocked')}"></i> Blocked
+      </span>
+    `);
+  } else {
+    tags.push(`
+      <span class="peer-tag disabled" title="Panel state: disabled">
+        <i class="fas ${statusIcon('disabled')}"></i> Disabled
+      </span>
+    `);
+  }
+
+  if (isDepleting(p)) {
+    tags.push(`
+      <span class="peer-tag depleting" title="Depleting: low data or time remaining">
+        <i class="fas ${statusIcon('depleting')}" aria-hidden="true"></i>
+        <span>Low</span>
+      </span>
+    `);
+  }
+
+  return tags.join('');
+}
+
+const pick = (keys) => Array.isArray(keys) ? (keys.find(sel => !!q(sel)) || keys[0]) : keys;
+
+const SEL = {
+  use_profile_toggle: [
+    '#use-profile-toggle',
+    '[name="use_profile"]',
+    '[name="use_profile_toggle"]'
+  ],
+
+  save_profile_btn: [
+    '#save-profile-btn',
+    '#profile-save-btn',
+    '[data-profile-save]'
+  ],
+
+  profile_select: [
+    '#profile-select',
+    '[name="profile"]',
+    '[name="profile_select"]'
+  ],
+
+  allowed_ips: [
+    '#peer-allowed-ips',
+    '#peer-allowed_ips',
+    '#peer-modal [name="allowed_ips"]'
+  ],
+
+  endpoint: [
+    '#peer-endpoint',
+    '#peer-modal [name="endpoint"]'
+  ],
+
+  dns: [
+    '#peer-dns',
+    '#peer-modal [name="dns"]'
+  ],
+
+  mtu: [
+    '#peer-mtu',
+    '#peer-modal [name="mtu"]'
+  ],
+
+  keepalive: [
+    '#peer-keepalive',
+    '#peer-modal [name="persistent_keepalive"]'
+  ],
+
+  data_limit_value: [
+    '#peer-data-limit-value',
+    '#peer-modal [name="data_limit"]',
+    '#peer-modal [name="data_limit_value"]'
+  ],
+
+  data_limit_unit: [
+    '#peer-data-limit-unit',
+    '#peer-modal [name="limit_unit"]',
+    '#peer-modal [name="data_limit_unit"]'
+  ],
+
+  start_on_first_use: [
+    '#peer-start-first-use',
+    '#peer-modal [name="start_on_first_use"]'
+  ],
+
+  unlimited: [
+    '#peer-unlimited',
+    '#peer-modal [name="unlimited"]'
+  ],
+
+  time_days: [
+    '#time_limit_days',
+    '#peer-time-days',
+    '#peer-modal [name="time_limit_days"]'
+  ],
+
+  time_hours: [
+    '#time_limit_hours',
+    '#peer-time-hours',
+    '#peer-modal [name="time_limit_hours"]'
+  ]
 };
 
-  const pick = (keys) => Array.isArray(keys) ? (keys.find(sel => !!q(sel)) || keys[0]) : keys;
-  let __profileCache = null;
-  let __profileSnapshot = null;
+let __profileCache = null;
+let __profileSnapshot = null;
 
 function snapForm() {
   return {
@@ -319,7 +482,7 @@ async function profileAction(act){
       toastSafe('Cannot delete “Default”', 'error');
       return;
     }
-    if (!confirm(`Delete profile “${current}”?`)) return;
+    if (!(await confirmBox(`Delete profile “${current}”?`))) return;
     const r = await fetch(`/api/peer_profile?name=${encodeURIComponent(current)}`, {
       method: 'DELETE', credentials: 'same-origin'
     });
@@ -397,24 +560,57 @@ async function afterPeerCreated() {
   }
 }
 window.afterPeerCreated = afterPeerCreated;
-  function toastSafe(msg, type = 'info', loading = false) {
-  if (typeof window.toast === 'function') {
-    try {
-      const t = window.toast(msg, type, loading);
-
-      if (t && t.classList && typeof t.classList.add === 'function') return t;
-
-      if (t && typeof t.remove === 'function') return t;
-    } catch (e) {
-    }
+  function peerEsc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
-  if (!loading) console[type === 'error' ? 'error' : 'log'](msg);
-  const dummy = document.createElement('div');
-  dummy.className = 'hide';
-  dummy.remove = () => {};
-  return dummy;
-}
+  function toastSafe(msg, type = 'info', loading = false) {
+    const kind = (type === 'warning' || type === 'warn') ? 'warn' : (type || 'info');
+    let host = document.getElementById('peer-toast-box');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'peer-toast-box';
+      document.body.appendChild(host);
+    }
+
+    const icon = kind === 'success' ? 'fa-circle-check'
+      : kind === 'error' ? 'fa-circle-xmark'
+      : kind === 'warn' ? 'fa-triangle-exclamation'
+      : loading ? 'fa-circle-notch'
+      : 'fa-circle-info';
+
+    const ms = loading ? 0 : 2700;
+    const t = document.createElement('div');
+    t.className = `peer-toast ${kind}${loading ? ' is-loading' : ''}`;
+    if (ms) t.style.setProperty('--toast-ms', `${ms}ms`);
+    t.innerHTML = `
+      <span class="peer-toast-icon"><i class="fas ${icon}"></i></span>
+      <span class="peer-toast-msg">${peerEsc(msg)}</span>
+      <button type="button" class="peer-toast-close" aria-label="Dismiss"><i class="fas fa-xmark"></i></button>
+      <span class="peer-toast-progress"></span>
+    `;
+
+    let removed = false;
+    const removeToast = () => {
+      if (removed) return;
+      removed = true;
+      t.classList.remove('show');
+      t.classList.add('hide');
+      setTimeout(() => { try { t.remove(); } catch {} }, 220);
+    };
+
+    t.querySelector('.peer-toast-close')?.addEventListener('click', removeToast, { once:true });
+
+    host.prepend(t);
+    Array.from(host.querySelectorAll('.peer-toast')).slice(4).forEach(x => {
+      try { x.remove(); } catch {}
+    });
+    requestAnimationFrame(() => t.classList.add('show'));
+    if (ms) setTimeout(removeToast, ms + 80);
+
+    t.remove = removeToast;
+    return t;
+  }
 
   async function copyTo(text) {
     try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; } } catch {}
@@ -481,10 +677,15 @@ function getScopeId() {
 };
   const remainingMiB = p => {
   if (p.unlimited) return Infinity;
-  const limMiB  = toMiB(p.data_limit, p.limit_unit);
+
+  const limMiB = toMiB(p.data_limit, p.limit_unit);
+
+  if (!Number.isFinite(limMiB) || limMiB <= 0) {
+    return 0;
+  }
+
   const usedMiB = usedBytes(p) / 1048576;
-  const rem     = Math.max(0, limMiB - usedMiB);
-  return (p.status === 'blocked') ? 0 : rem;
+  return Math.max(0, limMiB - usedMiB);
 };
 
   const nowSec = () => Math.floor(Date.now() / 1000);
@@ -513,38 +714,64 @@ function getScopeId() {
     if (p.hours > 0)   return `${p.hours}h ${p.minutes}m`;
     return `${Math.max(1, p.minutes)}m ${p.seconds}s`;
   }
+  function timeLimitCapSeconds(p) {
+    const d = Number(p.time_limit_days ?? p.time_days ?? 0) || 0;
+    const h = Number(p.time_limit_hours ?? p.time_hours ?? 0) || 0;
+    const m = Number(p.time_limit_minutes ?? p.time_minutes ?? 0) || 0;
+    return Math.max(0, Math.floor(d * 86400 + h * 3600 + m * 60));
+  }
+
+  function fmtCapDuration(sec) {
+    sec = Math.max(0, Math.floor(Number(sec) || 0));
+    if (!sec) return '';
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const parts = [];
+    if (d) parts.push(`${d}d`);
+    if (h) parts.push(`${h}h`);
+    if (!d && !h && m) parts.push(`${m}m`);
+    return parts.join(' ');
+  }
+
   function timeBadge(p) {
-  if (p.unlimited) return 'Unlimited';
+    if (p.unlimited) return 'Unlimited';
 
-  const started = itStarted(p);
-  let ttl = null;
+    const started = itStarted(p);
+    const capSec = timeLimitCapSeconds(p);
+    const capTxt = fmtCapDuration(capSec);
+    let ttl = null;
 
-  if (started) {
-    if (p.ttl_seconds != null) {
-      ttl = Number(p.ttl_seconds);
-    } else if (p.expires_at_ts != null) {
-      ttl = Math.max(0, Number(p.expires_at_ts) - nowSec());
+    if (started) {
+      if (p.ttl_seconds != null && p.ttl_seconds !== '') {
+        ttl = Number(p.ttl_seconds);
+      } else if (p.expires_at_ts != null && p.expires_at_ts !== '') {
+        ttl = Math.max(0, Number(p.expires_at_ts) - nowSec());
+      } else if (p.expires_at) {
+        const ts = tsFrom(p.expires_at);
+        ttl = ts ? Math.max(0, ts - nowSec()) : null;
+      }
     }
-  }
 
-  if (!started) {
-    if (p.time_limit_days) return `${fmtDaysHours(p.time_limit_days)} cap (starts on first use)`;
-    return 'starts on first use';
-  }
+    if (!started) {
+      return capTxt ? `Starts on use · ${capTxt}` : 'Starts on use';
+    }
 
-  if (ttl == null) {
-    if (p.time_limit_days) return `${fmtDaysHours(p.time_limit_days)} cap`;
-    return '–';
-  }
+    if (ttl == null || !Number.isFinite(ttl)) {
+      const remMiB = remainingMiB(p);
+      const looksTimeBlocked = isBlocked(p) && (capSec > 0 || (Number.isFinite(remMiB) && remMiB > 1));
+      if (looksTimeBlocked) return 'Expired';
+      return capTxt ? `${capTxt} cap` : 'No timer';
+    }
 
-  if (ttl <= 0) return 'expired';
-  const d = Math.floor(ttl / 86400);
-  const h = Math.floor((ttl % 86400) / 3600);
-  const m = Math.floor((ttl % 3600) / 60);
-  if (d > 0) return `${d}d left`;
-  if (h > 0) return `${h}h left`;
-  return `${Math.max(1, m)}m left`;
-}
+    if (ttl <= 0 || (isBlocked(p) && capSec > 0 && Number(ttl) === 0)) return 'Expired';
+    const d = Math.floor(ttl / 86400);
+    const h = Math.floor((ttl % 86400) / 3600);
+    const m = Math.floor((ttl % 3600) / 60);
+    if (d > 0) return `${d}d ${h}h left`;
+    if (h > 0) return `${h}h ${m}m left`;
+    return `${Math.max(1, m)}m left`;
+  }
 
   function endpointDisplay(p) {
     if (p.endpoint && p.endpoint.trim()) return p.endpoint;
@@ -613,7 +840,7 @@ async function getPresets() {
       <select id="ep-saved" class="input" style="flex:1 1 320px; min-width:240px">
         <option value="">Saved endpoints…</option>
       </select>
-      <button type="button" class="btn secondary" id="ep-save" title="Save current"><i class="fas fa-floppy-disk"></i></button>
+      <button type="button" class="btn secondary" id="ep-save" title="Save current"><i class="fas fa-save"></i></button>
       <button type="button" class="btn secondary" id="ep-apply" title="Apply selected"><i class="fas fa-clipboard-check"></i></button>
       <button type="button" class="btn secondary" id="ep-del" title="Delete selected"><i class="fas fa-trash"></i></button>`;
     input.parentElement.appendChild(row);
@@ -686,6 +913,93 @@ function closeSections(exceptId = null) {
     openMore.delete(id);
   });
 }
+function wireContainedSelect(select) {
+  if (!select || select.dataset.containedSelect === '1') return;
+  select.dataset.containedSelect = '1';
+
+  const collapse = () => {
+    select.size = 1;
+    select.classList.remove('is-expanded');
+  };
+
+  const expand = () => {
+    const count = Math.max(1, Math.min(select.options.length || 1, 8));
+    select.size = count;
+    select.classList.add('is-expanded');
+  };
+
+  select.addEventListener('mousedown', e => {
+    if (select.size > 1) return;
+    e.preventDefault();
+    expand();
+    select.focus({ preventScroll: true });
+  });
+
+  select.addEventListener('focus', () => {
+    if (select.matches(':hover')) expand();
+  });
+
+  select.addEventListener('change', () => {
+    collapse();
+    const hiddenAddr = document.getElementById('create-address');
+    if (select.id === 'create-address-select' && hiddenAddr) {
+      hiddenAddr.value = select.value || '';
+    }
+  });
+
+  select.addEventListener('blur', collapse);
+  select.addEventListener('keydown', e => {
+    if (e.key === 'Escape' || e.key === 'Enter') collapse();
+  });
+}
+
+function wireContainedPickers() {
+  wireContainedSelect(document.querySelector('#peer-modal #create-address-select'));
+  wireContainedSelect(document.querySelector('#bulk-modal #bulk-iface'));
+}
+
+function peerDetailInner(icon, label, value) {
+  return `
+    <span class="peer-detail-icon"><i class="fas fa-${icon}" aria-hidden="true"></i></span>
+    <span class="peer-detail-copy">
+      <span class="peer-detail-label">${label}</span>
+      <span class="peer-detail-value">${value}</span>
+    </span>`;
+}
+
+function peerDetailItem(cls, icon, label, value) {
+  return `<div class="peer-detail-item ${cls}">${peerDetailInner(icon, label, value)}</div>`;
+}
+
+function peerProgressBar(p, ttl, started) {
+  if (p.unlimited) return '';
+
+  const limitMiB = toMiB(p.data_limit, p.limit_unit);
+  const remainMiB = remainingMiB(p);
+  const dataPct = Number.isFinite(limitMiB) && limitMiB > 0
+    ? Math.max(0, Math.min(100, (remainMiB / limitMiB) * 100))
+    : 0;
+
+  let timePct = null;
+  const totalSec = timeLimitCapSeconds(p);
+  if (started && Number.isFinite(ttl) && totalSec > 0) {
+    timePct = Math.max(0, Math.min(100, (ttl / totalSec) * 100));
+  }
+
+  return `
+    <div class="peer-more-bars" aria-label="Peer limits">
+      <div class="peer-limit-bar">
+        <span>Data remaining</span>
+        <div class="bar"><i class="data-bar" style="width:${dataPct.toFixed(1)}%"></i></div>
+        <b>${dataPct.toFixed(0)}%</b>
+      </div>
+      <div class="peer-limit-bar time-progress">
+        <span>Time remaining</span>
+        <div class="bar"><i class="time-bar" style="width:${timePct == null ? 0 : timePct.toFixed(1)}%"></i></div>
+        <b>${timePct == null ? '—' : `${timePct.toFixed(0)}%`}</b>
+      </div>
+    </div>`;
+}
 
 function cardHTML(p, i) {
   const limitStr   = fmtLimit(p);
@@ -713,10 +1027,19 @@ function cardHTML(p, i) {
 
   const isOpen     = openMore.has(String(p.id));
 
+  const cStatus    = connStatus(p);
+  const pStatus    = panelStatus(p);
+  const depleted   = isDepleting(p);
+  const blocked    = isBlocked(p);
+  const pKey       = peerEsc(peerKey(p) ?? p.id ?? p.public_key ?? '');
+
   return `
   <div class="peer-card"
-       data-id="${p.id}"
-       data-status="${p.status}"
+       data-id="${pKey}"
+       data-status="${cStatus}"
+       data-panel-status="${pStatus}"
+       data-blocked="${blocked ? '1' : '0'}"
+       data-depleting="${depleted ? '1' : '0'}"
        data-name="${(p.name||'').toLowerCase()}"
        data-phone="${(p.phone_number||'').toLowerCase()}"
        data-tg="${(p.telegram_id||'').toLowerCase()}"
@@ -726,9 +1049,8 @@ function cardHTML(p, i) {
       <span class="peer-index">${i + 1})</span>
       <span class="peer-name truncate">${p.name || ''}</span>
 
-      <div class="peer-status ${p.status}">
-        <i class="fas ${statusIcon(p.status)}" aria-hidden="true"></i>
-        <span class="status-text">${cap(p.status)}</span>
+      <div class="peer-tags">
+        ${peerTagsHTML(p)}
       </div>
 
       <div class="peer-traffic">
@@ -756,67 +1078,57 @@ function cardHTML(p, i) {
         <span class="timer-text truncate">${timerStr}</span>
       </div>
 
-      <!-- More information toggle pinned at the end of the row -->
-      <div class="peer-info-wrap" data-id="${p.id}">
+      <div class="peer-info-wrap" data-id="${pKey}">
         <button
           type="button"
           class="more-toggle icon-only"
-          data-id="${p.id}"
+          data-id="${pKey}"
           title="More information"
           aria-label="More information"
           aria-expanded="${isOpen ? 'true' : 'false'}"
         >
-          <i class="fas fa-circle-info" aria-hidden="true"></i>
+          <i class="fas fa-info-circle" aria-hidden="true"></i>
           <span class="sr-only">More information</span>
         </button>
       </div>
     </div>
 
-    <!-- More information box (inside the card; does not overlap other rows) -->
     <div class="peer-more-section" ${isOpen ? '' : 'hidden'}>
       <div class="peer-more-hdr">
-        <div class="peer-more-title">More information</div>
-        <button type="button" class="more-close icon-only" data-id="${p.id}" title="Close" aria-label="Close">
+        <div class="peer-more-title"><i class="fas fa-info-circle" aria-hidden="true"></i> More information</div>
+        <button type="button" class="more-close icon-only" data-id="${pKey}" title="Close" aria-label="Close">
           <i class="fas fa-times" aria-hidden="true"></i>
         </button>
       </div>
 
-      <div class="peer-more-line">
-        <span class="mi-limit"><strong>Limit:</strong> ${limitStr}</span>
-        <span class="sep">•</span>
-        <span class="mi-days"><strong>${capLabel}:</strong> ${fmtDaysOrHours(p.time_limit_days)}${capTail}</span>
-        <span class="sep">•</span>
-        <span class="mi-first"><strong>First used:</strong> ${first}</span>
-        <span class="sep">•</span>
-        <span class="mi-created"><strong>Created:</strong> ${created}</span>
-        <span class="sep">•</span>
-        <span class="mi-exp"><strong>Expires:</strong> ${exp}</span>
-        <span class="sep">•</span>
-        <span class="mi-remain"><strong>Time remaining:</strong> ${remainTime}</span>
-        <span class="sep">•</span>
-        <span class="mi-total"><strong>Total usage:</strong> ${totalStr}</span>
-        <span class="sep">•</span>
-        <span class="mi-phone"><strong>Phone:</strong> ${p.phone_number || '–'}</span>
-        <span class="sep">•</span>
-        <span class="mi-tg"><strong>Telegram:</strong> ${p.telegram_id || '–'}</span>
-        <span class="sep">•</span>
-        <span class="mi-iface"><strong>Interface:</strong> <span class="mi-iface-name">${p.iface || '–'}</span></span>
+      ${peerProgressBar(p, ttl, started)}
+
+      <div class="peer-more-grid">
+        ${peerDetailItem('mi-limit', 'database', 'Limit', limitStr)}
+        ${peerDetailItem('mi-remain', 'hourglass-half', 'Time remaining', remainTime)}
+        ${peerDetailItem('mi-days', 'calendar-alt', capLabel, `${fmtDaysOrHours(p.time_limit_days)}${capTail}`)}
+        ${peerDetailItem('mi-first', 'play-circle', 'First used', first)}
+        ${peerDetailItem('mi-created', 'calendar-plus', 'Created', created)}
+        ${peerDetailItem('mi-exp', 'calendar-times', 'Expires', exp)}
+        ${peerDetailItem('mi-total', 'exchange-alt', 'Total usage', totalStr)}
+        ${peerDetailItem('mi-phone', 'phone', 'Phone', p.phone_number || '–')}
+        ${peerDetailItem('mi-tg', 'paper-plane', 'Telegram', p.telegram_id || '–')}
+        ${peerDetailItem('mi-iface', 'network-wired', 'Interface', `<span class="mi-iface-name">${p.iface || '–'}</span>`)}
       </div>
     </div>
 
-    <!-- ACTIONS TOOLBAR (must remain INSIDE .peer-card) -->
     <div class="peer-actions-row">
-      <div class="peer-actions" style="display:flex; gap:.6em; padding:.35rem 0 .25rem 0; width:100%; justify-content:flex-end;">
-        <button class="edit-btn"        title="Edit"                 data-id="${p.id}"><i class="fas fa-pen-to-square"></i></button>
-        <button class="logs-btn"        title="Logs"                 data-id="${p.id}"><i class="fas fa-list"></i></button>
-        <button class="download-btn"    title="Download config"      data-id="${p.id}"><i class="fas fa-download"></i></button>
-        <button class="qr-btn"          title="Show QR & download"   data-id="${p.id}"><i class="fas fa-qrcode"></i></button>
-        <button class="user-link-btn"   title="User link: click to copy, Ctrl/⌘ or middle-click to open" data-id="${p.id}"><i class="fas fa-link"></i></button>
-        <button class="enable-btn"      title="Enable"               data-id="${p.id}" style="${p.status==='online' ? 'display:none' : ''}"><i class="fas fa-play"></i></button>
-        <button class="disable-btn"     title="Disable"              data-id="${p.id}" style="${p.status==='online' ? '' : 'display:none'}"><i class="fas fa-ban"></i></button>
-        <button class="reset-data-btn"  title="Reset data"           data-id="${p.id}"><i class="fas fa-gauge-simple"></i></button>
-        <button class="reset-timer-btn" title="Reset timer"          data-id="${p.id}"><i class="fas fa-clock-rotate-left"></i></button>
-        <button class="delete-btn"      title="Delete"               data-id="${p.id}"><i class="fas fa-trash"></i></button>
+      <div class="peer-actions peer-action-dock" style="display:flex; gap:.45em; padding:0; width:100%; justify-content:flex-end;">
+        <button class="edit-btn"        title="Edit"                 data-id="${pKey}"><i class="fas fa-edit"></i></button>
+        <button class="logs-btn"        title="Logs"                 data-id="${pKey}"><i class="fas fa-list"></i></button>
+        <button class="download-btn"    title="Download config"      data-id="${pKey}"><i class="fas fa-download"></i></button>
+        <button class="qr-btn"          title="Show QR & download"   data-id="${pKey}"><i class="fas fa-qrcode"></i></button>
+        <button class="user-link-btn"   title="User link: click to copy, Ctrl/⌘ or middle-click to open" data-id="${pKey}"><i class="fas fa-link"></i></button>
+        <button class="enable-btn"      title="Enable"               data-id="${pKey}" style="${pStatus==='online' ? 'display:none' : ''}"><i class="fas fa-play"></i></button>
+        <button class="disable-btn"     title="Disable"              data-id="${pKey}" style="${pStatus==='online' ? '' : 'display:none'}"><i class="fas fa-ban"></i></button>
+        <button class="reset-data-btn"  title="Reset data"           data-id="${pKey}"><i class="fas fa-tachometer-alt"></i></button>
+        <button class="reset-timer-btn" title="Reset timer"          data-id="${pKey}"><i class="fas fa-history"></i></button>
+        <button class="delete-btn"      title="Delete"               data-id="${pKey}"><i class="fas fa-trash"></i></button>
       </div>
     </div>
 
@@ -824,32 +1136,21 @@ function cardHTML(p, i) {
 }
 
   function hover(card) {
+  // Hover is now controlled by CSS ..
   if (card.dataset.enhancedToolbar === '1') return;
   card.dataset.enhancedToolbar = '1';
-
-  const toolbar = card.querySelector('.peer-actions');
-
-  card.addEventListener('mouseenter', () => {
-    if (toolbar) {
-      toolbar.style.transition = 'transform .18s ease, opacity .18s ease';
-      toolbar.style.transform = 'scale(1.01)';
-      toolbar.style.opacity = '1';
-    }
-    card.style.transition = 'box-shadow .2s, transform .12s';
-    card.style.transform = 'translateY(-1px)';
-  });
-
-  card.addEventListener('mouseleave', () => {
-    if (toolbar) {
-      toolbar.style.transform = 'scale(1)';
-      toolbar.style.opacity = '.98';
-    }
-    card.style.transform = 'translateY(0)';
-  });
 }
 
 function updateCard(card, p, i) {
-  card.dataset.status = p.status;
+  const cStatus  = connStatus(p);
+  const pStatus  = panelStatus(p);
+  const depleted = isDepleting(p);
+  const blocked  = isBlocked(p);
+
+  card.dataset.status = cStatus;
+  card.dataset.panelStatus = pStatus;
+  card.dataset.blocked = blocked ? '1' : '0';
+  card.dataset.depleting = depleted ? '1' : '0';
   card.dataset.name   = (p.name || '').toLowerCase();
   card.dataset.phone  = (p.phone_number || '').toLowerCase();
   card.dataset.tg     = (p.telegram_id || '').toLowerCase();
@@ -862,13 +1163,8 @@ function updateCard(card, p, i) {
   set('.peer-index', `${i + 1})`);
   set('.peer-name', p.name || '');
 
-  const sEl = card.querySelector('.peer-status');
-  if (sEl) {
-    sEl.classList.remove('online', 'offline', 'blocked');
-    sEl.classList.add(p.status);
-    const ic = sEl.querySelector('i'); if (ic) ic.className = `fas ${statusIcon(p.status)}`;
-    const tx = sEl.querySelector('.status-text'); if (tx) tx.textContent = cap(p.status);
-  }
+  const tagsEl = card.querySelector('.peer-tags');
+  if (tagsEl) tagsEl.innerHTML = peerTagsHTML(p);
 
   set('.peer-traffic .rx', String(p.rx || '0'));
   set('.peer-traffic .tx', String(p.tx || '0'));
@@ -877,8 +1173,12 @@ function updateCard(card, p, i) {
   const epStr = endpointDisplay(p);
   const wrap  = card.querySelector('.peer-ip .endpoint-wrap');
   if (wrap) {
-    if (epStr) { wrap.style.removeProperty('display'); set('.peer-ip .endpoint', epStr); }
-    else wrap.style.display = 'none';
+    if (epStr) {
+      wrap.style.removeProperty('display');
+      set('.peer-ip .endpoint', epStr);
+    } else {
+      wrap.style.display = 'none';
+    }
   }
 
   const remMiB = remainingMiB(p);
@@ -889,13 +1189,19 @@ function updateCard(card, p, i) {
   const en = card.querySelector('.enable-btn');
   const di = card.querySelector('.disable-btn');
   if (en && di) {
-    if (p.status === 'online') { en.style.display = 'none'; di.style.display = 'inline-flex'; }
-    else { en.style.display = 'inline-flex'; di.style.display = 'none'; }
+    if (pStatus === 'online') {
+      en.style.display = 'none';
+      di.style.display = 'inline-flex';
+    } else {
+      en.style.display = 'inline-flex';
+      di.style.display = 'none';
+    }
   }
 
   const first = (p.first_used_at_ts != null)
       ? fmtLocalTs(p.first_used_at_ts)
-      : (p.start_on_first_use ? '—' : 'n/a');          
+      : (p.start_on_first_use ? '—' : 'n/a');
+
   const created = (p.created_at_ts != null)
       ? fmtLocalTs(p.created_at_ts)
       : (p.created_at ? fmtLocalTs(tsFrom(p.created_at)) : '—');
@@ -918,22 +1224,37 @@ function updateCard(card, p, i) {
   const capTail  = (!started && p.start_on_first_use) ? ' (starts on first use)' : '';
   const capStr   = (capDays != null) ? fmtDaysOrHours(capDays) : '–';
 
-  setHTML('.mi-limit',   `<strong>Limit:</strong> ${fmtLimit(p)}`);
-  setHTML('.mi-days',    `<strong>${capLabel}:</strong> ${capStr}${capTail}`);
-  setHTML('.mi-first',   `<strong>First used:</strong> ${first}`);
-  setHTML('.mi-created', `<strong>Created:</strong> ${created}`);
-  setHTML('.mi-exp',     `<strong>Expires:</strong> ${exp}`);
-  setHTML('.mi-remain',  `<strong>Time remaining:</strong> ${remainTime}`);
-  setHTML('.mi-total',   `<strong>Total usage:</strong> ${totalStr}`);
-  setHTML('.mi-phone',   `<strong>Phone:</strong> ${p.phone_number || '–'}`);
-  setHTML('.mi-tg',      `<strong>Telegram:</strong> ${p.telegram_id || '–'}`);
-  setHTML('.mi-iface',   `<strong>Interface:</strong> <span class="mi-iface-name">${p.iface || '–'}</span>`);
+  setHTML('.mi-limit',   peerDetailInner('database', 'Limit', fmtLimit(p)));
+  setHTML('.mi-days',    peerDetailInner('calendar-alt', capLabel, `${capStr}${capTail}`));
+  setHTML('.mi-first',   peerDetailInner('play-circle', 'First used', first));
+  setHTML('.mi-created', peerDetailInner('calendar-plus', 'Created', created));
+  setHTML('.mi-exp',     peerDetailInner('calendar-times', 'Expires', exp));
+  setHTML('.mi-remain',  peerDetailInner('hourglass-half', 'Time remaining', remainTime));
+  setHTML('.mi-total',   peerDetailInner('exchange-alt', 'Total usage', totalStr));
+  setHTML('.mi-phone',   peerDetailInner('phone', 'Phone', p.phone_number || '–'));
+  setHTML('.mi-tg',      peerDetailInner('paper-plane', 'Telegram', p.telegram_id || '–'));
+  setHTML('.mi-iface',   peerDetailInner('network-wired', 'Interface', `<span class="mi-iface-name">${p.iface || '–'}</span>`));
 
-  const bar = card.querySelector('.time-progress');
-  if (bar) {
-    if (!started) { bar.setAttribute('aria-hidden', 'true'); bar.style.opacity = '0.35'; }
-    else { bar.removeAttribute('aria-hidden'); bar.style.opacity = ''; }
+  const totalSec = timeLimitCapSeconds(p);
+  const timePct = started && Number.isFinite(ttl) && totalSec > 0
+    ? Math.max(0, Math.min(100, (ttl / totalSec) * 100))
+    : null;
+  const timeBar = card.querySelector('.time-bar');
+  const timeText = card.querySelector('.time-progress b');
+  if (timeBar) timeBar.style.width = `${timePct == null ? 0 : timePct.toFixed(1)}%`;
+  if (timeText) timeText.textContent = timePct == null ? '—' : `${timePct.toFixed(0)}%`;
+  const dataBar = card.querySelector('.data-bar');
+  const dataText = card.querySelector('.peer-limit-bar:first-child b');
+  if (dataBar || dataText) {
+    const limitMiB = toMiB(p.data_limit, p.limit_unit);
+    const remainMiB = remainingMiB(p);
+    const pct = Number.isFinite(limitMiB) && limitMiB > 0
+      ? Math.max(0, Math.min(100, (remainMiB / limitMiB) * 100))
+      : 0;
+    if (dataBar) dataBar.style.width = `${pct.toFixed(1)}%`;
+    if (dataText) dataText.textContent = `${pct.toFixed(0)}%`;
   }
+
   const more = card.querySelector('.peer-more-section');
   const moreBtn = card.querySelector('.more-toggle');
   const isOpen = openMore.has(String(p.id));
@@ -942,58 +1263,279 @@ function updateCard(card, p, i) {
 
   hover(card);
 }
+function peerTagCounts(peers) {
+  const out = {
+    total: 0,
+    online: 0,
+    offline: 0,
+    enabled: 0,
+    disabled: 0,
+    blocked: 0,
+    depleting: 0
+  };
 
-  const filters = { q: '', status: '' };
-  const pagination = { page: 1, pageSize: 10 };
-  function loadFilters() { try { const s = JSON.parse(localStorage.getItem('peer_filters') || '{}'); if (typeof s.q === 'string') filters.q = s.q; if (typeof s.status === 'string') filters.status = s.status; } catch {} }
-  function saveFilters() { localStorage.setItem('peer_filters', JSON.stringify(filters)); }
-  function loadPagination(){ try{ const s = JSON.parse(localStorage.getItem('peer_pagination')||'{}'); if (Number.isInteger(s.page)) pagination.page = s.page; if (Number.isInteger(s.pageSize)) pagination.pageSize = s.pageSize; }catch{} }
-  function savePagination(){ localStorage.setItem('peer_pagination', JSON.stringify(pagination)); }
+  for (const p of peers || []) {
+    out.total += 1;
 
-  function buildFilters() {
-    let host = $('.peer-filters');
-    if (!host) {
-      host = document.createElement('div'); host.className = 'peer-filters';
-      host.innerHTML = `
-        <div style="display:flex; gap:8px; align-items:center; margin:10px 0; flex-wrap:wrap;">
-          <input id="peer-filter-q" class="input" placeholder="Search name, phone, @telegram" style="flex:1 1 420px; min-width:260px;">
-          <select id="peer-filter-status" class="input" style="width:180px;">
-            <option value="">All statuses</option>
-            <option value="enabled">Enabled</option>
-            <option value="disabled">Disabled</option>
+    const c = connStatus(p);
+    const ps = panelStatus(p);
+
+    if (c === 'online') out.online += 1;
+    else out.offline += 1;
+
+    if (ps === 'online') out.enabled += 1;
+    else out.disabled += 1;
+
+    if (ps === 'blocked') out.blocked += 1;
+    if (isDepleting(p)) out.depleting += 1;
+  }
+
+  return out;
+}
+
+function ensurePeerSummary() {
+  let box = document.getElementById('peer-tag-summary');
+  if (box) return box;
+
+  box = document.createElement('div');
+  box.id = 'peer-tag-summary';
+  box.className = 'peer-summary-card';
+  box.innerHTML = `
+  <div class="peer-summary-head">
+    <div class="peer-summary-title">
+      <span class="peer-summary-icon"><i class="fas fa-chart-pie" aria-hidden="true"></i></span>
+      <div>
+        <strong>Peer summary</strong>
+        <small><b id="sum-total-head">0</b> peers · click a status to filter</small>
+      </div>
+    </div>
+    <div class="peer-summary-live"><span></span> Live status</div>
+  </div>
+
+  <div class="peer-summary-grid">
+    <button type="button" class="summary-stat online" data-summary-filter="online" title="Real connection status: recent WireGuard handshake">
+      <span class="stat-ico"><i class="fas fa-signal" aria-hidden="true"></i></span>
+      <span class="stat-copy"><b id="sum-online">0</b><small>Connected</small></span>
+    </button>
+
+    <button type="button" class="summary-stat offline" data-summary-filter="offline" title="Real connection status: no recent WireGuard handshake">
+      <span class="stat-ico"><i class="fas fa-times-circle" aria-hidden="true"></i></span>
+      <span class="stat-copy"><b id="sum-offline">0</b><small>Not connected</small></span>
+    </button>
+
+    <button type="button" class="summary-stat enabled" data-summary-filter="enabled" title="Panel state: enabled">
+      <span class="stat-ico"><i class="fas fa-toggle-on" aria-hidden="true"></i></span>
+      <span class="stat-copy"><b id="sum-enabled">0</b><small>Allowed</small></span>
+    </button>
+
+    <button type="button" class="summary-stat disabled" data-summary-filter="disabled" title="Panel state: disabled">
+      <span class="stat-ico"><i class="fas fa-toggle-off" aria-hidden="true"></i></span>
+      <span class="stat-copy"><b id="sum-disabled">0</b><small>Paused</small></span>
+    </button>
+
+    <button type="button" class="summary-stat depleting" data-summary-filter="depleting" title="Low data or time remaining">
+      <span class="stat-ico"><i class="fas fa-hourglass-half" aria-hidden="true"></i></span>
+      <span class="stat-copy"><b id="sum-depleting">0</b><small>Low quota</small></span>
+    </button>
+
+    <button type="button" class="summary-stat blocked" data-summary-filter="blocked" title="Blocked, expired, or data limit reached">
+      <span class="stat-ico"><i class="fas fa-ban" aria-hidden="true"></i></span>
+      <span class="stat-copy"><b id="sum-blocked">0</b><small>Blocked</small></span>
+    </button>
+  </div>
+`;
+
+  const filtersBox = document.querySelector('.peer-filters');
+  const list = document.querySelector('.peers-container');
+
+  if (filtersBox) {
+    filtersBox.before(box);
+  } else if (list) {
+    list.before(box);
+  }
+
+  box.addEventListener('click', e => {
+    const pill = e.target.closest('[data-summary-filter]');
+    if (!pill) return;
+
+    const val = pill.getAttribute('data-summary-filter') || '';
+    filters.status = val;
+    saveFilters();
+
+    const sel = document.getElementById('peer-filter-status');
+    if (sel) sel.value = val;
+
+    pagination.page = 1;
+    savePagination();
+    applyPagi();
+  });
+
+  return box;
+}
+
+function renderPeerSummary(peers) {
+  const box = ensurePeerSummary();
+  if (!box) return;
+
+  const c = peerTagCounts(peers || []);
+
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = String(val ?? 0);
+  };
+
+  set('sum-total', c.total);
+  set('sum-total-head', c.total);
+  set('sum-online', c.online);
+  set('sum-offline', c.offline);
+  set('sum-enabled', c.enabled);
+  set('sum-disabled', c.disabled);
+  set('sum-depleting', c.depleting);
+  set('sum-blocked', c.blocked);
+
+  const active = String(filters.status || '');
+  box.querySelectorAll('[data-summary-filter]').forEach(el => {
+    el.classList.toggle('is-active', (el.getAttribute('data-summary-filter') || '') === active);
+  });
+}
+const filters = { q: '', status: '' };
+const pagination = { page: 1, pageSize: 8 };
+
+function loadFilters() {
+  try {
+    const s = JSON.parse(localStorage.getItem('peer_filters') || '{}');
+    if (typeof s.q === 'string') filters.q = s.q;
+    if (typeof s.status === 'string') filters.status = s.status;
+  } catch {}
+}
+
+function saveFilters() {
+  localStorage.setItem('peer_filters', JSON.stringify(filters));
+}
+
+function loadPagination() {
+  try {
+    const s = JSON.parse(localStorage.getItem('peer_pagination') || '{}');
+    if (Number.isInteger(s.page)) pagination.page = s.page;
+    if (Number.isInteger(s.pageSize)) pagination.pageSize = s.pageSize;
+  } catch {}
+  if (![5, 8, 12, 20, 50].includes(Number(pagination.pageSize))) pagination.pageSize = 8;
+}
+
+function savePagination() {
+  localStorage.setItem('peer_pagination', JSON.stringify(pagination));
+}
+
+function buildFilters() {
+  let host = $('.peer-filters');
+  if (!host) {
+    host = document.createElement('div');
+    host.className = 'peer-filters';
+    host.innerHTML = `
+      <div style="display:flex; gap:8px; align-items:center; margin:10px 0; flex-wrap:wrap;">
+        <input id="peer-filter-q" class="input" placeholder="Search name, phone, @telegram" style="flex:1 1 420px; min-width:260px;">
+
+        <select id="peer-filter-status" class="input" style="width:190px;">
+        <option value="">All tags</option>
+        <option value="online">Online</option>
+        <option value="offline">Offline</option>
+        <option value="enabled">Enabled</option>
+        <option value="disabled">Disabled</option>
+        <option value="depleting">Depleting</option>
+        <option value="blocked">Blocked</option>
+        </select>
+
+        <label style="display:flex; align-items:center; gap:6px;">
+          <span>Page size</span>
+          <select id="peer-page-size" class="input" style="width:90px;">
+            <option value="10">10</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
           </select>
-          <label style="display:flex; align-items:center; gap:6px;">
-            <span>Page size</span>
-            <select id="peer-page-size" class="input" style="width:90px;">
-              <option value="10">10</option><option value="25">25</option><option value="50">50</option><option value="100">100</option>
-            </select>
-          </label>
-          <button id="peer-filter-clear" class="btn secondary">Clear</button>
-        </div>`;
-      const list = $('.peers-container'); if (list) list.before(host);
-    }
-    const q = $('#peer-filter-q', host), s = $('#peer-filter-status', host), c = $('#peer-filter-clear', host), ps = $('#peer-page-size', host);
-    q.value = filters.q || ''; s.value = filters.status || ''; ps.value = String(pagination.pageSize);
-    q.addEventListener('input', debounce(() => { filters.q = q.value.trim().toLowerCase(); saveFilters(); pagination.page = 1; savePagination(); applyPagi(); }, 150));
-    s.addEventListener('change', () => { filters.status = s.value; saveFilters(); pagination.page = 1; savePagination(); applyPagi(); });
-    c.addEventListener('click', () => { filters.q = ''; filters.status = ''; q.value = ''; s.value = ''; saveFilters(); pagination.page = 1; savePagination(); applyPagi(); });
-    ps.addEventListener('change', () => { pagination.pageSize = parseInt(ps.value, 10) || 10; pagination.page = 1; savePagination(); applyPagi(); });
+        </label>
+
+        <button id="peer-filter-clear" class="btn secondary">Clear</button>
+      </div>`;
+
+    const list = $('.peers-container');
+    if (list) list.before(host);
   }
 
-    function matchPeer(card) {
-    if (SELECTED_IFACE_NAME) {
-      const name = card.querySelector('.mi-iface-name')?.textContent || card.dataset.iface || '';
-      if (name !== SELECTED_IFACE_NAME) return false;
-    }
+  const q = $('#peer-filter-q', host);
+  const s = $('#peer-filter-status', host);
+  const c = $('#peer-filter-clear', host);
+  const ps = $('#peer-page-size', host);
 
-    const st = filters.status, status = card.dataset.status;
-    const statusOK = !st || (st === 'enabled' && status === 'online') || (st === 'disabled' && (status === 'offline' || status === 'blocked'));
-    if (!statusOK) return false;
-    const q = filters.q; if (!q) return true;
-    const name = card.dataset.name || '', phone = card.dataset.phone || '', tg = card.dataset.tg || '';
-    return name.includes(q) || phone.includes(q) || tg.includes(q);
+  q.value = filters.q || '';
+  s.value = filters.status || '';
+  ps.value = String(pagination.pageSize);
+
+  q.addEventListener('input', debounce(() => {
+    filters.q = q.value.trim().toLowerCase();
+    saveFilters();
+    pagination.page = 1;
+    savePagination();
+    applyPagi();
+  }, 150));
+
+  s.addEventListener('change', () => {
+    filters.status = s.value;
+    saveFilters();
+    pagination.page = 1;
+    savePagination();
+    applyPagi();
+  });
+
+  c.addEventListener('click', () => {
+    filters.q = '';
+    filters.status = '';
+    q.value = '';
+    s.value = '';
+    saveFilters();
+    pagination.page = 1;
+    savePagination();
+    applyPagi();
+  });
+
+  ps.addEventListener('change', () => {
+    pagination.pageSize = parseInt(ps.value, 10) || 10;
+    pagination.page = 1;
+    savePagination();
+    applyPagi();
+  });
+}
+
+function matchPeer(card) {
+  if (SELECTED_IFACE_NAME) {
+    const name = card.querySelector('.mi-iface-name')?.textContent || card.dataset.iface || '';
+    if (name !== SELECTED_IFACE_NAME) return false;
   }
 
+  const st = filters.status;
+  const status = card.dataset.status;
+  const panel = card.dataset.panelStatus;
+
+  const statusOK =
+    !st ||
+    (st === 'online' && status === 'online') ||
+    (st === 'offline' && status === 'offline') ||
+    (st === 'depleting' && card.dataset.depleting === '1') ||
+    (st === 'blocked' && card.dataset.blocked === '1') ||
+    (st === 'enabled' && panel === 'online') ||
+    (st === 'disabled' && panel !== 'online');
+
+  if (!statusOK) return false;
+
+  const q = filters.q;
+  if (!q) return true;
+
+  const name = card.dataset.name || '';
+  const phone = card.dataset.phone || '';
+  const tg = card.dataset.tg || '';
+
+  return name.includes(q) || phone.includes(q) || tg.includes(q);
+}
 
   function applyPagi() {
     const cont = $('.peers-container'); if (!cont) return;
@@ -1009,38 +1551,75 @@ function updateCard(card, p, i) {
   }
 
   function renderPager(total) {
-    let bar = $('#peer-pagination');
-    if (!bar) {
-      bar = document.createElement('div'); bar.id = 'peer-pagination';
-      bar.style.marginTop = '10px'; bar.style.display = 'flex'; bar.style.justifyContent = 'center'; bar.style.gap = '6px';
-      const list = $('.peers-container'); if (list) list.after(bar);
-      bar.addEventListener('click', e => {
-        const b = e.target.closest('button'); if (!b) return;
-        if (b.dataset.page) { pagination.page = parseInt(b.dataset.page, 10); savePagination(); applyPagi(); }
-        else if (b.dataset.nav === 'prev') { if (pagination.page > 1) { pagination.page--; savePagination(); applyPagi(); } }
-        else if (b.dataset.nav === 'next') {
-          const t = Math.max(1, Math.ceil(($$('.peer-card', $('.peers-container')).filter(c => c.dataset._match === '1').length) / pagination.pageSize));
-          if (pagination.page < t) { pagination.page++; savePagination(); applyPagi(); }
-        }
-      });
-    }
-    const cur = pagination.page;
-    const max = 7;
-    let html = `<button class="btn secondary" data-nav="prev" ${cur <= 1 ? 'disabled' : ''}>Prev</button>`;
-    const push = (i, a = false) => { html += `<button class="btn ${a ? '' : 'secondary'}" data-page="${i}">${i}</button>`; };
-    const dot = () => { html += '<span style="padding:0 6px">…</span>'; };
-    if (total <= max) { for (let i = 1; i <= total; i++) push(i, i === cur); }
-    else {
-      push(1, cur === 1);
-      if (cur > 4) dot();
-      const s = Math.max(2, cur - 2), e = Math.min(total - 1, cur + 2);
-      for (let i = s; i <= e; i++) push(i, i === cur);
-      if (cur < total - 3) dot();
-      push(total, cur === total);
-    }
-    html += `<button class="btn secondary" data-nav="next" ${cur >= total ? 'disabled' : ''}>Next</button>`;
-    bar.innerHTML = html;
+  let bar = $('#peer-pagination');
+
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'peer-pagination';
+    bar.className = 'peerx-pagination subx-pagination';
+
+    const list = $('.peers-container');
+    if (list) list.after(bar);
+
+    bar.addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (!b) return;
+
+      const maxPage = parseInt(bar.dataset.total || '1', 10) || 1;
+      const nav = b.dataset.nav || '';
+
+      if (nav === 'first') pagination.page = 1;
+      else if (nav === 'prev') pagination.page = Math.max(1, pagination.page - 1);
+      else if (nav === 'next') pagination.page = Math.min(maxPage, pagination.page + 1);
+      else if (nav === 'last') pagination.page = maxPage;
+      else return;
+
+      savePagination();
+      applyPagi();
+    });
+
+    bar.addEventListener('change', e => {
+      const size = e.target.closest('#peer-page-size-pager');
+      if (!size) return;
+
+      pagination.pageSize = parseInt(size.value, 10) || 8;
+      if (![5, 8, 12, 20, 50].includes(Number(pagination.pageSize))) pagination.pageSize = 8;
+      pagination.page = 1;
+      const oldTop = document.querySelector('.peer-filters #peer-page-size');
+      if (oldTop) oldTop.value = String(pagination.pageSize);
+      savePagination();
+      applyPagi();
+    });
+  } else {
+    bar.className = 'peerx-pagination subx-pagination';
   }
+
+  const cur = Math.max(1, Math.min(total, pagination.page));
+  pagination.page = cur;
+  bar.dataset.total = String(total);
+
+  const cards = $$('.peer-card', $('.peers-container') || document);
+  const matched = cards.filter(c => c.dataset._match === '1').length;
+  const from = matched ? ((cur - 1) * pagination.pageSize) + 1 : 0;
+  const to = Math.min(matched, cur * pagination.pageSize);
+
+  const sizeOptions = [5, 8, 12, 20, 50].map(n =>
+    `<option value="${n}" ${Number(pagination.pageSize) === n ? 'selected' : ''}>${n} / page</option>`
+  ).join('');
+
+  bar.innerHTML = `
+    <div class="subx-page-info">${from}-${to} of ${matched} peers</div>
+    <div class="subx-page-controls" aria-label="Peer pagination">
+      <button type="button" data-nav="first" ${cur <= 1 ? 'disabled' : ''} title="First page" aria-label="First page"><i class="fas fa-angles-left"></i></button>
+      <button type="button" data-nav="prev" ${cur <= 1 ? 'disabled' : ''} title="Previous page" aria-label="Previous page"><i class="fas fa-chevron-left"></i></button>
+      <span>Page <b>${cur}</b> of <b>${total}</b></span>
+      <button type="button" data-nav="next" ${cur >= total ? 'disabled' : ''} title="Next page" aria-label="Next page"><i class="fas fa-chevron-right"></i></button>
+      <button type="button" data-nav="last" ${cur >= total ? 'disabled' : ''} title="Last page" aria-label="Last page"><i class="fas fa-angles-right"></i></button>
+      <select id="peer-page-size-pager" class="input" aria-label="Peers per page">${sizeOptions}</select>
+    </div>
+  `;
+}
+
 
   // peers refresh
 let refreshTimer = null,
@@ -1048,7 +1627,9 @@ let refreshTimer = null,
     firstLoad = false,
     refreshDelay = 5000,
     lastErrorAt = 0,
-    peersFetchCtrl = null;
+    peersFetchCtrl = null,
+    peersLoadingSeq = 0,
+    peersLoadingSince = 0;
 
 const REFRESH_TIMEOUT_MS_LOCAL = 8000;
 const REFRESH_TIMEOUT_MS_NODE  = 20000;
@@ -1061,25 +1642,57 @@ function nextSchedule(ms) {
 }
 
 function findPeer(id) {
-  return (window._peers || []).find(x => String(x.id) === String(id));
+  const key = String(id ?? '');
+  return (window._peers || []).find(x =>
+    String(peerKey(x)) === key ||
+    String(x.id ?? '') === key ||
+    String(x.public_key ?? '') === key
+  );
 }
 
 function peersLoading(on, title, sub) {
   const el = document.getElementById('spinner-peers');
   if (!el) return;
 
+  if (!el.dataset.enhanced) {
+    el.dataset.enhanced = '1';
+    el.innerHTML = `
+      <div class="peers-loading-card" role="status" aria-live="polite">
+        <span class="peers-loading-orb"><i class="fas fa-circle-notch" aria-hidden="true"></i></span>
+        <span class="peers-loading-copy">
+          <b id="peers-loading-title">Loading peers…</b>
+          <small id="peers-loading-sub">Fetching latest state.</small>
+        </span>
+      </div>`;
+  }
+
   const t = document.getElementById('peers-loading-title');
   const s = document.getElementById('peers-loading-sub');
 
   if (on) {
+    peersLoadingSeq += 1;
+    peersLoadingSince = Date.now();
     if (t) t.textContent = title || 'Loading peers…';
     if (s) s.textContent = sub || 'Fetching latest state.';
     el.hidden = false;
-  } else {
-    el.hidden = true;
+    el.style.setProperty('display', 'flex', 'important');
+    el.setAttribute('aria-busy', 'true');
+    document.body.classList.add('peers-is-loading');
+    return;
   }
-}
 
+  const seq = peersLoadingSeq;
+  const elapsed = Date.now() - peersLoadingSince;
+  const delay = Math.max(0, 520 - elapsed);
+
+  setTimeout(() => {
+    if (seq !== peersLoadingSeq) return;
+    el.hidden = true;
+    el.style.setProperty('display', 'none', 'important');
+    el.setAttribute('aria-busy', 'false');
+    document.body.classList.remove('peers-is-loading');
+  }, delay);
+}
 function renderPeers(container, count = 2) {
   if (!container) return;
   if (container.dataset.skeleton === '1') return;
@@ -1133,7 +1746,13 @@ async function refreshPeers(opts = {}) {
 
   let showTimer = null;
 
-if (!quiet) {
+if (!quiet && opts.forceLoading) {
+  peersLoading(true, title, sub);
+  if (container) {
+    container.innerHTML = '';
+    renderPeers(container, 2);
+  }
+} else if (!quiet) {
   showTimer = setTimeout(() => {
     peersLoading(true, title, sub);
 
@@ -1178,6 +1797,7 @@ if (!quiet) {
     const data = await res.json();
     const peers = data?.peers || [];
     window._peers = peers;
+    renderPeerSummary(peers);
 
     if (!container) return;
 
@@ -1188,9 +1808,14 @@ if (!quiet) {
     );
 
     if (peers.length === 0) {
-      container.innerHTML = `<div class="empty-peers" style="padding:16px;color:#64748b;">
-        <i class="fas fa-circle-info"></i> No peers yet.
-      </div>`;
+      container.innerHTML = `
+        <div class="empty-peers empty-peers-pro">
+          <span class="empty-peers-icon"><i class="fas fa-user-plus" aria-hidden="true"></i></span>
+          <div class="empty-peers-copy">
+            <strong>No peers in this interface</strong>
+            <small>Create a peer or switch interface/scope to view existing peers.</small>
+          </div>
+        </div>`;
     } else {
       container.querySelector('.empty-peers')?.remove();
 
@@ -1272,7 +1897,7 @@ async function postEdit(path, okMsg, failMsg) {
       if (peer) {
         peer.used_bytes = 0;
         peer.used_bytes_db = 0;
-        const card = document.querySelector(`.peer-card[data-id="${peer.id}"]`);
+        const card = document.querySelector(`.peer-card[data-id="${peerEsc(peerKey(peer))}"]`);
         if (card) updateCard(card, peer, 0);
       }
     }
@@ -1286,15 +1911,27 @@ async function postEdit(path, okMsg, failMsg) {
   }
 }
 
-  async function getShortLink(id) {
+async function getShortLink(idOrPeer) {
+  const peer =
+    typeof idOrPeer === 'object'
+      ? idOrPeer
+      : (typeof findPeer === 'function' ? findPeer(idOrPeer) : null);
+
+  if (peer?.shortlink) {
+    return peer.shortlink;
+  }
+
   const apiKey = document.querySelector('meta[name="api-key"]')?.content?.trim() || '';
 
   const headers = {};
-  if (apiKey) {
-    headers['X-API-KEY'] = apiKey;
-  }
+  if (apiKey) headers['X-API-KEY'] = apiKey;
 
-  const r = await fetch(api(`/api/peer/${id}/shortlink`), {
+  const path =
+    typeof apiPeerPath === 'function'
+      ? apiPeerPath(peer || idOrPeer, '/shortlink')
+      : `/api/peer/${encodeURIComponent(String(idOrPeer))}/shortlink`;
+
+  const r = await fetch(api(path), {
     method: 'GET',
     credentials: 'same-origin',
     headers
@@ -1308,9 +1945,11 @@ async function postEdit(path, okMsg, failMsg) {
   const j = await r.json();
   return j.url;
 }
+
   async function userLink(e, id) {
     try {
-      const url = await getShortLink(id);
+      const peer = typeof findPeer === 'function' ? findPeer(id) : null;
+      const url = await getShortLink(peer || id);
       if (e.ctrlKey || e.metaKey) {
         window.open(url, '_blank', 'noopener');
         toastSafe('Opened user link', 'success');
@@ -1329,7 +1968,8 @@ async function postEdit(path, okMsg, failMsg) {
     const id = btn.dataset.id || btn.closest('.peer-card')?.dataset.id; if (!id) return;
     e.preventDefault();
     try {
-      const url = await getShortLink(id);
+      const peer = typeof findPeer === 'function' ? findPeer(id) : null;
+      const url = await getShortLink(peer || id);
       window.open(url, '_blank', 'noopener');
       toastSafe('Opened user link', 'success');
     } catch (err) {
@@ -1396,15 +2036,22 @@ async function postEdit(path, okMsg, failMsg) {
   let qrModal;
   function itsQR() {
     if (qrModal) return qrModal;
-    qrModal = document.createElement('div'); qrModal.className = 'modal'; qrModal.id = 'qr-modal';
+    qrModal = document.createElement('div'); qrModal.className = 'modal peer-qr-modal'; qrModal.id = 'qr-modal';
+    qrModal.setAttribute('aria-hidden', 'true');
     qrModal.innerHTML = `
-      <div class="modal-content" style="max-width:520px">
-        <button class="modal-close" id="qr-close" aria-label="Close" style="position:absolute;top:10px;right:10px">&times;</button>
-        <h2 style="margin-bottom:.5rem"><i class="fas fa-qrcode"></i> Peer QR</h2>
-        <div id="qr-img-wrap" style="display:flex;justify-content:center;align-items:center;min-height:260px;border:1px dashed #e5e7eb;border-radius:8px;margin-bottom:8px;padding:8px"><span style="color:#666">Generating…</span></div>
-        <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; margin-top:6px;">
-          <a id="qr-download" class="btn" download="peer.png"><i class="fas fa-download"></i> Download PNG</a>
-          <button id="qr-copy-text" class="btn secondary"><i class="fas fa-clipboard"></i> Copy config</button>
+      <div class="modal-content qr-modal-card" role="dialog" aria-modal="true" aria-labelledby="qr-modal-title">
+        <button class="modal-close" id="qr-close" aria-label="Close" type="button">&times;</button>
+        <div class="qr-modal-head">
+          <span class="qr-modal-icon"><i class="fas fa-qrcode" aria-hidden="true"></i></span>
+          <div>
+            <h2 id="qr-modal-title">Peer QR</h2>
+            <small>Scan in WireGuard or download the PNG.</small>
+          </div>
+        </div>
+        <div id="qr-img-wrap" class="qr-img-wrap"><span class="qr-loading"><i class="fas fa-circle-notch fa-spin"></i> Generating…</span></div>
+        <div class="qr-actions">
+          <a id="qr-download" class="btn" download="peer.png"><i class="fas fa-download"></i> Download</a>
+          <button id="qr-copy-text" class="btn secondary" type="button"><i class="fas fa-clipboard"></i> Copy config</button>
         </div>
       </div>`;
     document.body.appendChild(qrModal);
@@ -1412,22 +2059,22 @@ async function postEdit(path, okMsg, failMsg) {
   }
   async function openQR(id) {
     itsQR(); openModal(qrModal);
-    const wrap = $('#qr-img-wrap', qrModal); wrap.innerHTML = '<span style="color:#666">Generating…</span>';
+    const wrap = $('#qr-img-wrap', qrModal); wrap.innerHTML = '<span class="qr-loading"><i class="fas fa-circle-notch fa-spin"></i> Generating…</span>';
     const dl = $('#qr-download', qrModal); dl.removeAttribute('href'); dl.removeAttribute('download');
     try {
-      let r = await fetch(api(`/api/peer/${id}/config_qr`), { credentials: 'same-origin' });
-      if (r.status === 501) r = await fetch(api(`/api/peer/${id}/config_qr?install=1`), { credentials: 'same-origin' });
+      let r = await fetch(apiPeerPath(id, '/config_qr'), { credentials: 'same-origin' });
+      if (r.status === 501) r = await fetch(apiPeerPath(id, '/config_qr?install=1'), { credentials: 'same-origin' });
       if (r.ok) {
         const blob = await r.blob(); const url = URL.createObjectURL(blob);
-        wrap.innerHTML = `<img src="${url}" alt="QR" style="max-width:100%; height:auto">`;
+        wrap.innerHTML = `<img src="${url}" alt="Peer WireGuard QR code">`;
         dl.href = url; dl.download = `peer-${id}.png`;
         $('#qr-copy-text', qrModal).onclick = async () => {
-          const txt = await (await fetch(api(`/api/peer/${id}/config`), { credentials: 'same-origin' })).text();
+          const txt = await (await fetch(apiPeerPath(id, '/config'), { credentials: 'same-origin' })).text();
           await copyTo(txt); toastSafe('Config copied to clipboard', 'success');
         };
         return;
       }
-      const txt = await (await fetch(api(`/api/peer/${id}/config`), { credentials: 'same-origin' })).text();
+      const txt = await (await fetch(apiPeerPath(id, '/config'), { credentials: 'same-origin' })).text();
       wrap.innerHTML = `<textarea readonly style="width:100%;height:260px;border:0;outline:none;background:#f9fafb;border-radius:8px;padding:8px">${txt}</textarea>`;
       dl.style.display = 'none';
       $('#qr-copy-text', qrModal).onclick = async () => { await copyTo(txt); toastSafe('Config copied to clipboard', 'success'); };
@@ -1438,12 +2085,12 @@ async function postEdit(path, okMsg, failMsg) {
   }
 
   let logsModal;
-  const eventIcon = { created:'fa-plus-circle', enabled:'fa-play', disabled:'fa-ban', expired:'fa-hourglass-end', limit_reached:'fa-gauge-high', edited:'fa-pen-to-square', reset_data:'fa-gauge-simple', reset_timer:'fa-clock-rotate-left', first_use:'fa-bolt' };
+  const eventIcon = { created:'fa-plus-circle', enabled:'fa-play', disabled:'fa-ban', expired:'fa-hourglass-end', limit_reached:'fa-gauge-high', edited:'fa-edit', reset_data:'fa-tachometer-alt', reset_timer:'fa-history', first_use:'fa-bolt' };
   function itsLogs() {
     if (logsModal) return logsModal;
     logsModal = document.createElement('div'); logsModal.className = 'modal'; logsModal.id = 'logs-modal';
     logsModal.innerHTML = `
-      <div class="modal-content logs" style="max-width:760px">
+      <div class="modal-content logs">
         <button class="modal-close" id="logs-close" aria-label="Close" style="position:absolute;top:10px;right:10px">&times;</button>
         <div class="logs-header" style="display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem;">
           <i class="fas fa-list"></i><h2 style="margin:0">Peer Logs</h2>
@@ -1564,8 +2211,20 @@ function openLogs(id) {
     <div class="logs-pill"><i class="fas fa-clock"></i><strong>Status:</strong>&nbsp;${cap(peer.status ?? '–')}</div>
   `;
 
-  fetch(api(apiPeerPath(id, '/logs')), { credentials: 'same-origin' })
-    .then(r => r.json())
+  const logsFetchUrl = api(apiPeerPath(id, '/logs'));
+  const logsTbodyLoading = $in('#logs-tbody', logsModal);
+  if (logsTbodyLoading) {
+    logsTbodyLoading.innerHTML = `<tr><td colspan="4" class="logs-empty"><i class="fas fa-circle-notch fa-spin"></i><span>Loading peer events…</span></td></tr>`;
+  }
+
+  fetch(logsFetchUrl, { credentials: 'same-origin' })
+    .then(async r => {
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '');
+        throw new Error(`HTTP ${r.status}: ${txt.slice(0, 160)}`);
+      }
+      return r.json();
+    })
     .then(({ logs }) => {
       const overview = $in('#logs-overview', logsModal);
       const toLocalStr = (val) => {
@@ -1598,7 +2257,7 @@ function openLogs(id) {
             String(l.time || '').toLowerCase().includes(q)
           )
           .map(l => {
-            const ic = eventIcon[l.event] || 'fa-circle-info';
+            const ic = eventIcon[l.event] || 'fa-info-circle';
             const t  = (typeof l.time === 'number') ? normEpoch(l.time) : tsFrom(l.time);
             const when = t ? fmtLocalTs(t) : (l.time || '');
             const whenRel = (() => {
@@ -1623,7 +2282,7 @@ function openLogs(id) {
                 <td style="padding:.5rem .5rem;border-bottom:1px solid #f1f5f9;white-space:nowrap;color:#64748b">${whenRel}</td>
               </tr>`;
           }).join('');
-        tbody.innerHTML = rows || `<tr><td colspan="4" style="color:#64748b; padding:.75rem">No events yet</td></tr>`;
+        tbody.innerHTML = rows || `<tr><td colspan="4" class="logs-empty"><i class="fas fa-inbox"></i><span>No events yet</span><small>New actions for this peer will appear here.</small></td></tr>`;
       };
       draw();
       $in('#logs-search', logsModal).oninput = debounce(draw, 120);
@@ -1656,14 +2315,21 @@ function openLogs(id) {
             const r = await fetch(api(apiPeerPath(id, '/logs')), { method: 'DELETE', credentials: 'same-origin' });
             if (!r.ok) throw new Error('HTTP ' + r.status);
             toastSafe('Events cleared', 'success');
-            $in('#logs-tbody', logsModal).innerHTML = `<tr><td colspan="4" style="color:#64748b; padding:.75rem">No events yet</td></tr>`;
+            $in('#logs-tbody', logsModal).innerHTML = `<tr><td colspan="4" class="logs-empty"><i class="fas fa-inbox"></i><span>No events yet</span><small>New actions for this peer will appear here.</small></td></tr>`;
           } catch {
             toastSafe('Failed to clear events', 'error');
           }
         };
       }
     })
-    .catch(() => toastSafe('Failed to load logs', 'error'));
+    .catch((err) => {
+      console.error('Peer logs failed:', err);
+      const tbody = $in('#logs-tbody', logsModal);
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="4" class="logs-empty error"><i class="fas fa-triangle-exclamation"></i><span>Could not load peer logs</span><small>${String(err.message || err).replace(/[<>]/g, '')}</small></td></tr>`;
+      }
+      toastSafe('Failed to load logs', 'error');
+    });
 
   if (!logsModal._bindClearTotal) {
     logsModal.addEventListener('click', async (ev) => {
@@ -1703,22 +2369,17 @@ function uiConfirm() {
   if (confirmModal) return;
 
   confirmModal = document.createElement('div');
-  confirmModal.className = 'modal';
-
+  confirmModal.className = 'peer-confirm-overlay';
   confirmModal.innerHTML = `
-    <div class="modal-content" style="
-      width: min(92vw, 420px);
-      max-width: 420px;
-      border-radius: 16px;
-      padding: 16px 16px 14px;
-    ">
-      <div style="font-weight:800; margin:0 0 8px 0;">Confirm</div>
-
-      <p id="confirm-text" style="margin:0 0 14px 0; color:#64748b; line-height:1.35"></p>
-
-      <div style="display:flex; gap:10px; justify-content:flex-end;">
-        <button id="confirm-no" class="btn secondary" type="button" style="min-width:96px;">No</button>
-        <button id="confirm-yes" class="btn" type="button" style="min-width:96px;">Yes</button>
+    <div class="peer-confirm-card" role="dialog" aria-modal="true" aria-labelledby="peer-confirm-title">
+      <div class="peer-confirm-icon" id="peer-confirm-icon"><i class="fas fa-circle-question"></i></div>
+      <div class="peer-confirm-copy">
+        <h3 id="peer-confirm-title">Confirm action</h3>
+        <p id="confirm-text"></p>
+      </div>
+      <div class="peer-confirm-actions">
+        <button id="confirm-no" class="btn secondary" type="button">Cancel</button>
+        <button id="confirm-yes" class="btn" type="button">Continue</button>
       </div>
     </div>
   `;
@@ -1730,9 +2391,25 @@ function uiConfirm() {
   confirmNo   = confirmModal.querySelector('#confirm-no');
 }
 
+  function ensureModalBackdrop(m) {
+  if (!m) return null;
+  let bd = m.querySelector(':scope > .modal-backdrop');
+  if (!bd) {
+    bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    m.prepend(bd);
+  }
+  if (!bd.__peerBackdropBound) {
+    bd.addEventListener('click', () => closeModal(m));
+    bd.__peerBackdropBound = true;
+  }
+  return bd;
+}
+
   function openModal(m) {
   document.querySelectorAll('.modal.open').forEach(el => el.classList.remove('open'));
   if (m) {
+    ensureModalBackdrop(m);
     m.classList.add('open');
     document.body.classList.add('modal-open');
   }
@@ -1744,28 +2421,52 @@ function closeModal(m) {
     document.body.classList.remove('modal-open');
   }
 }
-  function confirmBox(msg) {
-    uiConfirm();
-    return new Promise(resolve => {
-      confirmText.textContent = msg;
-      openModal(confirmModal);
-      const y = () => done(true), n = () => done(false);
-      function done(ans) {
-        closeModal(confirmModal);
-        confirmYes.removeEventListener('click', y);
-        confirmNo.removeEventListener('click', n);
-        resolve(ans);
-      }
-      confirmYes.addEventListener('click', y);
-      confirmNo.addEventListener('click', n);
-      confirmModal.addEventListener('click', e => { if (e.target === confirmModal) done(false); }, { once: true });
-    });
-  }
+
+function confirmBox(msg, opts = {}) {
+  uiConfirm();
+  return new Promise(resolve => {
+    const danger = /delete|remove|clear|blocked|stop/i.test(String(msg || '') + ' ' + String(opts.title || ''));
+    const titleEl = confirmModal.querySelector('#peer-confirm-title');
+    const iconBox = confirmModal.querySelector('#peer-confirm-icon');
+    const icon = iconBox?.querySelector('i');
+
+    titleEl.textContent = opts.title || (danger ? 'Confirm dangerous action' : 'Confirm action');
+    confirmText.textContent = msg || '';
+    confirmYes.textContent = opts.yesText || (danger ? 'Continue' : 'Yes');
+    confirmNo.textContent = opts.noText || 'Cancel';
+    confirmYes.classList.toggle('danger', danger);
+    iconBox?.classList.toggle('danger', danger);
+    if (icon) icon.className = `fas ${danger ? 'fa-triangle-exclamation' : 'fa-circle-question'}`;
+
+    confirmModal.classList.add('open');
+    document.body.classList.add('modal-open');
+
+    const y = () => done(true), n = () => done(false);
+    function done(ans) {
+      confirmModal.classList.remove('open');
+      if (!document.querySelector('.modal.open')) document.body.classList.remove('modal-open');
+      confirmYes.removeEventListener('click', y);
+      confirmNo.removeEventListener('click', n);
+      document.removeEventListener('keydown', keyHandler);
+      resolve(ans);
+    }
+    function keyHandler(e) {
+      if (e.key === 'Escape') { e.preventDefault(); done(false); }
+      if (e.key === 'Enter')  { e.preventDefault(); done(true); }
+    }
+    confirmYes.addEventListener('click', y);
+    confirmNo.addEventListener('click', n);
+    document.addEventListener('keydown', keyHandler);
+    confirmModal.addEventListener('click', e => { if (e.target === confirmModal) done(false); }, { once: true });
+    setTimeout(() => confirmYes?.focus?.({preventScroll:true}), 30);
+  });
+}
+
 function confirmBoxIn(container, msg, opts = {}) {
   const {
-    title   = 'Really delete this peer?',
-    yesText = 'Yes',
-    noText  = 'No'
+    title   = 'Confirm action',
+    yesText = 'Continue',
+    noText  = 'Cancel'
   } = opts;
 
   return new Promise(resolve => {
@@ -1774,42 +2475,40 @@ function confirmBoxIn(container, msg, opts = {}) {
 
     host.querySelectorAll('.cbi-wrap').forEach(w => w.remove());
 
+    const danger = /delete|remove|clear|danger/i.test(String(title) + ' ' + String(msg));
     const wrap = document.createElement('div');
     wrap.className = 'cbi-wrap';
     Object.assign(wrap.style, {
       position: 'absolute',
       inset: '0',
-      background: 'rgba(0,0,0,.35)',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      zIndex: 50
+      zIndex: 80,
+      padding: '16px'
     });
 
-    const inner = document.createElement('div');
-    inner.setAttribute('role', 'dialog');
-    inner.setAttribute('aria-modal', 'true');
-    inner.setAttribute('aria-label', title);
-    inner.tabIndex = -1; 
-    inner.className = 'modal-content';
-    inner.style.maxWidth = '520px';
-    inner.style.width = 'min(96%, 520px)';
-    inner.innerHTML = `
-      <h3 style="margin:0 0 .6rem 0">${title}</h3>
-      <p style="margin:0 0 12px 0; color:#64748b">${msg || ''}</p>
-      <div style="display:flex; gap:8px; justify-content:flex-end;">
-        <button class="btn" id="cbi-yes" style="min-width:88px; display:inline-flex; justify-content:center">${yesText}</button>
-        <button class="btn secondary" id="cbi-no" style="min-width:88px; display:inline-flex; justify-content:center">${noText}</button>
+    wrap.innerHTML = `
+      <div class="cbi-card" role="dialog" aria-modal="true" aria-label="${peerEsc(title)}" tabindex="-1">
+        <div class="cbi-icon ${danger ? 'danger' : ''}"><i class="fas ${danger ? 'fa-triangle-exclamation' : 'fa-circle-question'}"></i></div>
+        <div class="cbi-copy">
+          <h3>${peerEsc(title)}</h3>
+          <p>${peerEsc(msg || '')}</p>
+        </div>
+        <div class="cbi-actions">
+          <button class="btn secondary" id="cbi-no" type="button">${peerEsc(noText)}</button>
+          <button class="btn ${danger ? 'danger' : ''}" id="cbi-yes" type="button">${peerEsc(yesText)}</button>
+        </div>
       </div>
     `;
 
-    wrap.appendChild(inner);
     host.appendChild(wrap);
 
-    const yes = inner.querySelector('#cbi-yes');
-    const no  = inner.querySelector('#cbi-no');
+    const inner = wrap.querySelector('.cbi-card');
+    const yes = wrap.querySelector('#cbi-yes');
+    const no  = wrap.querySelector('#cbi-no');
 
-    setTimeout(() => { inner.focus(); yes?.focus(); }, 10);
+    setTimeout(() => { inner?.focus(); yes?.focus(); }, 10);
 
     const done = (ans) => {
       try { wrap.remove(); } catch {}
@@ -2023,6 +2722,7 @@ async function refreshInterfacesUI({ keepSelection = true, updateCreate = true, 
     if (typeof bulkAvailability === 'function') bulkAvailability();
   }
 }
+window.refreshInterfacesUI = refreshInterfacesUI;
 
   let IFACES = [];               
   let SELECTED_IFACE_ID = null;   
@@ -2072,15 +2772,17 @@ async function refreshInterfacesUI({ keepSelection = true, updateCreate = true, 
 
   const addrSel = document.querySelector('#peer-modal #create-address-select, #peer-modal select[name="address"]');
   if (addrSel && iface?.available_ips) {
-    const prevAddr = addrSel.value;
-    addrSel.innerHTML = iface.available_ips.map(ip => `<option value="${ip}">${ip}</option>`).join('');
-    if (prevAddr && [...addrSel.options].some(o => o.value === prevAddr)) addrSel.value = prevAddr;
-    const hiddenAddr = document.getElementById('create-address');
-    if (hiddenAddr) hiddenAddr.value = addrSel.value || '';
+    setCreateAddressOptions(iface.available_ips || []);
   }
 
   if (fromUser && typeof refreshPeers === 'function') {
-    refreshPeers({ abortPrev: true });
+    const cont = document.querySelector('.peers-container');
+    peersLoading(true, `Loading ${iface?.name || 'interface'}…`, 'Refreshing peers for the selected interface.');
+    if (cont) {
+      cont.innerHTML = '';
+      renderPeers(cont, 1);
+    }
+    refreshPeers({ abortPrev: true, forceLoading: true });
   } else {
     applyPagi?.();
   }
@@ -2090,17 +2792,30 @@ function makeIfaceBar() {
   const host = $('#iface-bar');
   if (!host) return;
 
-  host.innerHTML = IFACES.map(x => `
-    <button type="button"
-            class="btn secondary iface-btn"
-            data-id="${x.id}"
-            aria-pressed="false"
-            aria-label="Select interface ${x.name}">
-      <i class="fas fa-network-wired"></i> ${x.name}
-      ${typeof x.is_up === 'boolean'
-          ? `<span class="iface-dot ${x.is_up ? 'up' : 'down'}" title="${x.is_up ? 'Interface up' : 'Interface down'}"></span>`
-          : ''}
-    </button>`).join('');
+  if (!IFACES.length) {
+    host.innerHTML = `
+      <div class="iface-empty">
+        <i class="fas fa-circle-info"></i>
+        No interfaces found in this scope.
+      </div>
+    `;
+    return;
+  }
+
+  host.innerHTML = `
+    <div class="iface-toolbar-label" aria-hidden="true">
+      <i class="fas fa-network-wired"></i><span>Interface</span>
+    </div>
+    ${IFACES.map(x => `
+      <button type="button"
+              class="iface-btn"
+              data-id="${x.id}"
+              aria-pressed="false"
+              aria-label="Select interface ${x.name}">
+        <span class="iface-dot ${x.is_up === true ? 'up' : (x.is_up === false ? 'down' : '')}" title="${x.is_up === true ? 'Interface up' : (x.is_up === false ? 'Interface down' : 'Interface status unknown')}"></span>
+        <span class="iface-name">${x.name}</span>
+      </button>`).join('')}
+  `;
 
   if (!host.dataset.wired) {
     host.dataset.wired = '1';
@@ -2121,43 +2836,74 @@ function makeIfaceBar() {
 
 
 function updateActiveInterface() {
-  $$('#iface-bar .iface-btn').forEach(btn => {
-    const isActive = String(btn.dataset.id) === String(SELECTED_IFACE_ID);
-    btn.classList.toggle('active', isActive);
-    btn.setAttribute('aria-pressed', isActive ? 'true' : 'false');
-  });
-
   const chip = $('#active-iface-chip');
   const iface = findIfaceById(SELECTED_IFACE_ID);
 
+  document.querySelectorAll('.iface-btn').forEach(btn => {
+    const on = iface && String(btn.dataset.id) === String(iface.id);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.classList.toggle('is-active', !!on);
+  });
+
   if (chip && iface) {
-    const dot = (typeof iface.is_up === 'boolean')
-      ? `<span class="iface-dot ${iface.is_up ? 'up' : 'down'}" title="${iface.is_up ? 'Interface up' : 'Interface down'}"></span>`
-      : '';
-    chip.innerHTML = `${dot}<span>Active interface:</span> <strong>${iface.name}</strong> <span class="mini">(port ${iface.listen_port ?? '–'})</span>`;
+    const isUp = (typeof iface.is_up === 'boolean') ? iface.is_up : null;
+    const dot = isUp != null
+      ? `<span class="iface-dot ${isUp ? 'up' : 'down'}" title="${isUp ? 'Interface up' : 'Interface down'}"></span>`
+      : `<span class="iface-dot" title="Interface status unknown"></span>`;
+    const state = isUp == null ? 'Unknown' : (isUp ? 'Up' : 'Down');
+    const port = iface.listen_port ?? '–';
+
+    chip.innerHTML = `
+      ${dot}
+      <span class="iface-active-copy">
+        <strong>${iface.name}</strong>
+        <small>${state} · :${port}</small>
+      </span>
+    `;
     chip.style.display = 'inline-flex';
 
     const row = chip.parentElement;
     if (row) {
+      row.classList.add('iface-active-row');
       let tgl = row.querySelector('#iface-toggle-btn');
       if (!tgl) {
         tgl = document.createElement('button');
         tgl.id = 'iface-toggle-btn';
-        tgl.className = 'btn secondary';
-        tgl.style.marginLeft = '6px';
+        tgl.type = 'button';
+        tgl.className = 'iface-action-btn';
         row.appendChild(tgl);
       }
-      tgl.textContent = iface.is_up ? 'Disable interface' : 'Enable interface';
+
+      tgl.innerHTML = iface.is_up
+        ? `<i class="fas fa-power-off" aria-hidden="true"></i><span>Disable</span>`
+        : `<i class="fas fa-play" aria-hidden="true"></i><span>Enable</span>`;
       tgl.dataset.intent = iface.is_up ? 'down' : 'up';
       tgl.disabled = false;
+
+      let del = row.querySelector('#iface-delete-btn');
+      if (!del) {
+        del = document.createElement('button');
+        del.id = 'iface-delete-btn';
+        del.className = 'iface-action-btn danger';
+        del.type = 'button';
+        row.appendChild(del);
+      }
+
+      del.innerHTML = `<i class="fas fa-trash" aria-hidden="true"></i><span>Delete</span>`;
+      del.disabled = false;
+      del.title = `Delete interface ${iface.name}`;
     }
   } else if (chip) {
     chip.style.display = 'none';
+    const row = chip.parentElement;
+    row?.classList.remove('iface-active-row');
+    row?.querySelector('#iface-toggle-btn')?.remove();
+    row?.querySelector('#iface-delete-btn')?.remove();
   }
 
   const createBtn = $('#create-peer-btn');
   if (createBtn && iface) {
-    createBtn.innerHTML = `<i class="fas fa-plus"></i> Create Peer on <strong>${iface.name}</strong>`;
+    createBtn.innerHTML = `<i class="fas fa-plus"></i> Create peer <span class="btn-mini-on">${iface.name}</span>`;
   }
 }
 async function ifaceToggle(e) {
@@ -2201,7 +2947,121 @@ async function ifaceToggle(e) {
     btn.disabled = false;
   }
 }
+async function ifaceDelete(e) {
+  const btn = e.target.closest('#iface-delete-btn');
+  if (!btn) return;
 
+  const iface = findIfaceById(SELECTED_IFACE_ID);
+  if (!iface) return;
+
+  const scopeId = getScopeId();
+  const isNode = !!scopeId;
+
+  btn.disabled = true;
+  const loader = toastSafe('Checking interface before deletion…', 'info', true);
+
+  async function sendDelete(deletePeers) {
+    const url = isNode
+      ? `/api/nodes/${encodeURIComponent(scopeId)}/iface/${encodeURIComponent(iface.name)}`
+      : `/api/iface/${encodeURIComponent(iface.id)}`;
+
+    const r = await fetch(url, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delete_peers: !!deletePeers }),
+    });
+
+    const j = await r.json().catch(() => ({}));
+    return { r, j };
+  }
+
+  try {
+    let deletePeers = false;
+
+    if (isNode) {
+      const check = await sendDelete(false);
+
+      if (check.r.status === 409 && check.j.error === 'interface_has_peers') {
+        const peerCount = Number(check.j.peer_count || 0);
+        const linkCount = Number(check.j.subscription_link_count || 0);
+
+        const ok = await confirmBox(
+          `Delete node interface "${iface.name}"?\n\n` +
+          `This interface has ${peerCount} peer(s).` +
+          (linkCount ? `\nIt is also used by ${linkCount} subscription inbound link(s).` : '') +
+          `\n\nDeleting it will remove the interface and all its peers.`
+        );
+
+        if (!ok) {
+          toastSafe('Interface deletion cancelled', 'info');
+          return;
+        }
+
+        deletePeers = true;
+      } else {
+        if (!check.r.ok) {
+          throw new Error(check.j.detail || check.j.error || `HTTP ${check.r.status}`);
+        }
+
+        const ok = await confirmBox(
+          `Delete node interface "${iface.name}"?\n\n` +
+          `This will stop the interface and remove its WireGuard config file.`
+        );
+
+        if (!ok) {
+          toastSafe('Interface deletion cancelled', 'info');
+          return;
+        }
+
+        toastSafe('Node interface deleted', 'success');
+
+        SELECTED_IFACE_ID = null;
+        SELECTED_IFACE_NAME = null;
+
+        await refreshInterfacesUI({ keepSelection: false, updateCreate: true, updateBulk: true });
+        updateActiveInterface?.();
+        bulkOptions?.();
+        bulkAvailability?.();
+        refreshPeers?.({ abortPrev: true });
+        return;
+      }
+    } else {
+      const ok = await confirmBox(
+        `Delete interface "${iface.name}"?\n\n` +
+        `This will stop the interface and remove its WireGuard config file.\n\n` +
+        `If this interface has peers, they may also need to be deleted.`
+      );
+
+      if (!ok) return;
+    }
+
+    let { r, j } = await sendDelete(deletePeers);
+
+    if (!r.ok) {
+      throw new Error(j.detail || j.error || `HTTP ${r.status}`);
+    }
+
+    toastSafe(isNode ? 'Node interface deleted' : 'Interface deleted', 'success');
+
+    SELECTED_IFACE_ID = null;
+    SELECTED_IFACE_NAME = null;
+
+    await refreshInterfacesUI({ keepSelection: false, updateCreate: true, updateBulk: true });
+    updateActiveInterface?.();
+    bulkOptions?.();
+    bulkAvailability?.();
+    refreshPeers?.({ abortPrev: true });
+
+  } catch (err) {
+    console.error(err);
+    toastSafe('Interface delete failed: ' + (err.message || err), 'error');
+  } finally {
+    loader?.classList?.add('hide');
+    setTimeout(() => loader?.remove?.(), 500);
+    btn.disabled = false;
+  }
+}
 //  BULK 
 let bulkModal = null, bulkForm = null;
 
@@ -2318,7 +3178,7 @@ async function openBulk() {
 
   if (!bulkModal) {
     console.error('Bulk modal not found');
-    alert('Bulk dialog not found on page.');
+    toastSafe('Bulk dialog not found on page.', 'error');
     return;
   }
 
@@ -2333,6 +3193,7 @@ async function openBulk() {
   }
 
   openModal(bulkModal);
+  wireContainedPickers();
   if (typeof attachEndpoint === 'function') attachEndpoint(bulkModal);
 }
 
@@ -2351,17 +3212,31 @@ async function submitBulk(ev) {
   ev.preventDefault();
 
   const fd = new FormData(bulkForm);
-  const ifaceSel = document.querySelector('#bulk-iface, #bulk-modal select[name="iface"], #bulk-modal select[name="iface_id"]');
-  const ifaceId  = Number((ifaceSel && ifaceSel.value) || (typeof SELECTED_IFACE_ID !== 'undefined' ? SELECTED_IFACE_ID : 0));
-  const iface    = typeof findIfaceById === 'function' ? findIfaceById(ifaceId) : null;
-  if (!ifaceId || !iface) { alert('No interface selected.'); return; }
+const scopeId = getScopeId();
+
+const ifaceSel = document.querySelector('#bulk-iface, #bulk-modal select[name="iface"], #bulk-modal select[name="iface_id"]');
+const rawIfaceId = (ifaceSel && ifaceSel.value) || (typeof SELECTED_IFACE_ID !== 'undefined' ? SELECTED_IFACE_ID : '');
+
+const iface = typeof findIfaceById === 'function' ? findIfaceById(rawIfaceId) : null;
+
+if (!iface) {
+  toastSafe('No interface selected.', 'error');
+  return;
+}
+
+const ifaceId = scopeId ? rawIfaceId : Number(rawIfaceId);
+
+if (!scopeId && !ifaceId) {
+  toastSafe('No interface selected.', 'error');
+  return;
+}
 
   const avail = Array.isArray(iface.available_ips) ? iface.available_ips.length : 0;
   const asked = Number(document.querySelector('#bulk-count')?.value || 0);
-  if (!asked || asked < 1) { alert('Please enter how many peers to create.'); return; }
+  if (!asked || asked < 1) { toastSafe('Please enter how many peers to create.', 'error'); return; }
   let finalCount = asked;
   if (avail && asked > avail) {
-    if (!confirm(`Only ${avail} IPs available on ${iface.name}. Create ${avail} instead?`)) return;
+    if (!(await confirmBox(`Only ${avail} IPs available on ${iface.name}. Create ${avail} instead?`))) return;
     finalCount = avail;
   }
 
@@ -2385,7 +3260,10 @@ async function submitBulk(ev) {
   const bool = q => !!document.querySelector(q)?.checked;
 
   const payload = {
-    iface_id: ifaceId,
+    scope: scopeId ? 'node' : 'local',
+    node_id: scopeId || null,
+    iface_id: scopeId ? null : ifaceId,
+    iface_name: iface.name,
     count: finalCount,
     prefix,             
     name_prefix: prefix,  
@@ -2476,6 +3354,25 @@ async function submitBulk(ev) {
 function bulkVisible() {
   return !!(bulkModal && window.getComputedStyle(bulkModal).display !== 'none');
 }
+function setCreateAddressOptions(list) {
+  const addrSel = document.querySelector('#peer-modal #create-address-select, #peer-modal select[name="address"]');
+  if (!addrSel) return;
+
+  const ips = Array.isArray(list) ? list : [];
+
+  addrSel.innerHTML = ips
+    .map(ip => {
+      const safe = peerEsc(ip);
+      return `<option value="${safe}">${safe}</option>`;
+    })
+    .join('');
+
+  // Always select the first currently available IP.
+  addrSel.selectedIndex = ips.length ? 0 : -1;
+
+  const hiddenAddr = document.getElementById('create-address');
+  if (hiddenAddr) hiddenAddr.value = addrSel.value || '';
+}
 async function refreshAddressOptions() {
   const addrSel = document.querySelector('#peer-modal #create-address-select, #peer-modal select[name="address"]');
   if (!addrSel) return;
@@ -2485,9 +3382,7 @@ async function refreshAddressOptions() {
 
   if (scopeId) {
     const list = Array.isArray(iface?.available_ips) ? iface.available_ips : [];
-    addrSel.innerHTML = list.map(ip => `<option value="${ip}">${ip}</option>`).join('');
-    const hiddenAddr = document.getElementById('create-address');
-    if (hiddenAddr) hiddenAddr.value = addrSel.value || '';
+    setCreateAddressOptions(list);
     return;
   }
 
@@ -2496,9 +3391,7 @@ async function refreshAddressOptions() {
     const r = await fetch(api(`/api/iface/${idNum}/available_ips`), { credentials: 'same-origin', cache: 'no-store' });
     if (r.ok) {
       const { available_ips } = await r.json();
-      addrSel.innerHTML = available_ips.map(ip => `<option value="${ip}">${ip}</option>`).join('');
-      const hiddenAddr = document.getElementById('create-address');
-      if (hiddenAddr) hiddenAddr.value = addrSel.value || '';
+      setCreateAddressOptions(available_ips || []);
     }
   }
 }
@@ -2577,7 +3470,7 @@ async function clickList(e) {
 
   if (btn.classList.contains('download-btn')) {
     const a = document.createElement('a');
-    a.href = `/api/peer/${encodeURIComponent(id)}/config?download=1`;
+    a.href = apiPeerPath(id, '/config?download=1');
     a.target = '_blank';
     a.rel = 'noopener';
     document.body.appendChild(a);
@@ -2601,20 +3494,79 @@ async function clickList(e) {
   }
 
   if (btn.classList.contains('reset-data-btn')) {
-    try {
-      const r = await fetch(api(`/api/peer/${encodeURIComponent(id)}/reset_data`), {
-        method: 'POST',
-        credentials: 'same-origin'
-      });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      toastSafe('Data reset', 'success');
-      refreshPeers?.();
-    } catch (err) {
-      console.error(err);
-      toastSafe('Reset failed', 'error');
-    }
-    return;
+  const path = scopeId
+    ? nodeFunc('reset_data')
+    : localFunc('reset_data');
+
+  if (!path) return;
+
+  try {
+    const r = await fetch(apiPath(path), {
+      method: 'POST',
+      credentials: 'same-origin'
+    });
+
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+
+    toastSafe('Data reset', 'success');
+    refreshPeers?.({ abortPrev: true });
+  } catch (err) {
+    console.error(err);
+    toastSafe('Reset failed', 'error');
   }
+
+  return;
+}
+
+if (btn.classList.contains('reset-timer-btn')) {
+  const path = scopeId
+    ? nodeFunc('reset_timer')
+    : localFunc('reset_timer');
+
+  if (!path) return;
+
+  try {
+    const r = await fetch(apiPath(path), {
+      method: 'POST',
+      credentials: 'same-origin'
+    });
+
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+
+    toastSafe('Timer reset', 'success');
+    refreshPeers?.({ abortPrev: true });
+  } catch (err) {
+    console.error(err);
+    toastSafe('Reset failed', 'error');
+  }
+
+  return;
+}
+
+if (btn.classList.contains('reset-timer-btn')) {
+  const path = scopeId
+    ? nodeFunc('reset_timer')
+    : localFunc('reset_timer');
+
+  if (!path) return;
+
+  try {
+    const r = await fetch(apiPath(path), {
+      method: 'POST',
+      credentials: 'same-origin'
+    });
+
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+
+    toastSafe('Timer reset', 'success');
+    refreshPeers?.({ abortPrev: true });
+  } catch (err) {
+    console.error(err);
+    toastSafe('Reset failed', 'error');
+  }
+
+  return;
+}
 
   if (btn.classList.contains('reset-timer-btn')) {
     try {
@@ -2665,6 +3617,7 @@ async function clickList(e) {
 
 function attachOpen(container) { container.addEventListener('auxclick', (e) => handleClick(e)); }
 window.addEventListener('DOMContentLoaded', async () => {
+  try { if (window.peerScopeReady) await window.peerScopeReady; } catch (_) {}
   await getPresets(); 
 (function wireCreateFormSubmit(){
   const form = document.querySelector('#create-peer-form'); 
@@ -2679,10 +3632,18 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 
   form.addEventListener('submit', async (e) => {
-    const scopeId = getScopeId();   
-    if (!scopeId) return;                  
+    const scopeId = getScopeId();
+    if (!scopeId) return;
 
-    e.preventDefault();                   
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+
+    if (form.dataset.nodeSubmitting === '1') return;
+    form.dataset.nodeSubmitting = '1';
+
+    const submitBtn = form.querySelector('button[type="submit"], .btn[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;                 
 
     const iface = findIfaceById(SELECTED_IFACE_ID);
     if (!iface) { toastSafe('No interface selected', 'error'); return; }
@@ -2752,21 +3713,38 @@ window.addEventListener('DOMContentLoaded', async () => {
       console.error(err);
       toastSafe('Create failed: ' + (err.message || err), 'error');
     } finally {
-      loader?.classList.add('hide'); setTimeout(() => loader?.remove(), 400);
-    }
-  });
+  form.dataset.nodeSubmitting = '0';
+  const submitBtn = form.querySelector('button[type="submit"], .btn[type="submit"]');
+  if (submitBtn) submitBtn.disabled = false;
+
+  loader?.classList.add('hide');
+  setTimeout(() => loader?.remove(), 400);
+}
+  }, true);
 })();
 
 const scopeEl = document.getElementById('peer-scope');
 if (scopeEl) {
   scopeEl.addEventListener('change', async () => {
     SELECTED_IFACE_ID = null;
+    SELECTED_IFACE_NAME = null;
     try { localStorage.removeItem('selected_iface_id'); } catch {}
     const epBulk = document.querySelector('#bulk-endpoint');
     if (epBulk)   { epBulk.value   = ''; epBulk.dataset.userEdited   = '0'; }
 
-    await refreshInterfacesUI({ keepSelection: false, updateCreate: true, updateBulk: true });
-    refreshPeers({ abortPrev: true });
+    const cont = document.querySelector('.peers-container');
+    peersLoading(true, getScopeId() ? 'Switching to node…' : 'Switching to local server…', 'Loading interfaces and peers for this scope.');
+    if (cont) {
+      cont.innerHTML = '';
+      renderPeers(cont, 2);
+    }
+
+    try {
+      await refreshInterfacesUI({ keepSelection: false, updateCreate: true, updateBulk: true });
+      await refreshPeers({ abortPrev: true, forceLoading: true });
+    } finally {
+      peersLoading(false);
+    }
   });
 }
   const createModal = $('#peer-modal');
@@ -2845,10 +3823,119 @@ if (scopeEl) {
       }
 
       openModal(createModal);
+      wireContainedPickers();
       window.createPeerModal?.();  
       attachEndpoint(createModal);
     };
   }
+
+
+  function closeIfaceCreateModal() {
+    const m = document.getElementById('iface-create-modal');
+    if (!m) return;
+    m.classList.remove('open');
+    m.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('modal-open');
+  }
+
+  function openIfaceCreateModal() {
+    const m = document.getElementById('iface-create-modal');
+    if (!m) return;
+
+    const usedNames = (window.IFACES || []).map(x => String(x.name || ''));
+    let nextIdx = 0;
+    while (usedNames.includes(`wg${nextIdx}`)) nextIdx++;
+
+    const ports = (window.IFACES || []).map(x => Number(x.listen_port || 0)).filter(Boolean);
+    let nextPort = ports.length ? Math.max(...ports) + 1 : 51820;
+    if (nextPort > 65535) nextPort = 51820;
+
+    const nameEl = document.getElementById('iface-new-name');
+    const portEl = document.getElementById('iface-new-port');
+    const addrEl = document.getElementById('iface-new-address');
+    const dnsEl  = document.getElementById('iface-new-dns');
+    const mtuEl  = document.getElementById('iface-new-mtu');
+
+    if (nameEl && !nameEl.value) nameEl.value = `wg${nextIdx}`;
+    if (portEl && !portEl.value) portEl.value = String(nextPort);
+    if (addrEl && !addrEl.value) addrEl.value = `10.${77 + Math.min(nextIdx, 100)}.0.1/24`;
+    if (dnsEl && !dnsEl.value) dnsEl.value = '1.1.1.1, 1.0.0.1';
+    if (mtuEl && !mtuEl.value) mtuEl.value = '';
+
+    m.classList.add('open');
+    m.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('modal-open');
+    setTimeout(() => nameEl?.focus?.({ preventScroll: true }), 0);
+  }
+
+  async function submitIfaceCreate(e) {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const scopeId = getScopeId();
+    const fd = new FormData(form);
+    const payload = {
+      name: (fd.get('name') || '').trim(),
+      address: (fd.get('address') || '').trim(),
+      listen_port: Number(fd.get('listen_port') || 0),
+      dns: (fd.get('dns') || '').trim(),
+      mtu: (fd.get('mtu') || '').trim() ? Number(fd.get('mtu')) : null,
+      auto_up: !!fd.get('auto_up'),
+    };
+
+    if (!payload.name || !payload.address || !payload.listen_port) {
+      toastSafe('Name, server address, and listen port are required', 'error');
+      return;
+    }
+
+    const url = scopeId
+      ? `/api/nodes/${encodeURIComponent(scopeId)}/interfaces`
+      : '/api/interfaces';
+
+    const loader = toastSafe(scopeId ? 'Creating interface on node…' : 'Creating local interface…', 'info', true);
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.detail || j.error || `HTTP ${r.status}`);
+
+      if (j.up_error) {
+        toastSafe(`Interface created, but could not start: ${j.up_error}`, 'warn', true);
+      } else {
+        toastSafe('Interface created', 'success');
+      }
+
+      closeIfaceCreateModal();
+      await refreshInterfacesUI({ keepSelection: false, updateCreate: true, updateBulk: true });
+      const createdName = j.interface?.name;
+      if (createdName && Array.isArray(window.IFACES)) {
+        const created = window.IFACES.find(x => String(x.name) === String(createdName));
+        if (created) setIfaceById?.(created.id, { fromUser: true, force: true });
+      }
+      refreshPeers?.({ abortPrev: true });
+    } catch (err) {
+      console.error(err);
+      toastSafe('Interface create failed: ' + (err.message || err), 'error', true);
+    } finally {
+      loader?.classList?.add?.('hide');
+      setTimeout(() => loader?.remove?.(), 400);
+    }
+  }
+
+  const ifaceCreateBtn = document.getElementById('create-iface-btn');
+  const ifaceCreateModal = document.getElementById('iface-create-modal');
+  const ifaceCreateForm = document.getElementById('iface-create-form');
+  ifaceCreateBtn?.addEventListener('click', openIfaceCreateModal);
+  document.addEventListener('click', ifaceDelete);
+  ifaceCreateForm?.addEventListener('submit', submitIfaceCreate);
+  document.getElementById('iface-create-close')?.addEventListener('click', closeIfaceCreateModal);
+  document.getElementById('iface-create-cancel')?.addEventListener('click', closeIfaceCreateModal);
+  ifaceCreateModal?.addEventListener('click', (e) => {
+    if (e.target.classList?.contains('modal-backdrop')) closeIfaceCreateModal();
+  });
 
   loadFilters(); loadPagination(); buildFilters();
   const peersCont = $('.peers-container');
