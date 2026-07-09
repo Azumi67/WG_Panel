@@ -1,8 +1,7 @@
-- بعدا اپدیت دیکری خواهم داد
-
-- اگر دوست داشتید پنل را تست کنید و مشکلات را مطرح کنید تا بررسی کنم
--  نوشتن اموزش با تصاویر کمی زمان بر خواهد بود
-- درصورت تمایل به تست و بررسی پنل، میتوانید مشکلاتی اگر در پنل دیدید در issue بیان کنید که برطرف بشود
+- اضافه شدن subscription و امکانات مربوطه
+- تعییرات در قسمت backup و peer
+- فیکس کردن چندین باگ از جمله ترافیک مصرفی و ریست شدن 
+- تغییر short link ار json به db و migration tools 
 
 ![R (2)](https://github.com/Azumi67/PrivateIP-Tunnel/assets/119934376/a064577c-9302-4f43-b3bf-3d4f84245a6f)
 نام پروژه : پنل وایرگارد
@@ -11,6 +10,7 @@
 ![check](https://github.com/Azumi67/PrivateIP-Tunnel/assets/119934376/13de8d36-dcfe-498b-9d99-440049c0cf14)
 **امکانات**
 - دارای dashboard با نمایش جزییات سرور و پنل
+- دارای subscription با امکان اضافه کردن location های node های مختلف برای user
 - مدیریت peers در پنل که شامل edit, reset time, reset usage, template & short links, more information میشود
 - ایجاد node و مدیریت ان در پنل اصلی که شامل تمام گزینه های پنل اصلی برای node میشود
 - اسکریپت جداگانه برای کانفیگ پنل اصلی و node
