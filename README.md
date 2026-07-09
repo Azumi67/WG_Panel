@@ -1,7 +1,8 @@
 - اضافه شدن subscription و امکانات مربوطه
 - تعییرات در قسمت backup و peer
 - فیکس کردن چندین باگ از جمله ترافیک مصرفی و ریست شدن 
-- تغییر short link ار json به db و migration tools 
+- تغییر short link ار json به db و migration tools
+- در صورت وجود مشکل در issues بیان کنید تا بررسی و fix شود
 
 ![R (2)](https://github.com/Azumi67/PrivateIP-Tunnel/assets/119934376/a064577c-9302-4f43-b3bf-3d4f84245a6f)
 نام پروژه : پنل وایرگارد
