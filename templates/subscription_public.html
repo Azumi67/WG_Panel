@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-layout="{{ sub_layout|default('aurora') }}" data-stat-style="{{ sub_display_mode|default('hybrid') }}" data-motion="{{ sub_animation|default('rich') }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>{{ portal_title|default(sub.name) }} — WireGuard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}">
+  <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Regular.woff2') }}" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-SemiBold.woff2') }}" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/subscription_public.css') }}">
+</head>
+<body>
+<canvas id="particles" aria-hidden="true"></canvas>
+<div class="wrap">
+  <main class="portal-shell">
+    <section class="portal-hero glass">
+      <div class="portal-id">
+        <div class="portal-icon"><i class="{{ portal_icon|default('fas fa-bolt') }}"></i></div>
+        <div class="portal-copy">
+          <div class="portal-label">{{ portal_label|default('Secure WireGuard portal') }}</div>
+          <h1 id="sub-name">{{ portal_title|default(sub.name) }}</h1>
+          <p>{{ portal_subtitle|default('Your access is ready. Install WireGuard, then scan QR or import a config.') }}</p>
+        </div>
+      </div>
+      <div class="portal-actions" aria-label="Public subscription actions">
+        <a class="icon-action primary" id="download-all" href="{{ url_for('subscription_public_config', token=sub.token) }}" download title="Download all configs" aria-label="Download all configs"><i class="fas fa-download"></i></a>
+        <button class="icon-action" id="copy-sub" title="Copy subscription config link" aria-label="Copy subscription config link"><i class="fas fa-link"></i></button>
+        <button class="icon-action" id="theme-toggle" title="Light / dark mode" aria-label="Light / dark mode"><i class="fas fa-moon"></i></button>
+        <span class="auto-chip" id="live-dot"><i class="fas fa-circle"></i><b>Auto</b></span>
+      </div>
+    </section>
+
+    <section class="quick-stats glass" aria-label="Client summary">
+      <article><span>Status</span><b id="hero-state">—</b><small id="hero-configs">—</small></article>
+      <article><span>Data</span><b id="hero-data">—</b><small id="data-pct-label">—</small></article>
+      <article><span>Time</span><b id="hero-time">—</b><small id="timer-mode">—</small></article>
+    </section>
+
+    <section class="stats-grid" aria-label="Usage and time">
+      <article class="stat-card glass data-stat">
+        <div class="stat-head"><span><i class="fas fa-database"></i> Data remaining</span></div>
+        <div class="stat-body">
+          <div class="ring" id="data-ring"><span id="data-ring-label">—</span></div>
+          <div class="stat-copy"><div class="big" id="data-human">—</div><div class="subline" id="data-sub">—</div><div class="meter" id="data-meter-wrap"><span id="data-meter" style="width:0%"></span></div></div>
+        </div>
+      </article>
+      <article class="stat-card glass time-stat">
+        <div class="stat-head"><span><i class="fas fa-clock"></i> Time remaining</span></div>
+        <div class="stat-body">
+          <div class="ring" id="time-ring"><span id="time-ring-label">—</span></div>
+          <div class="stat-copy"><div class="big" id="time-human">—</div><div class="subline" id="time-sub">—</div><div class="meter"><span id="time-meter" style="width:100%"></span></div></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="install-card glass">
+      <div><h2><i class="fas fa-mobile-screen-button"></i> Install WireGuard</h2><p>Open the official app, then scan QR or import one of the configs below.</p></div>
+      <div class="client-links">
+        <a href="https://www.wireguard.com/install/" target="_blank" rel="noopener" title="Desktop"><i class="fas fa-desktop"></i></a>
+        <a href="https://apps.apple.com/app/wireguard/id1441195209" target="_blank" rel="noopener" title="iPhone / iPad"><i class="fab fa-apple"></i></a>
+        <a href="https://play.google.com/store/apps/details?id=com.wireguard.android" target="_blank" rel="noopener" title="Android"><i class="fab fa-android"></i></a>
+        <a href="https://www.wireguard.com/install/" target="_blank" rel="noopener" title="All platforms"><i class="fas fa-arrow-up-right-from-square"></i></a>
+      </div>
+    </section>
+
+    <section class="configs glass">
+      <div class="section-head"><div><h2><i class="fas fa-location-dot"></i> Configs</h2><p>Choose the closest location. Icons stay compact on every screen.</p></div><span id="cfg-count">—</span></div>
+      <div id="loc-grid" class="loc-grid"></div>
+    </section>
+
+    <section class="support glass" id="support-box">
+      <h2><i class="fas fa-headset"></i> Support</h2>
+      <div class="support-links">
+        {% if support_telegram %}<a href="{{ support_telegram if support_telegram.startswith('http') else 'https://t.me/' + support_telegram.lstrip('@') }}" target="_blank" rel="noopener"><i class="fab fa-telegram"></i><span>Telegram</span></a>{% endif %}
+        {% if support_whatsapp %}<a href="{{ support_whatsapp if support_whatsapp.startswith('http') else 'https://wa.me/' + support_whatsapp|replace('+','')|replace(' ','') }}" target="_blank" rel="noopener"><i class="fab fa-whatsapp"></i><span>WhatsApp</span></a>{% endif %}
+        {% if support_phone %}<a href="tel:{{ support_phone }}"><i class="fas fa-phone"></i><span>Phone</span></a>{% endif %}
+        {% if support_email %}<a href="mailto:{{ support_email }}"><i class="fas fa-envelope"></i><span>Email</span></a>{% endif %}
+        {% if support_website %}<a href="{{ support_website }}" target="_blank" rel="noopener"><i class="fas fa-globe"></i><span>Website</span></a>{% endif %}
+        {% if support_instagram %}<a href="{{ support_instagram if support_instagram.startswith('http') else 'https://instagram.com/' + support_instagram.lstrip('@') }}" target="_blank" rel="noopener"><i class="fab fa-instagram"></i><span>Instagram</span></a>{% endif %}
+      </div>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast">Copied</div>
+<script>
+let DATA = {{ data|tojson }};
+const TOKEN = {{ sub.token|tojson }};
+const CONFIG_URL = {{ url_for('subscription_public_config', token=sub.token, _external=True)|tojson }};
+const API_URL = {{ url_for('subscription_public_api', token=sub.token, _external=True)|tojson }};
+const PUBLIC_SETTINGS = {display_mode: {{ sub_display_mode|default('hybrid')|tojson }}, animation: {{ sub_animation|default('rich')|tojson }}};
+</script>
+<script defer src="{{ url_for('static', filename='js/subscription_public.js') }}"></script>
+</body>
+</html>
