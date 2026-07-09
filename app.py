@@ -20,7 +20,20 @@ INSTANCE_DIR = os.path.join(BASE_DIR, "instance")
 DB_PATH      = os.path.join(INSTANCE_DIR, "wg_panel.db")
 load_dotenv(os.path.join(BASE_DIR, '.env'))
 from config import Config
-from models import db, InterfaceConfig, Peer, PeerEvent, Node, Admin2FA, AdminAccount
+import time as _geo_time
+from urllib.parse import urlparse as _geo_urlparse
+from models import (
+    db,
+    InterfaceConfig,
+    Peer,
+    PeerEvent,
+    Node,
+    Admin2FA,
+    AdminAccount,
+    Subscription,
+    SubscriptionPeer,
+    ShortLink,
+)
 from forms import PeerForm
 from auth import require_api_key, admin_required, require_api_key_or_login
 from sqlalchemy import or_, and_, text, inspect, func
@@ -29,6 +42,17 @@ from urllib.parse import urlparse, urljoin
 import secrets, hashlib, string, pyotp
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
+
+# ----------------------------------
+# Panel version / update checker
+# ----------------------------------
+PANEL_VERSION = "1.0.0"
+PANEL_REPO = "Azumi67/WG_Panel"
+PANEL_UPDATE_TTL = 1800  
+_PANEL_UPDATE_CACHE = {
+    "ts": 0,
+    "data": None,
+}
 
 def hash_recovery(code: str) -> str:
     return "sha256$" + hashlib.sha256(code.encode("utf-8")).hexdigest()
@@ -91,6 +115,88 @@ def _admin_columns():
         with db.engine.begin() as conn:
             for name, typ in to_add:
                 conn.execute(text(f'ALTER TABLE admin_account ADD COLUMN {name} {typ}'))
+
+def _migrate_shortlinks_json_to_db():
+    """
+    Move old instance/short_links.json into the short_link DB table.
+
+    """
+    legacy_file = os.path.join(app.instance_path, "short_links.json")
+
+    if not os.path.isfile(legacy_file):
+        return
+
+    try:
+        with open(legacy_file, "r", encoding="utf-8") as f:
+            old = json.load(f)
+    except Exception:
+        app.logger.exception("Could not read legacy short_links.json")
+        return
+
+    if not isinstance(old, dict):
+        return
+
+    imported = 0
+    skipped = 0
+
+    for token, rec in old.items():
+        token = (token or "").strip()
+
+        if not token or not isinstance(rec, dict):
+            skipped += 1
+            continue
+
+        try:
+            peer_id = int(rec.get("peer_id") or 0)
+        except Exception:
+            peer_id = 0
+
+        if peer_id <= 0:
+            skipped += 1
+            continue
+
+        peer = db.session.get(Peer, peer_id)
+        if not peer:
+            skipped += 1
+            continue
+
+        existing_token = ShortLink.query.filter_by(token=token).first()
+        if existing_token:
+            skipped += 1
+            continue
+
+        existing_peer = ShortLink.query.filter_by(peer_id=peer_id).first()
+        if existing_peer:
+            skipped += 1
+            continue
+
+        db.session.add(ShortLink(token=token, peer_id=peer_id))
+        imported += 1
+
+    if imported:
+        db.session.commit()
+
+    try:
+        migrated_path = legacy_file + ".migrated"
+        if not os.path.exists(migrated_path):
+            os.replace(legacy_file, migrated_path)
+    except Exception:
+        app.logger.warning("Could not rename migrated short_links.json", exc_info=True)
+
+    app.logger.info(
+        "Shortlink migration finished: imported=%s skipped=%s",
+        imported,
+        skipped,
+    )
+
+
+def _shortlink_schema():
+    """
+    short_link table & migrate old JSON links
+
+    """
+    db.create_all()
+    _migrate_shortlinks_json_to_db()
 
 app.config.from_object(Config)
 os.makedirs(app.instance_path, exist_ok=True)
@@ -501,8 +607,7 @@ def _validate_node_base_url(base_url: str) -> tuple[bool, str]:
     """Validate a node base_url to reduce SSRF risk.
 
     Rules:
-      - must be a valid URL
-      - HTTPS only
+      - must be a valid http:// or https:// URL
       - must not resolve to loopback/private/link-local/reserved/multicast/unspecified
     """
     base_url = (base_url or '').strip().rstrip('/')
@@ -511,18 +616,21 @@ def _validate_node_base_url(base_url: str) -> tuple[bool, str]:
 
     try:
         p = urlparse(base_url)
-        if (p.scheme or '').lower() != 'https':
-            return False, 'nodes must use https'
+        scheme = (p.scheme or '').lower()
+
+        if scheme not in ('http', 'https'):
+            return False, 'nodes must use http or https'
 
         host = (p.hostname or '').strip()
         if not host:
             return False, 'invalid host'
+
         if host in ('localhost', '127.0.0.1', '::1'):
             return False, 'loopback hosts are not allowed'
 
         infos = []
         try:
-            infos = socket.getaddrinfo(host, p.port or 443, type=socket.SOCK_STREAM)
+            infos = socket.getaddrinfo(host, p.port or (443 if scheme == 'https' else 80), type=socket.SOCK_STREAM)
         except Exception:
             infos = []
 
@@ -532,9 +640,10 @@ def _validate_node_base_url(base_url: str) -> tuple[bool, str]:
                 ip = ipaddress.ip_address(addr)
             except Exception:
                 continue
+
             if (
-                ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_multicast or
-                ip.is_reserved or ip.is_unspecified
+                ip.is_loopback or ip.is_private or ip.is_link_local or
+                ip.is_multicast or ip.is_reserved or ip.is_unspecified
             ):
                 return False, f'host resolves to non-public IP ({ip})'
 
@@ -577,18 +686,32 @@ def _probably_decrypt(s: str) -> str:
             return s 
     return s
 
-def _read_api_key(n):
-    k = (n.api_key or '').strip()
-    if k.startswith('enc$') and _FERNET:
-        try:
-            return _FERNET.decrypt(k[4:].encode()).decode()
-        except Exception:
-            current_app.logger.warning("Failed to decrypt node api_key (id=%s)", n.id)
-            return ''
-    return k
-
 def _read_api_key(node) -> str:
-    return _probably_decrypt(node.api_key or '')
+    raw = (getattr(node, 'api_key', None) or '').strip()
+    if not raw:
+        return ''
+
+    # Backward compatibility for older stored values like enc$...
+    if raw.startswith('enc$'):
+        token = raw[4:].strip()
+        for f in (_fernet, fernet):
+            if not f:
+                continue
+            try:
+                return f.decrypt(token.encode()).decode()
+            except Exception:
+                pass
+
+        try:
+            current_app.logger.warning(
+                "Failed to decrypt legacy node api_key (id=%s)",
+                getattr(node, 'id', '?')
+            )
+        except Exception:
+            pass
+        return ''
+
+    return _probably_decrypt(raw)
 
 #-------------------------------------------------
 # Time helpers (no timezones; epoch)
@@ -965,6 +1088,115 @@ def app_status():
         }
     })
 
+def _version_tuple(v: str):
+    """
+    Converts versions like:
+    1.0.0
+    v1.0
+    V1.2.3
+    into comparable tuples.
+    """
+    import re
+
+    s = str(v or "").strip()
+    s = s.lstrip("vV")
+    nums = re.findall(r"\d+", s)
+
+    if not nums:
+        return (0, 0, 0)
+
+    parts = [int(x) for x in nums[:3]]
+    while len(parts) < 3:
+        parts.append(0)
+
+    return tuple(parts)
+
+
+def _github_latest_panel_version():
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "WG-Panel"
+    }
+
+    try:
+        r = requests.get(
+            f"https://api.github.com/repos/{PANEL_REPO}/releases/latest",
+            headers=headers,
+            timeout=6,
+        )
+
+        if r.ok:
+            j = r.json() or {}
+            tag = (j.get("tag_name") or "").strip()
+            if tag:
+                return {
+                    "version": tag.lstrip("vV"),
+                    "url": j.get("html_url") or f"https://github.com/{PANEL_REPO}/releases",
+                    "source": "release",
+                }
+    except Exception:
+        pass
+
+    try:
+        r = requests.get(
+            f"https://api.github.com/repos/{PANEL_REPO}/tags",
+            headers=headers,
+            timeout=6,
+        )
+
+        if r.ok:
+            tags = r.json() or []
+            if tags:
+                tag = (tags[0].get("name") or "").strip()
+                if tag:
+                    return {
+                        "version": tag.lstrip("vV"),
+                        "url": f"https://github.com/{PANEL_REPO}/releases",
+                        "source": "tag",
+                    }
+    except Exception:
+        pass
+
+    return None
+
+
+@app.get("/api/panel/version")
+@login_required
+def api_panel_version():
+    now = int(time.time())
+
+    if (
+        _PANEL_UPDATE_CACHE.get("data")
+        and now - int(_PANEL_UPDATE_CACHE.get("ts") or 0) < PANEL_UPDATE_TTL
+    ):
+        return jsonify(_PANEL_UPDATE_CACHE["data"])
+
+    latest = _github_latest_panel_version()
+
+    current_version = PANEL_VERSION
+    latest_version = latest.get("version") if latest else None
+
+    update_available = False
+    if latest_version:
+        update_available = _version_tuple(latest_version) > _version_tuple(current_version)
+
+    payload = {
+        "ok": True,
+        "current": current_version,
+        "repo": PANEL_REPO,
+        "latest": latest_version,
+        "latest_url": latest.get("url") if latest else f"https://github.com/{PANEL_REPO}",
+        "source": latest.get("source") if latest else None,
+        "update_available": bool(update_available),
+        "checked_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+
+    _PANEL_UPDATE_CACHE["ts"] = now
+    _PANEL_UPDATE_CACHE["data"] = payload
+
+    return jsonify(payload)
+
 @app.route('/api/app_logs', methods=['GET','DELETE'])
 @login_required
 def app_logs():
@@ -1164,13 +1396,6 @@ def admin_logs():
     return jsonify(ok=True), 201
 
 
-def _load_log_settings():
-    try:
-        with open(LOGS_SETTINGS_FILE, 'r') as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
 def _will_persist() -> bool:
     s = _load_log_settings() or {}
     return bool(s.get('enabled', True) and s.get('persist', True) and not s.get('mute_save', False))
@@ -1219,17 +1444,6 @@ def _applymute_log():
                 h.setLevel(target_level)
     except Exception:
         pass
-
-
-def _read_tail(path: str, max_bytes=10000) -> str:
-    try:
-        with open(path, 'rb') as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(max(0, size - max_bytes), os.SEEK_SET)
-            return f.read().decode('utf-8', errors='replace')
-    except Exception:
-        return ''
 
 def _write_json(path: str, obj: dict):
     os.makedirs(app.instance_path, exist_ok=True)
@@ -1533,6 +1747,20 @@ def _jsonl_bundle(z: zipfile.ZipFile):
         if p.is_file() and p.suffix.lower() in keep_suffix:
             z.write(p, arcname=f'instance/{p.name}')
 
+def _env_bundle(z: zipfile.ZipFile):
+    """
+    Include the panel .env in full backups for migration.
+
+    Important: this contains FERNET_KEY/API_KEY/secret values.
+    Keep full backup ZIPs private.
+    """
+    try:
+        env_path = Path(BASE_DIR) / ".env"
+        if env_path.is_file():
+            z.write(env_path, arcname="env/.env")
+    except Exception as e:
+        current_app.logger.warning("ENV bundle skipped: %s", e)
+
 def _backup_prefs():
     return {"include_wg": True, "send_to_telegram": False}
 
@@ -1549,157 +1777,401 @@ def _backup_prefs_save(p):
     return cur
 
 def _backup_restore_impl():
-
-    import tempfile, zipfile
+    import tempfile
+    import zipfile
     from pathlib import Path
     from datetime import datetime
 
     f = request.files.get('file')
-    if not f or not (f.filename or "").lower().endswith('.zip'):
-        return jsonify(ok=False, error='no_file', message='Please upload a .zip backup file.'), 400
 
-    kind_req = (request.form.get('kind') or 'auto').lower()
+    if not f or not (f.filename or "").lower().endswith('.zip'):
+        return jsonify(
+            ok=False,
+            error='no_file',
+            message='Please upload a .zip backup file.'
+        ), 400
+
+    kind_req = (request.form.get('kind') or 'auto').lower().strip()
     restore_wg = (request.form.get('restore_wg') or '0') == '1'
+    server_settings_mode = (request.form.get('server_settings_mode') or 'keep').lower().strip()
+    if server_settings_mode not in ('keep', 'saved', 'custom'):
+        server_settings_mode = 'keep'
+
+    def _form_int(name, default=None):
+        try:
+            v = request.form.get(name)
+            if v in (None, ''):
+                return default
+            i = int(v)
+            return i if 1 <= i <= 65535 else default
+        except Exception:
+            return default
+
+    custom_port = _form_int('custom_port')
+    custom_http_port = _form_int('custom_http_port')
+    custom_https_port = _form_int('custom_https_port')
+    custom_bind = (request.form.get('custom_bind') or '').strip()
+    custom_domain = (request.form.get('custom_domain') or '').strip()
+    custom_scheme = (request.form.get('custom_scheme') or 'http').lower().strip()
+    custom_wg_path = (request.form.get('custom_wg_path') or '').strip()
+
+    if custom_scheme not in ('http', 'https'):
+        custom_scheme = 'http'
 
     tmp = tempfile.NamedTemporaryFile(delete=False)
-    f.save(tmp)
-    tmp.flush()
-    tmp.seek(0)
 
     try:
-        z = zipfile.ZipFile(tmp.name, 'r')
-    except Exception:
-        return jsonify(ok=False, error='invalid_zip', message='File is not a valid ZIP backup.'), 400
+        f.save(tmp)
+        tmp.flush()
+        tmp.close()
 
-    names = z.namelist()
-    has_db   = any(n.startswith('db/') for n in names)
-    has_inst = any(n.startswith('instance/') for n in names)
-    has_wg   = any(n.startswith('wg/') for n in names)
-
-    kind = kind_req
-    if kind == 'auto':
-        if has_db and has_inst:
-            kind = 'full'
-        elif has_db:
-            kind = 'db'
-        elif has_inst:
-            kind = 'settings'
-        else:
+        try:
+            z = zipfile.ZipFile(tmp.name, 'r')
+        except Exception:
             return jsonify(
                 ok=False,
-                error='unknown_layout',
-                message='Backup ZIP does not look like a panel backup.'
+                error='invalid_zip',
+                message='File is not a valid ZIP backup.'
             ), 400
 
-    inst = Path(app.instance_path)
-    db_dir = inst / "restore_tmp_db"
-    inst_dir = inst
-    wg_dir = Path("/etc/wireguard")
-
-    restored = {"db": False, "settings": False, "wg": False}
-    warnings = []
-
-    restore_ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-    snapshot_root = inst / "restore_snapshots" / restore_ts
-    backed_up = set()  
-
-    def _backup_existing(dest: Path, kind_name: str, rel_tail: str):
-
         try:
-            if not dest.exists() or not dest.is_file():
-                return
+            names = z.namelist()
 
-            key = str(dest.resolve())
-            if key in backed_up:
-                return
+            has_db = any(
+                n.startswith('db/') and not n.endswith('/')
+                for n in names
+            )
 
-            snap_path = snapshot_root / kind_name / rel_tail
-            snap_path.parent.mkdir(parents=True, exist_ok=True)
+            has_inst = any(
+                n.startswith('instance/') and not n.endswith('/')
+                for n in names
+            )
 
-            if snap_path.exists():
-                i = 2
-                while True:
-                    alt = snap_path.with_name(snap_path.name + f".{i}")
-                    if not alt.exists():
-                        snap_path = alt
-                        break
-                    i += 1
+            has_wg = any(
+                n.startswith('wg/') and n.endswith('.conf')
+                for n in names
+            )
 
-            dest.rename(snap_path)
-            backed_up.add(key)
-        except Exception:
-            pass
+            has_node_wg = any(
+                n.startswith('nodes/') and '/wg/' in n and n.endswith('.conf')
+                for n in names
+            )
 
-    def _extract(member: str, dest_root: Path, kind_name: str):
-        if member.endswith('/'):
-            return
+            kind = kind_req
 
-        _, _, tail = member.partition('/')
-        tail = tail.strip().lstrip('/')
+            if kind == 'auto':
+                if has_db and has_inst:
+                    kind = 'full'
+                elif has_db:
+                    kind = 'db'
+                elif has_inst:
+                    kind = 'settings'
+                else:
+                    return jsonify(
+                        ok=False,
+                        error='unknown_layout',
+                        message='Backup ZIP does not look like a panel backup.'
+                    ), 400
 
-        if '.' in Path(tail).parts:
-            return
+            if kind not in ('db', 'settings', 'full'):
+                return jsonify(
+                    ok=False,
+                    error='invalid_restore_kind',
+                    message='Restore kind must be auto, db, settings, or full.'
+                ), 400
 
-        dest_root.mkdir(parents=True, exist_ok=True)
-        dest = dest_root / tail
+            inst = Path(app.instance_path)
+            db_dir = inst / "restore_tmp_db"
+            inst_dir = inst
+            if server_settings_mode == 'custom' and custom_wg_path:
+                wg_dir = Path(custom_wg_path)
+            else:
+                wg_dir = Path(app.config.get('WG_CONF_PATH') or '/etc/wireguard/')
 
-        _backup_existing(dest, kind_name=kind_name, rel_tail=tail)
+            restored = {
+                "db": False,
+                "settings": False,
+                "wg": False,
+                "node_wg": False,
+            }
 
-        with z.open(member) as src, open(dest, 'wb') as out:
-            out.write(src.read())
+            warnings = []
+            node_restore_results = []
 
-    try:
-        if kind in ("db", "full"):
-            for n in names:
-                if n.startswith("db/") and not n.endswith("/"):
-                    _extract(n, db_dir, kind_name="db")
+            restore_ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+            snapshot_root = inst / "restore_snapshots" / restore_ts
+            backed_up = set()
 
-            db_files = list(db_dir.glob("*.db"))
-            if db_files:
-                src = db_files[0]
+            def _backup_existing(dest: Path, kind_name: str, rel_tail: str):
                 try:
-                    db_path = Path(DB_PATH)
-                    db_path.parent.mkdir(parents=True, exist_ok=True)
+                    if not dest.exists() or not dest.is_file():
+                        return
 
-                    _backup_existing(db_path, kind_name="db", rel_tail=db_path.name)
+                    key = str(dest.resolve())
+                    if key in backed_up:
+                        return
 
-                    src.replace(db_path)
-                    restored["db"] = True
+                    snap_path = snapshot_root / kind_name / rel_tail
+                    snap_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    if snap_path.exists():
+                        i = 2
+                        while True:
+                            alt = snap_path.with_name(snap_path.name + f".{i}")
+                            if not alt.exists():
+                                snap_path = alt
+                                break
+                            i += 1
+
+                    dest.rename(snap_path)
+                    backed_up.add(key)
+
                 except Exception as e:
-                    return jsonify(ok=False, error="db_restore_failed", message=str(e)), 500
+                    warnings.append(f"snapshot_failed:{dest}:{e}")
 
-        if kind in ("settings", "full"):
-            for n in names:
-                if n.startswith("instance/") and not n.endswith("/"):
-                    _extract(n, inst_dir, kind_name="instance")
-            restored["settings"] = True
+            def _safe_extract_tail(member: str) -> str:
+                _, _, tail = member.partition('/')
+                tail = tail.strip().lstrip('/')
 
-        if restore_wg and has_wg and kind in ("settings", "full"):
-            for n in names:
-                if n.startswith("wg/") and n.endswith(".conf"):
-                    _extract(n, wg_dir, kind_name="wg")
-            restored["wg"] = True
-        elif has_wg and not restore_wg:
-            warnings.append("wg_present_but_not_restored")
+                parts = Path(tail).parts
+
+                if not tail:
+                    raise ValueError('empty member path')
+
+                if any(part in ('', '.', '..') for part in parts):
+                    raise ValueError('unsafe member path')
+
+                return tail
+
+            def _extract(member: str, dest_root: Path, kind_name: str):
+                if member.endswith('/'):
+                    return
+
+                tail = _safe_extract_tail(member)
+
+                dest_root.mkdir(parents=True, exist_ok=True)
+                dest = dest_root / tail
+
+                # Final safety: ensure the resolved output stays inside dest_root.
+                root_resolved = dest_root.resolve()
+                dest_resolved = dest.resolve() if dest.exists() else dest.parent.resolve() / dest.name
+
+                if not str(dest_resolved).startswith(str(root_resolved)):
+                    raise ValueError(f'unsafe restore path: {member}')
+
+                _backup_existing(dest, kind_name=kind_name, rel_tail=tail)
+
+                dest.parent.mkdir(parents=True, exist_ok=True)
+
+                with z.open(member) as src, open(dest, 'wb') as out:
+                    out.write(src.read())
+
+                try:
+                    if dest.suffix == '.conf':
+                        os.chmod(dest, 0o600)
+                except Exception:
+                    pass
+
+            # -----------------------------
+            # Restore database
+            # -----------------------------
+            if kind in ("db", "full"):
+                for n in names:
+                    if n.startswith("db/") and not n.endswith("/"):
+                        _extract(n, db_dir, kind_name="db")
+
+                db_files = list(db_dir.glob("*.db"))
+
+                if db_files:
+                    src = db_files[0]
+
+                    try:
+                        db_path = Path(DB_PATH)
+                        db_path.parent.mkdir(parents=True, exist_ok=True)
+
+                        _backup_existing(db_path, kind_name="db", rel_tail=db_path.name)
+
+                        src.replace(db_path)
+                        restored["db"] = True
+
+                    except Exception as e:
+                        return jsonify(
+                            ok=False,
+                            error="db_restore_failed",
+                            message=str(e)
+                        ), 500
+                else:
+                    warnings.append("db_requested_but_no_db_file_found")
+
+            # -----------------------------
+            # Restore instance settings/json
+            # -----------------------------
+            if kind in ("settings", "full"):
+                if has_inst:
+
+                    server_local_files = {
+                    "runtime.json",
+                    "panel_settings.json",
+                    "backup_schedule.json",
+                    "backup_settings.json",
+                    "backup_last.json",
+                    "auto_backup.json",
+                }
+
+                    skipped_server_files = []
+                    restored_server_files = []
+
+                    for n in names:
+                        if not n.startswith("instance/") or n.endswith("/"):
+                            continue
+
+                        fname = os.path.basename(n)
+
+                        if fname in server_local_files:
+                            if server_settings_mode == "saved":
+                                _extract(n, inst_dir, kind_name="instance")
+                                restored_server_files.append(fname)
+                            else:
+                                skipped_server_files.append(fname)
+                            continue
+
+                        _extract(n, inst_dir, kind_name="instance")
+
+                    restored["settings"] = True
+
+                    if skipped_server_files:
+                        warnings.append(
+                        "server_local_settings_protected: " +
+                        ", ".join(sorted(set(skipped_server_files)))
+                    )
+
+                    if restored_server_files:
+                        warnings.append(
+                        "server_local_settings_restored: " +
+                        ", ".join(sorted(set(restored_server_files)))
+                    )
+
+                    if server_settings_mode == "custom":
+                        runtime_path = Path(app.instance_path) / "runtime.json"
+                        panel_path = Path(app.instance_path) / "panel_settings.json"
+
+                        port = custom_port or custom_http_port or custom_https_port
+                        bind_host = custom_bind or "0.0.0.0"
+
+                        if ":" in bind_host:
+                            host_part, _, port_part = bind_host.rpartition(":")
+                            bind_host = host_part or "0.0.0.0"
+                            try:
+                                port = int(port_part)
+                            except Exception:
+                                pass
+
+                        if not port:
+                            port = 443 if custom_scheme == "https" else 8000
+
+                        runtime_payload = {
+                        "bind": f"{bind_host}:{int(port)}",
+                        "port": int(port),
+                        "workers": 0,
+                        "threads": 4,
+                        "timeout": 60,
+                        "graceful_timeout": 30,
+                        "loglevel": "info",
+                    }
+
+                        panel_payload = {
+                        "tls_enabled": custom_scheme == "https",
+                        "domain": custom_domain,
+                        "force_https_redirect": False,
+                        "hsts": False,
+                        "http_port": custom_http_port or (int(port) if custom_scheme == "http" else None),
+                        "https_port": custom_https_port or (int(port) if custom_scheme == "https" else 443),
+                        "tls_cert_path": "",
+                        "tls_key_path": "",
+                    }
+
+                        runtime_path.write_text(json.dumps(runtime_payload, indent=2), encoding="utf-8")
+                        panel_path.write_text(json.dumps(panel_payload, indent=2), encoding="utf-8")
+
+                        warnings.append(
+                        "custom_server_settings_written: runtime.json, panel_settings.json"
+                        )
+                else:
+                    warnings.append("settings_requested_but_no_instance_files_found")
+
+            # -----------------------------
+            # Restore local WG configs
+            # -----------------------------
+            if restore_wg and has_wg and kind in ("settings", "full"):
+                for n in names:
+                    if n.startswith("wg/") and n.endswith(".conf"):
+                        _extract(n, wg_dir, kind_name="wg")
+
+                restored["wg"] = True
+
+            elif has_wg and not restore_wg:
+                warnings.append("wg_present_but_not_restored")
+
+            # -----------------------------
+            # Restore remote node WG configs
+            # -----------------------------
+            if restore_wg and has_node_wg and kind in ("settings", "full"):
+                try:
+                    node_restore_results = _restore_node_wg_zip(z, names)
+                    restored["node_wg"] = any(
+                        bool(x.get("ok"))
+                        for x in node_restore_results
+                    )
+
+                    if not restored["node_wg"]:
+                        warnings.append("node_wg_present_but_no_node_restore_success")
+
+                except Exception as e:
+                    warnings.append(f"node_wg_restore_failed:{e}")
+
+            elif has_node_wg and not restore_wg:
+                warnings.append("node_wg_present_but_not_restored")
+
+            try:
+                _norm_adminlog({
+                    "action": "backup_restore",
+                    "details": (
+                        f"kind={kind}; restore_wg={int(restore_wg)}; "
+                        f"db={int(restored['db'])}; settings={int(restored['settings'])}; "
+                        f"wg={int(restored['wg'])}; node_wg={int(restored['node_wg'])}"
+                    ),
+                    "channel": "api" if request.headers.get('Authorization') or request.headers.get('X-API-KEY') else "web",
+                })
+            except Exception:
+                pass
+
+            return jsonify(
+                ok=True,
+                kind=kind,
+                server_settings_mode=server_settings_mode,
+                detected={
+                    "db": bool(has_db),
+                    "settings": bool(has_inst),
+                    "wg": bool(has_wg),
+                    "node_wg": bool(has_node_wg),
+                },
+                restored=restored,
+                warnings=warnings,
+                node_restore_results=node_restore_results,
+                message="Restore completed. Restart may be required."
+            )
+
+        finally:
+            try:
+                z.close()
+            except Exception:
+                pass
 
     finally:
-        try:
-            z.close()
-        except Exception:
-            pass
         try:
             Path(tmp.name).unlink(missing_ok=True)
         except Exception:
             pass
-
-    return jsonify(
-        ok=True,
-        kind=kind,
-        restored=restored,
-        warnings=warnings,
-        message="Restore completed. Restart may be required."
-    )
-
 
 @app.post('/api/backup/restore')
 @login_required
@@ -1716,57 +2188,263 @@ def backup_restore_api():
 def backup_inspect():
     """
     Inspect an uploaded backup ZIP without restoring anything.
-    Returns what it contains (db/settings/WG)
+
+    Detects:
+      - db/
+      - instance/
+      - wg/                            local WireGuard configs
+      - env/.env                       panel .env
+      - nodes/<node_id>/wg/*.conf      remote node WireGuard configs
+      - nodes/<node_id>/env/.env       remote node .env files
+      - meta/manifest.json
+      - meta/node_wg_backup.json
     """
-    import tempfile, zipfile
+    import tempfile
+    import zipfile
+    from pathlib import Path
 
     f = request.files.get('file')
-    if not f or not f.filename.lower().endswith('.zip'):
-        return jsonify(ok=False, error='no_file',
-                       message='Please upload a .zip backup file.'), 400
+
+    if not f or not (f.filename or '').lower().endswith('.zip'):
+        return jsonify(
+            ok=False,
+            error='no_file',
+            message='Please upload a .zip backup file.'
+        ), 400
 
     tmp = tempfile.NamedTemporaryFile(delete=False)
-    f.save(tmp)
-    tmp.flush()
-    tmp.seek(0)
 
     try:
-        z = zipfile.ZipFile(tmp, 'r')
-    except Exception:
-        return jsonify(ok=False, error='invalid_zip',
-                       message='File is not a valid ZIP backup.'), 400
+        f.save(tmp)
+        tmp.flush()
+        tmp.close()
 
-    names = z.namelist()
-    has_db   = any(n.startswith('db/') for n in names)
-    has_inst = any(n.startswith('instance/') for n in names)
-    has_wg   = any(n.startswith('wg/') for n in names)
-
-    kind = 'unknown'
-    if has_db and has_inst:
-        kind = 'full'
-    elif has_db:
-        kind = 'db'
-    elif has_inst:
-        kind = 'settings'
-
-    def _read_text(member):
         try:
-            with z.open(member) as fh:
-                return fh.read().decode('utf-8', 'replace').strip()
+            z = zipfile.ZipFile(tmp.name, 'r')
         except Exception:
-            return None
+            return jsonify(
+                ok=False,
+                error='invalid_zip',
+                message='File is not a valid ZIP backup.'
+            ), 400
 
-    created = _read_text('meta/created.txt')
-    host    = _read_text('meta/host.txt')
+        try:
+            names = z.namelist()
+
+            has_db = any(
+                n.startswith('db/') and not n.endswith('/')
+                for n in names
+            )
+
+            has_inst = any(
+                n.startswith('instance/') and not n.endswith('/')
+                for n in names
+            )
+
+            has_wg = any(
+                n.startswith('wg/') and n.endswith('.conf')
+                for n in names
+            )
+
+            has_node_wg = any(
+                n.startswith('nodes/') and '/wg/' in n and n.endswith('.conf')
+                for n in names
+            )
+
+            has_env = any(
+                n == 'env/.env'
+                for n in names
+            )
+
+            has_node_env = any(
+                n.startswith('nodes/') and n.endswith('/env/.env')
+                for n in names
+            )
+
+            local_wg_files = sorted([
+                os.path.basename(n)
+                for n in names
+                if n.startswith('wg/') and n.endswith('.conf')
+            ])
+
+            node_wg_files = []
+            node_wg_nodes = {}
+            node_env_files = []
+            node_env_nodes = {}
+
+            for n in names:
+                m = re.match(r'^nodes/(\d+)/wg/([^/]+\.conf)$', n)
+                if m:
+                    node_id = int(m.group(1))
+                    filename = os.path.basename(m.group(2))
+
+                    node_wg_files.append({
+                        'node_id': node_id,
+                        'file': filename,
+                        'path': n,
+                    })
+
+                    node_wg_nodes.setdefault(str(node_id), 0)
+                    node_wg_nodes[str(node_id)] += 1
+                    continue
+
+                m_env = re.match(r'^nodes/(\d+)/env/\.env$', n)
+                if m_env:
+                    node_id = int(m_env.group(1))
+
+                    node_env_files.append({
+                        'node_id': node_id,
+                        'file': '.env',
+                        'path': n,
+                    })
+
+                    node_env_nodes.setdefault(str(node_id), 0)
+                    node_env_nodes[str(node_id)] += 1
+                    continue
+
+            def _read_text(member):
+                try:
+                    with z.open(member) as fh:
+                        return fh.read().decode('utf-8', 'replace').strip()
+                except Exception:
+                    return None
+
+            def _read_json(member):
+                txt = _read_text(member)
+                if not txt:
+                    return None
+                try:
+                    return json.loads(txt)
+                except Exception:
+                    return None
+
+            created = _read_text('meta/created.txt')
+            host = _read_text('meta/host.txt')
+            manifest = _read_json('meta/manifest.json')
+            node_wg_backup = _read_json('meta/node_wg_backup.json')
+
+            runtime_settings = _read_json('instance/runtime.json') or {}
+            panel_settings = _read_json('instance/panel_settings.json') or {}
+            app_meta = _read_json('meta/app.json') or {}
+
+            kind = 'unknown'
+
+            if has_db and has_inst:
+                kind = 'full'
+            elif has_db:
+                kind = 'db'
+            elif has_inst:
+                kind = 'settings'
+
+            contains = {
+                'database': bool(has_db),
+                'settings': bool(has_inst),
+                'local_wireguard_conf': bool(has_wg),
+                'remote_node_wireguard_conf': bool(has_node_wg),
+                'env_file': bool(has_env),
+                'remote_node_env': bool(has_node_env),
+                'short_links': any(n == 'instance/short_links.json' for n in names),
+                'manifest': bool(manifest),
+            }
+
+            counts = {
+                'local_wg_files': len(local_wg_files),
+                'node_wg_files': len(node_wg_files),
+                'node_wg_nodes': len(node_wg_nodes),
+                'node_env_files': len(node_env_files),
+                'node_env_nodes': len(node_env_nodes),
+                'instance_files': len([
+                    n for n in names
+                    if n.startswith('instance/') and not n.endswith('/')
+                ]),
+                'db_files': len([
+                    n for n in names
+                    if n.startswith('db/') and not n.endswith('/')
+                ]),
+            }
+
+            return jsonify(
+                ok=True,
+                kind=kind,
+
+                has_db=has_db,
+                has_settings=has_inst,
+                has_wg=has_wg,
+                has_node_wg=has_node_wg,
+                has_env=has_env,
+                has_node_env=has_node_env,
+
+                contains=contains,
+                counts=counts,
+
+                local_wg_files=local_wg_files,
+                node_wg_files=node_wg_files,
+                node_wg_nodes=node_wg_nodes,
+                node_env_files=node_env_files,
+                node_env_nodes=node_env_nodes,
+
+                created=created,
+                host=host,
+
+                manifest=manifest,
+                node_wg_backup=node_wg_backup,
+
+                runtime=runtime_settings,
+                panel_settings=panel_settings,
+                app_meta=app_meta,
+            )
+
+        finally:
+            try:
+                z.close()
+            except Exception:
+                pass
+
+    finally:
+        try:
+            Path(tmp.name).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+@app.get('/api/backup/node-agent/install-command')
+@login_required
+@admin_required
+def backup_node_agent_install_command():
+    """
+    restore/migration.
+
+    This does not SSH into the node.
+    It gives the admin the official WG_Panel node installer command.
+    """
+    node_id = request.args.get('node_id', type=int)
+    node = db.session.get(Node, node_id) if node_id else None
+
+    api_key = ''
+    base_url = ''
+
+    if node:
+        try:
+            api_key = _read_api_key(node)
+        except Exception:
+            api_key = ''
+        base_url = getattr(node, 'base_url', '') or ''
+
+    command = """sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main/agent/node.sh)"'"""
 
     return jsonify(
         ok=True,
-        kind=kind,
-        has_db=has_db,
-        has_settings=has_inst,
-        has_wg=has_wg,
-        created=created,
-        host=host,
+        node_id=node_id,
+        node_name=getattr(node, 'name', None) if node else None,
+        base_url=base_url,
+        has_api_key=bool(api_key),
+        command=command,
+        next_command="node",
+        notes=[
+            "Run the install command on the node server as root.",
+            "After installation, open the node menu by running: node",
+            "Use the same API key and port as the node record in this panel.",
+            "Return to the panel, test the node, then restore node WireGuard configs."
+        ],
     )
 
 @app.get('/api/backups/auto')
@@ -1958,6 +2636,218 @@ def backup_settings():
     resp.headers['X-Backup-Timestamp'] = ts
     return resp
 
+# ------------------------------------------------------------
+# Remote node WireGuard .conf backup / restore helpers
+# ------------------------------------------------------------
+def _node_backup_wg_zip(node: Node, timeout: int = 25) -> bytes:
+    url = f"{node.base_url.rstrip('/')}/api/backup/wg"
+
+    r = requests.get(
+        url,
+        headers={'Authorization': f'Bearer {_read_api_key(node)}'},
+        timeout=timeout,
+    )
+
+    r.raise_for_status()
+    return r.content or b''
+
+
+def _bundle_node_wg_backups(z: zipfile.ZipFile) -> list[dict]:
+    """
+    Pull each enabled node_agent backup and store it inside the panel full backup.
+
+    The node_agent backup can contain:
+      wg/<iface>.conf
+      env/.env
+      meta/node.json
+
+    Panel full backup layout:
+      nodes/<node_id>/meta.json
+      nodes/<node_id>/wg/<iface>.conf
+      nodes/<node_id>/env/.env
+    """
+    results = []
+
+    nodes = Node.query.order_by(Node.id.asc()).all()
+
+    for node in nodes:
+        rec = {
+            "node_id": node.id,
+            "name": node.name,
+            "base_url": node.base_url,
+            "ok": False,
+            "files": [],
+            "env_file": False,
+            "error": "",
+        }
+
+        try:
+            z.writestr(
+                f"nodes/{node.id}/meta.json",
+                json.dumps(
+                    {
+                        "node_id": node.id,
+                        "name": node.name,
+                        "base_url": node.base_url,
+                        "enabled": bool(node.enabled),
+                        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                    },
+                    indent=2,
+                ),
+            )
+
+            if not node.enabled:
+                rec["error"] = "node_disabled"
+                results.append(rec)
+                continue
+
+            raw = _node_backup_wg_zip(node)
+
+            if not raw:
+                rec["error"] = "empty_node_backup"
+                results.append(rec)
+                continue
+
+            try:
+                with zipfile.ZipFile(BytesIO(raw), "r") as nz:
+                    members = nz.namelist()
+
+                    for member in members:
+                        # Node WireGuard configs:
+                        # node_agent layout: wg/<iface>.conf
+                        # panel layout:     nodes/<node_id>/wg/<iface>.conf
+                        if member.startswith("wg/") and member.endswith(".conf"):
+                            filename = os.path.basename(member)
+                            if not filename:
+                                continue
+
+                            data = nz.read(member)
+                            z.writestr(f"nodes/{node.id}/wg/{filename}", data)
+                            rec["files"].append(filename)
+                            continue
+
+
+                        if member == "env/.env":
+                            try:
+                                data = nz.read(member)
+                                if data:
+                                    z.writestr(f"nodes/{node.id}/env/.env", data)
+                                    rec["env_file"] = True
+                            except Exception as e:
+                                current_app.logger.warning(
+                                    "Node env backup skipped node=%s url=%s error=%s",
+                                    getattr(node, "id", "?"),
+                                    getattr(node, "base_url", ""),
+                                    e,
+                                )
+                            continue
+
+                rec["files"] = sorted(set(rec["files"]))
+                rec["ok"] = bool(rec["files"] or rec["env_file"])
+
+                if not rec["ok"]:
+                    rec["error"] = "node_backup_had_no_wg_or_env"
+
+            except zipfile.BadZipFile:
+                rec["error"] = "node_backup_not_zip"
+            except Exception as e:
+                rec["error"] = f"node_backup_read_failed: {e}"
+
+        except Exception as e:
+            rec["error"] = str(e)
+            current_app.logger.warning(
+                "Node backup failed node=%s url=%s error=%s",
+                getattr(node, "id", "?"),
+                getattr(node, "base_url", ""),
+                e,
+            )
+
+        results.append(rec)
+
+    return results
+
+
+def _node_wg_payloads_zip(z: zipfile.ZipFile, names: list[str]) -> dict[int, dict[str, str]]:
+    """
+    Reads node WG files from a full backup ZIP.
+
+    """
+    payloads = {}
+
+    for member in names:
+        m = re.match(r'^nodes/(\d+)/wg/([^/]+\.conf)$', member)
+        if not m:
+            continue
+
+        node_id = int(m.group(1))
+        filename = os.path.basename(m.group(2))
+
+        try:
+            text = z.read(member).decode('utf-8', 'replace')
+        except Exception:
+            continue
+
+        payloads.setdefault(node_id, {})[filename] = text
+
+    return payloads
+
+
+def _restore_node_wg_zip(z: zipfile.ZipFile, names: list[str]) -> list[dict]:
+    """
+    Restores node WG .conf files back to node_agent.
+
+    """
+    payloads = _node_wg_payloads_zip(z, names)
+    results = []
+
+    for node_id, files in payloads.items():
+        node = db.session.get(Node, node_id)
+
+        rec = {
+            'node_id': node_id,
+            'ok': False,
+            'files': sorted(files.keys()),
+            'error': '',
+        }
+
+        if not node:
+            rec['error'] = 'node_not_found_in_current_db'
+            results.append(rec)
+            continue
+
+        try:
+            url = f"{node.base_url.rstrip('/')}/api/backup/wg/restore"
+
+            r = requests.post(
+                url,
+                headers={
+                    'Authorization': f'Bearer {_read_api_key(node)}',
+                    'Content-Type': 'application/json',
+                },
+                json={
+                    'files': files,
+                    'bring_up': False,
+                },
+                timeout=35,
+            )
+
+            try:
+                body = r.json()
+            except Exception:
+                body = {'raw': r.text[:500]}
+
+            if not r.ok:
+                rec['error'] = f'HTTP {r.status_code}: {str(body)[:500]}'
+            else:
+                rec['ok'] = bool(body.get('ok', True))
+                rec['result'] = body
+
+        except Exception as e:
+            rec['error'] = str(e)
+
+        results.append(rec)
+
+    return results
 
 # _______ Full Backup _________
 
@@ -1979,58 +2869,217 @@ def login_or_session(fn):
 @require_api_key_or_login
 def backup_full():
     prefs = _backup_prefs_load()
-    include_wg = (request.args.get('wg') or ('1' if prefs.get('include_wg') else '0')) == '1'
-    send_tg    = (request.args.get('tg') or ('1' if prefs.get('send_to_telegram') else '0')) == '1'
-    auto_flag  = (request.args.get('auto') or '0') == '1'
+
+    include_wg = (
+        request.args.get('wg') or
+        ('1' if prefs.get('include_wg') else '0')
+    ) == '1'
+
+    send_tg = (
+        request.args.get('tg') or
+        ('1' if prefs.get('send_to_telegram') else '0')
+    ) == '1'
+
+    auto_flag = (request.args.get('auto') or '0') == '1'
+
+    node_wg_results = []
 
     mem = BytesIO()
+
     with zipfile.ZipFile(mem, 'w', zipfile.ZIP_DEFLATED) as z:
+        # -----------------------------
+        # Database
+        # -----------------------------
+        # Includes peers, nodes, interfaces, subscriptions,
+        # subscription links, limits, counters, etc.
         dbp = _db_path()
+
         if dbp and os.path.isfile(dbp):
             z.write(dbp, arcname=f'db/{os.path.basename(dbp)}')
+
+        # -----------------------------
+        # Instance JSON / JSONL
+        # -----------------------------
+        # Includes short_links.json, panel settings, Telegram settings,
+        # template settings, backup settings, logs settings, peer profiles, etc.
         _jsonl_bundle(z)
+
+        # -----------------------------
+        # Panel .env
+        # -----------------------------
+        # Includes panel FERNET_KEY/API_KEY/secrets.
+        # Required for migration/decrypting encrypted panel values.
+        _env_bundle(z)
+
+        # -----------------------------
+        # Local + remote WireGuard backup
+        # -----------------------------
         if include_wg:
+            # Local panel server WireGuard configs.
             wgdir = app.config.get('WG_CONF_PATH') or '/etc/wireguard/'
+
             try:
                 for p in Path(wgdir).glob('*.conf'):
-                    z.write(p, arcname=f'wg/{p.name}')
+                    if p.is_file():
+                        z.write(p, arcname=f'wg/{p.name}')
             except Exception as e:
-                current_app.logger.debug("WG bundle skipped: %s", e)
-        z.writestr('meta/created.txt', datetime.utcnow().isoformat(timespec='seconds') + 'Z')
+                current_app.logger.debug("Local WG bundle skipped: %s", e)
+
+            # Remote node backups.
+            #
+            # _bundle_node_wg_backups() now pulls:
+            #   nodes/<node_id>/wg/<iface>.conf
+            #   nodes/<node_id>/env/.env
+            # from each node_agent backup.
+            try:
+                node_wg_results = _bundle_node_wg_backups(z)
+            except Exception as e:
+                current_app.logger.warning("Node backup bundle skipped: %s", e)
+                node_wg_results = [{
+                    'ok': False,
+                    'files': [],
+                    'env_file': False,
+                    'error': str(e),
+                }]
+
+        created_at = datetime.utcnow().isoformat(timespec='seconds') + 'Z'
+
+        z.writestr('meta/created.txt', created_at)
         z.writestr('meta/host.txt', socket.gethostname())
-        z.writestr('meta/app.json', json.dumps({
-            'db_uri': app.config.get('SQLALCHEMY_DATABASE_URI', ''),
-            'wg_conf_path': app.config.get('WG_CONF_PATH') or '/etc/wireguard/'
-        }, indent=2))
+
+        z.writestr(
+            'meta/app.json',
+            json.dumps({
+                'db_uri': app.config.get('SQLALCHEMY_DATABASE_URI', ''),
+                'wg_conf_path': app.config.get('WG_CONF_PATH') or '/etc/wireguard/',
+            }, indent=2)
+        )
+
+        z.writestr(
+            'meta/node_wg_backup.json',
+            json.dumps(node_wg_results, indent=2)
+        )
+
+        try:
+            manifest_counts = {
+                'nodes': Node.query.count(),
+                'interfaces': InterfaceConfig.query.count(),
+                'peers': Peer.query.count(),
+                'subscriptions': Subscription.query.count(),
+                'subscription_peers': SubscriptionPeer.query.count(),
+                'short_links': ShortLink.query.count(),
+            }
+        except Exception:
+            manifest_counts = {}
+
+        try:
+            local_wg_count = 0
+            if include_wg:
+                wgdir = app.config.get('WG_CONF_PATH') or '/etc/wireguard/'
+                local_wg_count = len([
+                    p for p in Path(wgdir).glob('*.conf')
+                    if p.is_file()
+                ])
+        except Exception:
+            local_wg_count = 0
+
+        node_wg_count = 0
+        node_env_count = 0
+
+        try:
+            for rec in node_wg_results or []:
+                node_wg_count += len(rec.get('files') or [])
+                if rec.get('env_file'):
+                    node_env_count += 1
+        except Exception:
+            node_wg_count = 0
+            node_env_count = 0
+
+        panel_env_exists = bool((Path(BASE_DIR) / '.env').is_file())
+
+        z.writestr(
+            'meta/manifest.json',
+            json.dumps({
+                'created_at': created_at,
+                'kind': 'full',
+                'panel_version': PANEL_VERSION,
+                'contains': {
+                    'database': bool(dbp and os.path.isfile(dbp)),
+                    'instance_json': True,
+                    'env_file': bool(panel_env_exists),
+                    'remote_node_env': bool(node_env_count > 0),
+                    'short_links': True,
+                    'subscriptions': True,
+                    'nodes_metadata': True,
+                    'local_wireguard_conf': bool(include_wg and local_wg_count > 0),
+                    'remote_node_wireguard_conf': bool(include_wg and node_wg_count > 0),
+                },
+                'counts': {
+                    **manifest_counts,
+                    'local_wg_files': int(local_wg_count or 0),
+                    'node_wg_files': int(node_wg_count or 0),
+                    'node_env_files': int(node_env_count or 0),
+                },
+                'node_wg_backup': node_wg_results,
+            }, indent=2)
+        )
+
     mem.seek(0)
+
     ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
     fname = f'wgpanel_full_backup_{ts}.zip'
     data = mem.getvalue()
 
+    # -----------------------------
+    # Save automatic backup copy
+    # -----------------------------
     if auto_flag:
         try:
             sched = _load_backup_schedule()
             keep = int(sched.get("keep", 7))
         except Exception:
             keep = 7
+
         try:
             _save_autobackup(data, keep=keep)
         except Exception as e:
             current_app.logger.debug("auto backup store failed: %s", e)
 
+    # -----------------------------
+    # Send to Telegram
+    # -----------------------------
     if send_tg:
         ok, msg = _send_zip_telegram(data, fname)
+
         if not ok:
             current_app.logger.warning("Backup Telegram send failed: %s", msg)
 
-    mem = BytesIO(data)
-    mem.seek(0)
-
+    # -----------------------------
+    # Admin log
+    # -----------------------------
     try:
+        node_wg_count = 0
+        node_env_count = 0
+
+        for rec in node_wg_results or []:
+            node_wg_count += len(rec.get('files') or [])
+            if rec.get('env_file'):
+                node_env_count += 1
+
         _norm_adminlog({
             "action": "backup_full",
-            "details": f"file={fname} size={len(data)}B wg={int(include_wg)} tg={int(send_tg)} auto={int(auto_flag)}",
-            "channel": "api" if request.headers.get('Authorization') or request.headers.get('X-API-KEY') else "web"
+            "details": (
+                f"file={fname} size={len(data)}B "
+                f"wg={int(include_wg)} tg={int(send_tg)} auto={int(auto_flag)} "
+                f"node_wg_nodes={len(node_wg_results or [])} "
+                f"node_wg_files={node_wg_count} "
+                f"node_env_files={node_env_count}"
+            ),
+            "channel": (
+                "api"
+                if request.headers.get('Authorization') or request.headers.get('X-API-KEY')
+                else "web"
+            ),
         })
     except Exception:
         pass
@@ -2040,14 +3089,33 @@ def backup_full():
     except Exception as e:
         current_app.logger.debug("record_backup(full) failed: %s", e)
 
-    resp = send_file(mem, mimetype='application/zip', as_attachment=True, download_name=fname)
+    out = BytesIO(data)
+    out.seek(0)
+
+    resp = send_file(
+        out,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=fname,
+    )
+
+    try:
+        node_env_count = sum(
+            1 for rec in (node_wg_results or [])
+            if rec.get('env_file')
+        )
+    except Exception:
+        node_env_count = 0
+
     resp.headers['X-Backup-Kind'] = 'full'
     resp.headers['X-Backup-Timestamp'] = ts
     resp.headers['X-Backup-WG'] = '1' if include_wg else '0'
     resp.headers['X-Backup-TG'] = '1' if send_tg else '0'
     resp.headers['X-Backup-AUTO'] = '1' if auto_flag else '0'
-    return resp
+    resp.headers['X-Backup-Node-WG'] = str(len(node_wg_results or []))
+    resp.headers['X-Backup-Node-ENV'] = str(node_env_count)
 
+    return resp
 
 def _load_backup_schedule():
     d = _json_load(BACKUP_SCHEDULE_FILE, {})
@@ -2491,6 +3559,55 @@ def _wg_transfer(peer):
     rx, tx = _wg_rx_tx(peer)
     return rx + tx
 
+
+def _accumulate_peer_usage(peer, live_total=None):
+    """
+    Persist Wireلuard traffic across server/interface/node reboots.
+
+    Returns:
+        used_total_bytes, live_delta_bytes, changed
+    """
+    changed = False
+
+    try:
+        live = int(_wg_transfer(peer) if live_total is None else (live_total or 0))
+    except Exception:
+        live = 0
+
+    try:
+        offset = int(getattr(peer, 'bytes_offset', 0) or 0)
+    except Exception:
+        offset = 0
+
+    try:
+        persisted = int(getattr(peer, 'used_bytes_total', 0) or 0)
+    except Exception:
+        persisted = 0
+
+    # keep DB total and start a new live window.
+    if live < offset:
+        offset = 0
+        if int(getattr(peer, 'bytes_offset', 0) or 0) != 0:
+            peer.bytes_offset = 0
+            changed = True
+
+    delta = max(0, live - offset)
+
+    if delta:
+        persisted += delta
+        peer.used_bytes_total = persisted
+        peer.bytes_offset = live
+        changed = True
+    else:
+        if getattr(peer, 'used_bytes_total', None) is None:
+            peer.used_bytes_total = persisted
+            changed = True
+        if getattr(peer, 'bytes_offset', None) is None:
+            peer.bytes_offset = live
+            changed = True
+
+    return int(persisted), int(delta), bool(changed)
+
 def _wg_handshake(peer):
     try:
         dev = iface_devname(peer.iface)
@@ -2587,21 +3704,32 @@ def _fix_route(iid: int, wgquick_output: str):
 def _check_iface_up(iface: InterfaceConfig):
     """
     Check if iface exists and is up (LOCAL ONLY).
-    Node-backed ifaces are controlled by the node_agent.
+
+    First tries wg-quick up.
+      - ip link add dev <name> type wireguard
+      - wg set private-key/listen-port
+      - ip address add <address>
+      - ip link set mtu <mtu>
+      - ip link set up dev <name>
+
     """
     if not iface:
         return
+
     if getattr(iface, 'node_id', None) is not None or (':' in (iface.name or '')):
         return
 
     dev = iface_devname(iface)
     iid = int(getattr(iface, "id", 0) or 0)
 
+    if _iface_up(dev):
+        return
+
     cmd = ['wg-quick', 'up', dev]
     rc, out = _run_capture(cmd, timeout=20.0)
     _iface_log(iid, f"$ {' '.join(cmd)}\n{out}".rstrip())
 
-    if rc == 0:
+    if rc == 0 and _iface_up(dev):
         return
 
     recovered = _fix_route(iid, out)
@@ -2609,26 +3737,109 @@ def _check_iface_up(iface: InterfaceConfig):
         _iface_log(iid, "Recovered from route-exists error; interface is up.")
         return
 
-    current_app.logger.warning("wg-quick up %s failed (rc=%s); trying manual bring-up", dev, rc)
+    current_app.logger.warning(
+        "wg-quick up %s failed (rc=%s); trying manual bring-up",
+        dev,
+        rc
+    )
 
-    steps = [
-        (['ip', 'link', 'add', 'dev', dev, 'type', 'wireguard'], 6.0),
-    ]
+    # Clean possible half-created interface from failed wg-quick/manual attempts.
+    rc0, out0 = _run_capture(['ip', 'link', 'del', 'dev', dev], timeout=6.0)
+    _iface_log(iid, f"$ ip link del dev {dev}\n{out0}".rstrip())
 
-    for c, to in steps:
-        rc2, o2 = _run_capture(c, timeout=to)
-        _iface_log(iid, f"$ {' '.join(c)}\n{o2}".rstrip())
+    c = ['ip', 'link', 'add', 'dev', dev, 'type', 'wireguard']
+    rc1, out1 = _run_capture(c, timeout=6.0)
+    _iface_log(iid, f"$ {' '.join(c)}\n{out1}".rstrip())
+    if rc1 != 0:
+        raise RuntimeError(f"Could not create interface {dev}: {out1.strip() or 'ip link add failed'}")
 
-    if iface.path and os.path.isfile(iface.path):
-        c = ['wg', 'setconf', dev, iface.path]
-        rc2, o2 = _run_capture(c, timeout=10.0)
-        _iface_log(iid, f"$ {' '.join(c)}\n{o2}".rstrip())
+    # Apply private key and listen port without using wg setconf on a wg-quick config.
+    private_key = (getattr(iface, 'private_key', None) or '').strip()
 
+    if not private_key and iface.path and os.path.isfile(iface.path):
+        try:
+            with open(iface.path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.strip().lower().startswith('privatekey'):
+                        private_key = line.split('=', 1)[1].strip()
+                        break
+        except Exception:
+            private_key = ''
+
+    if not private_key:
+        _run_capture(['ip', 'link', 'del', 'dev', dev], timeout=6.0)
+        raise RuntimeError(f"Missing private key for interface {dev}")
+
+    key_file = None
+    try:
+        fd, key_file = tempfile.mkstemp(prefix=f'{dev}_key_', text=True)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.write(private_key + '\n')
+        os.chmod(key_file, 0o600)
+
+        listen_port = int(getattr(iface, 'listen_port', 0) or 0)
+        if not (1 <= listen_port <= 65535):
+            listen_port = 51820
+
+        c = ['wg', 'set', dev, 'private-key', key_file, 'listen-port', str(listen_port)]
+        rc2, out2 = _run_capture(c, timeout=10.0)
+        _iface_log(iid, f"$ wg set {dev} private-key <hidden> listen-port {listen_port}\n{out2}".rstrip())
+        if rc2 != 0:
+            _run_capture(['ip', 'link', 'del', 'dev', dev], timeout=6.0)
+            raise RuntimeError(f"Could not configure WireGuard interface {dev}: {out2.strip() or 'wg set failed'}")
+    finally:
+        if key_file:
+            try:
+                os.remove(key_file)
+            except Exception:
+                pass
+
+    # Add interface address.
+    address = (getattr(iface, 'address', None) or '').strip()
+
+    if not address and iface.path and os.path.isfile(iface.path):
+        try:
+            with open(iface.path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if line.strip().lower().startswith('address'):
+                        address = line.split('=', 1)[1].strip()
+                        break
+        except Exception:
+            address = ''
+
+    if address:
+        for addr in [x.strip() for x in address.split(',') if x.strip()]:
+            c = ['ip', 'address', 'add', addr, 'dev', dev]
+            rc3, out3 = _run_capture(c, timeout=6.0)
+            _iface_log(iid, f"$ {' '.join(c)}\n{out3}".rstrip())
+
+            if rc3 != 0 and 'File exists' not in out3:
+                _run_capture(['ip', 'link', 'del', 'dev', dev], timeout=6.0)
+                raise RuntimeError(f"Could not add address {addr} to {dev}: {out3.strip() or 'ip address add failed'}")
+
+    # Optional MTU.
+    mtu = getattr(iface, 'mtu', None)
+    try:
+        mtu = int(mtu) if mtu not in (None, '') else None
+    except Exception:
+        mtu = None
+
+    if mtu:
+        c = ['ip', 'link', 'set', 'mtu', str(mtu), 'dev', dev]
+        rc4, out4 = _run_capture(c, timeout=6.0)
+        _iface_log(iid, f"$ {' '.join(c)}\n{out4}".rstrip())
+
+    # Bring link up.
     c = ['ip', 'link', 'set', 'up', 'dev', dev]
-    rc2, o2 = _run_capture(c, timeout=6.0)
-    _iface_log(iid, f"$ {' '.join(c)}\n{o2}".rstrip())
+    rc5, out5 = _run_capture(c, timeout=6.0)
+    _iface_log(iid, f"$ {' '.join(c)}\n{out5}".rstrip())
+
+    if rc5 != 0:
+        _run_capture(['ip', 'link', 'del', 'dev', dev], timeout=6.0)
+        raise RuntimeError(f"Could not bring interface {dev} up: {out5.strip() or 'ip link set up failed'}")
 
     if not _iface_up(dev):
+        _run_capture(['ip', 'link', 'del', 'dev', dev], timeout=6.0)
         raise RuntimeError(f"Interface {dev} bring-up failed; see Interface logs for details.")
 
 # -----------------------------
@@ -2756,46 +3967,127 @@ def _save_presets(presets):
     except Exception as e:
         current_app.logger.warning("Couldn't save endpoint presets: %s", e)
 
+
 #-----------------
 # Short Links
 #_________________
-SHORTLINKS_FILE = os.path.join(app.instance_path, 'short_links.json')
-
-def _load_shortlinks():
-    try:
-        with open(SHORTLINKS_FILE, 'r') as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-def _save_shortlinks(m):
-    os.makedirs(app.instance_path, exist_ok=True)
-    with open(SHORTLINKS_FILE, 'w') as f:
-        json.dump(m, f, indent=2)
 
 def _token():
     return secrets.token_urlsafe(16)
+
+
+def _shortlink_url(token):
+    return url_for('user_peer_page', token=token, _external=True)
+
+
+def _peer_from_shortlink_token(token):
+    token = (token or "").strip()
+    if not token:
+        abort(404)
+
+    link = ShortLink.query.filter_by(token=token).first()
+    if not link:
+        abort(404)
+
+    try:
+        link.last_used_at = datetime.utcnow()
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    return db.session.get(Peer, link.peer_id) or abort(404)
+
+
+def _delete_shortlinks_for_peer_ids(peer_ids):
+    ids = []
+    for x in peer_ids or []:
+        try:
+            ids.append(int(x))
+        except Exception:
+            pass
+
+    if not ids:
+        return 0
+
+    removed = (
+        ShortLink.query
+        .filter(ShortLink.peer_id.in_(ids))
+        .delete(synchronize_session=False)
+    )
+    db.session.flush()
+    return int(removed or 0)
+
+def _shortlink_from_peer_id(pid):
+    """
+    Return an existing DB shortlink for a peer id.
+    Does not create a new link.
+    Used by /api/peers list output.
+    """
+    try:
+        pid = int(pid)
+    except Exception:
+        return None, None
+
+    link = ShortLink.query.filter_by(peer_id=pid).first()
+    if not link:
+        return None, None
+
+    return link.token, _shortlink_url(link.token)
+
+
+def _shortlink_for_peer(peer: Peer):
+    """
+    Create or return an existing DB shortlink for a Peer row.
+    """
+    if not peer or not getattr(peer, "id", None):
+        return None, None
+
+    existing = ShortLink.query.filter_by(peer_id=peer.id).first()
+    if existing:
+        return existing.token, _shortlink_url(existing.token)
+
+    token = None
+    for _ in range(12):
+        candidate = _token()
+        if not ShortLink.query.filter_by(token=candidate).first():
+            token = candidate
+            break
+
+    if not token:
+        token = secrets.token_urlsafe(24)
+
+    link = ShortLink(token=token, peer_id=peer.id)
+    db.session.add(link)
+    db.session.commit()
+
+    return token, _shortlink_url(token)
+
+
+def _shortlink_response_for_peer(peer: Peer):
+    token, url = _shortlink_for_peer(peer)
+    if not token or not url:
+        abort(404)
+    return jsonify(url=url, token=token)
 
 
 @app.route('/api/peer/<int:pid>/shortlink', methods=['GET', 'POST'])
 @require_api_key_or_login
 def api_shortlink(pid):
     p = db.session.get(Peer, pid) or abort(404)
-    m = _load_shortlinks()
+    return _shortlink_response_for_peer(p)
 
-    def _short_url(token: str) -> str:
-        base = _panel_base()  # e.g https://panel.azumi.com:443/
-        path = url_for('user_peer_page', token=token)  
-        return urljoin(base, path.lstrip('/'))
+@app.route('/api/peer/<path:public_key>/shortlink', methods=['GET', 'POST'])
+@require_api_key_or_login
+def api_shortlink_by_public_key(public_key):
+    public_key = (public_key or '').strip()
+    if not public_key:
+        abort(404)
 
-    for t, obj in m.items():
-        if obj.get('peer_id') == p.id:
-            return jsonify(url=_short_url(t), token=t)
+    peer = Peer.query.filter_by(public_key=public_key).first()
+    if not peer:
+        abort(404)
 
-    t = _token()
-    m[t] = {'peer_id': p.id}
-    _save_shortlinks(m)
-    return jsonify(url=_short_url(t), token=t)
+    return _shortlink_response_for_peer(peer)
 
 #---------------------
 # Setting Page
@@ -2923,7 +4215,6 @@ def api_settings():
     return jsonify(ok=True, settings=payload, next_url=next_url, requires_restart=True)
 
 
-
 @app.get('/api/template_settings')
 @login_required
 def template_settings_get():
@@ -3041,9 +4332,7 @@ def tg_adminlog():
 
 @app.route('/u/<token>')
 def user_peer_page(token):
-    m = _load_shortlinks()
-    if token not in m:
-        abort(404)
+    _peer_from_shortlink_token(token)
 
     ts = _load_template_settings() 
     sel = (ts.get('selected') or 'default').lower()
@@ -3165,15 +4454,14 @@ def preview_template(name):
 
 @app.route('/api/u/<token>')
 def user_peer(token):
-    m = _load_shortlinks()
-    rec = m.get(token)
-    if not rec:
-        abort(404)
-    p = db.session.get(Peer, rec['peer_id']) or abort(404)
+    p = _peer_from_shortlink_token(token)
     _expire()
 
     total = _wg_transfer(p)
-    used_live = max(0, total - int(getattr(p, 'bytes_offset', 0) or 0))
+    used_total, _delta, usage_changed = _accumulate_peer_usage(p, total)
+    if usage_changed:
+        db.session.commit()
+    used_live = 0
     exp_ts = to_ts(getattr(p, 'expires_at', None))
     ttl_seconds = max(0, exp_ts - now_ts()) if exp_ts else None
     used_db = int(getattr(p, 'used_bytes_total', 0) or 0)
@@ -3183,7 +4471,7 @@ def user_peer(token):
     if lim_val and not getattr(p, 'unlimited', False):
         lim_bytes = lim_val * (1024*1024 if unit == 'Mi' else 1024*1024*1024)
     
-    used_eff = used_live + used_db
+    used_eff = used_db
     if lim_bytes:
         used_eff = min(used_eff, lim_bytes)
     
@@ -3199,7 +4487,7 @@ def user_peer(token):
     'unlimited': bool(getattr(p, 'unlimited', False)),
     'limit_unit': unit,
     'data_limit': lim_val,
-    'used_bytes': used_live,
+    'used_bytes': used_eff,
     'used_bytes_db': used_db,                
     'used_effective_bytes': used_eff,         
     'time_limit_days': getattr(p, 'time_limit_days', None),
@@ -3216,11 +4504,7 @@ def user_peer(token):
 
 @app.route('/api/u/<token>/config')
 def userpeer_config(token):
-    m = _load_shortlinks()
-    rec = m.get(token)
-    if not rec:
-        abort(404)
-    p = db.session.get(Peer, rec['peer_id']) or abort(404)
+    p = _peer_from_shortlink_token(token)
     cfg = _client_conf_txt(p)
     return make_response(cfg, 200, {
         'Content-Type': 'text/plain; charset=utf-8',
@@ -3511,11 +4795,13 @@ def _available_ips(iface):
             used_hosts |= _wg_allowed_ips(iface)
             used_hosts |= _conf_allowed_ips(iface)
 
-        return [
+        out = [
             f"{host}/{net.prefixlen}"
             for host in net.hosts()
             if host != iface_ip and host not in used_hosts
         ]
+
+        return sorted(out, key=lambda cidr: int(_ipa.ip_interface(cidr).ip))
 
     except Exception as e:
         current_app.logger.exception("_available_ips failed for iface=%r: %s", getattr(iface, "name", None), e)
@@ -3877,30 +5163,227 @@ def _server_publickey(iface):
         return out.decode().strip()
     except Exception:
         return ''
-    
+
+# ------------------------------------------------------------
+# Node peer config / QR export
+# ------------------------------------------------------------
+def _node_peer_by_publickey(nid: int, pub: str):
+    pub = (pub or "").strip()
+
+    if not pub:
+        abort(404)
+
+    q = (
+        db.session.query(Peer)
+        .join(InterfaceConfig, Peer.iface_id == InterfaceConfig.id)
+        .filter(or_(
+            InterfaceConfig.name.like(f"n{nid}:%"),
+            InterfaceConfig.node_id == nid
+        ))
+    )
+
+    if pub.isdigit():
+        peer = q.filter(Peer.id == int(pub)).first()
+    else:
+        peer = q.filter(Peer.public_key == pub).first()
+
+    if not peer:
+        abort(404)
+
+    return peer
+
+
+@app.get("/api/nodes/<int:nid>/peer/<path:pub>/config")
+@csrf.exempt
+@require_api_key_or_login
+def node_peer_config(nid, pub):
+    peer = _node_peer_by_publickey(nid, pub)
+
+    text = _client_conf_txt(peer)
+
+    if request.args.get("download"):
+        resp = make_response(text)
+        fname = f"{peer.name or 'peer'}-{peer.id}.conf".replace(" ", "_")
+        resp.headers["Content-Type"] = "text/plain; charset=utf-8"
+        resp.headers["Content-Disposition"] = f'attachment; filename="{fname}"'
+        return resp
+
+    return current_app.response_class(
+        text,
+        mimetype="text/plain; charset=utf-8"
+    )
+
+
+@app.get("/api/nodes/<int:nid>/peer/<path:pub>/config_qr")
+@csrf.exempt
+@require_api_key_or_login
+def node_peer_config_qr(nid, pub):
+    peer = _node_peer_by_publickey(nid, pub)
+
+    text = _client_conf_txt(peer)
+
+    if not text:
+        abort(404)
+
+    img = qrcode.make(text)
+    bio = BytesIO()
+    img.save(bio, format="PNG")
+    bio.seek(0)
+
+    return send_file(
+        bio,
+        mimetype="image/png",
+        as_attachment=False,
+        download_name=f"{peer.name or 'peer'}-{peer.id}.png",
+    )   
+
+@app.route('/api/nodes/<int:nid>/peer/<path:pub>/shortlink', methods=['GET', 'POST'])
+@require_api_key_or_login
+def node_peer_shortlink(nid, pub):
+    pub = (pub or '').strip()
+
+    if not pub:
+        abort(404)
+
+    peer = (
+        db.session.query(Peer)
+        .join(InterfaceConfig, Peer.iface_id == InterfaceConfig.id)
+        .filter(Peer.public_key == pub)
+        .filter(or_(
+            InterfaceConfig.name.like(f"n{nid}:%"),
+            InterfaceConfig.node_id == nid
+        ))
+        .first()
+    )
+
+    if not peer:
+        abort(404)
+
+    return _shortlink_response_for_peer(peer)
+ 
+# ------------------------------------------------------------
+# Node peer logs
+# ------------------------------------------------------------
+@app.route('/api/nodes/<int:nid>/peer/<path:pub>/logs', methods=['GET', 'DELETE'])
+@require_api_key_or_login
+def node_peer_logs(nid, pub):
+    pub = (pub or '').strip()
+
+    if not pub:
+        abort(404)
+
+    peer = (
+        db.session.query(Peer)
+        .join(InterfaceConfig, Peer.iface_id == InterfaceConfig.id)
+        .filter(Peer.public_key == pub)
+        .filter(or_(
+            InterfaceConfig.name.like(f"n{nid}:%"),
+            InterfaceConfig.node_id == nid
+        ))
+        .first()
+    )
+
+    if not peer:
+        abort(404)
+
+    if request.method == 'DELETE':
+        try:
+            cnt = PeerEvent.query.filter_by(peer_id=peer.id).delete(
+                synchronize_session=False
+            )
+            db.session.commit()
+
+            try:
+                logpanel_action(
+                    "node_peer_logs_clear",
+                    f"node={nid}; pid={peer.id}; deleted={int(cnt or 0)}"
+                )
+            except Exception:
+                pass
+
+            return jsonify(ok=True, deleted=int(cnt or 0))
+
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.exception("Failed to clear node peer logs")
+            return jsonify(ok=False, error="clear_failed", detail=str(e)), 500
+
+    try:
+        rows = (
+            PeerEvent.query
+            .filter_by(peer_id=peer.id)
+            .order_by(PeerEvent.timestamp.desc())
+            .limit(500)
+            .all()
+        )
+
+        logs = []
+        for e in reversed(rows):
+            ts = getattr(e, 'timestamp', None)
+            event = getattr(e, 'event', '') or ''
+            details = getattr(e, 'details', '') or ''
+
+            logs.append({
+                'time': isoz(ts) if ts else '',
+                'ts': isoz(ts) if ts else '',
+                'level': 'info',
+                'event': event,
+                'details': details,
+                'text': f"{event}: {details}".strip(': ')
+            })
+
+        return jsonify(logs=logs)
+
+    except Exception as e:
+        current_app.logger.exception("Node peer logs failed")
+        return jsonify(ok=False, error="logs_failed", detail=str(e)), 500
+
 @app.route('/api/nodes/<int:nid>/peer/<path:pub>', methods=['DELETE'])
 @admin_required
 def node_peer_delete(nid, pub):
     n = Node.query.get_or_404(nid)
+
     try:
         node_delete(n, f'/api/peer/{pub}')
     except Exception as e:
         current_app.logger.exception("Node peer delete failed")
         return jsonify(error="node_delete_failed", detail=str(e)), 502
 
+    removed_shortlinks = 0
+
     try:
-        p = (db.session.query(Peer)
-             .join(InterfaceConfig, Peer.iface_id == InterfaceConfig.id)
-             .filter(Peer.public_key == pub)
-             .filter(or_(InterfaceConfig.name.like(f"n{nid}:%"),
-                         InterfaceConfig.node_id == nid))
-             .first())
+        p = (
+            db.session.query(Peer)
+            .join(InterfaceConfig, Peer.iface_id == InterfaceConfig.id)
+            .filter(Peer.public_key == pub)
+            .filter(or_(
+                InterfaceConfig.name.like(f"n{nid}:%"),
+                InterfaceConfig.node_id == nid
+            ))
+            .first()
+        )
+
         if p:
+            removed_shortlinks = _delete_shortlinks_for_peer_ids([p.id])
+
+            try:
+                SubscriptionPeer.query.filter_by(peer_id=p.id).delete(
+                    synchronize_session=False
+                )
+            except Exception:
+                pass
             db.session.delete(p)
             db.session.commit()
-    except Exception:
-        pass
-    return jsonify(ok=True)
+
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception("Node peer DB cleanup failed: %s", e)
+        return jsonify(
+            error="node_peer_deleted_but_db_cleanup_failed",
+            detail=str(e)
+        ), 500
+
+    return jsonify(ok=True, shortlinks_removed=removed_shortlinks)
 
 def _client_conf_txt(peer: Peer) -> str:
 
@@ -3949,6 +5432,57 @@ def _client_conf_txt(peer: Peer) -> str:
 
     return "\n".join(lines)
 
+def _client_config_txt(peer: Peer) -> str:
+    return _client_conf_txt(peer)
+
+# ------------------------------------------------------------------
+# Config / QR fallback by public key
+# ------------------------------------------------------------------
+def _peer_by_public_key_or_404(public_key: str):
+    public_key = (public_key or "").strip()
+
+    if not public_key:
+        abort(404)
+
+    if public_key.isdigit():
+        peer = db.session.get(Peer, int(public_key))
+    else:
+        peer = Peer.query.filter_by(public_key=public_key).first()
+
+    if not peer:
+        abort(404)
+
+    return peer
+
+
+@app.get("/api/peer/<path:public_key>/config")
+@login_required
+def api_peer_config_by_public_key(public_key):
+    peer = _peer_by_public_key_or_404(public_key)
+
+    cfg = _client_conf_txt(peer)
+
+    filename = f"{peer.name or 'peer'}.conf"
+
+    return make_response(cfg, 200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Disposition": f'attachment; filename="{filename}"',
+    })
+
+
+@app.get("/api/peer/<path:public_key>/config_qr")
+@login_required
+def api_peer_config_qr_by_public_key(public_key):
+    peer = _peer_by_public_key_or_404(public_key)
+
+    cfg = _client_conf_txt(peer)
+
+    img = qrcode.make(cfg)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+
+    return send_file(buf, mimetype="image/png")
 # ------------------------------------------------
 # Template settings (selected template + socials)
 # ________________________________________________
@@ -4023,20 +5557,15 @@ def _expire():
             peer.expires_at = from_ts(add_days_ts(anchor_ts, float(peer.time_limit_days)))
             changed = True
 
-        offset   = int(getattr(peer, 'bytes_offset', 0) or 0)
-        is_node  = getattr(getattr(peer, 'iface', None), 'node_id', None) is not None
-
-        total_bytes = None            
-        used_live   = 0               
-        used_db     = int(getattr(peer, 'used_bytes_total', 0) or 0)  
-
+        is_node = getattr(getattr(peer, 'iface', None), 'node_id', None) is not None
+        total_bytes = None
         if not is_node:
             total_bytes = _wg_transfer(peer)
-            used_live   = max(0, int(total_bytes) - offset)
+            used_effective, _delta, usage_changed = _accumulate_peer_usage(peer, total_bytes)
+            if usage_changed:
+                changed = True
         else:
-            used_live = int(getattr(peer, 'used_runtime_bytes', 0) or 0)
-
-        used_effective = used_db + used_live
+            used_effective = int(getattr(peer, 'used_bytes_total', 0) or 0)
 
         exp_ts = to_ts(getattr(peer, 'expires_at', None))
         if exp_ts and now >= exp_ts and peer.status != 'blocked':
@@ -4047,25 +5576,109 @@ def _expire():
         limit_bytes = peer.limit_bytes() if hasattr(peer, 'limit_bytes') else None
         if limit_bytes is not None and peer.status != 'blocked':
             if used_effective >= limit_bytes:
-                peer.used_bytes_total = used_db + used_live
-
                 if not is_node:
                     if total_bytes is None:
                         total_bytes = _wg_transfer(peer)
-                    peer.bytes_offset = int(total_bytes or 0)
-                else:
-                    if hasattr(peer, 'used_runtime_bytes'):
-                        try:
-                            setattr(peer, 'used_runtime_bytes', 0)
-                        except Exception:
-                            pass
-
+                    _accumulate_peer_usage(peer, total_bytes)
                 _disable_peer(peer, 'limit_reached', status='blocked')
                 log_event(peer, 'limit_reached', f'Used {used_effective} bytes')
                 changed = True
 
     if changed:
         db.session.commit()
+
+_EXPIRY_THREAD_STARTED = False
+_EXPIRY_LOCK = threading.Lock()
+_EXPIRY_LAST_TS = 0.0
+
+try:
+    _EXPIRY_INTERVAL_SEC = max(5, int(os.getenv('WG_EXPIRY_INTERVAL_SEC', '15')))
+except Exception:
+    _EXPIRY_INTERVAL_SEC = 15
+
+
+def _run_expiry_once(source: str = 'manual') -> bool:
+    """Run peer expiry/limit enforcement once, safely and non-overlapping."""
+    if not _EXPIRY_LOCK.acquire(blocking=False):
+        return False
+
+    try:
+        _expire()
+        return True
+
+    except Exception as exc:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+        try:
+            current_app.logger.exception(
+                'Expiry enforcement failed (%s): %s',
+                source,
+                exc
+            )
+        except Exception:
+            pass
+
+        return False
+
+    finally:
+        try:
+            _EXPIRY_LOCK.release()
+        except Exception:
+            pass
+
+
+def _expiry_enforcer_loop():
+    while True:
+        try:
+            with app.app_context():
+                _run_expiry_once('background')
+        except Exception:
+            pass
+
+        time.sleep(_EXPIRY_INTERVAL_SEC)
+
+
+def _start_expiry_enforcer():
+    """Start background expiry enforcement once per process/worker."""
+    global _EXPIRY_THREAD_STARTED
+
+    if _EXPIRY_THREAD_STARTED:
+        return
+
+    _EXPIRY_THREAD_STARTED = True
+
+    t = threading.Thread(
+        target=_expiry_enforcer_loop,
+        name='peer-expiry-enforcer',
+        daemon=True,
+    )
+    t.start()
+
+
+@app.before_request
+def _expiry_tick_on_requests():
+    """
+    Fallback : any panel/API activity can enforce expiry,
+    not only the Peers tab.
+    """
+    global _EXPIRY_LAST_TS
+
+    try:
+        if (request.path or '').startswith('/static/'):
+            return
+
+        now = time.time()
+        if (now - _EXPIRY_LAST_TS) < _EXPIRY_INTERVAL_SEC:
+            return
+
+        _EXPIRY_LAST_TS = now
+        _run_expiry_once('request')
+
+    except Exception:
+        pass
 
 @app.post('/api/peer/<int:pid>/clear_total')
 @login_required   
@@ -4158,6 +5771,7 @@ def bootstrap():
         try:
             db.create_all()
             _admin_columns()
+            _shortlink_schema()
             app.logger.info("DB initialized / migrated OK")
         except OperationalError:
             app.logger.exception("DB init failed")
@@ -4177,6 +5791,8 @@ def bootstrap():
         db.session.commit()
 
         _on_boot()
+        _run_expiry_once('boot')
+        _start_expiry_enforcer()
         repoint_endpoints()
         try:
             _clear_retention()
@@ -4201,13 +5817,23 @@ def node_post(n: Node, path: str, payload=None, timeout=8):
     r.raise_for_status()
     return r.json() if r.headers.get('content-type','').startswith('application/json') else r.text
 
-def node_delete(n: Node, path: str, timeout=8):
-    r = requests.delete(f"{n.base_url}{path}",
-                        headers={'Authorization': f'Bearer {_read_api_key(n)}'},
-                        timeout=timeout)
-    r.raise_for_status()
-    return r.json() if r.headers.get('content-type','').startswith('application/json') else r.text
+def node_delete(n: Node, path: str, payload=None, timeout=8):
+    headers = {
+        'Authorization': f'Bearer {_read_api_key(n)}'
+    }
 
+    kwargs = {
+        'headers': headers,
+        'timeout': timeout,
+    }
+
+    if payload is not None:
+        headers['Content-Type'] = 'application/json'
+        kwargs['json'] = payload
+
+    r = requests.delete(f"{n.base_url}{path}", **kwargs)
+    r.raise_for_status()
+    return r.json() if r.headers.get('content-type', '').startswith('application/json') else r.text
 
 @app.route('/api/nodes/<int:nid>/health')
 @admin_required
@@ -4307,15 +5933,168 @@ def _latest_handshake(peer):
         pass
     return 0
 
+def _peer_ip_plain(peer) -> str:
+    try:
+        return str(ipaddress.ip_interface(peer.address).ip)
+    except Exception:
+        return ''
+
+
+def _peer_ping_ok(peer, timeout_sec: float = 0.8) -> bool:
+    """
+    Active reachability check over the WireGuard interface.
+    This detects peers that are reachable through a tunnel even when the public endpoint/handshake is misleading.
+    """
+    ip = _peer_ip_plain(peer)
+    if not ip:
+        return False
+
+    try:
+        dev = iface_devname(peer.iface)
+    except Exception:
+        dev = getattr(getattr(peer, 'iface', None), 'name', '') or ''
+
+    if not dev:
+        return False
+
+    try:
+        ip_obj = ipaddress.ip_address(ip)
+        if ip_obj.version == 6:
+            cmd = ['ping', '-6', '-I', dev, '-c', '1', '-W', '1', ip]
+        else:
+            cmd = ['ping', '-I', dev, '-c', '1', '-W', '1', ip]
+
+        return subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=max(1.0, float(timeout_sec) + 0.5)
+        ).returncode == 0
+    except Exception:
+        return False
+
+
+def _peer_conn_status(peer, *, live_total: int | None = None, handshake_window: int | None = None) -> dict:
+    """
+    Real connection status, separate from panel status.
+
+    - Probe is authoritative by default.
+    - This prevents stale WireGuard handshakes from showing a disconnected peer as Online.
+    """
+    now = now_ts()
+
+    try:
+        handshake_window = int(
+            handshake_window if handshake_window is not None
+            else os.environ.get('WG_ONLINE_HANDSHAKE_WINDOW', '45')
+        )
+    except Exception:
+        handshake_window = 45
+
+    probe_first = str(os.environ.get('WG_ONLINE_PROBE_FIRST', '1')).lower() not in ('0', 'false', 'no', 'off')
+    handshake_fallback = str(os.environ.get('WG_ONLINE_HANDSHAKE_FALLBACK', '0')).lower() in ('1', 'true', 'yes', 'on')
+
+    try:
+        hs = int(_latest_handshake(peer) or 0)
+    except Exception:
+        hs = 0
+
+    hs_age = (now - hs) if hs > 0 else None
+    hs_fresh = bool(hs > 0 and hs_age is not None and hs_age <= int(handshake_window))
+
+    try:
+        live = int(_wg_transfer(peer) if live_total is None else (live_total or 0))
+    except Exception:
+        live = 0
+
+    try:
+        offset = int(getattr(peer, 'bytes_offset', 0) or 0)
+    except Exception:
+        offset = 0
+
+    traffic_now = bool(live > offset)
+    panel_enabled = (getattr(peer, 'status', '') or '').lower() == 'online'
+
+    ping_ok = False
+    probed = False
+
+    if panel_enabled and probe_first:
+        probed = True
+        ping_ok = _peer_ping_ok(peer)
+
+        if ping_ok:
+            online = True
+            reason = 'probe'
+        else:
+            online = bool(handshake_fallback and hs_fresh)
+            reason = 'handshake' if online else 'probe_failed'
+    else:
+        online = bool(hs_fresh or traffic_now)
+        reason = 'handshake' if hs_fresh else 'traffic' if traffic_now else 'none'
+
+    return {
+        'conn_status': 'online' if online else 'offline',
+        'connection_status': 'online' if online else 'offline',
+        'latest_handshake': hs,
+        'latest_handshake_age': hs_age,
+        'conn_reason': reason,
+        'conn_probe': bool(probed),
+    }
+
 def _wg_transfer_bytes(peer):
     rx, tx = _wg_rx_tx(peer)
     return rx + tx
 
 
-@app.route('/api/nodes/<int:nid>/interfaces')
+@app.route('/api/nodes/<int:nid>/interfaces', methods=['GET', 'POST'])
 @require_api_key_or_login
 def node_ifaces(nid):
     n = Node.query.get_or_404(nid)
+
+    if request.method == 'POST':
+        payload = request.get_json(silent=True) or {}
+
+        try:
+            created = node_post(n, '/api/interfaces/create', payload, timeout=30)
+        except requests.HTTPError as e:
+            body = getattr(e.response, 'text', '') if getattr(e, 'response', None) else ''
+            code = getattr(getattr(e, 'response', None), 'status_code', None)
+            return jsonify(
+                error='node_interface_create_failed',
+                detail=str(e),
+                status=code,
+                body=body[:800] if body else ''
+            ), 502
+        except Exception as e:
+            return jsonify(error='node_interface_create_failed', detail=str(e)), 502
+
+        created_iface = None
+        if isinstance(created, dict):
+            created_iface = created.get('interface') or created.get('iface') or created
+
+        if isinstance(created_iface, dict):
+            iface_name = (created_iface.get('name') or payload.get('name') or '').strip()
+            if iface_name:
+                db_iface_name = f"n{nid}:{iface_name}"
+                iface = InterfaceConfig.query.filter_by(name=db_iface_name).first()
+                if not iface:
+                    iface = InterfaceConfig(
+                        name=db_iface_name,
+                        path=f"/etc/wireguard/{iface_name}.conf",
+                        address=created_iface.get('address') or payload.get('address') or '10.0.0.1/24',
+                        listen_port=int(created_iface.get('listen_port') or payload.get('listen_port') or 51820),
+                        private_key='(remote)',
+                        mtu=created_iface.get('mtu') or payload.get('mtu'),
+                        dns=created_iface.get('dns') or payload.get('dns'),
+                    )
+                    try:
+                        iface.node_id = n.id
+                    except Exception:
+                        pass
+                    db.session.add(iface)
+                    db.session.commit()
+
+        return jsonify(created if isinstance(created, dict) else {"ok": True, "result": created}), 201
 
     data = node_get(n, '/api/interfaces', timeout=15) or {}
     base = data.get('interfaces') if isinstance(data, dict) else (data or [])
@@ -4361,6 +6140,139 @@ def node_iface_toggle(nid, name, action):
         current_app.logger.exception("Node iface toggle failed: %s %s", n.base_url, e)
         code = getattr(getattr(e, 'response', None), 'status_code', None)
         return jsonify(error='node_toggle_failed', detail=str(e), status=code), 502
+
+@app.route('/api/nodes/<int:nid>/iface/<name>', methods=['DELETE'])
+@login_required
+def node_iface_delete(nid, name):
+    n = Node.query.get_or_404(nid)
+    data = request.get_json(silent=True) or {}
+    delete_peers = _sub_bool(
+        data.get('delete_peers')
+        if 'delete_peers' in data
+        else request.args.get('delete_peers')
+    )
+
+    try:
+        res = node_delete(
+            n,
+            f'/api/iface/{name}',
+            payload={'delete_peers': bool(delete_peers), 'force': bool(delete_peers)},
+            timeout=30
+        )
+    except requests.HTTPError as e:
+        body = getattr(e.response, 'text', '') if getattr(e, 'response', None) else ''
+        code = getattr(getattr(e, 'response', None), 'status_code', None)
+        try:
+            j = e.response.json()
+        except Exception:
+            j = {}
+
+        if code == 409:
+            return jsonify(j or {
+                'error': 'interface_has_peers',
+                'detail': body[:800] if body else ''
+            }), 409
+
+        current_app.logger.exception("Node interface delete failed")
+        return jsonify(
+            error='node_interface_delete_failed',
+            detail=str(e),
+            status=code,
+            body=body[:800] if body else ''
+        ), 502
+    except Exception as e:
+        current_app.logger.exception("Node interface delete failed")
+        return jsonify(error='node_interface_delete_failed', detail=str(e)), 502
+
+    db_iface_names = [
+        f'n{nid}:{name}',
+        name,
+    ]
+
+    q = InterfaceConfig.query.filter(
+        or_(
+            InterfaceConfig.name.in_(db_iface_names),
+            and_(InterfaceConfig.node_id == nid, InterfaceConfig.name == name)
+        )
+    )
+
+    iface = q.first()
+    deleted_local_peers = 0
+    subscription_link_count = 0
+    affected_subs = set()
+
+    try:
+        if iface:
+            peers = Peer.query.filter_by(iface_id=iface.id).all()
+            deleted_local_peers = len(peers)
+            peer_ids = [p.id for p in peers]
+
+            if peer_ids:
+                try:
+                    _delete_shortlinks_for_peer_ids(peer_ids)
+                except Exception:
+                    current_app.logger.exception(
+                        "shortlink cleanup failed during node interface delete"
+                    )
+
+                links = SubscriptionPeer.query.filter(
+                    SubscriptionPeer.peer_id.in_(peer_ids)
+                ).all()
+
+                subscription_link_count = len(links)
+
+                for link in links:
+                    if link.subscription:
+                        affected_subs.add(link.subscription)
+
+                SubscriptionPeer.query.filter(
+                    SubscriptionPeer.peer_id.in_(peer_ids)
+                ).delete(synchronize_session=False)
+
+            for p in peers:
+                try:
+                    db.session.delete(p)
+                except Exception:
+                    pass
+
+            db.session.delete(iface)
+            db.session.flush()
+
+            for sub in affected_subs:
+                try:
+                    _sync_all_subscription_peers(sub, rename=True)
+                except Exception:
+                    current_app.logger.exception(
+                        "Failed to sync subscription after node interface delete: %s",
+                        getattr(sub, 'id', '?')
+                    )
+
+            db.session.commit()
+
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception("Failed to clean local DB after node interface delete")
+        return jsonify(
+            error='node_interface_deleted_but_db_cleanup_failed',
+            detail=str(e),
+            node_result=res
+        ), 500
+
+    try:
+        logpanel_action(
+            "node_interface_delete",
+            f"node={nid}; iface={name}; delete_peers={bool(delete_peers)}; peers={deleted_local_peers}"
+        )
+    except Exception:
+        pass
+
+    return jsonify(
+        ok=True,
+        node_result=res,
+        deleted_interface=name,
+        deleted_local_peers=deleted_local_peers,
+        subscription_link_count=subscription_link_count
+    )
 
 @app.route('/api/iface/<int:iid>', methods=['GET', 'POST'])
 @login_required
@@ -4497,7 +6409,7 @@ def node_peers(nid):
         iface_id = (request.args.get('iface_id') or '').strip()
         try:
             _expire()
-        except Exceptions:
+        except Exception:
             pass
         if not iface and iface_id:
             parts = iface_id.split(':', 1)
@@ -4538,18 +6450,33 @@ def node_peers(nid):
 
         out, dirty = [], False
         for p in q.all():
-            r  = runtime.get(p.public_key, {})  
-            rs = (r.get('status') or '').strip()
-            rx = r.get('rx_mib', 0) or 0
-            tx = r.get('tx_mib', 0) or 0
+            r = runtime.get(p.public_key)
+            rs = ((r or {}).get('conn_status') or (r or {}).get('connection_status') or (r or {}).get('status') or '').strip()
 
-            try: rx_mib = float(rx)
-            except Exception: rx_mib = 0.0
-            try: tx_mib = float(tx)
-            except Exception: tx_mib = 0.0
-            live_total = int((rx_mib + tx_mib) * 1024 * 1024)
-            offset     = int(getattr(p, 'bytes_offset', 0) or 0)
-            used_live  = max(0, live_total - offset)
+            if r:
+                rx = r.get('rx_mib', 0) or 0
+                tx = r.get('tx_mib', 0) or 0
+
+                try:
+                    rx_mib = float(rx)
+                except Exception:
+                    rx_mib = 0.0
+                
+                try:
+                    tx_mib = float(tx)
+                except Exception:
+                    tx_mib = 0.0
+
+                live_total = int((rx_mib + tx_mib) * 1024 * 1024)
+                used_total, _delta, usage_changed = _accumulate_peer_usage(p, live_total)
+                if usage_changed:
+                    dirty = True
+                used_live = used_total
+            else:
+                rx_mib = 0.0
+                tx_mib = 0.0
+                live_total = int(getattr(p, 'bytes_offset', 0) or 0)
+                used_live = int(getattr(p, 'used_bytes_total', 0) or 0)
 
             if getattr(p, 'start_on_first_use', False) and not getattr(p, 'first_used_at', None) and live_total > 0:
                 p.first_used_at = datetime.utcnow()
@@ -4561,9 +6488,6 @@ def node_peers(nid):
                         p.expires_at = None
                 dirty = True
 
-            if int(getattr(p, 'used_bytes_total', 0) or 0) != used_live:
-                p.used_bytes_total = used_live
-                dirty = True
 
             exp_ts      = to_ts(getattr(p, 'expires_at', None))
             ttl_seconds = max(0, exp_ts - now_ts()) if exp_ts else None
@@ -4581,6 +6505,12 @@ def node_peers(nid):
             out.append({
                 'id': p.id,
                 'node_id': nid,
+                'panel_status': p.status,
+                'conn_status': rs if rs in ('online', 'offline') else 'offline',
+                'connection_status': rs if rs in ('online', 'offline') else 'offline',
+                'latest_handshake': (r or {}).get('latest_handshake'),
+                'latest_handshake_age': (r or {}).get('latest_handshake_age'),
+                'conn_reason': (r or {}).get('conn_reason') or 'none',
                 'iface': iface_disp,
                 'iface_raw': iface_raw,
                 'name': p.name,
@@ -4606,7 +6536,7 @@ def node_peers(nid):
                 'expires_at_ts': exp_ts,
                 'ttl_seconds': ttl_seconds,
                 'used_bytes': used_live,    
-                'used_bytes_db': int(getattr(p, 'used_bytes_total', 0) or 0),
+                'used_bytes_db': used_live,
                 'rx': str(rx_mib),
                 'tx': str(tx_mib),
                 'phone_number': getattr(p, 'phone_number', '') or '',
@@ -4735,6 +6665,10 @@ def ui_nodes():
         })
     return jsonify(nodes=out)
 
+@app.get('/api-docs')
+@login_required
+def api_docs_page():
+    return render_template('api_docs.html')
 
 @app.route('/api/nodes', methods=['GET', 'POST'])
 @require_api_key_or_login
@@ -4841,12 +6775,124 @@ def node_enable_peer(nid, pub):
     if p:
         p.first_used_at = None
         p.expires_at = None
-        p.bytes_offset = _wg_transfer(p)
+        p.bytes_offset = _node_peer_live_total_bytes(n, p)
+        p.used_bytes_total = 0
         p.status = 'online'
         log_event(p, 'enabled', 'Node: enabled (timer+data reset)')
         logpanel_action("peer_enable", f"pid={p.id}; iface={p.iface}")
         db.session.commit()
     return jsonify(ok=True)
+
+def _node_peer_db_row(nid, pub):
+    return (
+        db.session.query(Peer)
+        .join(InterfaceConfig, Peer.iface_id == InterfaceConfig.id)
+        .filter(Peer.public_key == pub)
+        .filter(or_(
+            InterfaceConfig.name.like(f"n{nid}:%"),
+            InterfaceConfig.node_id == nid
+        ))
+        .first()
+    )
+
+
+def _node_peer_live_total_bytes(node, peer):
+    """
+    Read current RX+TX from the node agent.
+    Returns bytes. Falls back to 0 if unavailable.
+    """
+    try:
+        iface_raw = peer.iface.name if peer.iface else ''
+        iface_name = iface_raw.split(':', 1)[1] if ':' in iface_raw else iface_raw
+
+        data = node_get(node, '/api/peers' + (f'?iface={iface_name}' if iface_name else ''), timeout=8) or {}
+        rows = data.get('peers') if isinstance(data, dict) else []
+        for row in rows or []:
+            if row.get('public_key') == peer.public_key:
+                rx_mib = float(row.get('rx_mib') or 0)
+                tx_mib = float(row.get('tx_mib') or 0)
+                return int((rx_mib + tx_mib) * 1024 * 1024)
+    except Exception:
+        current_app.logger.debug("Could not read node live transfer for peer %s", getattr(peer, 'id', '?'))
+
+    return 0
+
+
+@app.route('/api/nodes/<int:nid>/peer/<path:pub>/reset_data', methods=['POST'])
+@login_required
+def node_reset_peer_data_only(nid, pub):
+    """
+    Reset node peer traffic counters only
+    """
+    n = Node.query.get_or_404(nid)
+    p = _node_peer_db_row(nid, pub) or abort(404)
+
+    current = _node_peer_live_total_bytes(n, p)
+
+    p.bytes_offset = int(current or 0)
+    p.used_bytes_total = 0
+
+    db.session.commit()
+
+    try:
+        log_event(p, 'reset_data', f'Node: offset set to {current}; status kept as {p.status}')
+        logpanel_action("node_peer_reset_data", f"node={nid}; pid={p.id}; new_offset={current}; status_kept={p.status}")
+    except Exception:
+        pass
+
+    return jsonify(ok=True, success=True, status=p.status)
+
+
+@app.route('/api/nodes/<int:nid>/peer/<path:pub>/reset_timer', methods=['POST'])
+@login_required
+def node_reset_peer_timer_only(nid, pub):
+    """
+    Reset node peer timer and re-enable
+    """
+    n = Node.query.get_or_404(nid)
+    p = _node_peer_db_row(nid, pub) or abort(404)
+
+    tl_days = getattr(p, 'time_limit_days', None)
+    try:
+        tl_days_f = float(tl_days) if tl_days is not None else 0.0
+    except Exception:
+        tl_days_f = 0.0
+
+    p.first_used_at = None
+
+    if getattr(p, 'unlimited', False) or tl_days_f <= 0:
+        p.expires_at = None
+        detail = 'Node timer cleared; peer re-enabled'
+    elif getattr(p, 'start_on_first_use', False):
+        p.expires_at = None
+        detail = 'Node timer cleared; will start on first use; peer re-enabled'
+    else:
+        p.expires_at = from_ts(add_days_ts(now_ts(), tl_days_f))
+        detail = f'Node timer restarted for {tl_days_f} days; peer re-enabled'
+
+    payload = {}
+    try:
+        payload['host_cidr'] = _host_peer(p)
+    except Exception:
+        pass
+
+    try:
+        node_post(n, f'/api/peer/{pub}/enable', payload)
+        p.status = 'online'
+    except Exception as e:
+        db.session.commit()
+        current_app.logger.exception("Node reset timer enable failed")
+        return jsonify(error="node_reset_timer_failed", detail=str(e)), 502
+
+    db.session.commit()
+
+    try:
+        log_event(p, 'reset_timer', detail)
+        logpanel_action("node_peer_reset_timer", f"node={nid}; pid={p.id}; {detail}")
+    except Exception:
+        pass
+
+    return jsonify(ok=True, success=True, status=p.status)
 
 @app.route('/api/nodes/<int:nid>', methods=['DELETE', 'PUT', 'PATCH'])
 @admin_required
@@ -5111,17 +7157,6 @@ def admin_rename():
     return jsonify(ok=True)
 
 
-@app.route('/api/admin', methods=['GET'])
-@login_required
-def admin_state():
-    username = getattr(current_user, 'username', 'admin')
-    rec = Admin2FA.query.filter_by(username=username).first()
-    return jsonify(
-        username=username,
-        twofa_enabled=bool(rec and rec.enabled),
-        recovery_count=len(json.loads(rec.recovery_hashes or "[]")) if rec else 0
-    ), 200
-
 @app.route('/api/admin/twofa_begin', methods=['POST'])
 @login_required
 def twofa_begin():
@@ -5301,6 +7336,12 @@ def users():
 
         db.session.add(peer)
         db.session.commit()
+        short_token = None
+        short_url = None
+        try:
+            short_token, short_url = _shortlink_for_peer(peer)
+        except Exception:
+            current_app.logger.exception("shortlink create failed for local peer %s", peer.id)
 
         try:
             _peer_to_conf(peer)
@@ -5526,18 +7567,20 @@ def node_iface_logs(nid, name):
                 name, nid, e
             )
             return jsonify(ok=False, error="node_clear_failed"), 502
-
+    from urllib.parse import urlencode
     params = {
         'limit': request.args.get('limit', 500),
         'q': (request.args.get('q') or '').strip(),
     }
+    qs = urlencode({k: v for k, v in params.items() if str(v or '').strip()})
+    node_path = f"/api/iface/{name}/logs" + (f"?{qs}" if qs else "")
+
     try:
-        data = node_get(n, f"/api/iface/{name}/logs", params=params, timeout=12)
+        data = node_get(n, node_path, timeout=12)
     except Exception as e:
         current_app.logger.warning("node_iface_logs failed for %s on %s: %s", name, n, e)
         return jsonify(logs=[])
-
-    return jsonify(logs=data.get('logs', []))
+    return jsonify(logs=(data.get('logs', []) if isinstance(data, dict) else []))
 
 
 @app.route('/api/stats')
@@ -5719,20 +7762,85 @@ def stats_mini():
 @require_api_key_or_login
 def peers_create():
     data = request.get_json(silent=True) or {}
+
     scope = (data.get('scope') or 'local').strip().lower()
     if scope not in ('local', 'node'):
         return jsonify(error='scope must be local or node'), 400
 
+    def _as_int(v, default=None):
+        try:
+            if v is None or v == '':
+                return default
+            return int(v)
+        except Exception:
+            return default
+
+    def _as_bool(v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        return str(v or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+    def _clean_keepalive(v):
+        n = _as_int(v, None)
+        return n if n and n > 0 else None
+
+    def _clean_mtu(v):
+        n = _as_int(v, None)
+        return n if n and n > 0 else None
+
+    # --------------------
+    # NODE PEER CREATE
+    # --------------------
     if scope == 'node':
-        nid = int(data.get('node_id') or 0)
-        iface_name = (data.get('iface_name') or '').strip()
+        nid = _as_int(data.get('node_id') or data.get('nodeId'), 0)
+        iface_name = (
+            data.get('iface_name') or
+            data.get('ifaceName') or
+            data.get('iface') or
+            ''
+        ).strip()
+
         if not nid or not iface_name:
             return jsonify(error='node_id and iface_name required for node scope'), 400
 
         n = Node.query.get_or_404(nid)
 
-        priv = subprocess.check_output(['wg', 'genkey']).strip().decode()
-        pub  = subprocess.check_output(['wg', 'pubkey'], input=priv.encode()).strip().decode()
+        name = (data.get('name') or '').strip() or 'peer'
+        endpoint = (data.get('endpoint') or '').strip()
+        allowed_ips = (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip()
+        keepalive = _clean_keepalive(data.get('persistent_keepalive'))
+        mtu = _clean_mtu(data.get('mtu'))
+        dns = (data.get('dns') or '').strip() or None
+
+        phone = (data.get('phone_number') or data.get('phone') or '').strip()
+        tg = (data.get('telegram_id') or data.get('telegram') or '').strip()
+
+        combined_days = _conv_time_limit(data)
+
+        data_limit_value = _as_int(
+            data.get('data_limit_value') if data.get('data_limit_value') is not None else data.get('data_limit'),
+            0
+        )
+        data_limit_unit = (
+            data.get('data_limit_unit') or
+            data.get('limit_unit') or
+            'Mi'
+        )
+
+        start_on_first_use = _as_bool(data.get('start_on_first_use'))
+        unlimited = _as_bool(data.get('unlimited'))
+
+        # Get remote interface metadata and available IPs.
+        try:
+            node_ifaces = node_get(n, "/api/interfaces") or {}
+            rows = node_ifaces.get("interfaces") if isinstance(node_ifaces, dict) else node_ifaces
+            rows = rows or []
+            remote_iface = next((x for x in rows if str(x.get("name")) == iface_name), {}) or {}
+        except Exception:
+            current_app.logger.exception("Failed to fetch node interfaces for node_id=%s", nid)
+            remote_iface = {}
 
         addr = (data.get('address') or '').strip()
         if not addr:
@@ -5741,76 +7849,136 @@ def peers_create():
                 if isinstance(avail, dict):
                     avail = avail.get("available_ips", [])
                 if not isinstance(avail, list) or not avail:
-                     return jsonify(error="node_no_available_ip",
-                                    detail="empty or invalid available_ips"), 409
+                    return jsonify(
+                        error="node_no_available_ip",
+                        detail="empty or invalid available_ips"
+                    ), 409
                 addr = avail[0]
-
             except Exception as e:
                 current_app.logger.exception("node available_ips failed: %s", e)
-                return jsonify(error="node_available_ips_failed"), 502
+                return jsonify(error="node_available_ips_failed", detail=str(e)), 502
 
+        # Make sure remote interface is up.
         try:
             node_post(n, f"/api/iface/{iface_name}/up", {})
         except Exception:
-            pass  
+            pass
+
+        # Generate keys on panel, then install public key on node.
+        try:
+            priv = subprocess.check_output(
+                ['wg', 'genkey'],
+                stderr=subprocess.DEVNULL,
+                timeout=3
+            ).strip().decode()
+
+            pub = subprocess.check_output(
+                ['wg', 'pubkey'],
+                input=(priv + '\n').encode(),
+                stderr=subprocess.DEVNULL,
+                timeout=3
+            ).strip().decode()
+        except Exception as e:
+            current_app.logger.exception("key generation failed")
+            return jsonify(error="key_generation_failed", detail=str(e)), 500
 
         node_payload = {
             'iface': iface_name,
             'public_key': pub,
-            'host_cidr': addr,  
-            'endpoint':   (data.get('endpoint') or '').strip(),
-            'persistent_keepalive': data.get('persistent_keepalive') or 0,
-            'mtu':  data.get('mtu'),
-            'dns':  data.get('dns'),
-            'allowed_ips': (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip(),
+            'host_cidr': addr,
+            'endpoint': endpoint,
+            'persistent_keepalive': keepalive or 0,
+            'mtu': mtu,
+            'dns': dns,
+            'allowed_ips': allowed_ips,
         }
 
         try:
             node_post(n, '/api/peers/add', node_payload)
         except requests.HTTPError as e:
             body = getattr(e.response, 'text', '') if getattr(e, 'response', None) else ''
-            return jsonify(error="node_create_failed", detail=str(e), body=(body[:800] if body else '')), 502
+            current_app.logger.exception("node_create_failed node_id=%s iface=%s", nid, iface_name)
+            return jsonify(
+                error="node_create_failed",
+                detail=str(e),
+                body=(body[:800] if body else '')
+            ), 502
+        except Exception as e:
+            current_app.logger.exception("node_create_failed node_id=%s iface=%s", nid, iface_name)
+            return jsonify(error="node_create_failed", detail=str(e)), 502
 
         db_iface_name = f"n{nid}:{iface_name}"
         iface = InterfaceConfig.query.filter_by(name=db_iface_name).first()
+
         if not iface:
             iface = InterfaceConfig(
                 name=db_iface_name,
                 path=f"/etc/wireguard/{iface_name}.conf",
-                address=data.get('server_cidr') or '10.0.0.1/24',
-                listen_port=int(data.get('listen_port') or 51820),
+                address=(
+                    remote_iface.get('address') or
+                    data.get('server_cidr') or
+                    '10.0.0.1/24'
+                ),
+                listen_port=int(
+                    remote_iface.get('listen_port') or
+                    data.get('listen_port') or
+                    51820
+                ),
                 private_key='(remote)',
-                mtu=data.get('mtu'),
-                dns=data.get('dns'),
+                mtu=remote_iface.get('mtu') or mtu,
+                dns=remote_iface.get('dns') or dns,
+                node_id=n.id,
             )
-            try:
-                iface.node_id = n.id
-            except Exception:
-                pass
             db.session.add(iface)
-            db.session.commit()
+            db.session.flush()
+        else:
+            changed = False
 
-        combined_days = _conv_time_limit(data)
+            if remote_iface.get('address') and iface.address != remote_iface.get('address'):
+                iface.address = remote_iface.get('address')
+                changed = True
 
-        phone = (data.get('phone_number') or '').strip()
-        tg    = (data.get('telegram_id')  or '').strip()
+            if remote_iface.get('listen_port'):
+                try:
+                    lp = int(remote_iface.get('listen_port'))
+                    if iface.listen_port != lp:
+                        iface.listen_port = lp
+                        changed = True
+                except Exception:
+                    pass
+
+            if remote_iface.get('mtu') and iface.mtu != remote_iface.get('mtu'):
+                iface.mtu = remote_iface.get('mtu')
+                changed = True
+
+            if remote_iface.get('dns') and iface.dns != remote_iface.get('dns'):
+                iface.dns = remote_iface.get('dns')
+                changed = True
+
+            if getattr(iface, 'node_id', None) != n.id:
+                iface.node_id = n.id
+                changed = True
+
+            if changed:
+                db.session.flush()
 
         peer = Peer(
             iface_id=iface.id,
-            name=(data.get('name') or '').strip() or 'peer',
-            public_key=pub, private_key=priv,
-            address=node_payload['host_cidr'],
-            allowed_ips=node_payload['allowed_ips'],
-            endpoint=node_payload['endpoint'] or '',
-            persistent_keepalive=data.get('persistent_keepalive') or None,
-            mtu=data.get('mtu') or None,
-            dns=data.get('dns') or None,
+            name=name,
+            public_key=pub,
+            private_key=priv,
+            address=addr,
+            allowed_ips=allowed_ips,
+            endpoint=endpoint,
+            persistent_keepalive=keepalive,
+            mtu=mtu,
+            dns=dns,
             status='online',
-            data_limit_value=int(data.get('data_limit_value') or 0),
-            data_limit_unit=(data.get('data_limit_unit') or 'Mi'),
-            start_on_first_use=bool(data.get('start_on_first_use')),
+            data_limit_value=data_limit_value,
+            data_limit_unit=data_limit_unit,
+            start_on_first_use=start_on_first_use,
             time_limit_days=combined_days,
-            unlimited=bool(data.get('unlimited')),
+            unlimited=unlimited,
             phone_number=phone or '',
             telegram_id=tg or '',
         )
@@ -5819,38 +7987,103 @@ def peers_create():
             exp_ts = add_days_ts(now_ts(), float(peer.time_limit_days))
             peer.expires_at = from_ts(exp_ts)
 
-        db.session.add(peer)
-        db.session.commit()
-
+        short_token = None
+        short_url = None
         try:
-            log_event(
-                peer,
-                'created(node)',
-                f"Limit={getattr(peer,'data_limit_value',0)}{getattr(peer,'data_limit_unit','')}; "
-                f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
-            )
-        except Exception:
-            pass
+            db.session.add(peer)
+            db.session.flush()
+            try:
+                short_token, short_url = _shortlink_for_peer(peer)
+            except Exception:
+                current_app.logger.exception(
+                    "shortlink create failed for node peer %s",
+                    getattr(peer, "id", "?")
+                )
+            try:
+                log_event(
+                    peer,
+                    'created',
+                    f"node create; node_id={nid}; iface={iface_name}; "
+                    f"Limit={peer.data_limit_value}{peer.data_limit_unit or ''}; "
+                    f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
+                )
+            except Exception:
+                pass
 
-        return jsonify(success=True, id=peer.id,
-                       phone_number=peer.phone_number or '',
-                       telegram_id=peer.telegram_id or ''), 200
+            try:
+                logpanel_action(
+                    "peer_create",
+                    f"pid={peer.id}; scope=node; node_id={nid}; iface={iface_name}; "
+                    f"unlimited={peer.unlimited}; days={peer.time_limit_days}"
+                )
+            except Exception:
+                pass
 
+            db.session.commit()
+
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.exception("DB save failed after node peer create: %s", e)
+
+            try:
+                node_delete(n, f"/api/peer/{pub}")
+            except Exception:
+                pass
+
+            return jsonify(error="db_save_failed", detail=str(e)), 500
+
+        return jsonify(
+            success=True,
+            ok=True,
+            scope='node',
+            node_id=nid,
+            iface=iface_name,
+            id=peer.id,
+            public_key=peer.public_key,
+            shortlink=short_url or '',
+            shortlink_token=short_token or '',
+            address=peer.address,
+            phone_number=peer.phone_number or '',
+            telegram_id=peer.telegram_id or ''
+        ), 200
+
+    # ---------------------
+    # LOCAL PEER CREATE
+    # ---------------------
     iface_id = data.get('iface_id')
     if not iface_id:
         return jsonify(error='iface_id required'), 400
 
-    iface = db.session.get(InterfaceConfig, int(iface_id))
+    try:
+        iface_id = int(iface_id)
+    except Exception:
+        return jsonify(error='invalid iface_id'), 400
+
+    iface = db.session.get(InterfaceConfig, iface_id)
     if not iface:
         return jsonify(error='Interface not found'), 404
 
-    priv = subprocess.check_output(['wg', 'genkey']).strip().decode()
-    pub  = subprocess.check_output(['wg', 'pubkey'], input=priv.encode()).strip().decode()
+    try:
+        priv = subprocess.check_output(
+            ['wg', 'genkey'],
+            stderr=subprocess.DEVNULL,
+            timeout=3
+        ).strip().decode()
+
+        pub = subprocess.check_output(
+            ['wg', 'pubkey'],
+            input=(priv + '\n').encode(),
+            stderr=subprocess.DEVNULL,
+            timeout=3
+        ).strip().decode()
+    except Exception as e:
+        current_app.logger.exception("key generation failed")
+        return jsonify(error="key_generation_failed", detail=str(e)), 500
 
     combined_days = _conv_time_limit(data)
 
     phone = (data.get('phone_number') or data.get('phone') or '').strip()
-    tg    = (data.get('telegram_id')  or data.get('telegram') or '').strip()
+    tg = (data.get('telegram_id') or data.get('telegram') or '').strip()
 
     address = (data.get('address') or '').strip()
     if not address:
@@ -5861,24 +8094,41 @@ def peers_create():
             address = avail[0]
         except Exception as e:
             current_app.logger.exception("Failed to get available IPs: %s", e)
-            return jsonify(error='address_allocation_failed'), 500
+            return jsonify(error='address_allocation_failed', detail=str(e)), 500
+
+    allowed_ips = (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip()
+    endpoint = (data.get('endpoint') or '').strip()
+    keepalive = _clean_keepalive(data.get('persistent_keepalive'))
+    mtu = _clean_mtu(data.get('mtu'))
+    dns = (data.get('dns') or '').strip() or None
+
+    data_limit_value = _as_int(
+        data.get('data_limit_value') if data.get('data_limit_value') is not None else data.get('data_limit'),
+        0
+    )
+    data_limit_unit = (
+        data.get('data_limit_unit') or
+        data.get('limit_unit') or
+        'Mi'
+    )
 
     peer = Peer(
         iface_id=iface.id,
         name=(data.get('name') or '').strip() or 'peer',
-        public_key=pub, private_key=priv,
+        public_key=pub,
+        private_key=priv,
         address=address,
-        allowed_ips=(data.get('allowed_ips') or '').strip(),
-        endpoint=(data.get('endpoint') or '').strip(),
-        persistent_keepalive=data.get('persistent_keepalive'),
-        mtu=data.get('mtu'),
-        dns=data.get('dns'),
+        allowed_ips=allowed_ips,
+        endpoint=endpoint,
+        persistent_keepalive=keepalive,
+        mtu=mtu,
+        dns=dns,
         status='online',
-        data_limit_value=int(data.get('data_limit_value') or 0),
-        data_limit_unit=(data.get('data_limit_unit') or 'Mi'),
-        start_on_first_use=bool(data.get('start_on_first_use')),
+        data_limit_value=data_limit_value,
+        data_limit_unit=data_limit_unit,
+        start_on_first_use=_as_bool(data.get('start_on_first_use')),
         time_limit_days=combined_days,
-        unlimited=bool(data.get('unlimited')),
+        unlimited=_as_bool(data.get('unlimited')),
         phone_number=phone or '',
         telegram_id=tg or '',
     )
@@ -5887,26 +8137,60 @@ def peers_create():
         exp_ts = add_days_ts(now_ts(), float(peer.time_limit_days))
         peer.expires_at = from_ts(exp_ts)
 
-    db.session.add(peer)
-    db.session.commit()
+    short_token = None
+    short_url = None
 
     try:
+        db.session.add(peer)
+        db.session.flush()
+
+        try:
+            short_token, short_url = _shortlink_for_peer(peer)
+        except Exception:
+            current_app.logger.exception(
+                "shortlink create failed for local peer %s",
+                getattr(peer, "id", "?")
+            )
+
         _peer_to_conf(peer)
         _check_iface_up(peer.iface)
         _wg_enable(peer)
-    except Exception:
-        current_app.logger.exception("enable failed for peer %s", peer.id)
 
-    log_event(
-        peer,
-        'created',
-        f"Limit={getattr(peer,'data_limit_value',0)}{getattr(peer,'data_limit_unit','')}; "
-        f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
-    )
+        try:
+            log_event(
+                peer,
+                'created',
+                f"Limit={peer.data_limit_value}{peer.data_limit_unit or ''}; "
+                f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
+            )
+        except Exception:
+            pass
+
+        try:
+            logpanel_action(
+                "peer_create",
+                f"pid={peer.id}; scope=local; iface={iface.name}; "
+                f"unlimited={peer.unlimited}; days={peer.time_limit_days}"
+            )
+        except Exception:
+            pass
+
+        db.session.commit()
+
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception("local peer create failed: %s", e)
+        return jsonify(error="local_create_failed", detail=str(e)), 500
 
     return jsonify(
         success=True,
+        ok=True,
+        scope='local',
         id=peer.id,
+        public_key=peer.public_key,
+        shortlink=short_url or '',
+        shortlink_token=short_token or '',
+        address=peer.address,
         phone_number=peer.phone_number or '',
         telegram_id=peer.telegram_id or ''
     ), 200
@@ -5936,7 +8220,10 @@ def panel_peers():
     for p in peers:
         try:
             total = _wg_transfer(p)
-            used = max(0, total - int(getattr(p, 'bytes_offset', 0) or 0))
+            used, _delta, usage_changed = _accumulate_peer_usage(p, total)
+            conn = _peer_conn_status(p, live_total=total)
+            if usage_changed:
+                db.session.commit()
 
             rx = tx = '0'
             try:
@@ -5949,8 +8236,23 @@ def panel_peers():
             exp_ts = to_ts(getattr(p, 'expires_at', None))
             ttl_seconds = max(0, exp_ts - now_ts()) if exp_ts else None
 
+            short_token = ''
+            short_url = ''
+            try:
+                short_token, short_url = _shortlink_from_peer_id(p.id)
+
+                if not short_token or not short_url:
+                    short_token, short_url = _shortlink_for_peer(p)
+            except Exception:
+                current_app.logger.exception(
+                "shortlink attach failed while listing peer %s",
+                getattr(p, "id", "?")
+            )
+
             out.append({
                 'id': p.id,
+                'shortlink': short_url or '',
+                'shortlink_token': short_token or '',
                 'name': p.name,
                 'iface': p.iface.name,
                 'listen_port': p.iface.listen_port,
@@ -5962,6 +8264,12 @@ def panel_peers():
                 'mtu': p.mtu,
                 'dns': p.dns,
                 'status': p.status,
+                'panel_status': p.status,
+                'conn_status': conn['conn_status'],
+                'connection_status': conn['connection_status'],
+                'latest_handshake': conn['latest_handshake'],
+                'latest_handshake_age': conn['latest_handshake_age'],
+                'conn_reason': conn['conn_reason'],
                 'data_limit': getattr(p, 'data_limit_value', None),
                 'limit_unit': getattr(p, 'data_limit_unit', None),
                 'unlimited': getattr(p, 'unlimited', False),
@@ -5975,7 +8283,7 @@ def panel_peers():
                 'expires_at_ts': exp_ts,
                 'ttl_seconds': ttl_seconds,
                 'used_bytes': used,                                
-                'used_bytes_db': getattr(p, 'used_bytes_total', 0), 
+                'used_bytes_db': used,
                 'phone_number': getattr(p, 'phone_number', '') or '',
                 'telegram_id': getattr(p, 'telegram_id', '') or '',
                 'rx': rx,
@@ -6003,20 +8311,365 @@ def panel_peers_bulk():
     if scope == 'node':
         nid = data.get('node_id') or data.get('nodeId')
         iface_name = (data.get('iface_name') or data.get('ifaceName') or '').strip()
+
         if not nid or not iface_name:
             return jsonify(error="node_id and iface_name are required for node scope"), 400
 
-        forward_payload = {k: v for k, v in data.items()
-                           if k not in ('scope', 'iface_id', 'iface', 'ifaceId')}
-        forward_payload['iface_name'] = iface_name
+        try:
+            nid = int(nid)
+        except Exception:
+            return jsonify(error="invalid node_id"), 400
 
         try:
-            n = Node.query.get_or_404(int(nid))
-            res = node_post(n, '/api/peers/bulk', payload=forward_payload)
-            return jsonify(res), 200
+            count = int(data.get('count') or data.get('bulkPeerCount') or 0)
+        except Exception:
+            count = 0
+
+        if count < 1:
+            return jsonify(error="count is required"), 400
+
+        n = Node.query.get_or_404(nid)
+
+        prefix = (data.get('prefix') or data.get('name_prefix') or 'b').strip() or 'b'
+
+        combined_days = _conv_time_limit({
+            'time_limit_days': data.get('time_limit_days'),
+            'time_limit_hours': data.get('time_limit_hours'),
+        })
+
+        allowed_ips = (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip()
+        endpoint = (data.get('endpoint') or '').strip()
+
+        try:
+            keepalive = int(data.get('persistent_keepalive') or 0)
+        except Exception:
+            keepalive = 0
+
+        try:
+            mtu = int(data.get('mtu')) if str(data.get('mtu') or '').strip() else None
+        except Exception:
+            mtu = None
+
+        dns = (data.get('dns') or '').strip() or None
+
+        try:
+            dlim_val = int(data.get('data_limit_value') or data.get('data_limit') or 0)
+        except Exception:
+            dlim_val = 0
+
+        dlim_unit = data.get('data_limit_unit') or data.get('limit_unit') or 'Mi'
+
+        start_on_first_use = bool(data.get('start_on_first_use') or False)
+        unlimited = bool(data.get('unlimited') or False)
+
+        def _social_list(val):
+            if val is None:
+                return []
+            if isinstance(val, list):
+                return [str(x).strip() for x in val if str(x).strip()]
+            return [s for s in (t.strip() for t in re.split(r'[\n,]+', str(val))) if s]
+
+        phones = _social_list(
+            data.get('phone_numbers') or
+            data.get('phone_number') or
+            data.get('phones') or
+            data.get('mobile_numbers') or
+            data.get('mobiles')
+        )
+
+        tgs = _social_list(
+            data.get('telegram_ids') or
+            data.get('telegram_id') or
+            data.get('telegrams') or
+            data.get('telegram')
+        )
+
+        try:
+            node_ifaces = node_get(n, "/api/interfaces") or {}
+            rows = node_ifaces.get("interfaces") if isinstance(node_ifaces, dict) else node_ifaces
+            rows = rows or []
+            remote_iface = next(
+                (x for x in rows if str((x or {}).get("name") or "") == iface_name),
+                {}
+            ) or {}
+        except Exception:
+            current_app.logger.exception(
+                "Failed to fetch node interfaces for node_id=%s",
+                nid
+            )
+            remote_iface = {}
+
+        try:
+            avail = node_get(n, f"/api/iface/{iface_name}/available_ips", timeout=10)
+            if isinstance(avail, dict):
+                avail_ips = avail.get("available_ips", []) or []
+            else:
+                avail_ips = avail or []
+
+            if not isinstance(avail_ips, list):
+                avail_ips = []
         except Exception as e:
-            current_app.logger.exception("Bulk forward to node %s failed: %s", nid, e)
-            return jsonify(error="node_proxy_failed", message=str(e)), 502
+            current_app.logger.exception(
+                "node bulk available_ips failed node_id=%s iface=%s",
+                nid,
+                iface_name
+            )
+            return jsonify(error="node_available_ips_failed", detail=str(e)), 502
+
+        if not avail_ips:
+            return jsonify(error="No available IPs for this node interface"), 409
+
+        if count > len(avail_ips):
+            count = len(avail_ips)
+
+        try:
+            node_post(n, f"/api/iface/{iface_name}/up", {})
+        except Exception:
+            pass
+
+        db_iface_name = f"n{nid}:{iface_name}"
+        iface = InterfaceConfig.query.filter_by(name=db_iface_name).first()
+
+        if not iface:
+            iface = InterfaceConfig(
+                name=db_iface_name,
+                path=f"/etc/wireguard/{iface_name}.conf",
+                address=(
+                    remote_iface.get('address') or
+                    data.get('server_cidr') or
+                    '10.0.0.1/24'
+                ),
+                listen_port=int(
+                    remote_iface.get('listen_port') or
+                    data.get('listen_port') or
+                    51820
+                ),
+                private_key='(remote)',
+                mtu=remote_iface.get('mtu') or mtu,
+                dns=remote_iface.get('dns') or dns,
+                node_id=n.id,
+            )
+            db.session.add(iface)
+            db.session.flush()
+        else:
+            changed = False
+
+            if remote_iface.get('address') and iface.address != remote_iface.get('address'):
+                iface.address = remote_iface.get('address')
+                changed = True
+
+            if remote_iface.get('listen_port'):
+                try:
+                    lp = int(remote_iface.get('listen_port'))
+                    if iface.listen_port != lp:
+                        iface.listen_port = lp
+                        changed = True
+                except Exception:
+                    pass
+
+            if remote_iface.get('mtu') and iface.mtu != remote_iface.get('mtu'):
+                iface.mtu = remote_iface.get('mtu')
+                changed = True
+
+            if remote_iface.get('dns') and iface.dns != remote_iface.get('dns'):
+                iface.dns = remote_iface.get('dns')
+                changed = True
+
+            if getattr(iface, 'node_id', None) != n.id:
+                iface.node_id = n.id
+                changed = True
+
+            if changed:
+                db.session.flush()
+
+        rx = re.compile(rf'^{re.escape(prefix)}(\d+)$')
+        existing = {
+            m.group(1)
+            for (nm,) in db.session.query(Peer.name)
+                .filter(Peer.iface_id == iface.id)
+                .all()
+            for m in [rx.match(nm)] if m
+        }
+
+        next_num = 1
+        if existing:
+            try:
+                next_num = max(int(x) for x in existing) + 1
+            except Exception:
+                next_num = 1
+
+        created, errors = [], []
+        shortlinks_by_id = {}
+
+        for i in range(count):
+            pub = ''
+            try:
+                priv = subprocess.check_output(
+                    ['wg', 'genkey'],
+                    stderr=subprocess.DEVNULL,
+                    timeout=3
+                ).strip().decode()
+
+                pub = subprocess.check_output(
+                    ['wg', 'pubkey'],
+                    input=(priv + '\n').encode(),
+                    stderr=subprocess.DEVNULL,
+                    timeout=3
+                ).strip().decode()
+
+                name = f"{prefix}{next_num + i}"
+                addr = avail_ips[i]
+
+                node_payload = {
+                    'iface': iface_name,
+                    'public_key': pub,
+                    'host_cidr': addr,
+                    'endpoint': endpoint,
+                    'persistent_keepalive': keepalive or 0,
+                    'mtu': mtu,
+                    'dns': dns,
+                    'allowed_ips': allowed_ips,
+                }
+
+                node_post(n, '/api/peers/add', node_payload, timeout=12)
+
+                peer = Peer(
+                    iface_id=iface.id,
+                    name=name,
+                    public_key=pub,
+                    private_key=priv,
+                    address=addr,
+                    allowed_ips=allowed_ips,
+                    endpoint=endpoint,
+                    persistent_keepalive=keepalive if keepalive > 0 else None,
+                    mtu=mtu,
+                    dns=dns,
+                    status='online',
+                    data_limit_value=dlim_val,
+                    data_limit_unit=dlim_unit,
+                    time_limit_days=combined_days,
+                    start_on_first_use=start_on_first_use,
+                    unlimited=unlimited,
+                    phone_number=phones[i] if i < len(phones) else '',
+                    telegram_id=tgs[i] if i < len(tgs) else '',
+                )
+
+                if peer.time_limit_days and not peer.start_on_first_use and not peer.unlimited:
+                    exp_ts = add_days_ts(now_ts(), float(peer.time_limit_days))
+                    peer.expires_at = from_ts(exp_ts)
+
+                db.session.add(peer)
+                db.session.flush()
+
+                try:
+                    token, url = _shortlink_for_peer(peer)
+                    shortlinks_by_id[int(peer.id)] = {
+                        "token": token or "",
+                        "url": url or "",
+                    }
+                except Exception:
+                    current_app.logger.exception(
+                        "shortlink create failed for node bulk peer %s",
+                        getattr(peer, "id", "?")
+                    )
+
+                try:
+                    db.session.add(PeerEvent(
+                        peer_id=peer.id,
+                        event='created',
+                        details=(
+                            f"node bulk; node_id={nid}; iface={iface_name}; "
+                            f"Limit={peer.data_limit_value}{peer.data_limit_unit or ''}; "
+                            f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
+                        )
+                    ))
+                except Exception:
+                    pass
+
+                created.append(peer)
+
+            except requests.HTTPError as e:
+                body = getattr(e.response, 'text', '') if getattr(e, 'response', None) else ''
+                current_app.logger.exception(
+                    "node bulk create failed node_id=%s iface=%s index=%s",
+                    nid,
+                    iface_name,
+                    i
+                )
+                errors.append({
+                    'index': i,
+                    'error': str(e),
+                    'body': body[:800] if body else '',
+                })
+
+                if pub:
+                    try:
+                        node_delete(n, f"/api/peer/{pub}")
+                    except Exception:
+                        pass
+
+            except Exception as e:
+                current_app.logger.exception(
+                    "node bulk create failed node_id=%s iface=%s index=%s",
+                    nid,
+                    iface_name,
+                    i
+                )
+                errors.append({'index': i, 'error': str(e)})
+
+                if pub:
+                    try:
+                        node_delete(n, f"/api/peer/{pub}")
+                    except Exception:
+                        pass
+
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.exception("node bulk DB commit failed: %s", e)
+
+            for peer in created:
+                try:
+                    node_delete(n, f"/api/peer/{peer.public_key}")
+                except Exception:
+                    pass
+
+            return jsonify(error="node_bulk_db_commit_failed", detail=str(e)), 500
+
+        for peer in created:
+            try:
+                logpanel_action(
+                    "peer_create",
+                    f"pid={peer.id}; scope=node_bulk; node_id={nid}; iface={iface_name}; "
+                    f"unlimited={peer.unlimited}; days={peer.time_limit_days}"
+                )
+            except Exception:
+                pass
+
+        return jsonify(
+            ok=True,
+            success=True,
+            scope='node',
+            node_id=nid,
+            iface=iface_name,
+            created=len(created),
+            errors=errors,
+            first_name=created[0].name if created else None,
+            last_name=created[-1].name if created else None,
+            peers=[{
+                'id': p.id,
+                'node_id': nid,
+                'name': p.name,
+                'iface': iface_name,
+                'public_key': p.public_key,
+                'address': p.address,
+                'shortlink': (shortlinks_by_id.get(int(p.id)) or {}).get('url', ''),
+                'shortlink_token': (shortlinks_by_id.get(int(p.id)) or {}).get('token', ''),
+                'phone_number': getattr(p, 'phone_number', '') or '',
+                'telegram_id': getattr(p, 'telegram_id', '') or '',
+            } for p in created]
+        ), 200
 
     iface_id = data.get('iface_id') or data.get('iface') or data.get('ifaceId')
     iface_name = (data.get('iface_name') or data.get('ifaceName') or '').strip()
@@ -6097,6 +8750,7 @@ def panel_peers_bulk():
     )
 
     created, errors = [], []
+    shortlinks_by_id = {}
 
     for i in range(count):
         try:
@@ -6127,7 +8781,19 @@ def panel_peers_bulk():
                 peer.expires_at = from_ts(exp_ts)
 
             db.session.add(peer)
-            db.session.flush()  
+            db.session.flush()
+
+            try:
+                token, url = _shortlink_for_peer(peer)
+                shortlinks_by_id[int(peer.id)] = {
+                    "token": token or "",
+                    "url": url or "",
+                }
+            except Exception:
+                current_app.logger.exception(
+                    "shortlink create failed for bulk peer %s",
+                    getattr(peer, "id", "?")
+                )
 
             try:
                 _peer_to_conf(peer)
@@ -6179,6 +8845,8 @@ def panel_peers_bulk():
             'id': p.id,
             'name': p.name,
             'address': p.address,
+            'shortlink': (shortlinks_by_id.get(int(p.id)) or {}).get('url', ''),
+            'shortlink_token': (shortlinks_by_id.get(int(p.id)) or {}).get('token', ''),
             'phone_number': getattr(p, 'phone_number', '') or '',
             'telegram_id': getattr(p, 'telegram_id', '') or ''
         } for p in created]
@@ -6253,12 +8921,137 @@ def _iface_down(name: str):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
         )
 
+@app.post("/api/interfaces")
+@login_required
+def create_local_interface():
+    data = request.get_json(silent=True) or {}
+
+    name = (data.get("name") or "").strip()
+    address = (data.get("address") or "").strip()
+    dns = (data.get("dns") or "").strip() or None
+    auto_up = bool(data.get("auto_up"))
+
+    try:
+        listen_port = int(data.get("listen_port") or 0)
+    except Exception:
+        return jsonify(error="invalid_listen_port"), 400
+
+    mtu = data.get("mtu")
+    try:
+        mtu = int(mtu) if str(mtu or "").strip() else None
+    except Exception:
+        return jsonify(error="invalid_mtu"), 400
+
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,32}", name):
+        return jsonify(error="invalid_name", detail="Use 1-32 characters: letters, numbers, underscore, dot, or dash."), 400
+
+    if not address:
+        return jsonify(error="address_required"), 400
+
+    try:
+        ipaddress.ip_interface(address)
+    except Exception:
+        return jsonify(error="invalid_address", detail="Use CIDR format, for example 10.77.0.1/24."), 400
+
+    if not (1 <= listen_port <= 65535):
+        return jsonify(error="invalid_listen_port", detail="Listen port must be between 1 and 65535."), 400
+
+    if mtu is not None and not (576 <= mtu <= 9000):
+        return jsonify(error="invalid_mtu", detail="MTU must be between 576 and 9000."), 400
+
+    if InterfaceConfig.query.filter_by(name=name).first():
+        return jsonify(error="interface_exists", detail=f"Interface {name} already exists."), 409
+
+    wg_dir = app.config.get("WG_CONF_PATH") or "/etc/wireguard"
+    if os.path.isfile(wg_dir):
+        wg_dir = os.path.dirname(wg_dir)
+
+    os.makedirs(wg_dir, exist_ok=True)
+    conf_path = os.path.join(wg_dir, f"{name}.conf")
+
+    if os.path.exists(conf_path):
+        return jsonify(error="config_exists", detail=f"{conf_path} already exists."), 409
+
+    try:
+        private_key = subprocess.check_output(["wg", "genkey"], timeout=5).decode().strip()
+    except Exception as e:
+        return jsonify(error="wg_genkey_failed", detail=str(e)), 500
+
+    lines = [
+        "[Interface]",
+        f"PrivateKey = {private_key}",
+        f"Address = {address}",
+        f"ListenPort = {listen_port}",
+    ]
+
+    if dns:
+        lines.append(f"DNS = {dns}")
+
+    if mtu:
+        lines.append(f"MTU = {mtu}")
+
+    conf_text = "\n".join(lines) + "\n"
+
+    try:
+        with open(conf_path, "w", encoding="utf-8") as f:
+            f.write(conf_text)
+        os.chmod(conf_path, 0o600)
+    except Exception as e:
+        return jsonify(error="write_config_failed", detail=str(e)), 500
+
+    iface = InterfaceConfig(
+        name=name,
+        path=conf_path,
+        address=address,
+        listen_port=listen_port,
+        private_key=private_key,
+        mtu=mtu,
+        dns=dns,
+    )
+
+    db.session.add(iface)
+    db.session.commit()
+
+    up_error = None
+    if auto_up:
+        try:
+            _check_iface_up(iface)
+        except Exception as e:
+            up_error = str(e)
+
+    return jsonify(
+        ok=True,
+        interface={
+            "id": iface.id,
+            "name": iface.name,
+            "path": iface.path,
+            "address": iface.address,
+            "listen_port": iface.listen_port,
+            "dns": iface.dns,
+            "mtu": iface.mtu,
+            "available_ips": _available_ips(iface),
+            "is_up": _iface_up(iface.name),
+        },
+        up_error=up_error,
+    ), 201
+
 @app.route('/api/iface/<int:iface_id>/enable', methods=['POST'])
 @csrf.exempt
 @require_api_key_or_login
 def iface_enable(iface_id):
     iface = db.session.get(InterfaceConfig, iface_id) or abort(404)
-    _check_iface_up(iface) 
+
+    try:
+        _check_iface_up(iface)
+    except Exception as e:
+        current_app.logger.exception("Interface enable failed for %s", iface.name)
+        return jsonify(
+            success=False,
+            error="interface_enable_failed",
+            detail=str(e),
+            hint="Open the interface logs in the panel, or run: journalctl -u wg-quick@%s -n 80 --no-pager" % iface_devname(iface)
+        ), 409
+
     return jsonify(success=True, is_up=True)
 
 @app.route('/api/iface/<int:iface_id>/disable', methods=['POST'])
@@ -6269,6 +9062,141 @@ def iface_disable(iface_id):
     _iface_down(iface.name)
     return jsonify(success=True, is_up=False)
 
+@app.route('/api/iface/<int:iface_id>', methods=['DELETE'])
+@csrf.exempt
+@require_api_key_or_login
+def iface_delete(iface_id):
+    iface = db.session.get(InterfaceConfig, iface_id) or abort(404)
+
+    if getattr(iface, 'node_id', None) is not None or ':' in (iface.name or ''):
+        return jsonify(
+            success=False,
+            error='node_interface_delete_not_supported_here',
+            detail='Delete node interfaces through the node interface API.'
+        ), 400
+
+    data = request.get_json(silent=True) or {}
+    delete_peers = _sub_bool(
+        data.get('delete_peers')
+        if 'delete_peers' in data
+        else request.args.get('delete_peers')
+    )
+
+    peers = Peer.query.filter_by(iface_id=iface.id).all()
+    peer_count = len(peers)
+
+    peer_ids = [p.id for p in peers]
+    subscription_link_count = 0
+    affected_subs = set()
+
+    if peer_ids:
+        links = SubscriptionPeer.query.filter(SubscriptionPeer.peer_id.in_(peer_ids)).all()
+        subscription_link_count = len(links)
+        for link in links:
+            if link.subscription:
+                affected_subs.add(link.subscription)
+
+    if peer_count and not delete_peers:
+        return jsonify(
+            success=False,
+            error='interface_has_peers',
+            detail=f'Interface {iface.name} has {peer_count} peer(s).',
+            peer_count=peer_count,
+            subscription_link_count=subscription_link_count,
+            require_delete_peers=True
+        ), 409
+
+    dev = iface_devname(iface)
+    conf_path = iface.path or ''
+
+    try:
+        try:
+            _iface_down(dev)
+        except Exception:
+            current_app.logger.exception("Failed to bring interface down before delete: %s", dev)
+
+        # Delete peers if explicitly requested.
+        _delete_shortlinks_for_peer_ids([p.id for p in peers if p])
+        if delete_peers:
+            for peer in peers:
+                try:
+                    try:
+                        _wg_disable(peer)
+                    except Exception:
+                        pass
+
+                    try:
+                        _remove_peer(peer)
+                    except Exception:
+                        pass
+
+                    # Remove subscription inbound links that point to this peer.
+                    SubscriptionPeer.query.filter_by(peer_id=peer.id).delete(synchronize_session=False)
+
+                    db.session.delete(peer)
+                except Exception:
+                    current_app.logger.exception(
+                        "Failed deleting peer %s while deleting interface %s",
+                        getattr(peer, 'id', '?'),
+                        iface.name
+                    )
+
+        if conf_path:
+            try:
+                wg_dir = app.config.get("WG_CONF_PATH") or "/etc/wireguard"
+                allowed_dir = wg_dir if os.path.isdir(wg_dir) else os.path.dirname(wg_dir)
+                allowed_dir = os.path.abspath(allowed_dir)
+                real_conf = os.path.abspath(conf_path)
+
+                if real_conf.startswith(allowed_dir + os.sep) and os.path.isfile(real_conf):
+                    os.remove(real_conf)
+            except Exception:
+                current_app.logger.exception("Could not remove interface config file: %s", conf_path)
+
+        try:
+            log_path = _ifacelog_path(iface.id)
+            if log_path and os.path.isfile(log_path):
+                os.remove(log_path)
+        except Exception:
+            pass
+
+        db.session.delete(iface)
+        db.session.flush()
+
+        for sub in affected_subs:
+            try:
+                _sync_all_subscription_peers(sub, rename=True)
+            except Exception:
+                current_app.logger.exception(
+                    "Failed to sync subscription after interface delete: %s",
+                    getattr(sub, 'id', '?')
+                )
+
+        db.session.commit()
+
+        try:
+            logpanel_action(
+                "interface_delete",
+                f"iface={dev}; delete_peers={bool(delete_peers)}; peers={peer_count}"
+            )
+        except Exception:
+            pass
+
+        return jsonify(
+            success=True,
+            deleted_interface=dev,
+            deleted_peers=peer_count if delete_peers else 0
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception("Interface delete failed for %s", iface.name)
+        return jsonify(
+            success=False,
+            error='interface_delete_failed',
+            detail=str(e)
+        ), 500
+    
 # -------------
 # Peer actions
 # _____________
@@ -6280,6 +9208,7 @@ def api_enable(pid):
     p.first_used_at = None
     p.expires_at = None
     p.bytes_offset = _wg_transfer(p)
+    p.used_bytes_total = 0
     try:
         _wg_enable(p)
         _sync_peer(p)
@@ -6347,70 +9276,104 @@ def api_edit(pid):
     return jsonify(success=True)
 
 @app.route('/api/peer/<int:pid>/reset_data', methods=['POST'])
-@csrf.exempt
-@require_api_key_or_login
+@require_api_key
 def reset_data(pid):
+    """
+    Reset traffic counters
+    This does NOT re-enable the peer and does NOT change timer fields.
+    """
     p = db.session.get(Peer, pid) or abort(404)
-    current = _wg_transfer(p)
-    prev_off = int(getattr(p, 'bytes_offset', 0) or 0)
-    session_used = max(0, int(current) - prev_off)
 
-    p.used_bytes_total = int(getattr(p, 'used_bytes_total', 0) or 0) + session_used
-    p.bytes_offset = int(current)
+    try:
+        current = _wg_transfer(p)
+    except Exception:
+        current = 0
+
+    p.bytes_offset = int(current or 0)
+    p.used_bytes_total = 0
 
     db.session.commit()
-    log_event(p, 'reset_data', f'Offset set to {current}; +{session_used} bytes to lifetime')
-    logpanel_action("peer_reset_data", f"pid={p.id}; new_offset={current}; add={session_used}")
-    return jsonify(success=True)
 
+    try:
+        log_event(p, 'reset_data', f'Offset set to {current}; status kept as {p.status}')
+        logpanel_action("peer_reset_data", f"pid={p.id}; new_offset={current}; status_kept={p.status}")
+    except Exception:
+        pass
+
+    return jsonify(success=True, status=p.status)
 
 
 @app.route('/api/peer/<int:pid>/reset_timer', methods=['POST'])
-@csrf.exempt
-@require_api_key_or_login
+@require_api_key
 def api_reset_timer(pid):
+    """
+    Reset timer and re-enable peer.
+    This does NOT reset data usage/counters.
+    """
     p = db.session.get(Peer, pid) or abort(404)
 
-    now = now_ts()
     tl_days = getattr(p, 'time_limit_days', None)
     try:
-        tl_days_f = float(tl_days) if tl_days is not None else None
+        tl_days_f = float(tl_days) if tl_days is not None else 0.0
     except Exception:
-        tl_days_f = None
+        tl_days_f = 0.0
 
     p.first_used_at = None
 
-    if getattr(p, 'unlimited', False) or not tl_days_f or tl_days_f <= 0:
+    if getattr(p, 'unlimited', False) or tl_days_f <= 0:
         p.expires_at = None
-        detail = 'Timer cleared (no time cap)'
+        detail = 'Timer cleared; peer re-enabled'
+    elif getattr(p, 'start_on_first_use', False):
+        p.expires_at = None
+        detail = 'Timer cleared; will start on first use; peer re-enabled'
     else:
-        if getattr(p, 'start_on_first_use', False):
-            p.expires_at = None
-            detail = 'Timer cleared (will start on first use)'
-        else:
-            exp_ts = add_days_ts(now, tl_days_f)
-            p.expires_at = from_ts(exp_ts)
-            detail = f'Timer restarted for {tl_days_f} days'
+        p.expires_at = from_ts(add_days_ts(now_ts(), tl_days_f))
+        detail = f'Timer restarted for {tl_days_f} days; peer re-enabled'
+
+    try:
+        _wg_enable(p)
+        _sync_peer(p)
+        p.status = 'online'
+    except subprocess.CalledProcessError as e:
+        db.session.commit()
+        dev = iface_devname(p.iface)
+        current_app.logger.warning("reset_timer wg set failed for %s on %s: %s", p.name, dev, e)
+        return jsonify(
+            error="wg_failed",
+            message=str(e),
+            hint=f"Is interface '{dev}' up? Try: systemctl start wg-quick@{dev}"
+        ), 409
+    except Exception as e:
+        db.session.commit()
+        current_app.logger.exception("reset_timer failed for peer %s", p.id)
+        return jsonify(error="reset_timer_failed", detail=str(e)), 500
 
     db.session.commit()
-    log_event(p, 'reset_timer', detail)
-    return jsonify(success=True)
 
+    try:
+        log_event(p, 'reset_timer', detail)
+        logpanel_action("peer_reset_timer", f"pid={p.id}; {detail}")
+    except Exception:
+        pass
 
+    return jsonify(success=True, status=p.status)
 
 @app.route('/api/peer/<int:pid>', methods=['DELETE'])
-@csrf.exempt
-@require_api_key_or_login
+@require_api_key
 def api_delete(pid):
     p = db.session.get(Peer, pid) or abort(404)
     try: _wg_disable(p)
     except Exception: pass
     try: _remove_peer(p)
     except Exception: pass
+
+    _delete_shortlinks_for_peer_ids([p.id])
+
     db.session.delete(p)
     db.session.commit()
     logpanel_action("peer_delete", f"pid={pid}")
     return jsonify(success=True)
+
 
 @app.route('/api/peer/<int:pid>/logs')
 @login_required
@@ -6469,8 +9432,1366 @@ def peer_config_qr(pid):
         download_name=f"{p.name or 'peer'}-{p.id}.png",
     )
 
+# Subscriptions: one client policy shared across local/node peers
+# =========================================================
+SUBSCRIPTION_SETTINGS_FILE = os.path.join(app.instance_path, 'subscription_settings.json')
+
+def _sub_bool(v):
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    return str(v).strip().lower() in ('1', 'true', 'yes', 'on')
+
+def _sub_float(v, default=0.0):
+    try:
+        return float(v or default)
+    except Exception:
+        return float(default)
+
+def _sub_int(v, default=0):
+    try:
+        return int(float(v or default))
+    except Exception:
+        return int(default)
+
+def _subscription_settings_default():
+    return {
+        'layout': 'aurora',
+        'display_mode': 'hybrid',  # bars | rings | hybrid
+        'animation': 'rich',       # rich | soft | minimal
+
+        # Public page 
+        'portal_label': 'Secure WireGuard portal',
+        'portal_icon': 'fas fa-bolt',
+        'portal_title': '',
+        'portal_subtitle': 'Your Account is ready. Install Wireguard, then scan QR or import a config.',
+
+        # Optional support links
+        'support': {
+            'telegram': '',
+            'whatsapp': '',
+            'phone': '',
+            'email': '',
+            'website': '',
+            'instagram': ''
+        }
+    }
+
+
+def _subscription_portal_icons():
+    return {
+        'fas fa-bolt',
+        'fas fa-shield-halved',
+        'fas fa-store',
+        'fas fa-crown',
+        'fas fa-rocket',
+        'fas fa-globe',
+        'fas fa-headset',
+        'fas fa-wifi',
+        'fas fa-gamepad',
+        'fas fa-server',
+        'fas fa-link',
+        'fas fa-signal',
+        'fas fa-gem',
+        'fas fa-building',
+        'fas fa-cloud',
+        'fas fa-network-wired',
+        'fas fa-lock',
+        'fas fa-star',
+    }
+
+
+def _subscription_portal_icon(value):
+    value = str(value or '').strip()
+    return value if value in _subscription_portal_icons() else 'fas fa-bolt'
+
+
+def _subscription_text(value, default='', max_len=160):
+    value = str(value or '').strip()
+    if not value:
+        return default
+    return value[:max_len]
+
+
+def _load_subscription_settings():
+    os.makedirs(app.instance_path, exist_ok=True)
+
+    d = _subscription_settings_default()
+
+    try:
+        with open(SUBSCRIPTION_SETTINGS_FILE, 'r', encoding='utf-8') as f:
+            got = json.load(f) or {}
+
+        if not isinstance(got, dict):
+            got = {}
+
+        layout = (got.get('layout') or got.get('selected') or d['layout']).strip().lower()
+        d['layout'] = layout if layout in ('aurora', 'compact', 'cards', 'minimal') else 'aurora'
+        display_mode = str(got.get('display_mode') or got.get('stats_style') or d.get('display_mode') or 'hybrid').strip().lower()
+        d['display_mode'] = display_mode if display_mode in ('bars', 'rings', 'hybrid') else 'hybrid'
+
+        animation = str(got.get('animation') or got.get('motion') or d.get('animation') or 'rich').strip().lower()
+        d['animation'] = animation if animation in ('rich', 'soft', 'minimal') else 'rich'
+
+        support = got.get('support') if isinstance(got.get('support'), dict) else {}
+        identity = got.get('identity') if isinstance(got.get('identity'), dict) else {}
+        public = got.get('public') if isinstance(got.get('public'), dict) else {}
+
+        def pick(*keys, default=''):
+            for src in (got, identity, public, support):
+                if not isinstance(src, dict):
+                    continue
+                for key in keys:
+                    if key in src and src.get(key) not in (None, ''):
+                        return src.get(key)
+            return default
+
+        d['portal_label'] = _subscription_text(
+            pick('portal_label', 'badge_label', 'label', default=d['portal_label']),
+            d['portal_label'],
+            80
+        )
+        d['portal_icon'] = _subscription_portal_icon(
+            pick('portal_icon', 'badge_icon', 'icon', default=d['portal_icon'])
+        )
+        d['portal_title'] = _subscription_text(
+            pick('portal_title', 'title', default=d['portal_title']),
+            d['portal_title'],
+            90
+        )
+        d['portal_subtitle'] = _subscription_text(
+            pick('portal_subtitle', 'subtitle', default=d['portal_subtitle']),
+            d['portal_subtitle'],
+            180
+        )
+
+        sup = d.get('support') or {}
+        incoming_support = got.get('support') if isinstance(got.get('support'), dict) else {}
+        incoming_socials = got.get('socials') if isinstance(got.get('socials'), dict) else {}
+
+        for key in sup.keys():
+            sup[key] = str(
+                incoming_support.get(key)
+                if incoming_support.get(key) is not None
+                else incoming_socials.get(key, sup.get(key, ''))
+            ).strip()
+
+        d['support'] = sup
+
+    except Exception:
+        pass
+
+    return d
+
+
+def _save_subscription_settings(data):
+    if not isinstance(data, dict):
+        data = {}
+
+    cur = _load_subscription_settings()
+
+    if 'layout' in data or 'selected' in data:
+        layout = str(data.get('layout') or data.get('selected') or cur.get('layout') or 'aurora').strip().lower()
+        cur['layout'] = layout if layout in ('aurora', 'compact', 'cards', 'minimal') else 'aurora'
+
+    if 'display_mode' in data or 'stats_style' in data:
+        display_mode = str(data.get('display_mode') or data.get('stats_style') or cur.get('display_mode') or 'hybrid').strip().lower()
+        cur['display_mode'] = display_mode if display_mode in ('bars', 'rings', 'hybrid') else 'hybrid'
+
+    if 'animation' in data or 'motion' in data:
+        animation = str(data.get('animation') or data.get('motion') or cur.get('animation') or 'rich').strip().lower()
+        cur['animation'] = animation if animation in ('rich', 'soft', 'minimal') else 'rich'
+
+    support = data.get('support') if isinstance(data.get('support'), dict) else {}
+    identity = data.get('identity') if isinstance(data.get('identity'), dict) else {}
+    public = data.get('public') if isinstance(data.get('public'), dict) else {}
+
+    def pick(*keys, default=None):
+        for src in (data, identity, public, support):
+            if not isinstance(src, dict):
+                continue
+            for key in keys:
+                if key in src:
+                    return src.get(key)
+        return default
+
+    portal_label = pick('portal_label', 'badge_label', 'label', default=cur.get('portal_label'))
+    portal_icon = pick('portal_icon', 'badge_icon', 'icon', default=cur.get('portal_icon'))
+    portal_title = pick('portal_title', 'title', default=cur.get('portal_title'))
+    portal_subtitle = pick('portal_subtitle', 'subtitle', default=cur.get('portal_subtitle'))
+
+    cur['portal_label'] = _subscription_text(
+        portal_label,
+        'Secure WireGuard portal',
+        80
+    )
+    cur['portal_icon'] = _subscription_portal_icon(portal_icon)
+    cur['portal_title'] = _subscription_text(
+        portal_title,
+        '',
+        90
+    )
+    cur['portal_subtitle'] = _subscription_text(
+        portal_subtitle,
+        'Your account is ready. Install WireGuard, then scan QR or import a config.',
+        180
+    )
+
+    if isinstance(data.get('support'), dict):
+        cur['support'].update({
+            k: str(data['support'].get(k) or '').strip()
+            for k in cur['support'].keys()
+        })
+
+    cur['support']['portal_label'] = cur['portal_label']
+
+    os.makedirs(app.instance_path, exist_ok=True)
+    with open(SUBSCRIPTION_SETTINGS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(cur, f, indent=2)
+
+    return cur
+
+def _sub_limit_bytes(sub):
+    try:
+        return sub.limit_bytes()
+    except Exception:
+        if not getattr(sub, 'data_limit_value', 0) or getattr(sub, 'unlimited', False):
+            return None
+        mult = 1024**2 if (getattr(sub, 'data_limit_unit', None) or 'Mi') == 'Mi' else 1024**3
+        return int(sub.data_limit_value) * mult
+
+def _sub_used_bytes(sub):
+    total = 0
+    dirty = False
+
+    for link in list(getattr(sub, 'links', []) or []):
+        peer = getattr(link, 'peer', None)
+        if not peer:
+            continue
+
+        try:
+            iface = getattr(peer, 'iface', None)
+            is_node = bool(
+                iface and (
+                    getattr(iface, 'node_id', None) is not None or
+                    re.match(r'^n\d+:', getattr(iface, 'name', '') or '')
+                )
+            )
+
+            if is_node:
+                used = int(getattr(peer, 'used_bytes_total', 0) or 0)
+            else:
+                live = _wg_transfer(peer)
+                used, _delta, changed = _accumulate_peer_usage(peer, live)
+                if changed:
+                    dirty = True
+
+        except Exception:
+            used = int(getattr(peer, 'used_bytes_total', 0) or 0)
+
+        total += int(used or 0)
+
+    if dirty:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    return int(total)
+
+def _sub_ttl_seconds(sub):
+    exp_ts = to_ts(getattr(sub, 'expires_at', None))
+    return max(0, exp_ts - now_ts()) if exp_ts else None
+
+def _sub_public_url(sub):
+    return url_for('subscription_public_page', token=sub.token, _external=True)
+
+def _sub_config_url(sub):
+    return url_for('subscription_public_config', token=sub.token, _external=True)
+
+def _apply_subscription_timer(sub):
+    """Recalculate the shared subscription expiry """
+    if getattr(sub, 'unlimited', False) or not _sub_float(getattr(sub, 'time_limit_days', 0)):
+        sub.expires_at = None
+        if not getattr(sub, 'start_on_first_use', False):
+            sub.first_used_at = None
+        return
+    days = _sub_float(sub.time_limit_days)
+    if getattr(sub, 'start_on_first_use', False):
+        if getattr(sub, 'first_used_at', None):
+            sub.expires_at = from_ts(add_days_ts(to_ts(sub.first_used_at), days))
+        else:
+            sub.expires_at = None
+    else:
+        if not getattr(sub, 'first_used_at', None):
+            sub.first_used_at = from_ts(now_ts())
+        sub.expires_at = from_ts(add_days_ts(to_ts(sub.first_used_at), days))
+
+def _sync_peer_subscription(peer, sub, idx=None, rename=True):
+    if rename:
+        total = len(getattr(sub, 'links', []) or []) or 1
+        base = (sub.name or 'subscription').strip() or 'subscription'
+        if idx is not None and total > 1:
+            peer.name = f'{base}-{idx + 1}'
+        else:
+            peer.name = base
+    peer.data_limit_value = int(getattr(sub, 'data_limit_value', 0) or 0)
+    peer.data_limit_unit = getattr(sub, 'data_limit_unit', None) or 'Gi'
+    peer.time_limit_days = _sub_float(getattr(sub, 'time_limit_days', 0)) or None
+    peer.start_on_first_use = bool(getattr(sub, 'start_on_first_use', False))
+    peer.unlimited = bool(getattr(sub, 'unlimited', False))
+    peer.phone_number = getattr(sub, 'phone_number', '') or ''
+    peer.telegram_id = getattr(sub, 'telegram_id', '') or ''
+    peer.first_used_at = getattr(sub, 'first_used_at', None)
+    peer.expires_at = getattr(sub, 'expires_at', None)
+    return peer
+
+def _sync_all_subscription_peers(sub, rename=True):
+    links = sorted(list(getattr(sub, 'links', []) or []), key=lambda l: (l.sort_order or 0, l.id or 0))
+    for idx, link in enumerate(links):
+        if link.peer:
+            _sync_peer_subscription(link.peer, sub, idx=idx, rename=rename)
+
+def _block_subscription_runtime(sub, reason='subscription_blocked'):
+    """
+    Block every runtime inbound attached to a subscription.
+
+    """
+    changed = False
+
+    for link in list(getattr(sub, 'links', []) or []):
+        peer = getattr(link, 'peer', None)
+        if not peer:
+            continue
+
+        if getattr(peer, 'status', None) == 'blocked':
+            continue
+
+        ok = False
+        try:
+            ok = bool(_disable_peer(peer, reason, status='blocked'))
+        except Exception:
+            ok = False
+
+        if not ok:
+            peer.status = 'blocked'
+            try:
+                log_event(peer, reason, 'status → blocked')
+            except Exception:
+                pass
+
+        changed = True
+
+    if changed:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    return changed
+
+def _subscription_row(sub):
+    used = _sub_used_bytes(sub)
+    if bool(getattr(sub, 'start_on_first_use', False)) and not getattr(sub, 'first_used_at', None) and used > 0 and not bool(getattr(sub, 'unlimited', False)):
+        sub.first_used_at = from_ts(now_ts())
+        _apply_subscription_timer(sub)
+        _sync_all_subscription_peers(sub, rename=False)
+    limit = _sub_limit_bytes(sub)
+    remaining = None if limit is None else max(0, int(limit) - int(used))
+    expired = _subscription_time_expired(sub)
+
+    if limit and used >= limit:
+        _block_subscription_runtime(sub, 'subscription_limit_reached')
+    elif expired:
+        _block_subscription_runtime(sub, 'subscription_expired')
+    locs = []
+    for link in sorted(list(getattr(sub, 'links', []) or []), key=lambda l: (l.sort_order or 0, l.id or 0)):
+        peer = link.peer
+        if not peer:
+            continue
+        iface = peer.iface
+        raw_name = iface.name if iface else ''
+        node_id = getattr(iface, 'node_id', None) if iface else None
+        locs.append({
+            'link_id': link.id,
+            'peer_id': peer.id,
+            'scope': 'node' if node_id is not None or raw_name.startswith('n') and ':' in raw_name else 'local',
+            'node_id': node_id,
+            'node_name': (getattr(iface.node, 'name', '') if getattr(iface, 'node', None) else ''),
+            'iface': raw_name.split(':', 1)[1] if raw_name.startswith('n') and ':' in raw_name else raw_name,
+            'name': peer.name,
+            'address': peer.address,
+            'endpoint': peer.endpoint or '',
+            'allowed_ips': peer.allowed_ips or '',
+            'dns': peer.dns or '',
+            'status': peer.status or 'offline',
+            'used_bytes': int(getattr(peer, 'used_bytes_total', 0) or 0),
+            'location_label': link.location_label or '',
+            'country_code': link.country_code or '',
+            'flag': link.flag or '',
+        })
+    return {
+        'id': sub.id,
+        'name': sub.name,
+        'token': sub.token,
+        'note': sub.note or '',
+        'data_limit_value': int(getattr(sub, 'data_limit_value', 0) or 0),
+        'data_limit_unit': getattr(sub, 'data_limit_unit', None) or 'Gi',
+        'limit_bytes': limit,
+        'used_bytes': used,
+        'remaining_bytes': remaining,
+        'usage_pct': (round((used / limit) * 100, 2) if limit else 0),
+        'time_limit_days': _sub_float(getattr(sub, 'time_limit_days', 0)),
+        'ttl_seconds': _sub_ttl_seconds(sub),
+        'start_on_first_use': bool(getattr(sub, 'start_on_first_use', False)),
+        'first_used_at': isoz(getattr(sub, 'first_used_at', None)),
+        'expires_at': isoz(getattr(sub, 'expires_at', None)),
+        'unlimited': bool(getattr(sub, 'unlimited', False)),
+        'phone_number': getattr(sub, 'phone_number', '') or '',
+        'telegram_id': getattr(sub, 'telegram_id', '') or '',
+        'enabled': bool(getattr(sub, 'enabled', True)),
+        'public_url': _sub_public_url(sub),
+        'config_url': _sub_config_url(sub),
+        'locations': locs,
+    }
+
+def _peer_payload_subscription(sub, target, data, idx=0, total=1):
+    name = (target.get('peer_name') or '').strip()
+    if not name:
+        base = (sub.name or data.get('name') or 'subscription').strip() or 'subscription'
+        name = base if total <= 1 else f'{base}-{idx + 1}'
+    return {
+        'name': name,
+        'allowed_ips': (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip(),
+        'endpoint': (data.get('endpoint') or '').strip(),
+        'persistent_keepalive': data.get('persistent_keepalive') or None,
+        'mtu': data.get('mtu') or None,
+        'dns': data.get('dns') or None,
+        'data_limit_value': int(getattr(sub, 'data_limit_value', 0) or 0),
+        'data_limit_unit': getattr(sub, 'data_limit_unit', None) or 'Gi',
+        'time_limit_days': _sub_float(getattr(sub, 'time_limit_days', 0)) or None,
+        'start_on_first_use': bool(getattr(sub, 'start_on_first_use', False)),
+        'unlimited': bool(getattr(sub, 'unlimited', False)),
+        'phone_number': getattr(sub, 'phone_number', '') or '',
+        'telegram_id': getattr(sub, 'telegram_id', '') or '',
+    }
+
+def _create_subscription_peer(target, payload):
+    scope = (target.get('scope') or 'local').lower()
+    priv = subprocess.check_output(['wg', 'genkey']).strip().decode()
+    pub = subprocess.check_output(['wg', 'pubkey'], input=priv.encode()).strip().decode()
+    if scope == 'node':
+        nid = _sub_int(target.get('node_id'))
+        iface_name = (target.get('iface') or '').strip()
+        if not nid or not iface_name:
+            raise ValueError('node_id and iface are required for node target')
+        node = db.session.get(Node, nid) or abort(404)
+        addr = (target.get('address') or '').strip()
+        if not addr:
+            try:
+                avail = node_get(node, f'/api/iface/{iface_name}/available_ips')
+                if isinstance(avail, dict):
+                    avail = avail.get('available_ips') or []
+                addr = (avail or [None])[0]
+            except Exception:
+                addr = None
+        if not addr:
+            db_iface_name = f'n{nid}:{iface_name}'
+            mirror = InterfaceConfig.query.filter_by(name=db_iface_name).first()
+            ips = _available_ips(mirror) if mirror else []
+            addr = (ips or [None])[0]
+        if not addr:
+            raise ValueError(f'No available IP for node interface {iface_name}')
+        node_payload = {
+            'iface': iface_name,
+            'public_key': pub,
+            'host_cidr': addr,
+            'endpoint': payload.get('endpoint') or '',
+            'persistent_keepalive': payload.get('persistent_keepalive') or 0,
+            'mtu': payload.get('mtu'),
+            'dns': payload.get('dns'),
+            'allowed_ips': payload.get('allowed_ips') or '0.0.0.0/0, ::/0',
+        }
+        node_post(node, '/api/peers/add', node_payload)
+        db_iface_name = f'n{nid}:{iface_name}'
+        iface = InterfaceConfig.query.filter_by(name=db_iface_name).first()
+        if not iface:
+            iface = InterfaceConfig(
+                name=db_iface_name,
+                path=f'/etc/wireguard/{iface_name}.conf',
+                address=target.get('server_cidr') or '10.0.0.1/24',
+                listen_port=_sub_int(target.get('listen_port'), 51820),
+                private_key='(remote)', mtu=payload.get('mtu'), dns=payload.get('dns')
+            )
+            try:
+                iface.node_id = node.id
+            except Exception:
+                pass
+            db.session.add(iface)
+            db.session.flush()
+        peer = Peer(iface_id=iface.id, public_key=pub, private_key=priv, address=addr, status='online', **payload)
+        db.session.add(peer)
+        db.session.flush()
+        return peer
+
+    iface_id = _sub_int(target.get('iface_id'))
+    iface = db.session.get(InterfaceConfig, iface_id) if iface_id else None
+    if not iface and target.get('iface'):
+        iface = InterfaceConfig.query.filter_by(name=(target.get('iface') or '').strip()).first()
+    if not iface:
+        raise ValueError('iface_id is required for local target')
+    addr = (target.get('address') or '').strip() or ((_available_ips(iface) or [None])[0])
+    if not addr:
+        raise ValueError(f'No available IP for local interface {iface.name}')
+    peer = Peer(iface_id=iface.id, public_key=pub, private_key=priv, address=addr, status='online', **payload)
+    db.session.add(peer)
+    db.session.flush()
+    try:
+        _wg_enable(peer)
+        _sync_peer(peer)
+    except Exception:
+        current_app.logger.exception('subscription local peer enable failed')
+    return peer
+
+def _attach_subscription_target(sub, target, data, idx=0, total=1):
+    if target.get('peer_id'):
+        peer = db.session.get(Peer, int(target.get('peer_id'))) or abort(404)
+        existing = SubscriptionPeer.query.filter_by(peer_id=peer.id).first()
+        if existing and existing.subscription_id != sub.id:
+            raise ValueError(f'Peer {peer.name} is already attached to another subscription')
+        if existing:
+            link = existing
+        else:
+            link = SubscriptionPeer(subscription_id=sub.id, peer_id=peer.id)
+            db.session.add(link)
+            db.session.flush()
+    else:
+        payload = _peer_payload_subscription(sub, target, data, idx=idx, total=total)
+        peer = _create_subscription_peer(target, payload)
+        link = SubscriptionPeer(subscription_id=sub.id, peer_id=peer.id)
+        db.session.add(link)
+        db.session.flush()
+    link.sort_order = idx
+    link.location_label = (target.get('location_label') or target.get('label') or target.get('location') or '').strip()
+    link.country_code = (target.get('country_code') or '').strip()[:2].upper()
+    link.flag = (target.get('flag') or '').strip()[:8]
+    _sync_peer_subscription(link.peer, sub, idx=idx, rename=True)
+    return link
+
+def _update_subscription_payload(sub, data, reset_timer=False):
+    old_name = sub.name
+    if 'name' in data:
+        sub.name = (data.get('name') or sub.name or 'Subscription').strip()
+    if 'note' in data:
+        sub.note = (data.get('note') or '').strip()
+    if 'data_limit_value' in data:
+        sub.data_limit_value = _sub_int(data.get('data_limit_value'), 0)
+    if 'data_limit_unit' in data:
+        sub.data_limit_unit = (data.get('data_limit_unit') or 'Gi')
+    if 'time_limit_days' in data:
+        sub.time_limit_days = _sub_float(data.get('time_limit_days'), 0)
+    if 'start_on_first_use' in data:
+        sub.start_on_first_use = _sub_bool(data.get('start_on_first_use'))
+    if 'unlimited' in data:
+        sub.unlimited = _sub_bool(data.get('unlimited'))
+    if 'phone_number' in data:
+        sub.phone_number = (data.get('phone_number') or '').strip()
+    if 'telegram_id' in data:
+        sub.telegram_id = (data.get('telegram_id') or '').strip()
+    if 'enabled' in data:
+        sub.enabled = _sub_bool(data.get('enabled'))
+    if reset_timer or old_name != sub.name or any(k in data for k in ('time_limit_days', 'start_on_first_use', 'unlimited')):
+        if reset_timer or not getattr(sub, 'start_on_first_use', False):
+            sub.first_used_at = None
+        _apply_subscription_timer(sub)
+    else:
+        _apply_subscription_timer(sub)
+    _sync_all_subscription_peers(sub, rename=True)
+
+def _reset_subscription_data(sub):
+    for link in list(getattr(sub, 'links', []) or []):
+        peer = link.peer
+        if not peer:
+            continue
+        try:
+            if getattr(peer.iface, 'node_id', None) is not None:
+                try:
+                    node_post(peer.iface.node, f'/api/peer/{peer.public_key}/reset_data', {})
+                except Exception:
+                    pass
+                peer.bytes_offset = 0
+            else:
+                peer.bytes_offset = _wg_transfer(peer)
+        except Exception:
+            peer.bytes_offset = 0
+        peer.used_bytes_total = 0
+        if peer.status == 'blocked' and not _subscription_time_expired(sub):
+            _enable_subscription_peer_runtime(peer)
+        try:
+            log_event(peer, 'subscription_reset_data', 'Shared subscription data reset')
+        except Exception:
+            pass
+
+def _reset_subscription_timer(sub):
+    sub.first_used_at = None
+    _apply_subscription_timer(sub)
+    for link in list(getattr(sub, 'links', []) or []):
+        if link.peer:
+            _sync_peer_subscription(link.peer, sub, rename=False)
+            if link.peer.status == 'blocked' and not _subscription_data_exhausted(sub):
+                _enable_subscription_peer_runtime(link.peer)
+            try:
+                log_event(link.peer, 'subscription_reset_timer', 'Shared subscription timer reset')
+            except Exception:
+                pass
+
+def _subscription_data_exhausted(sub):
+    limit = _sub_limit_bytes(sub)
+    return bool(limit and _sub_used_bytes(sub) >= limit)
+
+def _subscription_time_expired(sub):
+    ttl = _sub_ttl_seconds(sub)
+    return bool(ttl is not None and ttl <= 0)
+
+
+def _enable_subscription_peer_runtime(peer):
+    try:
+        if getattr(peer.iface, 'node_id', None) is not None:
+            node_post(peer.iface.node, f'/api/peer/{peer.public_key}/enable', {'host_cidr': _host_peer(peer)})
+        else:
+            _wg_enable(peer)
+            _sync_peer(peer)
+        peer.status = 'online'
+        return True
+    except Exception:
+        current_app.logger.exception('failed enabling subscription peer %s', getattr(peer, 'id', '?'))
+        return False
+
+@app.get('/subscriptions')
+@login_required
+def subscriptions_page():
+    return render_template('subscriptions.html')
+
+@app.route('/api/subscriptions/settings', methods=['GET', 'POST'])
+@require_api_key_or_login
+def api_subscription_settings():
+    if request.method == 'GET':
+        return jsonify(_load_subscription_settings())
+    saved = _save_subscription_settings(request.get_json(silent=True) or {})
+    return jsonify(ok=True, settings=saved)
+
+@app.get('/api/subscriptions/locations')
+@require_api_key_or_login
+def api_subscriptions_locations():
+    locals_ = []
+    for iface in InterfaceConfig.query.order_by(InterfaceConfig.name).all():
+        if getattr(iface, 'node_id', None) is not None or (iface.name or '').startswith('n') and ':' in (iface.name or ''):
+            continue
+        locals_.append({
+            'scope': 'local', 'iface_id': iface.id, 'iface': iface.name, 'label': iface.name,
+            'listen_port': iface.listen_port, 'dns': iface.dns or '', 'mtu': iface.mtu,
+            'available': len(_available_ips(iface)),
+        })
+    nodes = []
+    for n in Node.query.order_by(Node.name).all():
+        interfaces = []
+        try:
+            remote = node_get(n, '/api/interfaces') or []
+            for it in remote:
+                name = it.get('name') or it.get('iface') or ''
+                if not name:
+                    continue
+                mirror = InterfaceConfig.query.filter_by(name=f'n{n.id}:{name}').first()
+                interfaces.append({
+                    'scope': 'node', 'node_id': n.id, 'node_name': n.name,
+                    'iface_id': mirror.id if mirror else None, 'iface': name,
+                    'label': f'{n.name} · {name}', 'listen_port': it.get('listen_port'),
+                    'dns': it.get('dns') or '', 'mtu': it.get('mtu'),
+                })
+        except Exception:
+            # Fallback to mirrored DB interfaces if node cannot be reached.
+            for iface in InterfaceConfig.query.filter(InterfaceConfig.name.like(f'n{n.id}:%')).all():
+                interfaces.append({
+                    'scope': 'node', 'node_id': n.id, 'node_name': n.name,
+                    'iface_id': iface.id, 'iface': iface.name.split(':',1)[1],
+                    'label': f'{n.name} · {iface.name.split(":",1)[1]}',
+                    'listen_port': iface.listen_port, 'dns': iface.dns or '', 'mtu': iface.mtu,
+                })
+        nodes.append({'id': n.id, 'name': n.name, 'online': bool(n.enabled), 'interfaces': interfaces})
+    return jsonify(local=locals_, nodes=nodes)
+
+@app.get('/api/subscriptions/inbounds_catalog')
+@require_api_key_or_login
+def api_subscriptions_inbounds_catalog():
+    inbounds = []
+    for p in Peer.query.order_by(Peer.name).all():
+        iface = p.iface
+        raw = iface.name if iface else ''
+        node_id = getattr(iface, 'node_id', None) if iface else None
+        linked = SubscriptionPeer.query.filter_by(peer_id=p.id).first()
+        inbounds.append({
+            'peer_id': p.id,
+            'scope': 'node' if node_id is not None or raw.startswith('n') and ':' in raw else 'local',
+            'node_id': node_id,
+            'node_name': (getattr(iface.node, 'name', '') if getattr(iface, 'node', None) else ''),
+            'iface': raw.split(':',1)[1] if raw.startswith('n') and ':' in raw else raw,
+            'name': p.name,
+            'address': p.address,
+            'endpoint': p.endpoint or '',
+            'allowed_ips': p.allowed_ips or '',
+            'dns': p.dns or '',
+            'status': p.status or 'offline',
+            'used_bytes': int(getattr(p, 'used_bytes_total', 0) or 0),
+            'phone_number': p.phone_number or '',
+            'telegram_id': p.telegram_id or '',
+            'already_linked': bool(linked),
+            'subscription_id': linked.subscription_id if linked else None,
+            'location_label': linked.location_label if linked else '',
+        })
+    return jsonify(inbounds=inbounds)
+
+@app.route('/api/subscriptions', methods=['GET', 'POST'])
+@require_api_key_or_login
+def api_subscriptions():
+    if request.method == 'GET':
+        rows = Subscription.query.order_by(Subscription.created_at.desc()).all()
+        db.session.commit()
+        return jsonify(subscriptions=[_subscription_row(s) for s in rows])
+    data = request.get_json(silent=True) or {}
+    sub = Subscription(
+        name=(data.get('name') or 'Subscription').strip(),
+        token=_token(),
+        note=(data.get('note') or '').strip(),
+        data_limit_value=_sub_int(data.get('data_limit_value'), 0),
+        data_limit_unit=(data.get('data_limit_unit') or 'Gi'),
+        time_limit_days=_sub_float(data.get('time_limit_days'), 0),
+        start_on_first_use=_sub_bool(data.get('start_on_first_use')),
+        unlimited=_sub_bool(data.get('unlimited')),
+        phone_number=(data.get('phone_number') or '').strip(),
+        telegram_id=(data.get('telegram_id') or '').strip(),
+        enabled=True,
+    )
+    _apply_subscription_timer(sub)
+    db.session.add(sub)
+    db.session.flush()
+    targets = data.get('targets') or []
+    try:
+        for idx, target in enumerate(targets):
+            _attach_subscription_target(sub, target or {}, data, idx=idx, total=len(targets))
+        _sync_all_subscription_peers(sub, rename=True)
+        db.session.commit()
+        return jsonify(ok=True, subscription=_subscription_row(sub)), 201
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception('subscription create failed')
+        return jsonify(error='subscription_create_failed', detail=str(e)), 500
+
+@app.get('/api/subscriptions/<int:sid>')
+@require_api_key_or_login
+def api_subscription_get(sid):
+    sub = db.session.get(Subscription, sid) or abort(404)
+    return jsonify(subscription=_subscription_row(sub))
+
+@app.put('/api/subscriptions/<int:sid>')
+@require_api_key_or_login
+def api_subscription_update(sid):
+    sub = db.session.get(Subscription, sid) or abort(404)
+    data = request.get_json(silent=True) or {}
+    try:
+        _update_subscription_payload(sub, data, reset_timer=_sub_bool(data.get('reset_timer')))
+        db.session.commit()
+        return jsonify(ok=True, subscription=_subscription_row(sub))
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception('subscription update failed')
+        return jsonify(error='subscription_update_failed', detail=str(e)), 500
+
+@app.post('/api/subscriptions/<int:sid>/inbounds')
+@require_api_key_or_login
+def api_subscription_add_inbounds(sid):
+    sub = db.session.get(Subscription, sid) or abort(404)
+    data = request.get_json(silent=True) or {}
+    targets = data.get('targets') or []
+    try:
+        base = db.session.query(func.max(SubscriptionPeer.sort_order)).filter_by(subscription_id=sub.id).scalar() or 0
+        for off, target in enumerate(targets):
+            _attach_subscription_target(sub, target or {}, data, idx=base + off + 1, total=len(getattr(sub, 'links', []) or []) + len(targets))
+        _sync_all_subscription_peers(sub, rename=True)
+        db.session.commit()
+        return jsonify(ok=True, subscription=_subscription_row(sub))
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception('subscription add inbound failed')
+        return jsonify(error='subscription_add_inbound_failed', detail=str(e)), 500
+
+@app.patch('/api/subscriptions/<int:sid>/inbounds/<int:link_id>')
+@require_api_key_or_login
+def api_subscription_patch_inbound(sid, link_id):
+    link = SubscriptionPeer.query.filter_by(id=link_id, subscription_id=sid).first() or abort(404)
+    data = request.get_json(silent=True) or {}
+    link.location_label = (data.get('location_label') or '').strip()
+    db.session.commit()
+    return jsonify(ok=True, subscription=_subscription_row(link.subscription))
+
+@app.delete('/api/subscriptions/<int:sid>/inbounds/<int:link_id>')
+@require_api_key_or_login
+def api_subscription_remove_inbound(sid, link_id):
+    link = SubscriptionPeer.query.filter_by(id=link_id, subscription_id=sid).first() or abort(404)
+    sub = link.subscription
+    delete_peer = _sub_bool(request.args.get('delete_peer'))
+    peer = link.peer
+    db.session.delete(link)
+    if delete_peer and peer:
+        try:
+            if getattr(peer.iface, 'node_id', None) is not None:
+                node_delete(peer.iface.node, f'/api/peer/{peer.public_key}')
+            else:
+                try: _wg_disable(peer)
+                except Exception: pass
+                try: _remove_peer(peer)
+                except Exception: pass
+        except Exception:
+            current_app.logger.exception('subscription inbound peer delete failed')
+        _delete_shortlinks_for_peer_ids([peer.id])
+        db.session.delete(peer)
+    db.session.flush()
+    _sync_all_subscription_peers(sub, rename=True)
+    db.session.commit()
+    return jsonify(ok=True, subscription=_subscription_row(sub))
+
+@app.delete('/api/subscriptions/<int:sid>')
+@require_api_key_or_login
+def api_subscription_delete(sid):
+    sub = db.session.get(Subscription, sid) or abort(404)
+    delete_peers = request.args.get('delete_peers')
+    delete_peers = True if delete_peers is None else _sub_bool(delete_peers)
+    peers = [l.peer for l in list(sub.links or []) if l.peer]
+    try:
+        db.session.delete(sub)  
+        if delete_peers:
+            _delete_shortlinks_for_peer_ids([p.id for p in peers if p])
+            for peer in peers:
+                try:
+                    if getattr(peer.iface, 'node_id', None) is not None:
+                        node_delete(peer.iface.node, f'/api/peer/{peer.public_key}')
+                    else:
+                        try: _wg_disable(peer)
+                        except Exception: pass
+                        try: _remove_peer(peer)
+                        except Exception: pass
+                except Exception:
+                    current_app.logger.exception('failed deleting subscription peer %s', getattr(peer, 'id', '?'))
+                db.session.delete(peer)
+        db.session.commit()
+        return jsonify(ok=True, deleted_peers=bool(delete_peers))
+    except Exception as e:
+        db.session.rollback()
+        return jsonify(error='subscription_delete_failed', detail=str(e)), 500
+
+@app.post('/api/subscriptions/<int:sid>/reset_data')
+@require_api_key_or_login
+def api_subscription_reset_data(sid):
+    sub = db.session.get(Subscription, sid) or abort(404)
+    try:
+        _reset_subscription_data(sub)
+        db.session.commit()
+        return jsonify(ok=True, subscription=_subscription_row(sub))
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception('subscription reset data failed')
+        return jsonify(error='subscription_reset_data_failed', detail=str(e)), 500
+
+@app.post('/api/subscriptions/<int:sid>/reset_timer')
+@require_api_key_or_login
+def api_subscription_reset_timer(sid):
+    sub = db.session.get(Subscription, sid) or abort(404)
+    try:
+        _reset_subscription_timer(sub)
+        db.session.commit()
+        return jsonify(ok=True, subscription=_subscription_row(sub))
+    except Exception as e:
+        db.session.rollback()
+        current_app.logger.exception('subscription reset timer failed')
+        return jsonify(error='subscription_reset_timer_failed', detail=str(e)), 500
+
+@app.get('/api/subscriptions/<int:sid>/shortlink')
+@require_api_key_or_login
+def api_subscription_shortlink(sid):
+    sub = db.session.get(Subscription, sid) or abort(404)
+    return jsonify(url=_sub_public_url(sub), config_url=_sub_config_url(sub), token=sub.token)
+
+
+GEO_CACHE_FILE = os.path.join(app.instance_path, 'subscription_geo_cache.json')
+GEO_CACHE_TTL = 7 * 24 * 3600
+
+
+def _flag_from_cc(cc: str) -> str:
+    cc = (cc or '').strip().upper()
+    if not re.match(r'^[A-Z]{2}$', cc):
+        return '🌐'
+    return ''.join(chr(127397 + ord(ch)) for ch in cc)
+
+
+def _load_geo_cache() -> dict:
+    try:
+        with open(GEO_CACHE_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_geo_cache(data: dict):
+    try:
+        os.makedirs(app.instance_path, exist_ok=True)
+        with open(GEO_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def _i_public_host(host: str) -> bool:
+    host = (host or '').strip().strip('[]')
+    if not host:
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+        return bool(ip.is_global)
+    except Exception:
+        low = host.lower()
+        return low not in ('localhost',) and not low.endswith('.local')
+
+
+def _endpoint_host(endpoint: str) -> str:
+    endpoint = (endpoint or '').strip()
+    if not endpoint:
+        return ''
+    if endpoint.startswith('[') and ']' in endpoint:
+        return endpoint[1:].split(']', 1)[0]
+    if ':' in endpoint:
+        return endpoint.rsplit(':', 1)[0]
+    return endpoint
+
+
+def _node_public_host(iface) -> str:
+    try:
+        nid = getattr(iface, 'node_id', None)
+        if nid is None:
+            nm = getattr(iface, 'name', '') or ''
+            m = re.match(r'^n(\d+):', nm)
+            nid = int(m.group(1)) if m else None
+        if nid is None:
+            return ''
+        n = db.session.get(Node, int(nid))
+        if not n:
+            return ''
+        try:
+            h = node_get(n, '/api/health', timeout=5) or {}
+            pub = (h.get('public_ipv4') or h.get('ipv4') or h.get('public_ip') or '').strip()
+            if pub:
+                return pub
+        except Exception:
+            pass
+        return (_geo_urlparse(n.base_url or '').hostname or '').strip()
+    except Exception:
+        return ''
+
+
+def _public_host_peer(peer) -> str:
+    """
+    Return the public host of the SERVER where this WG interface is active.
+
+    """
+    try:
+        iface = peer.iface
+    except Exception:
+        iface = None
+
+    iface_name = getattr(iface, 'name', '') or ''
+    is_node = bool(
+        iface and (
+            getattr(iface, 'node_id', None) is not None or
+            re.match(r'^n\d+:', iface_name)
+        )
+    )
+
+    if is_node:
+        host = _node_public_host(iface)
+        if _i_public_host(host):
+            return host
+
+        try:
+            nid = getattr(iface, 'node_id', None)
+            if nid is None:
+                m = re.match(r'^n(\d+):', iface_name)
+                nid = int(m.group(1)) if m else None
+            n = db.session.get(Node, int(nid)) if nid is not None else None
+            if n:
+                host = _endpoint_host(getattr(n, 'base_url', '') or '')
+                if _i_public_host(host):
+                    return host
+        except Exception:
+            pass
+
+        return ''
+
+    try:
+        host = _public_ipv4(force=True)
+    except TypeError:
+        host = _public_ipv4()
+    except Exception:
+        host = ''
+
+    if _i_public_host(host):
+        return host
+
+    if iface:
+        host = _endpoint_host(_endpoint_fallback(iface))
+        if _i_public_host(host):
+            return host
+
+    return ''
+
+def _lookup_geo(host: str) -> dict:
+    host = (host or '').strip().strip('[]')
+    if not _i_public_host(host):
+        return {'country': '', 'country_code': '', 'flag': '🌐'}
+
+    now = int(_geo_time.time())
+    cache = _load_geo_cache()
+    old = cache.get(host) or {}
+    if old and (now - int(old.get('ts') or 0) < GEO_CACHE_TTL):
+        return old
+
+    headers = {'User-Agent': 'WG-Panel/1.0 (+subscription geo)'}
+    providers = [
+        ('ipwho', f'https://ipwho.is/{host}'),
+        ('ipapi', f'https://ipapi.co/{host}/json/'),
+        ('ipapi2', f'http://ip-api.com/json/{host}?fields=status,country,countryCode'),
+    ]
+
+    for provider, url in providers:
+        try:
+            r = requests.get(url, headers=headers, timeout=4)
+            if not r.ok:
+                continue
+            j = r.json() or {}
+            country = ''
+            cc = ''
+            if provider == 'ipwho':
+                if j.get('success') is False:
+                    continue
+                country = (j.get('country') or '').strip()
+                cc = (j.get('country_code') or '').strip().upper()
+            elif provider == 'ipapi':
+                country = (j.get('country_name') or '').strip()
+                cc = (j.get('country_code') or j.get('country') or '').strip().upper()
+            else:
+                if j.get('status') != 'success':
+                    continue
+                country = (j.get('country') or '').strip()
+                cc = (j.get('countryCode') or '').strip().upper()
+
+            if cc or country:
+                geo = {'country': country or cc, 'country_code': cc, 'flag': _flag_from_cc(cc), 'ts': now}
+                cache[host] = geo
+                _save_geo_cache(cache)
+                return geo
+        except Exception:
+            continue
+
+    return {'country': '', 'country_code': '', 'flag': '🌐', 'ts': now}
+
+
+def _peer_used_for_subscription(peer) -> int:
+    try:
+        iface = getattr(peer, 'iface', None)
+        is_node = bool(
+            iface and (
+                getattr(iface, 'node_id', None) is not None or
+                re.match(r'^n\d+:', getattr(iface, 'name', '') or '')
+            )
+        )
+
+        if is_node:
+            return int(getattr(peer, 'used_bytes_total', 0) or 0)
+
+        total = _wg_transfer(peer)
+        used, _delta, changed = _accumulate_peer_usage(peer, total)
+        if changed:
+            db.session.commit()
+        return int(used)
+
+    except Exception:
+        return int(getattr(peer, 'used_bytes_total', 0) or 0)
+
+def _subscription_public_payload(sub) -> dict:
+    try:
+        _expire()
+    except Exception:
+        pass
+
+    links = sorted(list(getattr(sub, 'links', []) or []), key=lambda x: (x.sort_order or 0, x.id or 0))
+    limit_bytes = sub.limit_bytes() if hasattr(sub, 'limit_bytes') else None
+    used_bytes = 0
+    locs = []
+    dirty = False
+
+    for link in links:
+        peer = getattr(link, 'peer', None)
+        if not peer:
+            continue
+        used_bytes += _peer_used_for_subscription(peer)
+        host = _public_host_peer(peer)
+
+        cc = (getattr(link, 'country_code', '') or '').strip().upper()
+        flag = (getattr(link, 'flag', '') or '').strip()
+        label = (getattr(link, 'location_label', '') or '').strip()
+        if host:
+            geo = _lookup_geo(host)
+            new_cc = (geo.get('country_code') or '').strip().upper()
+            new_flag = geo.get('flag') or _flag_from_cc(new_cc)
+            new_label = geo.get('country') or new_cc or ''
+            if new_cc and new_cc != cc:
+                cc = new_cc
+                flag = new_flag
+                label = new_label
+                link.country_code = cc
+                link.flag = flag
+                link.location_label = label
+                dirty = True
+            elif new_cc and not cc:
+                cc = new_cc
+                flag = new_flag
+                label = new_label
+                link.country_code = cc
+                link.flag = flag
+                link.location_label = label
+                dirty = True
+
+
+        endpoint = getattr(peer, 'endpoint', '') or ''
+        if not endpoint and getattr(peer, 'iface', None):
+            endpoint = _endpoint_fallback(peer.iface) or ''
+
+        locs.append({
+            'link_id': link.id,
+            'peer_id': peer.id,
+            'name': peer.name,
+            'status': peer.status,
+            'endpoint': endpoint,
+            'public_host': host,
+            'location_label': label,
+            'country_code': cc,
+            'flag': flag or _flag_from_cc(cc),
+        })
+
+    if dirty:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    exp_ts = to_ts(getattr(sub, 'expires_at', None))
+    ttl_seconds = max(0, exp_ts - now_ts()) if exp_ts else None
+    if limit_bytes is not None:
+        used_bytes = min(int(used_bytes), int(limit_bytes))
+
+    return {
+        'id': sub.id,
+        'name': sub.name,
+        'token': sub.token,
+        'enabled': bool(getattr(sub, 'enabled', True)),
+        'unlimited': bool(getattr(sub, 'unlimited', False)),
+        'limit_bytes': limit_bytes,
+        'used_bytes': int(used_bytes),
+        'data_limit_value': getattr(sub, 'data_limit_value', 0) or 0,
+        'data_limit_unit': getattr(sub, 'data_limit_unit', 'Gi') or 'Gi',
+        'start_on_first_use': bool(getattr(sub, 'start_on_first_use', False)),
+        'expires_at': isoz(getattr(sub, 'expires_at', None)),
+        'expires_at_ts': exp_ts,
+        'ttl_seconds': ttl_seconds,
+        'locations': locs,
+    }
+
+
+def _subscription_settings_public():
+    try:
+        s = _load_subscription_settings()
+    except Exception:
+        s = _subscription_settings_default()
+
+    socials = s.get('support') or s.get('socials') or {}
+
+    layout = str(s.get('layout') or s.get('selected') or 'aurora').strip().lower()
+    if layout not in ('aurora', 'compact', 'cards', 'minimal'):
+        layout = 'aurora'
+
+    return {
+        'layout': layout,
+        'display_mode': s.get('display_mode') if s.get('display_mode') in ('bars', 'rings', 'hybrid') else 'hybrid',
+        'animation': s.get('animation') if s.get('animation') in ('rich', 'soft', 'minimal') else 'rich',
+
+        'portal_label': _subscription_text(
+            s.get('portal_label'),
+            'Secure WireGuard portal',
+            80
+        ),
+        'portal_icon': _subscription_portal_icon(
+            s.get('portal_icon')
+        ),
+        'portal_title': _subscription_text(
+            s.get('portal_title'),
+            '',
+            90
+        ),
+        'portal_subtitle': _subscription_text(
+            s.get('portal_subtitle'),
+            'Your account is ready. Install WireGuard, then scan QR or import a config.',
+            180
+        ),
+
+        'socials': {
+            'telegram': socials.get('telegram', ''),
+            'whatsapp': socials.get('whatsapp', ''),
+            'instagram': socials.get('instagram', ''),
+            'phone': socials.get('phone', ''),
+            'website': socials.get('website', ''),
+            'email': socials.get('email', ''),
+        }
+    }
+
+
+@app.get('/s/<token>')
+def subscription_public_page(token):
+    sub = Subscription.query.filter_by(token=token).first() or abort(404)
+
+    cfg = _subscription_settings_public()
+    socials = cfg['socials']
+
+    portal_title = cfg.get('portal_title') or sub.name
+
+    return render_template(
+        'subscription_public.html',
+        sub=sub,
+        data=_subscription_public_payload(sub),
+        sub_layout=cfg['layout'],
+        sub_display_mode=cfg.get('display_mode', 'hybrid'),
+        sub_animation=cfg.get('animation', 'rich'),
+
+        portal_label=cfg.get('portal_label', 'Secure WireGuard portal'),
+        portal_icon=cfg.get('portal_icon', 'fas fa-bolt'),
+        portal_title=portal_title,
+        portal_subtitle=cfg.get(
+            'portal_subtitle',
+            'Your account is ready. Install WireGuard, then scan QR or import a config.'
+        ),
+
+        support_portal_label=cfg.get('portal_label', 'Secure WireGuard portal'),
+        support_portal_icon=cfg.get('portal_icon', 'fas fa-bolt'),
+        support_portal_title=portal_title,
+        support_portal_subtitle=cfg.get(
+            'portal_subtitle',
+            'Your account is ready. Install WireGuard, then scan QR or import a config.'
+        ),
+
+        support_telegram=socials.get('telegram', ''),
+        support_whatsapp=socials.get('whatsapp', ''),
+        support_instagram=socials.get('instagram', ''),
+        support_phone=socials.get('phone', ''),
+        support_website=socials.get('website', ''),
+        support_email=socials.get('email', ''),
+    )
+
+@app.get('/s/<token>/api', endpoint='subscription_public_api')
+def subscription_public_api(token):
+    sub = Subscription.query.filter_by(token=token).first() or abort(404)
+    return jsonify(subscription=_subscription_public_payload(sub))
+
+
+@app.get('/s/<token>/config', endpoint='subscription_public_config')
+def subscription_public_config(token):
+    sub = Subscription.query.filter_by(token=token).first() or abort(404)
+    mem = BytesIO()
+    with zipfile.ZipFile(mem, 'w', zipfile.ZIP_DEFLATED) as z:
+        for link in sorted(sub.links, key=lambda x: (x.sort_order or 0, x.id or 0)):
+            if not link.peer:
+                continue
+            safe = re.sub(r'[^A-Za-z0-9_.-]+', '_', link.peer.name or f'peer-{link.peer.id}').strip('_')
+            z.writestr(f'{safe or "peer"}.conf', _client_config_txt(link.peer))
+    mem.seek(0)
+    fname = re.sub(r'[^A-Za-z0-9_.-]+', '_', sub.name or 'subscription').strip('_') or 'subscription'
+    return send_file(mem, mimetype='application/zip', as_attachment=True, download_name=f'{fname}.zip')
+
+
+@app.get('/s/<token>/inbound/<int:link_id>/config')
+def subscription_public_inbound_config(token, link_id):
+    sub = Subscription.query.filter_by(token=token).first() or abort(404)
+    link = SubscriptionPeer.query.filter_by(id=link_id, subscription_id=sub.id).first() or abort(404)
+    peer = link.peer or abort(404)
+    cfg = _client_config_txt(peer)
+    fname = re.sub(r'[^A-Za-z0-9_.-]+', '_', peer.name or 'peer').strip('_') or 'peer'
+    return make_response(cfg, 200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Content-Disposition': f'attachment; filename={fname}.conf'
+    })
+
+
+@app.get('/s/<token>/inbound/<int:link_id>/qr')
+def subscription_public_inbound_qr(token, link_id):
+    sub = Subscription.query.filter_by(token=token).first() or abort(404)
+    link = SubscriptionPeer.query.filter_by(id=link_id, subscription_id=sub.id).first() or abort(404)
+    peer = link.peer or abort(404)
+    img = qrcode.make(_client_config_txt(peer))
+    bio = BytesIO()
+    img.save(bio, format='PNG')
+    bio.seek(0)
+    return send_file(bio, mimetype='image/png')
+
+
+@app.get('/s/<token>/inbound/<int:link_id>/geo')
+def subscription_public_inbound_geo(token, link_id):
+    sub = Subscription.query.filter_by(token=token).first() or abort(404)
+    link = SubscriptionPeer.query.filter_by(id=link_id, subscription_id=sub.id).first() or abort(404)
+    peer = link.peer or abort(404)
+
+    host = _public_host_peer(peer)
+    geo = _lookup_geo(host)
+
+    cc = (geo.get('country_code') or '').strip().upper()
+    flag = geo.get('flag') or _flag_from_cc(cc)
+    country = geo.get('country') or cc or ''
+
+    changed = False
+
+    if cc and (link.country_code or '').strip().upper() != cc:
+        link.country_code = cc
+        changed = True
+
+    if flag and flag != '🌐' and (link.flag or '').strip() != flag:
+        link.flag = flag
+        changed = True
+
+    if country and (link.location_label or '').strip() != country:
+        link.location_label = country
+        changed = True
+
+    if changed:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    return jsonify(
+        country=country,
+        country_code=cc,
+        flag=flag,
+        public_host=host
+    )
 
 _start_retention()
+_start_expiry_enforcer()
 if __name__ == "__main__":
 
     import multiprocessing, ssl
