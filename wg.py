@@ -14,6 +14,7 @@ import secrets
 import shutil
 import signal
 import subprocess
+import socket
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -406,6 +407,12 @@ RUNTIME_DEFAULT = {
     "timeout": 60,
     "graceful_timeout": 30,
     "loglevel": "info",
+}
+
+ONLINE_DETECT_DEFAULTS = {
+    "WG_ONLINE_PROBE_FIRST": "1",
+    "WG_ONLINE_HANDSHAKE_FALLBACK": "0",
+    "WG_ONLINE_HANDSHAKE_WINDOW": "45",
 }
 
 TELEGRAM_SETTINGS_DEFAULT = {
@@ -801,7 +808,6 @@ def __wg_serverconf(
     if enable_nat and wan_iface:
         lines.append("")
         lines.append("# NAT + forwarding (auto-generated)")
-                # Idempotent rules (avoid duplicates on restart/crash)
         lines.append(
             f"PostUp   = "
             f"iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %i -j ACCEPT; "
@@ -1125,11 +1131,16 @@ def _env_text(values: Dict[str, str]) -> str:
     lines.append(f"WIREGUARD_CONF_PATH={g('WIREGUARD_CONF_PATH','/etc/wireguard')}")
     lines.append("")
 
+    lines.append("# Live peer detection")
+    lines.append(f"WG_ONLINE_PROBE_FIRST={g('WG_ONLINE_PROBE_FIRST','1')}")
+    lines.append(f"WG_ONLINE_HANDSHAKE_FALLBACK={g('WG_ONLINE_HANDSHAKE_FALLBACK','0')}")
+    lines.append(f"WG_ONLINE_HANDSHAKE_WINDOW={g('WG_ONLINE_HANDSHAKE_WINDOW','45')}")
+    lines.append("")
+
     lines.append(f"SETUP_TOKEN={g('SETUP_TOKEN','')}")
     lines.append(f"TG_HEARTBEAT_SEC={g('TG_HEARTBEAT_SEC','60')}")
 
     return "\n".join(lines) + "\n"
-
 
 def env_setup(root: Path):
     env_path = root / ".env"
@@ -1143,6 +1154,11 @@ def env_setup(root: Path):
     vals["LOG_LEVEL"] = (existing.get("LOG_LEVEL") or "INFO").upper()
     vals["SECURE_COOKIES"] = existing.get("SECURE_COOKIES") or "1"
     vals["WIREGUARD_CONF_PATH"] = existing.get("WIREGUARD_CONF_PATH") or "/etc/wireguard"
+
+    vals["WG_ONLINE_PROBE_FIRST"] = existing.get("WG_ONLINE_PROBE_FIRST") or "1"
+    vals["WG_ONLINE_HANDSHAKE_FALLBACK"] = existing.get("WG_ONLINE_HANDSHAKE_FALLBACK") or "0"
+    vals["WG_ONLINE_HANDSHAKE_WINDOW"] = existing.get("WG_ONLINE_HANDSHAKE_WINDOW") or "45"
+
     vals["SETUP_TOKEN"] = existing.get("SETUP_TOKEN") or ""
     vals["TG_HEARTBEAT_SEC"] = existing.get("TG_HEARTBEAT_SEC") or "60"
 
@@ -1170,6 +1186,11 @@ def env_setup(root: Path):
     vals["LOG_LEVEL"] = ask("LOG_LEVEL", default=vals["LOG_LEVEL"], show_default=True).upper()
     vals["SECURE_COOKIES"] = ask("SECURE_COOKIES", default=vals["SECURE_COOKIES"], show_default=True)
     vals["WIREGUARD_CONF_PATH"] = ask("WIREGUARD_CONF_PATH", default=vals["WIREGUARD_CONF_PATH"], show_default=True)
+
+    vals["WG_ONLINE_PROBE_FIRST"] = ask("WG_ONLINE_PROBE_FIRST", default=vals["WG_ONLINE_PROBE_FIRST"], show_default=True)
+    vals["WG_ONLINE_HANDSHAKE_FALLBACK"] = ask("WG_ONLINE_HANDSHAKE_FALLBACK", default=vals["WG_ONLINE_HANDSHAKE_FALLBACK"], show_default=True)
+    vals["WG_ONLINE_HANDSHAKE_WINDOW"] = ask("WG_ONLINE_HANDSHAKE_WINDOW", default=vals["WG_ONLINE_HANDSHAKE_WINDOW"], show_default=True)
+
     vals["SETUP_TOKEN"] = ask("SETUP_TOKEN", default=vals["SETUP_TOKEN"], show_default=True)
     vals["TG_HEARTBEAT_SEC"] = ask("TG_HEARTBEAT_SEC", default=vals["TG_HEARTBEAT_SEC"], show_default=True)
 
@@ -1328,6 +1349,42 @@ def panel_settings(root: Path):
         warn("Skipped saving panel_settings.json.")
     pause()
 
+def _split_host_port_input(raw: str, default_host: str = "0.0.0.0") -> tuple[str, int | None]:
+    """
+    Accepts:
+      - 0.0.0.0
+      - 127.0.0.1
+      - 0.0.0.0:9000
+      - :9000
+      - [::]:9000
+
+    Returns clean host + optional port.
+    Never appends a default port by itself.
+    """
+    s = (raw or "").strip()
+
+    if not s:
+        return default_host, None
+
+    if s.startswith("[") and "]:" in s:
+        host_part, port_part = s.rsplit("]:", 1)
+        host = host_part + "]"
+        try:
+            port = int(port_part)
+            return host, port if 1 <= port <= 65535 else None
+        except Exception:
+            return host, None
+
+    if ":" in s:
+        host_part, port_part = s.rsplit(":", 1)
+        host = (host_part or default_host).strip()
+        try:
+            port = int(port_part)
+            return host, port if 1 <= port <= 65535 else None
+        except Exception:
+            return host, None
+
+    return s, None
 
 def _panel_tls(root: Path) -> Tuple[bool, int, int]:
     ps = load_json(root / "instance" / "panel_settings.json", {})
@@ -1358,38 +1415,71 @@ def runtime(root: Path):
     if isinstance(cur, dict):
         rt.update({k: cur.get(k, rt.get(k)) for k in RUNTIME_DEFAULT.keys()})
 
-    tls_eff, http_port, https_port = _panel_tls(root)
-    default_port = https_port if tls_eff else http_port
-
     clear()
     header("Runtime Settings", _paths("instance/runtime.json"))
     print(box("Tips", [
-        c("This controls internal gunicorn launched by app.py.", BR_WHT),
-        c("If unsure, keep defaults.", BR_GRN),
+        c("This controls the internal gunicorn/app.py bind.", BR_WHT),
+        c("No port is auto-added while editing.", BR_GRN),
+        c("You can enter Bind as host:port, for example 0.0.0.0:9000.", BR_WHT),
     ], border_color=BR_YEL))
 
-    auto = confirm("Auto-configure bind based on panel TLS settings?", default_yes=True)
+    existing_bind = str(rt.get("bind") or "").strip()
+    existing_port = rt.get("port")
+
+    if not existing_bind and existing_port:
+        existing_bind = f"0.0.0.0:{existing_port}"
+
+    auto = confirm("Auto-configure bind from panel settings?", default_yes=False)
 
     if auto:
+        tls_eff, http_port, https_port = _panel_tls(root)
         host = "0.0.0.0"
-        port = default_port
-        ok(f"Auto bind set to {host}:{port}")
-        workers = int(rt.get("workers") or 0)
-        threads = int(rt.get("threads") or 4)
-        timeout = int(rt.get("timeout") or 60)
-        gtimeout = int(rt.get("graceful_timeout") or 30)
-        loglevel = str(rt.get("loglevel") or "info").strip().lower() or "info"
+        port = https_port if tls_eff else http_port
+        bind_out = f"{host}:{port}"
+        ok(f"Auto bind set to {bind_out}")
     else:
-        host = ask("Bind host", default="0.0.0.0", show_default=True).strip() or "0.0.0.0"
-        port = ask_int("Bind port", default=int(rt.get("port") or default_port), allow_blank=False, show_default=True) or default_port
-        workers = ask_int("Workers (0 = app default)", default=int(rt.get("workers") or 0), allow_blank=False, show_default=True) or 0
-        threads = ask_int("Threads", default=int(rt.get("threads") or 4), allow_blank=False, show_default=True) or 4
-        timeout = ask_int("Timeout (sec)", default=int(rt.get("timeout") or 60), allow_blank=False, show_default=True) or 60
-        gtimeout = ask_int("Graceful timeout (sec)", default=int(rt.get("graceful_timeout") or 30), allow_blank=False, show_default=True) or 30
-        loglevel = ask("Loglevel (debug/info/warning/error)", default=str(rt.get("loglevel") or "info"), show_default=True).strip().lower() or "info"
+        while True:
+            raw_bind = ask(
+                "Bind address",
+                default=existing_bind,
+                show_default=bool(existing_bind)
+            ).strip()
+
+            if not raw_bind:
+                err("Bind address is required. Example: 0.0.0.0:9000")
+                continue
+
+            host, port_from_bind = _split_host_port_input(raw_bind, default_host="0.0.0.0")
+
+            if port_from_bind is None:
+                port_value = ask_int(
+                    "Bind port",
+                    default=int(existing_port) if existing_port else None,
+                    allow_blank=False,
+                    show_default=bool(existing_port)
+                )
+                if not port_value:
+                    err("Port is required.")
+                    continue
+                port = int(port_value)
+            else:
+                port = int(port_from_bind)
+
+            if not (1 <= int(port) <= 65535):
+                err("Port must be between 1 and 65535.")
+                continue
+
+            bind_out = f"{host}:{port}"
+            break
+
+    workers = ask_int("Workers (0 = app default)", default=int(rt.get("workers") or 0), allow_blank=False, show_default=True) or 0
+    threads = ask_int("Threads", default=int(rt.get("threads") or 4), allow_blank=False, show_default=True) or 4
+    timeout = ask_int("Timeout (sec)", default=int(rt.get("timeout") or 60), allow_blank=False, show_default=True) or 60
+    gtimeout = ask_int("Graceful timeout (sec)", default=int(rt.get("graceful_timeout") or 30), allow_blank=False, show_default=True) or 30
+    loglevel = ask("Loglevel (debug/info/warning/error)", default=str(rt.get("loglevel") or "info"), show_default=True).strip().lower() or "info"
 
     rt_out = {
-        "bind": f"{host}:{port}",
+        "bind": bind_out,
         "port": int(port),
         "workers": int(max(0, min(workers, 64))),
         "threads": int(max(1, min(threads, 64))),
@@ -1717,7 +1807,8 @@ WantedBy=multi-user.target
     host = str(ps.get("domain") or "").strip()
     if not host:
         ipf = root / "instance" / "last_public_ipv4.txt"
-        host = ipf.read_text(encoding="utf-8").strip() if ipf.exists() else "127.0.0.1"
+        cached_ip = ipf.read_text(encoding="utf-8").strip() if ipf.exists() else ""
+        host = cached_ip or _public_ipv4() or "127.0.0.1"
 
     scheme = "https" if tls_enabled else "http"
     port = https_port if tls_enabled else http_port
@@ -2315,31 +2406,150 @@ def _tls(root: Path) -> bool:
         return False
     return Path(cert).is_file() and Path(key).is_file()
 
+def _public_ipv4(root: Optional[Path] = None) -> str:
+    """
+    Best-effort public IPv4 detection.
+
+    Priority:
+      1) PANEL_PUBLIC_HOST / PUBLIC_IPV4 from .env
+      2) cached instance/last_public_ipv4.txt
+      3) external HTTPS lookups
+      4) local route IP
+    """
+    def valid_ipv4(x: str) -> str:
+        x = (x or "").strip()
+        if not x:
+            return ""
+        try:
+            import ipaddress
+            ip = ipaddress.ip_address(x)
+            if ip.version != 4:
+                return ""
+            if ip.is_loopback or ip.is_unspecified:
+                return ""
+            return str(ip)
+        except Exception:
+            return ""
+
+    try:
+        if root is not None:
+            env = parse_env(readtext(root / ".env"))
+            manual = (
+                env.get("PANEL_PUBLIC_HOST")
+                or env.get("PUBLIC_IPV4")
+                or env.get("PUBLIC_IP")
+                or ""
+            ).strip()
+            if manual:
+                if re.fullmatch(r"[A-Za-z0-9.-]+", manual):
+                    return manual
+    except Exception:
+        pass
+
+    try:
+        if root is not None:
+            ipf = root / "instance" / "last_public_ipv4.txt"
+            cached = valid_ipv4(ipf.read_text(encoding="utf-8").strip()) if ipf.exists() else ""
+            if cached:
+                return cached
+    except Exception:
+        pass
+
+    for cmd in (
+        ["curl", "-4fsSL", "--max-time", "4", "https://api.ipify.org"],
+        ["curl", "-4fsSL", "--max-time", "4", "https://ipv4.icanhazip.com"],
+        ["curl", "-4fsSL", "--max-time", "4", "https://ifconfig.me/ip"],
+    ):
+        try:
+            if not _cmd(cmd[0]):
+                continue
+            out = subprocess.check_output(
+                cmd,
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=6
+            ).strip()
+            ip = valid_ipv4(out.splitlines()[0] if out else "")
+            if ip:
+                try:
+                    if root is not None:
+                        p = root / "instance" / "last_public_ipv4.txt"
+                        p.parent.mkdir(parents=True, exist_ok=True)
+                        p.write_text(ip + "\n", encoding="utf-8")
+                except Exception:
+                    pass
+                return ip
+        except Exception:
+            pass
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = valid_ipv4(s.getsockname()[0])
+        s.close()
+        if ip:
+            return ip
+    except Exception:
+        pass
+
+    try:
+        out = subprocess.check_output(
+            ["bash", "-lc", "hostname -I 2>/dev/null | awk '{print $1}'"],
+            text=True
+        ).strip()
+        ip = valid_ipv4(out.split()[0] if out else "")
+        if ip:
+            return ip
+    except Exception:
+        pass
+
+    return ""
 
 def _panel_urls(root: Path) -> dict:
     rt = load_json(root / "instance" / "runtime.json", {})
-    bind = (rt.get("bind") or "").strip() or "0.0.0.0:8000"
-    host, port = (bind.split(":", 1) + ["8000"])[:2]
+    bind = (rt.get("bind") or "").strip()
+
+    if not bind:
+        port_value = rt.get("port")
+        if port_value:
+            bind = f"0.0.0.0:{port_value}"
+        else:
+            bind = "0.0.0.0"
+
+    if bind.startswith("[") and "]:" in bind:
+        host = bind.split("]", 1)[0].lstrip("[")
+        port = bind.rsplit(":", 1)[1]
+    elif ":" in bind:
+        host, port = bind.rsplit(":", 1)
+    else:
+        host = bind
+        port = str(rt.get("port") or "").strip()
+
     host = host.strip() or "0.0.0.0"
-    port = port.strip() or "8000"
+    port = port.strip()
 
     ps = load_json(root / "instance" / "panel_settings.json", {})
     domain = (ps.get("domain") or "").strip()
     tls_eff = _tls(root)
     scheme = "https" if tls_eff else "http"
 
-    if domain:
+    if tls_eff and domain:
+        browse_host = domain
+    elif domain:
         browse_host = domain
     else:
-        browse_host = "127.0.0.1" if host in ("0.0.0.0", "*") else host
+        if host in ("0.0.0.0", "*", "::", "[::]", "127.0.0.1", "localhost"):
+            browse_host = _public_ipv4(root) or "SERVER_PUBLIC_IP"
+        else:
+            browse_host = host
 
-    show_port = True
+    show_port = bool(port)
     try:
-        p = int(port)
+        p = int(port) if port else 0
         if (scheme == "https" and p == 443) or (scheme == "http" and p == 80):
             show_port = False
     except Exception:
-        pass
+        show_port = bool(port)
 
     base = f"{scheme}://{browse_host}" + (f":{port}" if show_port else "")
     return {
@@ -2349,7 +2559,6 @@ def _panel_urls(root: Path) -> dict:
         "login": f"{base}/login",
         "settings": f"{base}/settings",
     }
-
 
 def _admin_usernames(root: Path) -> list[str]:
 
@@ -2654,13 +2863,22 @@ def information_page(root: Path):
     admins = _admin_usernames(root)
 
     svc_user = _detect_svcuser()
-
     bind = str(urls.get("bind") or "")
     try:
-        port = (bind.split(":", 1) + ["8000"])[1].strip() or "8000"
+        if bind.startswith("[") and "]:" in bind:
+            port = bind.rsplit(":", 1)[1].strip()
+        elif ":" in bind:
+            port = bind.rsplit(":", 1)[1].strip()
+        else:
+            port = ""
     except Exception:
-        port = "8000"
-    tunnel = f"ssh -L {port}:127.0.0.1:{port} root@YOUR_SERVER_IP"
+        port = ""
+    tunnel = (
+        f"ssh -L {port}:127.0.0.1:{port} root@YOUR_SERVER_IP"
+        if port else
+        "ssh -L LOCAL_PORT:127.0.0.1:PANEL_PORT root@YOUR_SERVER_IP"
+        )
+
 
     scheme = str(urls.get("scheme") or "http").lower()
     scheme_badge = c("HTTPS", BR_GRN) if scheme == "https" else c("HTTP", BR_YEL)
@@ -2756,8 +2974,8 @@ def update_project(root: Path):
         ]
 
         rc = _live(
-            ["rsync", "-a"] + excludes + [str(tmp) + "/", str(dest) + "/"],
-            "rsync overwrite (safe)"
+           ["rsync", "-a", "--delete"] + excludes + [str(tmp) + "/", str(dest) + "/"],
+           "rsync overwrite (safe, mirror GitHub code)"
         )
         if rc != 0:
             pause()
