@@ -79,6 +79,11 @@ node
 - بات توکن را که از botfather گرفته ام وارد میکنم و برای دسترسی به بات هم باید ادمین id و یوزر نیم را وارد نمایم. همچنین notification ها را فعال میکنم. توجه کنید که ادمینی که ساختید mute نکنید. ( سوال پرسیده میشود)
 - گزینه mute را n وارد میکنم و تنظیمات telegram را ذخیره میکنم
 -----------------------
+  </details>
+</div>
+
+-----------------------
+
 ![images](https://github.com/user-attachments/assets/f50ecb83-2194-4b91-9594-00d310dc506a)
 اسکرین شات:
 
@@ -94,7 +99,15 @@ node
   <summary align="right">peers</summary>
 
   <p align="right">
-    <img src="https://github.com/user-attachments/assets/82149141-f648-4c07-ad73-22e8a3fa9d68" alt="menu screen" />
+    <img src="https://github.com/user-attachments/assets/5f01d460-8870-48d2-bf50-6f892d483cce" alt="menu screen" />
+  </p>
+</details>
+
+<details>
+  <summary align="right">Subscription</summary>
+
+  <p align="right">
+    <img src="https://github.com/user-attachments/assets/039973fe-fa9b-4cbe-975a-13bbcbdfadf7" alt="menu screen" />
   </p>
 </details>
 
@@ -131,4 +144,5 @@ node
 </details>
 
 ---------------------------------------------------------------
- 
+   </details>
+</div>
