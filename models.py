@@ -1,5 +1,4 @@
 from flask_sqlalchemy import SQLAlchemy
-from werkzeug.security import check_password_hash
 from datetime import datetime, timedelta
 from sqlalchemy import BigInteger, Column, Integer, String, Boolean, DateTime, Text
 from passlib.context import CryptContext
@@ -70,6 +69,25 @@ class PeerEvent(db.Model):
     event     = db.Column(db.String(32), nullable=False)
     details   = db.Column(db.Text)
 
+class ShortLink(db.Model):
+    __tablename__ = "short_link"
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    token = db.Column(db.String(96), unique=True, nullable=False, index=True)
+
+    peer_id = db.Column(
+        db.Integer,
+        db.ForeignKey("peer.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    last_used_at = db.Column(db.DateTime)
+
+    peer = db.relationship("Peer", backref=db.backref("short_links", cascade="all, delete-orphan"))
+
 class Node(db.Model):
     id       = db.Column(db.Integer, primary_key=True)
     name     = db.Column(db.String(64), unique=True, nullable=False)
@@ -77,6 +95,43 @@ class Node(db.Model):
     api_key  = db.Column(db.String(128), nullable=False)  
     enabled  = db.Column(db.Boolean, default=True)
     last_seen = db.Column(db.DateTime)
+
+
+
+class Subscription(db.Model):
+    id                   = db.Column(db.Integer, primary_key=True)
+    name                 = db.Column(db.String(96), nullable=False)
+    token                = db.Column(db.String(64), unique=True, nullable=False)
+    note                 = db.Column(db.String(256))
+    data_limit_value     = db.Column(db.BigInteger, default=0)
+    data_limit_unit      = db.Column(db.String(2), default='Gi')
+    time_limit_days      = db.Column(db.Float, default=0)
+    start_on_first_use   = db.Column(db.Boolean, default=False)
+    first_used_at        = db.Column(db.DateTime)
+    expires_at           = db.Column(db.DateTime)
+    unlimited            = db.Column(db.Boolean, default=False)
+    phone_number         = db.Column(db.String(32))
+    telegram_id          = db.Column(db.String(64))
+    created_at           = db.Column(db.DateTime, server_default=db.func.now())
+    enabled              = db.Column(db.Boolean, default=True)
+
+    links = db.relationship('SubscriptionPeer', backref='subscription', lazy=True, cascade='all, delete-orphan')
+
+    def limit_bytes(self):
+        if not self.data_limit_value or self.unlimited:
+            return None
+        mult = 1024**2 if (self.data_limit_unit or 'Mi') == 'Mi' else 1024**3
+        return int(self.data_limit_value) * mult
+
+class SubscriptionPeer(db.Model):
+    id              = db.Column(db.Integer, primary_key=True)
+    subscription_id = db.Column(db.Integer, db.ForeignKey('subscription.id'), nullable=False, index=True)
+    peer_id         = db.Column(db.Integer, db.ForeignKey('peer.id'), nullable=False, index=True)
+    location_label  = db.Column(db.String(128))
+    country_code    = db.Column(db.String(2))
+    flag            = db.Column(db.String(8))
+    sort_order      = db.Column(db.Integer, default=0)
+    peer            = db.relationship('Peer', backref=db.backref('subscription_links', lazy=True, cascade='all, delete-orphan'))
 
 class AdminLog(db.Model):
     id              = db.Column(db.Integer, primary_key=True)
@@ -101,48 +156,8 @@ class AdminAccount(db.Model):
         return pwd_ctx.hash(password)
 
     def verify_pw(self, password: str) -> bool:
-
         password = (password or "").strip()
-        if not password:
-            return False
-
-        h = (self.password_hash or "").strip()
-        if not h:
-            return False
-
-        if h.startswith("pbkdf2:") or h.startswith("scrypt:"):
-            try:
-                ok = bool(check_password_hash(h, password))
-            except Exception:
-                ok = False
-
-            if ok:
-                try:
-                    self.password_hash = pwd_ctx.hash(password)
-                    db.session.add(self)
-                    db.session.commit()
-                except Exception:
-                    db.session.rollback()
-                return True
-
-            return False
-
-        try:
-            ok = bool(pwd_ctx.verify(password, h))
-        except Exception:
-            ok = False
-
-        if ok:
-            try:
-                if pwd_ctx.needs_update(h):
-                    self.password_hash = pwd_ctx.hash(password)
-                    db.session.add(self)
-                    db.session.commit()
-            except Exception:
-                db.session.rollback()
-
-        return ok
-
+        return pwd_ctx.verify(password, self.password_hash)
     
 class Admin2FA(db.Model):
     __tablename__ = 'admin_twofa'
