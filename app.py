@@ -46,7 +46,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 # ----------------------------------
 # Panel version / update checker
 # ----------------------------------
-PANEL_VERSION = "1.0.0"
+PANEL_VERSION = "1.0.2"
 PANEL_REPO = "Azumi67/WG_Panel"
 PANEL_UPDATE_TTL = 1800  
 _PANEL_UPDATE_CACHE = {
