@@ -1631,8 +1631,8 @@ let refreshTimer = null,
     peersLoadingSeq = 0,
     peersLoadingSince = 0;
 
-const REFRESH_TIMEOUT_MS_LOCAL = 8000;
-const REFRESH_TIMEOUT_MS_NODE  = 20000;
+const REFRESH_TIMEOUT_MS_LOCAL = 15000;
+const REFRESH_TIMEOUT_MS_NODE  = 25000;
 const MAX_BACKOFF_MS = 60000;
 
 function nextSchedule(ms) {
@@ -1848,12 +1848,45 @@ if (!quiet && opts.forceLoading) {
   } catch (err) {
   const msg = String(err?.message || err || '');
   const abortMsg = msg.toLowerCase();
+  const isRefreshTimeout =
+  abortMsg.includes('refresh-timeout') ||
+  signal?.reason === 'refresh-timeout';
+
   const benignAbort =
   err?.name === 'AbortError' ||
   abortMsg.includes('superseded-by-newer-request') ||
   abortMsg.includes('superseded-by-newer-poll');
 
-if (benignAbort) return;
+if (benignAbort && !isRefreshTimeout) return;
+
+if (isRefreshTimeout) {
+  const now = Date.now();
+
+  if (now - lastErrorAt > 60000) {
+    console.warn(
+      `Peers refresh timed out after ${timeoutMs}ms`,
+      {
+        ifaceId,
+        scopeId,
+        url: typeof url !== 'undefined' ? url.toString() : ''
+      }
+    );
+
+    toastSafe?.(
+      'Peer status refresh took too long. The panel will retry automatically.',
+      'warning'
+    );
+
+    lastErrorAt = now;
+  }
+
+  refreshDelay = Math.min(
+    MAX_BACKOFF_MS,
+    Math.max(10000, Math.round(refreshDelay * 1.7))
+  );
+
+  return;
+}
 
     const now = Date.now();
     if (now - lastErrorAt > 60000) {
