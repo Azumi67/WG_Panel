@@ -3559,6 +3559,76 @@ def _wg_transfer(peer):
     rx, tx = _wg_rx_tx(peer)
     return rx + tx
 
+def _wg_runtime_snapshot(iface_names):
+
+    transfers = {}
+    handshakes = {}
+
+    names = {
+        str(name or '').strip()
+        for name in iface_names
+        if str(name or '').strip()
+    }
+
+    for iface_name in sorted(names):
+        try:
+            dev = iface_name.split(':')[-1]
+
+            lines = subprocess.check_output(
+                ['wg', 'show', dev, 'dump'],
+                stderr=subprocess.DEVNULL,
+                timeout=2.0,
+            ).decode(
+                errors='replace'
+            ).splitlines()
+
+            for line in lines[1:]:
+                columns = line.split('\t')
+
+                if len(columns) < 8:
+                    columns = line.split()
+
+                if len(columns) < 8:
+                    continue
+
+                public_key = columns[0].strip()
+
+                if not public_key:
+                    continue
+
+                try:
+                    latest_handshake = int(columns[4] or 0)
+                except (TypeError, ValueError):
+                    latest_handshake = 0
+
+                try:
+                    rx_bytes = int(columns[5] or 0)
+                    tx_bytes = int(columns[6] or 0)
+                except (TypeError, ValueError):
+                    rx_bytes = 0
+                    tx_bytes = 0
+
+                key = (iface_name, public_key)
+
+                transfers[key] = (rx_bytes, tx_bytes)
+                handshakes[key] = latest_handshake
+
+        except (
+            subprocess.TimeoutExpired,
+            subprocess.CalledProcessError,
+            FileNotFoundError,
+            OSError,
+        ):
+            continue
+
+        except Exception:
+            current_app.logger.debug(
+                "WireGuard runtime snapshot failed for %s",
+                iface_name,
+                exc_info=True,
+            )
+
+    return transfers, handshakes
 
 def _accumulate_peer_usage(peer, live_total=None):
     """
@@ -3570,43 +3640,69 @@ def _accumulate_peer_usage(peer, live_total=None):
     changed = False
 
     try:
-        live = int(_wg_transfer(peer) if live_total is None else (live_total or 0))
+        if live_total is None:
+            live = int(_wg_transfer(peer) or 0)
+        else:
+            live = int(live_total or 0)
+    except (TypeError, ValueError):
+        live = 0
     except Exception:
+        current_app.logger.debug(
+            "Could not read live traffic for peer %s",
+            getattr(peer, 'id', '?'),
+            exc_info=True,
+        )
         live = 0
 
+    live = max(0, live)
+
     try:
-        offset = int(getattr(peer, 'bytes_offset', 0) or 0)
-    except Exception:
+        offset = int(
+            getattr(peer, 'bytes_offset', 0) or 0
+        )
+    except (TypeError, ValueError):
         offset = 0
 
     try:
-        persisted = int(getattr(peer, 'used_bytes_total', 0) or 0)
-    except Exception:
+        persisted = int(
+            getattr(peer, 'used_bytes_total', 0) or 0
+        )
+    except (TypeError, ValueError):
         persisted = 0
 
-    # keep DB total and start a new live window.
+    offset = max(0, offset)
+    persisted = max(0, persisted)
+
     if live < offset:
         offset = 0
+
         if int(getattr(peer, 'bytes_offset', 0) or 0) != 0:
             peer.bytes_offset = 0
             changed = True
 
     delta = max(0, live - offset)
 
-    if delta:
+    if delta > 0:
         persisted += delta
+
         peer.used_bytes_total = persisted
         peer.bytes_offset = live
         changed = True
+
     else:
         if getattr(peer, 'used_bytes_total', None) is None:
             peer.used_bytes_total = persisted
             changed = True
+
         if getattr(peer, 'bytes_offset', None) is None:
             peer.bytes_offset = live
             changed = True
 
-    return int(persisted), int(delta), bool(changed)
+    return (
+        int(persisted),
+        int(delta),
+        bool(changed),
+    )
 
 def _wg_handshake(peer):
     try:
@@ -5974,71 +6070,224 @@ def _peer_ping_ok(peer, timeout_sec: float = 0.8) -> bool:
         return False
 
 
-def _peer_conn_status(peer, *, live_total: int | None = None, handshake_window: int | None = None) -> dict:
+def _peer_conn_status(
+    peer,
+    *,
+    live_total: int | None = None,
+    latest_handshake: int | None = None,
+    handshake_window: int | None = None,
+    allow_probe: bool = True,
+) -> dict:
     """
-    Real connection status, separate from panel status.
+    Determine the peer's live WireGuard connection state.
 
-    - Probe is authoritative by default.
-    - This prevents stale WireGuard handshakes from showing a disconnected peer as Online.
+    Parameters:
+        peer:
+            Peer database object.
+
+        live_total:
+            Current RX + TX WireGuard counter.
+
+        latest_handshake:
+            Latest handshake from Wireguard snapshot.
+
+        handshake_window:
+            Maximum handshake age
+
+        allow_probe:
+            When True, an enabled peer may be actively pinged.
+            Automatic peer-list refresh must pass False so it doesn't launch ping process
+            
     """
     now = now_ts()
 
     try:
-        handshake_window = int(
-            handshake_window if handshake_window is not None
-            else os.environ.get('WG_ONLINE_HANDSHAKE_WINDOW', '45')
-        )
-    except Exception:
+        if handshake_window is None:
+            handshake_window = int(
+                os.environ.get(
+                    'WG_ONLINE_HANDSHAKE_WINDOW',
+                    '45',
+                )
+            )
+        else:
+            handshake_window = int(handshake_window)
+    except (TypeError, ValueError):
         handshake_window = 45
 
-    probe_first = str(os.environ.get('WG_ONLINE_PROBE_FIRST', '1')).lower() not in ('0', 'false', 'no', 'off')
-    handshake_fallback = str(os.environ.get('WG_ONLINE_HANDSHAKE_FALLBACK', '0')).lower() in ('1', 'true', 'yes', 'on')
+    handshake_window = max(5, handshake_window)
+
+    probe_first = str(
+        os.environ.get(
+            'WG_ONLINE_PROBE_FIRST',
+            '1',
+        )
+    ).strip().lower() not in (
+        '0',
+        'false',
+        'no',
+        'off',
+    )
+
+    handshake_fallback = str(
+        os.environ.get(
+            'WG_ONLINE_HANDSHAKE_FALLBACK',
+            '1',
+        )
+    ).strip().lower() in (
+        '1',
+        'true',
+        'yes',
+        'on',
+    )
 
     try:
-        hs = int(_latest_handshake(peer) or 0)
+        if latest_handshake is None:
+            handshake = int(
+                _latest_handshake(peer) or 0
+            )
+        else:
+            handshake = int(
+                latest_handshake or 0
+            )
+    except (TypeError, ValueError):
+        handshake = 0
     except Exception:
-        hs = 0
+        current_app.logger.debug(
+            "Could not read handshake for peer %s",
+            getattr(peer, 'id', '?'),
+            exc_info=True,
+        )
+        handshake = 0
 
-    hs_age = (now - hs) if hs > 0 else None
-    hs_fresh = bool(hs > 0 and hs_age is not None and hs_age <= int(handshake_window))
+    handshake = max(0, handshake)
+
+    handshake_age = (
+        max(0, now - handshake)
+        if handshake > 0
+        else None
+    )
+
+    handshake_fresh = bool(
+        handshake > 0
+        and handshake_age is not None
+        and handshake_age <= handshake_window
+    )
 
     try:
-        live = int(_wg_transfer(peer) if live_total is None else (live_total or 0))
+        if live_total is None:
+            live = int(
+                _wg_transfer(peer) or 0
+            )
+        else:
+            live = int(
+                live_total or 0
+            )
+    except (TypeError, ValueError):
+        live = 0
     except Exception:
+        current_app.logger.debug(
+            "Could not read live transfer counter for peer %s",
+            getattr(peer, 'id', '?'),
+            exc_info=True,
+        )
         live = 0
 
+    live = max(0, live)
+
     try:
-        offset = int(getattr(peer, 'bytes_offset', 0) or 0)
-    except Exception:
+        offset = int(
+            getattr(peer, 'bytes_offset', 0) or 0
+        )
+    except (TypeError, ValueError):
         offset = 0
 
-    traffic_now = bool(live > offset)
-    panel_enabled = (getattr(peer, 'status', '') or '').lower() == 'online'
+    offset = max(0, offset)
+
+    traffic_now = live > offset
+
+    panel_status = str(
+        getattr(peer, 'status', '') or ''
+    ).strip().lower()
+
+    panel_enabled = panel_status == 'online'
+    panel_blocked = panel_status == 'blocked'
 
     ping_ok = False
     probed = False
 
-    if panel_enabled and probe_first:
+    if (
+        allow_probe
+        and panel_enabled
+        and probe_first
+    ):
         probed = True
-        ping_ok = _peer_ping_ok(peer)
+
+        try:
+            ping_ok = bool(
+                _peer_ping_ok(peer)
+            )
+        except Exception:
+            ping_ok = False
 
         if ping_ok:
             online = True
             reason = 'probe'
+
+        elif handshake_fallback and handshake_fresh:
+            online = True
+            reason = 'handshake'
+
+        elif traffic_now:
+            online = True
+            reason = 'traffic'
+
         else:
-            online = bool(handshake_fallback and hs_fresh)
-            reason = 'handshake' if online else 'probe_failed'
+            online = False
+            reason = 'probe_failed'
+
     else:
-        online = bool(hs_fresh or traffic_now)
-        reason = 'handshake' if hs_fresh else 'traffic' if traffic_now else 'none'
+        if panel_blocked:
+            online = False
+            reason = 'blocked'
+
+        elif handshake_fresh:
+            online = True
+            reason = 'handshake'
+
+        elif traffic_now:
+            online = True
+            reason = 'traffic'
+
+        elif not panel_enabled:
+            online = False
+            reason = 'disabled'
+
+        else:
+            online = False
+            reason = 'no_recent_activity'
+
+    connection_status = (
+        'online'
+        if online
+        else 'offline'
+    )
 
     return {
-        'conn_status': 'online' if online else 'offline',
-        'connection_status': 'online' if online else 'offline',
-        'latest_handshake': hs,
-        'latest_handshake_age': hs_age,
+        'conn_status': connection_status,
+        'connection_status': connection_status,
+
+        'latest_handshake': handshake,
+        'latest_handshake_age': handshake_age,
+
         'conn_reason': reason,
         'conn_probe': bool(probed),
+        'probe_ok': bool(ping_ok),
+
+        'traffic_now': bool(traffic_now),
+        'live_total': int(live),
+
+        'handshake_fresh': bool(handshake_fresh),
+        'handshake_window': int(handshake_window),
     }
 
 def _wg_transfer_bytes(peer):
@@ -8199,101 +8448,359 @@ def peers_create():
 @require_api_key_or_login
 def panel_peers():
 
-    _expire()
-    pub = _public_ipv4()
-    out = []
-
-    iface_id = request.args.get('iface_id', type=int)
-    iface_name = (request.args.get('iface') or '').strip()
+    try:
+        _expire()
+    except Exception:
+        current_app.logger.exception(
+            "Peer expiration processing failed during refresh"
+        )
 
     try:
-        q = Peer.query
-        if iface_id is not None:
-            q = q.filter(Peer.iface_id == iface_id)
-        elif iface_name:
-            q = q.join(InterfaceConfig).filter(InterfaceConfig.name == iface_name)
-        peers = q.all()
+        server_public_ip = _public_ipv4()
     except Exception:
-        current_app.logger.exception("Failed to query peers")
-        return jsonify(peers=[]), 200
+        server_public_ip = ''
 
-    for p in peers:
-        try:
-            total = _wg_transfer(p)
-            used, _delta, usage_changed = _accumulate_peer_usage(p, total)
-            conn = _peer_conn_status(p, live_total=total)
-            if usage_changed:
-                db.session.commit()
+    output = []
 
-            rx = tx = '0'
-            try:
-                rx_b, tx_b = _wg_rx_tx(p)
-                rx = str(round(rx_b/1024/1024, 2))
-                tx = str(round(tx_b/1024/1024, 2))
-            except Exception:
-                rx = tx = '0'
+    interface_id = request.args.get(
+        'iface_id',
+        type=int,
+    )
 
-            exp_ts = to_ts(getattr(p, 'expires_at', None))
-            ttl_seconds = max(0, exp_ts - now_ts()) if exp_ts else None
+    interface_name_filter = (
+        request.args.get('iface') or ''
+    ).strip()
 
-            short_token = ''
-            short_url = ''
-            try:
-                short_token, short_url = _shortlink_from_peer_id(p.id)
+    try:
+        query = Peer.query
 
-                if not short_token or not short_url:
-                    short_token, short_url = _shortlink_for_peer(p)
-            except Exception:
-                current_app.logger.exception(
-                "shortlink attach failed while listing peer %s",
-                getattr(p, "id", "?")
+        if interface_id is not None:
+            query = query.filter(
+                Peer.iface_id == interface_id
             )
 
-            out.append({
-                'id': p.id,
-                'shortlink': short_url or '',
-                'shortlink_token': short_token or '',
-                'name': p.name,
-                'iface': p.iface.name,
-                'listen_port': p.iface.listen_port,
-                'server_public_ip': pub,
-                'address': p.address,
-                'endpoint': p.endpoint or '',
-                'allowed_ips': p.allowed_ips or '',
-                'persistent_keepalive': p.persistent_keepalive,
-                'mtu': p.mtu,
-                'dns': p.dns,
-                'status': p.status,
-                'panel_status': p.status,
-                'conn_status': conn['conn_status'],
-                'connection_status': conn['connection_status'],
-                'latest_handshake': conn['latest_handshake'],
-                'latest_handshake_age': conn['latest_handshake_age'],
-                'conn_reason': conn['conn_reason'],
-                'data_limit': getattr(p, 'data_limit_value', None),
-                'limit_unit': getattr(p, 'data_limit_unit', None),
-                'unlimited': getattr(p, 'unlimited', False),
-                'time_limit_days': getattr(p, 'time_limit_days', None),
-                'start_on_first_use': getattr(p, 'start_on_first_use', False),
-                'created_at': isoz(getattr(p, 'created_at', None)),
-                'created_at_ts': to_ts(getattr(p, 'created_at', None)),
-                'first_used_at': isoz(getattr(p, 'first_used_at', None)),
-                'expires_at': isoz(getattr(p, 'expires_at', None)),
-                'first_used_at_ts': to_ts(getattr(p, 'first_used_at', None)),
-                'expires_at_ts': exp_ts,
-                'ttl_seconds': ttl_seconds,
-                'used_bytes': used,                                
-                'used_bytes_db': used,
-                'phone_number': getattr(p, 'phone_number', '') or '',
-                'telegram_id': getattr(p, 'telegram_id', '') or '',
-                'rx': rx,
-                'tx': tx
+        elif interface_name_filter:
+            query = (
+                query
+                .join(InterfaceConfig)
+                .filter(
+                    InterfaceConfig.name
+                    == interface_name_filter
+                )
+            )
+
+        peers = query.all()
+
+    except Exception:
+        current_app.logger.exception(
+            "Failed to query peers"
+        )
+
+        return jsonify(
+            peers=[],
+            error='peer_query_failed',
+        ), 200
+
+    transfer_map, handshake_map = _wg_runtime_snapshot(
+        [
+            getattr(
+                getattr(peer, 'iface', None),
+                'name',
+                '',
+            )
+            for peer in peers
+        ]
+    )
+
+    usage_dirty = False
+    current_timestamp = now_ts()
+
+    for peer in peers:
+        try:
+            interface = getattr(
+                peer,
+                'iface',
+                None,
+            )
+
+            database_interface_name = (
+                getattr(interface, 'name', '') or ''
+            ).strip()
+
+            runtime_key = (
+                database_interface_name,
+                peer.public_key,
+            )
+
+            rx_bytes, tx_bytes = transfer_map.get(
+                runtime_key,
+                (0, 0),
+            )
+
+            try:
+                rx_bytes = max(0, int(rx_bytes or 0))
+            except (TypeError, ValueError):
+                rx_bytes = 0
+
+            try:
+                tx_bytes = max(0, int(tx_bytes or 0))
+            except (TypeError, ValueError):
+                tx_bytes = 0
+
+            live_total = rx_bytes + tx_bytes
+
+            (
+                used_bytes,
+                _new_usage,
+                usage_changed,
+            ) = _accumulate_peer_usage(
+                peer,
+                live_total=live_total,
+            )
+
+            if usage_changed:
+                usage_dirty = True
+
+            connection = _peer_conn_status(
+                peer,
+                live_total=live_total,
+                latest_handshake=handshake_map.get(
+                    runtime_key,
+                    0,
+                ),
+                allow_probe=False,
+            )
+
+            rx_mib = str(
+                round(
+                    rx_bytes / 1024 / 1024,
+                    2,
+                )
+            )
+
+            tx_mib = str(
+                round(
+                    tx_bytes / 1024 / 1024,
+                    2,
+                )
+            )
+
+            expires_at = getattr(
+                peer,
+                'expires_at',
+                None,
+            )
+
+            expires_timestamp = to_ts(
+                expires_at
+            )
+
+            ttl_seconds = (
+                max(
+                    0,
+                    expires_timestamp - current_timestamp,
+                )
+                if expires_timestamp
+                else None
+            )
+
+            shortlink_token = ''
+            shortlink_url = ''
+
+            try:
+                (
+                    shortlink_token,
+                    shortlink_url,
+                ) = _shortlink_from_peer_id(
+                    peer.id
+                )
+
+                if not shortlink_token or not shortlink_url:
+                    (
+                        shortlink_token,
+                        shortlink_url,
+                    ) = _shortlink_for_peer(
+                        peer
+                    )
+
+            except Exception:
+                current_app.logger.exception(
+                    "Shortlink attach failed while listing peer %s",
+                    getattr(peer, 'id', '?'),
+                )
+
+            output.append({
+                'id': peer.id,
+
+                'shortlink': shortlink_url or '',
+                'shortlink_token': shortlink_token or '',
+
+                'name': peer.name,
+                'iface': database_interface_name,
+                'listen_port': getattr(
+                    interface,
+                    'listen_port',
+                    None,
+                ),
+
+                'server_public_ip': server_public_ip,
+
+                'address': peer.address,
+                'endpoint': peer.endpoint or '',
+                'allowed_ips': peer.allowed_ips or '',
+
+                'persistent_keepalive':
+                    peer.persistent_keepalive,
+
+                'mtu': peer.mtu,
+                'dns': peer.dns,
+
+                'status': peer.status,
+                'panel_status': peer.status,
+
+                'conn_status':
+                    connection['conn_status'],
+
+                'connection_status':
+                    connection['connection_status'],
+
+                'latest_handshake':
+                    connection['latest_handshake'],
+
+                'latest_handshake_age':
+                    connection['latest_handshake_age'],
+
+                'conn_reason':
+                    connection['conn_reason'],
+
+                'conn_probe':
+                    connection.get(
+                        'conn_probe',
+                        False,
+                    ),
+
+                'data_limit': getattr(
+                    peer,
+                    'data_limit_value',
+                    None,
+                ),
+
+                'limit_unit': getattr(
+                    peer,
+                    'data_limit_unit',
+                    None,
+                ),
+
+                'unlimited': bool(
+                    getattr(
+                        peer,
+                        'unlimited',
+                        False,
+                    )
+                ),
+
+                'time_limit_days': getattr(
+                    peer,
+                    'time_limit_days',
+                    None,
+                ),
+
+                'start_on_first_use': bool(
+                    getattr(
+                        peer,
+                        'start_on_first_use',
+                        False,
+                    )
+                ),
+
+                'created_at': isoz(
+                    getattr(
+                        peer,
+                        'created_at',
+                        None,
+                    )
+                ),
+
+                'created_at_ts': to_ts(
+                    getattr(
+                        peer,
+                        'created_at',
+                        None,
+                    )
+                ),
+
+                'first_used_at': isoz(
+                    getattr(
+                        peer,
+                        'first_used_at',
+                        None,
+                    )
+                ),
+
+                'first_used_at_ts': to_ts(
+                    getattr(
+                        peer,
+                        'first_used_at',
+                        None,
+                    )
+                ),
+
+                'expires_at': isoz(
+                    expires_at
+                ),
+
+                'expires_at_ts':
+                    expires_timestamp,
+
+                'ttl_seconds':
+                    ttl_seconds,
+
+                'used_bytes':
+                    used_bytes,
+
+                'used_bytes_db':
+                    used_bytes,
+
+                'phone_number': (
+                    getattr(
+                        peer,
+                        'phone_number',
+                        '',
+                    ) or ''
+                ),
+
+                'telegram_id': (
+                    getattr(
+                        peer,
+                        'telegram_id',
+                        '',
+                    ) or ''
+                ),
+
+                'rx': rx_mib,
+                'tx': tx_mib,
             })
+
         except Exception:
-            current_app.logger.exception("Failed to serialize peer %s", p.id)
+            current_app.logger.exception(
+                "Failed to serialize peer %s",
+                getattr(peer, 'id', '?'),
+            )
 
-    return jsonify(peers=out), 200
+    if usage_dirty:
+        try:
+            db.session.commit()
 
+        except Exception:
+            db.session.rollback()
+
+            current_app.logger.exception(
+                "Failed to persist peer usage after refresh"
+            )
+
+    return jsonify(
+        peers=output,
+    ), 200
 
 # ------------
 # Bulk create 
