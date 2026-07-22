@@ -1,373 +1,474 @@
-
 (() => {
+  'use strict';
+
   const IS_PREVIEW = new URLSearchParams(location.search).has('embed');
-  let TOKEN = (window.USER_LINK_TOKEN || '').trim();
-  if (IS_PREVIEW) TOKEN = 'DEMO';
-  const REFRESH_MS = 3000;
-  const safeStore = {
-  get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
-  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }
-};
-
-  const root = document.documentElement;
-  const toggle = document.getElementById('theme-toggle');
-
-  const currentParticleColor = () =>
-    (getComputedStyle(root).getPropertyValue('--particles').trim() || '#b6c1d8');
-
-  function setTheme(mode) {
-    document.documentElement.setAttribute('data-theme', mode);
-    safeStore.set('userlink:theme', mode);
-    root.setAttribute('data-theme', mode);
-    if (toggle) {
-      toggle.innerHTML = `<i class="fas ${mode === 'dark' ? 'fa-sun' : 'fa-moon'}"></i>`;
-      toggle.title = mode === 'dark' ? 'Switch to light' : 'Switch to dark';
-    }
-  }
-
-  (function initTheme() {
-    const saved = safeStore.get('userlink:theme');
-    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-    setTheme(saved || (prefersDark ? 'dark' : 'light'));
-    toggle?.addEventListener('click', () =>
-      setTheme(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark')
-    );
-  })();
-
-  const $ = id => document.getElementById(id);
-  const nameEl = $('name');
-  const statusEl = $('status');
-  const addressEl = $('address');
-  const endpointEl = $('endpoint');
-
-  const timeLeftEl = $('time-left');
-  const expiresAtEl = $('expires-at');
-  const timeBar = $('time-bar');
-  const timeSub = $('time-sub');
-  const timePctEl = $('time-pct');
-
-  const dataLeftEl = $('data-left');
-  const usedHumanEl = $('used-human');
-  const limitHumanEl = $('limit-human');
-  const usageBar = $('usage-bar');
-  const dataPctEl = $('data-pct');
-
-  const qrWrap = $('qr');
-  const copyBtn = $('copy-config');
-  const dl = $('dl');
-
-  let lastCfgText = '';
-  let lastQrContent = '';
-  let qrDrawn = false;
-  let refreshTimer = null;
-
+  const TOKEN = (window.USER_LINK_TOKEN || document.querySelector('meta[name="user-token"]')?.content || '').trim();
+  const API = TOKEN ? `/api/u/${TOKEN}` : '';
+  const REFRESH_MS = 15000;
+  const $ = (id) => document.getElementById(id);
+  const clamp = (n, min = 0, max = 1) => Math.max(min, Math.min(max, n));
   const nowSec = () => Math.floor(Date.now() / 1000);
-  const normalizeEpoch = x => (x > 1e12 ? Math.floor(x / 1000) : Math.floor(x));
-  function tsFrom(o, k) {
-    if (!o) return null;
-    if (o[k + '_ts'] != null && !isNaN(o[k + '_ts'])) return Number(o[k + '_ts']);
-    const v = o[k]; if (v == null) return null;
-    if (typeof v === 'number') return normalizeEpoch(v);
-    if (/^\d{10,13}$/.test(String(v))) return normalizeEpoch(Number(v));
-    const d = new Date(String(v));
-    return isNaN(d) ? null : Math.floor(d.getTime() / 1000);
-  }
-  const fmtLocal = ts => {
-    if (!ts) return '—';
-    const d = new Date(ts * 1000), p = n => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-  };
-  const leftParts = exp => {
-    if (!exp) return null;
-    const s = Math.max(0, exp - nowSec());
-    return { sec: s, d: Math.floor(s / 86400), h: Math.floor((s % 86400) / 3600), m: Math.floor((s % 3600) / 60) };
-  };
-  const fmtCountdown = p => !p ? '00d 00h 00m'
-    : `${String(p.d).padStart(2, '0')}d ${String(p.h).padStart(2, '0')}h ${String(p.m).padStart(2, '0')}m`;
+  const state = { ttl: null, cap: null, unlimited: false, timer: null, poll: null, config: '' };
 
-  const toMiB = (v, u) => {
-    const n = Number(v); if (!Number.isFinite(n)) return 0;
-    return (u && u.toLowerCase().startsWith('g')) ? n * 1024 : n;
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} }
   };
-  const bytesToMiB = b => (Number(b) || 0) / 1048576;
-  const fmtMiB = mib => !isFinite(mib) ? 'Unlimited'
-    : mib >= 1024 ? (mib / 1024).toFixed(2).replace(/\.0+$/, '') + ' GiB'
-      : Math.max(0, Math.round(mib)) + ' MiB';
 
-  function pickNum(obj, keys) {
-    for (const k of keys) {
-      const v = Number(obj?.[k]);
-      if (Number.isFinite(v) && v > 0) return v;
+  function parseTs(value) {
+    if (value == null || value === '') return null;
+    if (typeof value === 'number') return value > 1e12 ? Math.floor(value / 1000) : Math.floor(value);
+    if (/^\d{10,13}$/.test(String(value))) {
+      const n = Number(value);
+      return n > 1e12 ? Math.floor(n / 1000) : Math.floor(n);
     }
-    return 0;
-  }
-  const pctRemaining = (remain, total) =>
-    (!isFinite(total) || total <= 0) ? 0 : Math.max(0, Math.min(100, (remain / total) * 100));
-
-  function setBar(span, pct) {
-    const v = Math.max(0, Math.min(100, Math.round(pct || 0)));
-    if (!span) return;
-    span.style.width = v + '%';
+    const d = new Date(String(value));
+    return Number.isNaN(d.getTime()) ? null : Math.floor(d.getTime() / 1000);
   }
 
-  function toast(msg) {
-    const host = document.getElementById('toast-container') || document.body;
-    const box = document.createElement('div');
-    box.className = 'toast';
-    box.textContent = msg;
-    host.appendChild(box);
+  function firstTs(obj, keys) {
+    for (const key of keys) {
+      const ts = parseTs(obj?.[key]);
+      if (ts) return ts;
+    }
+    return null;
+  }
+
+  function formatDate(ts) {
+    if (!ts) return '—';
+    return new Intl.DateTimeFormat(undefined, {
+      year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit'
+    }).format(new Date(ts * 1000));
+  }
+
+  function formatDuration(seconds) {
+    seconds = Math.max(0, Math.floor(Number(seconds) || 0));
+    const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    if (d) return `${d}d ${h}h`;
+    if (h) return `${h}h ${m}m`;
+    return `${m}m`;
+  }
+
+  function bytesToHuman(bytes) {
+    const b = Math.max(0, Number(bytes) || 0);
+    const mib = b / 1048576;
+    if (mib >= 1024) return `${trim(mib / 1024, 2)} GiB`;
+    return `${trim(mib, mib < 10 ? 2 : 0)} MiB`;
+  }
+
+  function limitToBytes(value, unit) {
+    const n = Math.max(0, Number(value) || 0);
+    const u = String(unit || '').toLowerCase();
+    return n * (u.startsWith('gi') || u.startsWith('g') ? 1073741824 : 1048576);
+  }
+
+  function trim(n, digits = 1) {
+    return Number(n.toFixed(digits)).toString();
+  }
+
+  function setText(id, value) {
+    const el = $(id);
+    if (el) el.textContent = value == null || value === '' ? '—' : String(value);
+  }
+
+  function setStatus(status) {
+    const el = $('peer-status');
+    if (!el) return;
+    const raw = String(status || 'offline').toLowerCase();
+    const label = raw === 'online' ? 'Online' : raw === 'blocked' ? 'Blocked' : raw === 'offline' ? 'Offline' : raw;
+    el.className = `status-pill ${raw === 'online' ? 'online' : raw === 'blocked' ? 'blocked' : 'offline'}`;
+    const labelEl = $('peer-status-label');
+    if (labelEl) labelEl.textContent = label.charAt(0).toUpperCase() + label.slice(1);
+  }
+
+  function setMeter(id, pct, tone = '') {
+    const bar = $(id);
+    if (!bar) return;
+    bar.className = `meter-fill ${tone}`.trim();
+    bar.style.width = `${Math.round(clamp(pct) * 100)}%`;
+  }
+
+  function toneFor(pct) {
+    return pct <= .12 ? 'danger' : pct <= .35 ? 'warning' : 'healthy';
+  }
+
+  function renderTags(id, raw, emptyLabel = 'Not set') {
+    const host = $(id);
+    if (!host) return;
+    const values = Array.isArray(raw)
+      ? raw
+      : String(raw || '').split(',').map(v => v.trim()).filter(Boolean);
+    host.innerHTML = '';
+    if (!values.length) {
+      const span = document.createElement('span');
+      span.className = 'route-tag muted-tag';
+      span.textContent = emptyLabel;
+      host.appendChild(span);
+      return;
+    }
+    for (const value of [...new Set(values)]) {
+      const span = document.createElement('span');
+      span.className = 'route-tag';
+      span.textContent = value;
+      host.appendChild(span);
+    }
+  }
+
+  function toast(message, type = 'ok') {
+    const host = $('toast-container') || document.body;
+    const item = document.createElement('div');
+    item.className = `toast ${type}`;
+    item.innerHTML = `<i class="fas ${type === 'error' ? 'fa-triangle-exclamation' : 'fa-circle-check'}"></i><span></span>`;
+    item.querySelector('span').textContent = message;
+    host.appendChild(item);
+    requestAnimationFrame(() => item.classList.add('show'));
     setTimeout(() => {
-      box.classList.add('hide');
-      setTimeout(() => box.remove(), 350);
-    }, 1600);
+      item.classList.remove('show');
+      setTimeout(() => item.remove(), 250);
+    }, 2200);
   }
 
-  async function fetchJson(url) {
-    const r = await fetch(url, { cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+  function setTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    store.set('wg-user-theme', theme);
+    const icon = $('theme-toggle')?.querySelector('i');
+    if (icon) icon.className = `fas ${theme === 'dark' ? 'fa-sun' : 'fa-moon'}`;
+  }
+
+  function initTheme() {
+    const saved = store.get('wg-user-theme');
+    const preferred = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    setTheme(saved || preferred);
+    $('theme-toggle')?.addEventListener('click', () => {
+      setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+    });
+  }
+
+  function supportLink(kind, value) {
+    const clean = String(value || '').trim();
+    if (!clean) return null;
+    const map = {
+      telegram: [`https://t.me/${clean.replace('@', '')}`, 'fab fa-telegram', clean],
+      whatsapp: [clean.startsWith('http') ? clean : `https://wa.me/${clean.replace(/\D/g, '')}`, 'fab fa-whatsapp', 'WhatsApp'],
+      instagram: [clean.startsWith('http') ? clean : `https://instagram.com/${clean.replace('@', '')}`, 'fab fa-instagram', 'Instagram'],
+      website: [clean.startsWith('http') ? clean : `https://${clean}`, 'fas fa-globe', 'Website'],
+      email: [`mailto:${clean}`, 'fas fa-envelope', clean],
+      phone: [`tel:${clean.replace(/\s/g, '')}`, 'fas fa-phone', clean]
+    };
+    return map[kind];
+  }
+
+  function renderSupport() {
+    const host = $('support-links');
+    if (!host) return;
+    host.innerHTML = '';
+    const socials = window.SOCIALS || {};
+    for (const key of ['telegram', 'whatsapp', 'instagram', 'website', 'email', 'phone']) {
+      const data = supportLink(key, socials[key]);
+      if (!data) continue;
+      const a = document.createElement('a');
+      a.className = 'support-chip';
+      a.href = data[0];
+      a.target = data[0].startsWith('http') ? '_blank' : '_self';
+      a.rel = 'noopener';
+      a.innerHTML = `<i class="${data[1]}"></i><span></span>`;
+      a.querySelector('span').textContent = data[2];
+      host.appendChild(a);
+    }
+    if (!host.children.length) {
+      const empty = document.createElement('span');
+      empty.className = 'support-empty';
+      empty.textContent = 'No support contacts configured.';
+      host.appendChild(empty);
+    }
+  }
+
+  async function fetchJson(url, signal) {
+    const r = await fetch(url, { cache: 'no-store', credentials: 'same-origin', signal });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return r.json();
   }
+
   async function fetchText(url) {
-    const r = await fetch(url, { cache: 'no-store' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const r = await fetch(url, { cache: 'no-store', credentials: 'same-origin' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return r.text();
   }
 
-  function drawQR(text) {
+  async function ensureConfig() {
+    if (state.config) return state.config;
+    if (IS_PREVIEW) return '[Interface]\nPrivateKey = preview\nAddress = 10.66.66.2/24';
+    state.config = await fetchText(`${API}/config`);
+    return state.config;
+  }
+
+  async function drawQR() {
+    const host = $('config-qr');
+    if (!host || host.dataset.ready === '1') return;
     try {
-      if (text === lastQrContent) return;
-      lastQrContent = text;
-      if (!qrWrap) return;
-      if (!qrDrawn) qrWrap.innerHTML = '';
-      if (window.QRCode) {
-        new QRCode(qrWrap, {
-          text,
-          width: 180,
-          height: 180,
-          colorDark: "#111827",
-          colorLight: "#ffffff"
-        });
-        qrDrawn = true;
-      } else {
-        setTimeout(() => drawQR(text), 120);
-      }
+      const text = await ensureConfig();
+      host.innerHTML = '';
+      new QRCode(host, { text, width: 210, height: 210, correctLevel: QRCode.CorrectLevel.M });
+      host.dataset.ready = '1';
+      host.setAttribute('aria-busy', 'false');
     } catch {
+      host.innerHTML = '<div class="qr-error"><i class="fas fa-triangle-exclamation"></i><span>QR unavailable</span></div>';
     }
   }
 
-  async function render() {
-  let j;
-  if (IS_PREVIEW) {
-    const now = Math.floor(Date.now() / 1000);
-    j = {
-      name: 'azumi',
-      address: '10.66.66.7/24',
-      endpoint: '167.71.78.88:57015',
-      status: 'online',
-      unlimited: false,
-      limit_unit: 'Gi',        
-      data_limit: 1,           
-      used_bytes: 0,
-      first_used: now - 86400 * 3,
-      expires_at_ts: now - 60,
-      ttl_seconds: 86400 * 10
-    };
-  } else {
-    j = await fetchJson(`/api/u/${TOKEN}`);
-  }
+  function bindActions() {
+    const dl = $('download-config');
+    if (dl && !IS_PREVIEW) dl.href = `${API}/config`;
+    if (dl && IS_PREVIEW) dl.addEventListener('click', e => e.preventDefault());
 
-  if (statusEl) {
-    if (!statusEl.querySelector('.status-indicator')) {
-      statusEl.innerHTML = '<span class="status-indicator"></span><span class="status-label">—</span>';
-    }
-    const raw = String(j.status || '').trim().toLowerCase();
-    const isOnline  = raw === 'online';
-    const isOffline = raw === 'offline' || raw === '' || raw === 'unknown' || raw === 'inactive';
-    const cls   = isOnline ? 'ok' : (isOffline ? 'bad' : 'muted');
-    const label = isOnline ? 'Online' : (isOffline ? 'Offline' : (j.status || '—'));
-    statusEl.querySelector('.status-label').textContent = label;
-    statusEl.className = 'v status-chip ' + cls;
-  }
-
-  if (nameEl)     nameEl.textContent    = j.name || '—';
-  if (addressEl)  addressEl.textContent = j.address || '—';
-  if (endpointEl) endpointEl.textContent = (j.endpoint || '').trim() || '—';
-
-
-  let limMiB = j.unlimited
-    ? Infinity
-    : toMiB(
-        (pickNum(j, ['data_limit', 'limit', 'limit_mib']) || 0),
-        (j.limit_unit || j.unit || '')
-      );
-
-  if (!isFinite(limMiB) || limMiB <= 0) {
-    const bytesLim = pickNum(j, ['data_limit_bytes', 'limit_bytes']);
-    if (Number.isFinite(bytesLim) && bytesLim > 0) limMiB = bytesToMiB(bytesLim);
-  }
-
-  const usedEffBytes =
-      (pickNum(j, ['used_effective_bytes']) ??
-       ((Number(j.used_bytes) || 0) + (Number(j.used_bytes_db) || 0)) ??
-       (Number(j.used_bytes) || 0));
-
-  let usedMiB = bytesToMiB(usedEffBytes);
-  let leftMiB = j.unlimited ? Infinity : Math.max(0, (limMiB || 0) - usedMiB);
-
-  const isBlocked = String(j.status).toLowerCase() === 'blocked';
-  if (!j.unlimited && isBlocked && isFinite(limMiB) && limMiB > 0) {
-    usedMiB = limMiB;
-    leftMiB = 0;
-  }
-
-  if (dataLeftEl)   dataLeftEl.textContent   = isFinite(leftMiB) ? fmtMiB(leftMiB) : 'Unlimited';
-  if (usedHumanEl)  usedHumanEl.textContent  = fmtMiB(usedMiB);
-  if (limitHumanEl) limitHumanEl.textContent =
-    isFinite(limMiB) && limMiB > 0 ? fmtMiB(limMiB) : (j.unlimited ? 'Unlimited' : '0 MiB');
-
-  const pctData = isFinite(limMiB) && limMiB > 0
-    ? pctRemaining(leftMiB, limMiB)
-    : (j.unlimited ? 100 : 0);
-
-  setBar(usageBar, pctData);
-  if (dataPctEl) {
-    dataPctEl.textContent =
-      isFinite(limMiB) && limMiB > 0 ? `${Math.round(pctData)}%` : (j.unlimited ? '∞' : '0%');
-  }
-
-  if (j.unlimited) {
-    if (timeLeftEl)  timeLeftEl.textContent  = '∞ Unlimited';
-    if (expiresAtEl) expiresAtEl.textContent = 'Expires —';
-    if (timeSub)     timeSub.textContent     = 'No time limit';
-    setBar(timeBar, 100);
-    if (timePctEl) timePctEl.textContent = '∞';
-  } else {
-    const exp   = tsFrom(j, 'expires_at');
-    const parts = leftParts(exp);
-    if (timeLeftEl)  timeLeftEl.textContent  = fmtCountdown(parts);
-    if (expiresAtEl) expiresAtEl.textContent = exp ? `Expires ${fmtLocal(exp)}` : 'Expires —';
-    if (timeSub)     timeSub.textContent     = 'Countdown to expiry';
-
-    let capSec =
-    pickNum(j, ['time_limit_seconds', 'timer_seconds', 'duration_seconds', 'max_age_seconds']) ||
-    (pickNum(j, ['time_limit_days', 'valid_days']) * 86400);
-
-
-    const startTs = tsFrom(j, 'start_at') || tsFrom(j, 'started_at') ||
-                    tsFrom(j, 'first_used') || tsFrom(j, 'created_at') || tsFrom(j, 'added_at');
-
-    if (!capSec) {
-      const expTs = exp;
-      if (expTs && startTs && expTs > startTs) capSec = expTs - startTs;
-    }
-
-    const remainOverride = pickNum(j, ['remaining_seconds', 'seconds_left', 'time_left_seconds']);
-    const remainingSec = (Number.isFinite(remainOverride) && remainOverride > 0)
-      ? remainOverride
-      : (parts ? parts.sec : 0);
-
-    if (!capSec) capSec = Math.max(remainingSec, 1);
-
-    const pctTime = pctRemaining(remainingSec, capSec);
-    setBar(timeBar, pctTime);
-    if (timePctEl) timePctEl.textContent = `${Math.round(pctTime)}%`;
-  }
-
-  if (dl) {
-    if (IS_PREVIEW) {
-      dl.removeAttribute('href');
-      dl.setAttribute('aria-disabled', 'true');
-      dl.classList.add('btn-disabled');
-    } else {
-      dl.href = `/api/u/${TOKEN}/config`;
-    }
-  }
-
-  if (!qrDrawn) {
-    if (IS_PREVIEW) {
-      drawQR('[WG-CONFIG-PREVIEW]');
-    } else {
+    $('copy-config')?.addEventListener('click', async () => {
       try {
-        lastCfgText = await fetchText(`/api/u/${TOKEN}/config`);
-      } catch {
-        lastCfgText = '';
-      }
-      if (lastCfgText && lastCfgText.trim().length > 0) {
-        drawQR(lastCfgText);
-      } else {
-        drawQR(`${location.origin}/api/u/${TOKEN}/config`);
-        toast('Config text not available. Using download URL instead.');
-      }
+        const text = await ensureConfig();
+        if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
+        else {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          ta.remove();
+        }
+        toast('Configuration copied');
+      } catch { toast('Copy failed', 'error'); }
+    });
+
+    document.querySelectorAll('[data-copy-target]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const target = $(btn.dataset.copyTarget);
+        const value = target?.textContent?.trim();
+        if (!value || value === '—') return;
+        try { await navigator.clipboard.writeText(value); toast('Copied'); }
+        catch { toast('Copy failed', 'error'); }
+      });
+    });
+  }
+
+  function demoPayload() {
+    const now = nowSec();
+    return {
+      name: 'azumi-premium', status: 'online', address: '10.66.66.7/24',
+      endpoint: 'wireguard.example.com:51820', unlimited: true,
+      limit_unit: 'GiB', data_limit: 50, used_effective_bytes: 18.4 * 1073741824,
+      first_used_at_ts: now - 7 * 86400, expires_at_ts: now + 23 * 86400,
+      ttl_seconds: 23 * 86400, time_limit_days: 30,
+      allowed_ips: '0.0.0.0/0, ::/0, 10.66.66.0/24, 10.30.0.0/30',
+      dns: '1.1.1.1, 1.0.0.1', mtu: 1420, start_on_first_use: true
+    };
+  }
+
+  function render(payload) {
+    const j = payload || {};
+    setText('peer-name', j.name || '—');
+    setStatus(j.status);
+    setText('peer-address', j.address || '—');
+    setText('peer-endpoint', String(j.endpoint || '').trim() || '—');
+    renderTags('allowed-ips-list', j.allowed_ips, 'Default route');
+    renderTags('dns-list', j.dns, 'System DNS');
+    setText('peer-mtu', j.mtu || 'Auto');
+
+    const started = firstTs(j, ['first_used_at_ts', 'first_used_at', 'first_used', 'started_at', 'start_at']);
+    const created = firstTs(j, ['created_at_ts', 'created_at', 'added_at']);
+    const unlimited = Boolean(j.unlimited);
+    if (started) {
+      setText('active-since', formatDate(started));
+      setText('activation-label', 'Active since');
+    } else if (unlimited && created) {
+      setText('active-since', formatDate(created));
+      setText('activation-label', 'Active since');
+    } else if (j.start_on_first_use) {
+      setText('active-since', 'Waiting for first connection');
+      setText('activation-label', 'Activation');
+    } else if (created) {
+      setText('active-since', formatDate(created));
+      setText('activation-label', 'Created');
+    } else {
+      setText('active-since', 'Not active yet');
+      setText('activation-label', 'Activation');
+    }
+
+
+    state.unlimited = unlimited;
+    const usedBytes = Number(j.used_effective_bytes ?? j.used_bytes ?? j.used_bytes_db ?? 0) || 0;
+    const limitBytes = unlimited ? Infinity : limitToBytes(j.data_limit ?? j.limit, j.limit_unit ?? j.unit);
+    const remaining = unlimited ? Infinity : Math.max(0, limitBytes - usedBytes);
+    const dataPct = unlimited ? 1 : limitBytes > 0 ? remaining / limitBytes : 0;
+
+    setText('data-left', unlimited ? 'Unlimited' : bytesToHuman(remaining));
+    setText('data-used', `${bytesToHuman(usedBytes)} used`);
+    setText('data-limit', unlimited ? 'No data cap' : limitBytes > 0 ? `${bytesToHuman(limitBytes)} total` : 'No data allowance');
+    setText('data-pct', unlimited ? '∞' : `${Math.round(clamp(dataPct) * 100)}%`);
+    setMeter('data-bar', dataPct, unlimited ? 'infinite' : toneFor(dataPct));
+
+    const expires = firstTs(j, ['expires_at_ts', 'expires_at']);
+    let ttl = Number(j.ttl_seconds);
+    if (!Number.isFinite(ttl)) ttl = expires ? Math.max(0, expires - nowSec()) : null;
+    let cap = Number(j.time_limit_seconds || j.duration_seconds || 0);
+    if (!cap) cap = Number(j.time_limit_days || 0) * 86400;
+    if (!cap && expires && started && expires > started) cap = expires - started;
+    state.ttl = ttl;
+    state.cap = cap || (ttl || 1);
+
+    if (unlimited || ttl == null) {
+      setText('time-left', unlimited ? 'Unlimited' : 'No expiry');
+      setText('time-expiry', unlimited ? 'No time limit' : 'No expiration date');
+      setText('time-pct', '∞');
+      setMeter('time-bar', 1, 'infinite');
+    } else {
+      const pct = state.cap > 0 ? ttl / state.cap : 0;
+      setText('time-left', ttl <= 0 ? 'Expired' : formatDuration(ttl));
+      setText('time-expiry', expires ? `Expires ${formatDate(expires)}` : 'Expiration pending');
+      setText('time-pct', `${Math.round(clamp(pct) * 100)}%`);
+      setMeter('time-bar', pct, toneFor(pct));
     }
   }
-}
 
-  copyBtn?.addEventListener('click', async () => {
+  function startCountdown() {
+    clearInterval(state.timer);
+    state.timer = setInterval(() => {
+      if (state.unlimited || state.ttl == null || state.ttl <= 0) return;
+      state.ttl = Math.max(0, state.ttl - 1);
+      const pct = state.cap > 0 ? state.ttl / state.cap : 0;
+      setText('time-left', state.ttl ? formatDuration(state.ttl) : 'Expired');
+      setText('time-pct', `${Math.round(clamp(pct) * 100)}%`);
+      setMeter('time-bar', pct, toneFor(pct));
+    }, 1000);
+  }
+
+  async function load() {
+    if (IS_PREVIEW) {
+      render(demoPayload());
+      await drawQR();
+      return;
+    }
+    if (!API) throw new Error('Missing token');
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 8000);
     try {
-      if (!lastCfgText) {
-        try { lastCfgText = await fetchText(`/api/u/${TOKEN}/config`); } catch {}
-      }
-      if (!lastCfgText) { toast('No config text to copy'); return; }
+      const data = await fetchJson(API, ctrl.signal);
+      render(data);
+      await drawQR();
+    } finally { clearTimeout(timeout); }
+  }
 
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(lastCfgText);
-      } else {
-        const ta = document.createElement('textarea');
-        ta.value = lastCfgText;
-        ta.style.position = 'fixed';
-        ta.style.left = '-9999px';
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        ta.remove();
-      }
-      const old = copyBtn.innerHTML;
-      copyBtn.innerHTML = '<i class="fas fa-check"></i>';
-      setTimeout(() => { copyBtn.innerHTML = old; }, 900);
-      toast('Config copied');
-    } catch {
-      toast('Copy failed');
+  function startPolling() {
+    clearInterval(state.poll);
+    state.poll = setInterval(() => {
+      if (!document.hidden) load().catch(() => {});
+    }, REFRESH_MS);
+  }
+
+  document.addEventListener('DOMContentLoaded', async () => {
+    initTheme();
+    renderSupport();
+    bindActions();
+    try {
+      await load();
+      document.body.classList.add('data-ready');
+      startCountdown();
+      startPolling();
+    } catch (error) {
+      console.error(error);
+      document.body.classList.add('data-error');
+      toast('Unable to load this access profile', 'error');
     }
   });
-
-  function startRefresh() {
-    if (!refreshTimer) {
-      refreshTimer = setInterval(() => { render().catch(() => {}); }, REFRESH_MS);
-    }
-  }
-  function stopRefresh() {
-    if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
-  }
-
-  if (TOKEN) {
-    render().catch(() => {});
-    startRefresh();
-  } else {
-    console.warn('USER_LINK_TOKEN missing – nothing to load.');
-  }
 
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { stopRefresh(); }
-    else { render().catch(() => {}); startRefresh(); }
+    if (!document.hidden) load().catch(() => {});
   });
-  function renderSocials(slot, socials){
-  const S = socials || {};
-  const items = [];
-  if (S.telegram)  items.push({href:`https://t.me/${S.telegram.replace('@','')}`, icon:'fab fa-telegram',  label:S.telegram});
-  if (S.whatsapp)  items.push({href: S.whatsapp.startsWith('http')?S.whatsapp:`https://wa.me/${S.whatsapp.replace(/\D+/g,'')}`, icon:'fab fa-whatsapp', label:'WhatsApp'});
-  if (S.instagram) items.push({href:S.instagram, icon:'fab fa-instagram', label:'Instagram'});
-  if (S.website)   items.push({href:S.website, icon:'fas fa-globe', label:'Website'});
-  if (S.email)     items.push({href:`mailto:${S.email}`, icon:'fas fa-envelope', label:S.email});
-  if (S.phone)     items.push({href:`tel:${S.phone}`, icon:'fas fa-phone', label:S.phone});
+})();
 
-  slot.innerHTML = items.map(x => 
-    `<a class="ulc-chip" target="_blank" rel="noopener" href="${x.href}">
-       <i class="${x.icon}"></i><span>${x.label}</span>
-     </a>`).join('');
-}
-document.addEventListener('DOMContentLoaded', () => {
-  const slot = document.getElementById('ulc-support-slot') || document.getElementById('ulm-support-slot');
-  if (slot && window.SOCIALS) renderSocials(slot, window.SOCIALS);
-});
+(function initPublicLiveBackground(){
+  const canvas = document.getElementById('live-background');
+  if (!canvas || canvas.dataset.bound === '1') return;
+  canvas.dataset.bound = '1';
+  const ctx = canvas.getContext('2d', { alpha: true });
+  if (!ctx) return;
 
+  const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let dpr = 1, width = 0, height = 0, particles = [], raf = 0;
+
+  function themeColors(){
+    const cs = getComputedStyle(document.documentElement);
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+      (!document.documentElement.getAttribute('data-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+    const accent = (cs.getPropertyValue('--accent') || cs.getPropertyValue('--fill-strong') || '#3b82f6').trim();
+    const secondary = (cs.getPropertyValue('--good') || cs.getPropertyValue('--accent-2') || '#14b8a6').trim();
+    return { dark, accent, secondary };
+  }
+
+  function hexRgb(value, fallback){
+    const v = String(value || '').trim();
+    const short = /^#([0-9a-f]{3})$/i.exec(v);
+    if (short) return short[1].split('').map(x => parseInt(x+x,16));
+    const full = /^#([0-9a-f]{6})$/i.exec(v);
+    if (full) return [parseInt(full[1].slice(0,2),16),parseInt(full[1].slice(2,4),16),parseInt(full[1].slice(4,6),16)];
+    const rgb = /rgba?\(\s*(\d+)\D+(\d+)\D+(\d+)/i.exec(v);
+    return rgb ? [Number(rgb[1]),Number(rgb[2]),Number(rgb[3])] : fallback;
+  }
+
+  function resize(){
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    width = window.innerWidth;
+    height = window.innerHeight;
+    canvas.width = Math.max(1, Math.floor(width*dpr));
+    canvas.height = Math.max(1, Math.floor(height*dpr));
+    canvas.style.width = width+'px';
+    canvas.style.height = height+'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    const count = Math.max(38, Math.min(110, Math.round(width*height/13500)));
+    particles = Array.from({length:count}, (_,i)=>({
+      x:Math.random()*width, y:Math.random()*height,
+      vx:(Math.random()-.5)*(reduced?0:.42), vy:(Math.random()-.5)*(reduced?0:.42),
+      r:.8+Math.random()*1.7, group:i%2
+    }));
+  }
+
+  function frame(){
+    const {dark,accent,secondary}=themeColors();
+    const a=hexRgb(accent,[59,130,246]);
+    const b=hexRgb(secondary,[20,184,166]);
+    ctx.clearRect(0,0,width,height);
+
+    const glow=ctx.createRadialGradient(width*.78,height*.08,10,width*.78,height*.08,Math.max(width,height)*.72);
+    glow.addColorStop(0,`rgba(${a.join(',')},${dark?.18:.14})`);
+    glow.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=glow; ctx.fillRect(0,0,width,height);
+
+    for(const p of particles){
+      p.x+=p.vx; p.y+=p.vy;
+      if(p.x<-12)p.x=width+12; else if(p.x>width+12)p.x=-12;
+      if(p.y<-12)p.y=height+12; else if(p.y>height+12)p.y=-12;
+      const c=p.group?a:b;
+      ctx.beginPath();
+      ctx.fillStyle=`rgba(${c.join(',')},${dark?.72:.48})`;
+      ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+    }
+    ctx.lineWidth=.8;
+    for(let i=0;i<particles.length;i++){
+      for(let j=i+1;j<particles.length;j++){
+        const p=particles[i],q=particles[j],dx=p.x-q.x,dy=p.y-q.y,d2=dx*dx+dy*dy;
+        if(d2<145*145){
+          const alpha=(1-Math.sqrt(d2)/145)*(dark?.30:.20);
+          ctx.strokeStyle=`rgba(${a.join(',')},${alpha})`;
+          ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);ctx.stroke();
+        }
+      }
+    }
+    if(!reduced) raf=requestAnimationFrame(frame);
+  }
+
+  function restart(){ if(raf) cancelAnimationFrame(raf); resize(); frame(); }
+  window.addEventListener('resize', restart, {passive:true});
+  new MutationObserver(restart).observe(document.documentElement,{attributes:true,attributeFilter:['class','data-theme']});
+  restart();
 })();
