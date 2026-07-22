@@ -17,28 +17,70 @@ function formatDateTime(value){
     return d.toLocaleString();
   }
 }
+function unlimitedActiveText() {
+  if (!DATA.unlimited) return '';
 
-function timeModeText(){
-  const ttl = DATA.ttl_seconds == null ? null : Number(DATA.ttl_seconds || 0);
+  if (DATA.first_used_at) {
+    return `Active since ${formatDateTime(
+      DATA.first_used_at
+    )}`;
+  }
 
-  if(DATA.start_on_first_use && !DATA.first_used_at && ttl !== 0) {
+  return 'Not used yet';
+}
+
+function timeModeText() {
+  if (DATA.unlimited) {
+    return DATA.first_used_at
+      ? 'Active'
+      : 'Not started';
+  }
+
+  const ttl =
+    DATA.ttl_seconds == null
+      ? null
+      : Number(DATA.ttl_seconds || 0);
+
+  if (
+    DATA.start_on_first_use &&
+    !DATA.first_used_at &&
+    ttl !== 0
+  ) {
     return 'Starts on first use';
   }
 
-  if(ttl === 0) return 'Expired';
-  if(DATA.expires_at) return 'Fixed expiry';
+  if (ttl === 0) return 'Expired';
+  if (DATA.expires_at) return 'Fixed expiry';
+
   return 'No timer';
 }
 
-function timeSubText(){
-  const ttl = DATA.ttl_seconds == null ? null : Number(DATA.ttl_seconds || 0);
+function timeSubText() {
+  if (DATA.unlimited) {
+    return DATA.first_used_at
+      ? `First connected ${formatDateTime(
+          DATA.first_used_at
+        )}`
+      : 'Waiting for the first WireGuard connection.';
+  }
 
-  if(DATA.start_on_first_use && !DATA.first_used_at && ttl !== 0) {
+  const ttl =
+    DATA.ttl_seconds == null
+      ? null
+      : Number(DATA.ttl_seconds || 0);
+
+  if (
+    DATA.start_on_first_use &&
+    !DATA.first_used_at &&
+    ttl !== 0
+  ) {
     return 'Timer begins when this config is first used.';
   }
 
-  if(DATA.expires_at) {
-    return `Expires ${formatDateTime(DATA.expires_at)}`;
+  if (DATA.expires_at) {
+    return `Expires ${formatDateTime(
+      DATA.expires_at
+    )}`;
   }
 
   return 'No expiry date';
@@ -99,19 +141,19 @@ function renderStats(){
   const dataPct = document.getElementById('data-pct-label');
   const dataWrap = document.getElementById('data-meter-wrap');
 
-  if(dataHuman) dataHuman.textContent = lim ? fmtBytes(remaining) : 'Unlimited';
+  if (dataHuman) {dataHuman.textContent = lim? fmtBytes(remaining): `${fmtBytes(used)} used`;}
   if(dataSub) dataSub.textContent = lim
     ? `${fmtBytes(used)} used from ${fmtBytes(lim)}`
     : `${fmtBytes(used)} used · no data cap`;
   if(dataMeter) dataMeter.style.width = Math.max(3, remPct) + '%';
-  if(dataPct) dataPct.textContent = lim ? `${remPct}% left` : 'Unlimited';
+  if (dataPct) {dataPct.textContent = lim? `${remPct}% left`: 'No data cap';}
   if(dataWrap) dataWrap.classList.toggle('warn', !!(lim && remPct <= 20));
 
   const timeHuman = document.getElementById('time-human');
   const timeSub = document.getElementById('time-sub');
   const timerMode = document.getElementById('timer-mode');
 
-  if(timeHuman) timeHuman.textContent = humanTTL(DATA.ttl_seconds);
+  if (timeHuman) {timeHuman.textContent = DATA.unlimited? unlimitedActiveText(): humanTTL(DATA.ttl_seconds);}
   if(timeSub) timeSub.textContent = timeSubText();
   if(timerMode) {
     timerMode.textContent = timeModeText();
@@ -128,10 +170,10 @@ function renderStats(){
   if(heroState) heroState.textContent = clientStateText();
 
   const heroTime = document.getElementById('hero-time');
-  if(heroTime) heroTime.textContent = humanTTL(DATA.ttl_seconds);
+  if (heroTime) {heroTime.textContent = DATA.unlimited? (DATA.first_used_at? formatDateTime(DATA.first_used_at): 'Not started'): humanTTL(DATA.ttl_seconds);}
 
   const heroData = document.getElementById('hero-data');
-  if(heroData) heroData.textContent = lim ? `${fmtBytes(remaining)} left` : 'Unlimited data';
+  if (heroData) {heroData.textContent = lim? `${fmtBytes(remaining)} left`: `${fmtBytes(used)} used`;}
 
   const heroConfigs = document.getElementById('hero-configs');
   if(heroConfigs) {
