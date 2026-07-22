@@ -15,9 +15,13 @@ import shutil
 import signal
 import subprocess
 import socket
+import ipaddress
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
+import tempfile
+import urllib.request
+import zipfile
 
 
 def _exit(code: int = 130):
@@ -790,6 +794,20 @@ def _wg_keypair() -> Tuple[str, str]:
     priv = base64.b64encode(key_bytes).decode("ascii")
     return priv, pub_from_priv(priv)
     
+def _wireguard_ipv4_network(address: str) -> str:
+    """Return the first private IPv4 network from a WireGuard Address value."""
+    for raw in re.split(r"[\s,]+", str(address or "").strip()):
+        if not raw or "/" not in raw:
+            continue
+        try:
+            iface = ipaddress.ip_interface(raw)
+        except ValueError:
+            continue
+        if iface.version == 4 and iface.ip.is_private:
+            return str(iface.network)
+    return ""
+
+
 def __wg_serverconf(
     iface: str,
     address: str,
@@ -799,34 +817,53 @@ def __wg_serverconf(
     enable_nat: bool,
     enable_ipv6_fwd: bool,
 ) -> str:
-    lines: List[str] = []
-    lines.append("[Interface]")
-    lines.append(f"Address = {address}")
-    lines.append(f"ListenPort = {listen_port}")
-    lines.append(f"PrivateKey = {privkey}")
+    lines: List[str] = [
+        "[Interface]",
+        f"Address = {address}",
+        f"ListenPort = {listen_port}",
+        f"PrivateKey = {privkey}",
+    ]
 
     if enable_nat and wan_iface:
+        network = _wireguard_ipv4_network(address)
+        if not network:
+            raise ValueError(
+                "NAT requires at least one private IPv4 WireGuard address."
+            )
+
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,32}", wan_iface):
+            raise ValueError("Invalid outbound interface name.")
+
         lines.append("")
         lines.append("# NAT + forwarding (auto-generated)")
         lines.append(
-            f"PostUp   = "
-            f"iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %i -j ACCEPT; "
-            f"iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -o %i -j ACCEPT; "
-            f"iptables -t nat -C POSTROUTING -o {wan_iface} -j MASQUERADE 2>/dev/null || "
-            f"iptables -t nat -A POSTROUTING -o {wan_iface} -j MASQUERADE"
+            "PostUp = "
+            "sysctl -w net.ipv4.ip_forward=1 >/dev/null; "
+            "iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null "
+            "|| iptables -A FORWARD -i %i -j ACCEPT; "
+            "iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null "
+            "|| iptables -A FORWARD -o %i -j ACCEPT; "
+            f"iptables -t nat -C POSTROUTING -s {network} -o {wan_iface} "
+            "-j MASQUERADE 2>/dev/null "
+            f"|| iptables -t nat -A POSTROUTING -s {network} -o {wan_iface} "
+            "-j MASQUERADE"
         )
         lines.append(
-            f"PostDown = "
-            f"iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; "
-            f"iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; "
-            f"iptables -t nat -D POSTROUTING -o {wan_iface} -j MASQUERADE 2>/dev/null || true"
+            "PostDown = "
+            "iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; "
+            "iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; "
+            f"iptables -t nat -D POSTROUTING -s {network} -o {wan_iface} "
+            "-j MASQUERADE 2>/dev/null || true"
         )
 
         if enable_ipv6_fwd and _cmd("ip6tables"):
             lines.append(
-                "PostUp   = "
-                "ip6tables -C FORWARD -i %i -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -i %i -j ACCEPT; "
-                "ip6tables -C FORWARD -o %i -j ACCEPT 2>/dev/null || ip6tables -A FORWARD -o %i -j ACCEPT"
+                "PostUp = "
+                "sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null; "
+                "ip6tables -C FORWARD -i %i -j ACCEPT 2>/dev/null "
+                "|| ip6tables -A FORWARD -i %i -j ACCEPT; "
+                "ip6tables -C FORWARD -o %i -j ACCEPT 2>/dev/null "
+                "|| ip6tables -A FORWARD -o %i -j ACCEPT"
             )
             lines.append(
                 "PostDown = "
@@ -2926,95 +2963,754 @@ def information_page(root: Path):
     else:
         pause()
 
-def update_project(root: Path):
+def _service_exists(name: str) -> bool:
+    if not _cmd("systemctl"):
+        return False
 
+    try:
+        result = subprocess.run(
+            ["systemctl", "cat", name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _related_panel_services() -> List[str]:
+    return [
+        name
+        for name in (
+            "wg-panel.service",
+            "wg-panel-bot.service",
+        )
+        if _service_exists(name)
+    ]
+
+
+def _restart_related_panel_services() -> bool:
+    services = _related_panel_services()
+
+    if not services:
+        warn("No WG Panel systemd services were found. Restart skipped.")
+        return True
+
+    all_ok = True
+
+    for service in services:
+        rc = _live(
+            ["systemctl", "restart", service],
+            f"Restart {service}",
+            timeout=90,
+        )
+
+        if rc != 0:
+            all_ok = False
+            continue
+
+        time.sleep(1)
+
+        state = _svc_active(service)
+
+        if state == "active":
+            ok(f"{service} is active.")
+            continue
+
+        all_ok = False
+        err(
+            f"{service} did not become active after restart "
+            f"(state={state or 'unknown'})."
+        )
+
+        if _cmd("journalctl"):
+            subprocess.run(
+                [
+                    "journalctl",
+                    "-u",
+                    service,
+                    "-n",
+                    "80",
+                    "--no-pager",
+                ],
+                check=False,
+            )
+
+    return all_ok
+
+
+def _update_preserve_patterns() -> List[str]:
+    return [
+        ".git/",
+        ".env",
+        "venv/",
+        "instance/",
+        "backups/",
+        "db/",
+        "*.db",
+        "__pycache__/",
+        "agent/.env",
+        "agent/venv/",
+    ]
+
+
+def _sync_project_code(source: Path, destination: Path) -> bool:
+    if not _cmd("rsync"):
+        err("rsync is required for update and downgrade.")
+        return False
+
+    cmd = ["rsync", "-a", "--delete"]
+
+    for pattern in _update_preserve_patterns():
+        cmd += ["--exclude", pattern]
+
+    cmd += [
+        str(source).rstrip("/") + "/",
+        str(destination).rstrip("/") + "/",
+    ]
+
+    return (
+        _live(
+            cmd,
+            "Apply project code",
+            timeout=600,
+        )
+        == 0
+    )
+
+
+def _create_code_snapshot(root: Path) -> Path:
+    backup_dir = root / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    snapshot = backup_dir / f"code-rollback-{stamp}"
+    snapshot.mkdir(parents=True, exist_ok=False)
+
+    cmd = ["rsync", "-a"]
+
+    for pattern in _update_preserve_patterns():
+        cmd += ["--exclude", pattern]
+
+    cmd += [
+        str(root).rstrip("/") + "/",
+        str(snapshot).rstrip("/") + "/",
+    ]
+
+    rc = _live(
+        cmd,
+        "Create rollback snapshot",
+        timeout=600,
+    )
+
+    if rc != 0:
+        shutil.rmtree(snapshot, ignore_errors=True)
+        raise RuntimeError("Could not create the rollback snapshot.")
+
+    return snapshot
+
+
+def _restore_code_snapshot(root: Path, snapshot: Path) -> bool:
+    if not snapshot.is_dir():
+        err("Rollback snapshot is missing.")
+        return False
+
+    warn("Restoring the previous panel code...")
+
+    if not _sync_project_code(snapshot, root):
+        err("Automatic rollback failed.")
+        return False
+
+    _refresh_project_requirements(root)
+    _restart_related_panel_services()
+
+    ok("Previous panel code restored.")
+    return True
+
+
+def _refresh_project_requirements(root: Path) -> bool:
+    requirements = root / "requirements.txt"
+    venv_python = root / "venv" / "bin" / "python"
+
+    if not requirements.is_file():
+        warn("requirements.txt is missing. Dependency refresh skipped.")
+        return True
+
+    if not venv_python.is_file():
+        warn("Panel virtual environment is missing. Dependency refresh skipped.")
+        return True
+
+    rc = _live(
+        [
+            str(venv_python),
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            str(requirements),
+        ],
+        "Install panel requirements",
+        timeout=1200,
+    )
+
+    return rc == 0
+
+
+def _validate_project_python(root: Path) -> bool:
+    venv_python = root / "venv" / "bin" / "python"
+    python_bin = str(venv_python) if venv_python.is_file() else sys.executable
+
+    candidates = [
+        root / "app.py",
+        root / "telegram_bot.py",
+        root / "wg.py",
+    ]
+
+    files = [str(path) for path in candidates if path.is_file()]
+
+    if not files:
+        err("No panel Python entry files were found after the code change.")
+        return False
+
+    rc = _live(
+        [
+            python_bin,
+            "-m",
+            "py_compile",
+            *files,
+        ],
+        "Validate panel Python files",
+        timeout=180,
+    )
+
+    return rc == 0
+
+
+def _finish_project_change(
+    root: Path,
+    snapshot: Path,
+    action_name: str,
+) -> bool:
+    if not _refresh_project_requirements(root):
+        err(f"{action_name} failed while installing requirements.")
+        _restore_code_snapshot(root, snapshot)
+        return False
+
+    if not _validate_project_python(root):
+        err(f"{action_name} failed Python validation.")
+        _restore_code_snapshot(root, snapshot)
+        return False
+
+    if not _restart_related_panel_services():
+        err(
+            f"{action_name} was applied, but a related service "
+            "failed to restart."
+        )
+        _restore_code_snapshot(root, snapshot)
+        return False
+
+    ok(f"{action_name} completed successfully.")
+    ok(f"Rollback snapshot: {_paths(str(snapshot))}")
+    return True
+
+
+def _github_json(url: str, timeout: int = 20):
+    request_obj = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "WG-Panel-Installer",
+        },
+    )
+
+    with urllib.request.urlopen(
+        request_obj,
+        timeout=timeout,
+    ) as response:
+        return json.loads(
+            response.read().decode("utf-8", "replace")
+        )
+
+
+def _github_panel_releases() -> List[dict]:
+    data = _github_json(
+        "https://api.github.com/repos/"
+        "Azumi67/WG_Panel/releases?per_page=40"
+    )
+
+    if not isinstance(data, list):
+        return []
+
+    releases: List[dict] = []
+
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+
+        if bool(item.get("draft")):
+            continue
+
+        tag = str(item.get("tag_name") or "").strip()
+
+        if not tag:
+            continue
+
+        zip_url = (
+            "https://github.com/Azumi67/WG_Panel/"
+            f"archive/refs/tags/{tag}.zip"
+        )
+
+        releases.append(
+            {
+                "tag": tag,
+                "name": str(
+                    item.get("name") or tag
+                ).strip(),
+                "published_at": str(
+                    item.get("published_at") or ""
+                ).strip(),
+                "prerelease": bool(
+                    item.get("prerelease")
+                ),
+                "zipball_url": zip_url,
+            }
+        )
+
+    return releases
+
+
+def _select_downgrade_release() -> Optional[dict]:
+    try:
+        releases = _github_panel_releases()
+    except Exception as exc:
+        err(f"Could not read GitHub releases: {exc}")
+        pause()
+        return None
+
+    if not releases:
+        err("No published releases were returned by GitHub.")
+        pause()
+        return None
+
+    while True:
+        clear()
+        header("Downgrade", "choose a published release")
+
+        lines: List[str] = []
+
+        for index, release in enumerate(releases, start=1):
+            published = release.get("published_at") or "unknown date"
+            prerelease = (
+                " — pre-release"
+                if release.get("prerelease")
+                else ""
+            )
+
+            lines.append(
+                f"{index}) {release['tag']} — "
+                f"{release.get('name') or release['tag']} — "
+                f"{published}{prerelease}"
+            )
+
+        lines += ["", "0) Back"]
+
+        print(
+            box(
+                "Available Releases",
+                lines,
+                border_color=BR_YEL,
+            )
+        )
+
+        selected = _menu_input("Select release")
+
+        if selected == "0":
+            return None
+
+        if selected.isdigit():
+            index = int(selected)
+
+            if 1 <= index <= len(releases):
+                return releases[index - 1]
+
+        warn("Enter a valid release number or 0.")
+        time.sleep(0.35)
+
+
+def _download_file(url: str, target: Path) -> None:
+    target.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    request_obj = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/zip",
+            "User-Agent": "WG-Panel-Installer",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(
+            request_obj,
+            timeout=180,
+        ) as response:
+            status = getattr(response, "status", 200)
+
+            if status != 200:
+                raise RuntimeError(
+                    f"GitHub archive download returned HTTP {status}."
+                )
+
+            with target.open("wb") as output:
+                shutil.copyfileobj(
+                    response,
+                    output,
+                )
+
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(
+            "GitHub archive download failed: "
+            f"HTTP {exc.code} {exc.reason}"
+        ) from exc
+
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            "Could not connect to GitHub: "
+            f"{exc.reason}"
+        ) from exc
+
+    if not target.is_file():
+        raise RuntimeError(
+            "GitHub archive was not saved."
+        )
+
+    if target.stat().st_size == 0:
+        target.unlink(missing_ok=True)
+
+        raise RuntimeError(
+            "GitHub returned an empty release archive."
+        )
+
+    if not zipfile.is_zipfile(target):
+        try:
+            preview = target.read_bytes()[:300].decode(
+                "utf-8",
+                "replace",
+            )
+        except Exception:
+            preview = ""
+
+        target.unlink(missing_ok=True)
+
+        raise RuntimeError(
+            "GitHub response is not a valid ZIP archive."
+            + (
+                f" Response preview: {preview!r}"
+                if preview
+                else ""
+            )
+        )
+
+def _extract_release_zip(
+    zip_path: Path,
+    destination: Path,
+) -> Path:
+    destination.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(zip_path, "r") as archive:
+        members = archive.infolist()
+
+        if not members:
+            raise RuntimeError("The downloaded release ZIP is empty.")
+
+        destination_resolved = destination.resolve()
+
+        for member in members:
+            output_path = (
+                destination / member.filename
+            ).resolve()
+
+            if (
+                output_path != destination_resolved
+                and destination_resolved not in output_path.parents
+            ):
+                raise RuntimeError(
+                    "Unsafe path found in release ZIP: "
+                    f"{member.filename}"
+                )
+
+        archive.extractall(destination)
+
+    direct_app = destination / "app.py"
+
+    if direct_app.is_file():
+        return destination
+
+    top_dirs = [
+        path
+        for path in destination.iterdir()
+        if path.is_dir()
+    ]
+
+    if (
+        len(top_dirs) == 1
+        and (top_dirs[0] / "app.py").is_file()
+    ):
+        return top_dirs[0]
+
+    for app_file in destination.rglob("app.py"):
+        project_root = app_file.parent
+
+        if (project_root / "requirements.txt").is_file():
+            return project_root
+
+    raise RuntimeError(
+        "Could not locate the panel project inside the release ZIP."
+    )
+
+
+def update_project(root: Path):
+    """
+    Update WG Panel to the latest main-branch version.
+
+    Update never shows a release/version list.
+    """
     if not isitroot():
-        err("Update requires sudo.")
+        err("Update requires sudo/root.")
         pause()
         return
 
     if not _cmd("git"):
-        err("git not installed. Install system requirements first.")
+        err("git is not installed.")
         pause()
         return
 
     if not _cmd("rsync"):
-        err("rsync not installed. Install: sudo apt-get install -y rsync")
+        err("rsync is not installed. Run: apt-get install -y rsync")
         pause()
         return
 
-    dest = root.resolve()
-    if not dest.exists():
-        err("Project root not found. Clone first.")
+    root = root.resolve()
+
+    if not root.is_dir() or not (root / "app.py").is_file():
+        err("The active WG Panel project root is invalid.")
         pause()
         return
 
-    tmp = Path("/tmp") / f"wgpanel_update_{int(time.time())}"
+    clear()
+    header("Update", "latest main branch")
+
+    print(
+        box(
+            "Update Plan",
+            [
+                "• Download the latest main branch.",
+                "• Preserve .env, instance, database, backups and venv.",
+                "• Refresh Python requirements.",
+                "• Validate app.py, telegram_bot.py and wg.py.",
+                "• Restart the panel and Telegram services when installed.",
+                "• Restore the previous code automatically on failure.",
+            ],
+            border_color=BR_GRN,
+        )
+    )
+
+    if not confirm(
+        "Update to the latest version now?",
+        default_yes=True,
+    ):
+        warn("Canceled.")
+        pause()
+        return
+
+    temp_root = Path(
+        tempfile.mkdtemp(prefix="wg-panel-update-")
+    )
+    snapshot: Optional[Path] = None
+
     try:
-        if tmp.exists():
-            shutil.rmtree(tmp, ignore_errors=True)
-
-        info("Downloading latest update from GitHub...")
-        rc = _live(["git", "clone", "--depth", "1", REPO_URL, str(tmp)], "git clone (temp)")
-        if rc != 0:
-            pause()
-            return
-
-        info("Overwriting project files (keeping backups/instance/.env/venv)...")
-
-        excludes = [
-            "--exclude", ".git/",
-            "--exclude", ".env",
-            "--exclude", "venv/",
-            "--exclude", "instance/",
-            "--exclude", "backups/",
-            "--exclude", "db/",
-            "--exclude", "*.db",
-            "--exclude", "__pycache__/",
-        ]
+        snapshot = _create_code_snapshot(root)
+        source = temp_root / "source"
 
         rc = _live(
-           ["rsync", "-a", "--delete"] + excludes + [str(tmp) + "/", str(dest) + "/"],
-           "rsync overwrite (safe, mirror GitHub code)"
+            [
+                "git",
+                "clone",
+                "--depth",
+                "1",
+                "--branch",
+                "main",
+                REPO_URL,
+                str(source),
+            ],
+            "Download latest WG Panel",
+            timeout=600,
         )
+
         if rc != 0:
-            pause()
-            return
+            raise RuntimeError(
+                "Could not download the latest main branch."
+            )
 
-        ok("Update applied.")
+        if not _sync_project_code(source, root):
+            raise RuntimeError(
+                "Could not apply the latest panel code."
+            )
 
-        vpy = dest / "venv" / "bin" / "python"
-        req = dest / "requirements.txt"
-        if vpy.exists() and req.exists():
-            info("Updating Python requirements in venv...")
-            _live([str(vpy), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], "pip upgrade tools")
-            _live([str(vpy), "-m", "pip", "install", "-r", str(req)], "pip install -r requirements.txt")
-            ok("Requirements updated.")
-        else:
-            warn("venv/requirements.txt not found. Skipping pip update.")
+        _finish_project_change(
+            root,
+            snapshot,
+            "Update",
+        )
 
-        pause()
+    except Exception as exc:
+        err(f"Update failed: {exc}")
+
+        if snapshot is not None:
+            _restore_code_snapshot(root, snapshot)
 
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+    pause()
+
+
+def downgrade_project(root: Path):
+    """
+    Downgrade WG Panel to a selected published GitHub release.
+    """
+    if not isitroot():
+        err("Downgrade requires sudo/root.")
+        pause()
+        return
+
+    if not _cmd("rsync"):
+        err("rsync is not installed. Run: apt-get install -y rsync")
+        pause()
+        return
+
+    root = root.resolve()
+
+    if not root.is_dir() or not (root / "app.py").is_file():
+        err("The active WG Panel project root is invalid.")
+        pause()
+        return
+
+    release = _select_downgrade_release()
+
+    if not release:
+        return
+
+    clear()
+    header("Downgrade", release["tag"])
+
+    print(
+        box(
+            "Selected Release",
+            [
+                f"Tag: {release['tag']}",
+                f"Name: {release.get('name') or release['tag']}",
+                (
+                    "Published: "
+                    f"{release.get('published_at') or 'unknown'}"
+                ),
+                "",
+                "Your current .env, instance, database, backups and venv",
+                "will be preserved.",
+                "",
+                "Database schemas are not automatically downgraded.",
+                "Create a full panel backup before crossing major versions.",
+            ],
+            border_color=BR_YEL,
+        )
+    )
+
+    if not confirm(
+        f"Downgrade to {release['tag']} now?",
+        default_yes=False,
+    ):
+        warn("Canceled.")
+        pause()
+        return
+
+    temp_root = Path(
+        tempfile.mkdtemp(prefix="wg-panel-downgrade-")
+    )
+    snapshot: Optional[Path] = None
+
+    try:
+        snapshot = _create_code_snapshot(root)
+
+        zip_path = temp_root / "release.zip"
+        extract_dir = temp_root / "release"
+
+        info(f"Downloading release {release['tag']}...")
+        _download_file(
+            release["zipball_url"],
+            zip_path,
+        )
+
+        source = _extract_release_zip(
+            zip_path,
+            extract_dir,
+        )
+
+        if not _sync_project_code(source, root):
+            raise RuntimeError(
+                "Could not apply the selected release."
+            )
+
+        _finish_project_change(
+            root,
+            snapshot,
+            f"Downgrade to {release['tag']}",
+        )
+
+    except Exception as exc:
+        err(f"Downgrade failed: {exc}")
+
+        if snapshot is not None:
+            _restore_code_snapshot(root, snapshot)
+
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+    pause()
 
 
 def update_menu():
     while True:
         root = get_project()
+
         clear()
-        header("Update", "download updates safely (keep your backups and settings)")
+        header(
+            "Update / Downgrade",
+            "latest update or selected release",
+        )
         print(render_status(root))
         print()
 
         items = [
-            c("1) Update project (overwrite code, keep backups/settings)", BR_GRN),
-            c("2) Git pull (fast-forward only)", BR_YEL),
+            c("1) Update to latest version", BR_GRN),
+            c(
+                "2) Downgrade (choose a published release)",
+                BR_YEL,
+            ),
             c("3) Show git status", BR_CYN),
             "",
             c("0) Back", DIM),
         ]
-        print(box("Update Menu", items, border_color=BR_YEL))
+
+        print(
+            box(
+                "Update Menu",
+                items,
+                border_color=BR_YEL,
+            )
+        )
 
         ch = _menu_input()
 
@@ -3022,24 +3718,27 @@ def update_menu():
             update_project(root)
 
         elif ch == "2":
-            if not _cmd("git"):
-                err("git not installed.")
-                pause()
-                continue
-            if not (root / ".git").exists():
-                err("Project root is not a git repo. Clone first.")
-                pause()
-                continue
-            _live(["git", "-C", str(root), "pull", "--ff-only"], "git pull --ff-only")
-            ok("Git pull completed.")
-            pause()
+            downgrade_project(root)
 
         elif ch == "3":
-            if not _cmd("git") or not (root / ".git").exists():
-                warn("Not a git repo.")
+            if (
+                not _cmd("git")
+                or not (root / ".git").exists()
+            ):
+                warn("The active project is not a git repository.")
                 pause()
                 continue
-            _live(["git", "-C", str(root), "status"], "git status")
+
+            _live(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "status",
+                ],
+                "git status",
+                timeout=120,
+            )
             pause()
 
         elif ch == "0":
@@ -3048,6 +3747,8 @@ def update_menu():
         else:
             warn("Invalid option.")
             time.sleep(0.25)
+
+
 
 
 def _disable_remove_service(name: str):
