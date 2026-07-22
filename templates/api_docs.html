@@ -1421,11 +1421,11 @@ https://panel.example.com/settings"><i class="fa-regular fa-copy"></i> Copy</but
     </div>
   </div>
 </article>
-<article class="route-row" data-text="interfaces post /api/interfaces create_local_interface lists interfaces or creates an interface.">
+<article class="route-row" data-text="interfaces post /api/interfaces create_local_interface lists interfaces or creates an interface with optional automatic forwarding and NAT rules.">
   <button class="route-main" type="button" aria-expanded="false">
     <span class="method m-post">POST</span>
     <code class="route-path">/api/interfaces</code>
-    <span class="route-desc">Lists interfaces or creates an interface.</span>
+    <span class="route-desc">Lists interfaces or creates an interface with optional automatic forwarding and NAT rules.</span>
     <span class="auth-pill">Login session</span>
     <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
   </button>
@@ -1433,7 +1433,7 @@ https://panel.example.com/settings"><i class="fa-regular fa-copy"></i> Copy</but
     <div class="detail-grid">
       <div class="detail-card">
         <div class="detail-title">What it does</div>
-        <p>Lists interfaces or creates an interface.</p>
+        <p>Creates a local WireGuard interface. When <code>auto_firewall</code> is true, the panel detects the default IPv4 egress interface, enables IPv4 forwarding, and writes idempotent subnet-scoped <code>PostUp</code>/<code>PostDown</code> FORWARD and MASQUERADE rules. The submitted DNS value is retained as client metadata and is not written as a server-side <code>DNS =</code> directive.</p>
         <div class="meta-line"><span>app.py</span><span>handler: <code>create_local_interface</code></span></div>
       </div>
       <div class="detail-card command-card">
@@ -1445,8 +1445,10 @@ https://panel.example.com/settings"><i class="fa-regular fa-copy"></i> Copy</but
   &quot;name&quot;: &quot;wg0&quot;,
   &quot;address&quot;: &quot;10.66.0.1/24&quot;,
   &quot;listen_port&quot;: 51820,
-  &quot;dns&quot;: &quot;1.1.1.1&quot;,
-  &quot;auto_up&quot;: true
+  &quot;dns&quot;: &quot;1.1.1.1, 1.0.0.1&quot;,
+  &quot;mtu&quot;: 1420,
+  &quot;auto_up&quot;: true,
+  &quot;auto_firewall&quot;: true
 }&#x27;</code></pre>
         <button class="copy-btn" type="button" data-copy="curl -X POST &quot;https://panel.example.com/api/interfaces&quot; \
   -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot; \
@@ -1455,8 +1457,10 @@ https://panel.example.com/settings"><i class="fa-regular fa-copy"></i> Copy</but
   &quot;name&quot;: &quot;wg0&quot;,
   &quot;address&quot;: &quot;10.66.0.1/24&quot;,
   &quot;listen_port&quot;: 51820,
-  &quot;dns&quot;: &quot;1.1.1.1&quot;,
-  &quot;auto_up&quot;: true
+  &quot;dns&quot;: &quot;1.1.1.1, 1.0.0.1&quot;,
+  &quot;mtu&quot;: 1420,
+  &quot;auto_up&quot;: true,
+  &quot;auto_firewall&quot;: true
 }&#x27;"><i class="fa-regular fa-copy"></i> Copy</button>
       </div>
     </div>
@@ -2458,11 +2462,11 @@ https://panel.example.com/users"><i class="fa-regular fa-copy"></i> Copy</button
     </div>
   </div>
 </article>
-<article class="route-row" data-text="nodes get /api/nodes/&lt;int:nid&gt;/interfaces node_ifaces lists or creates interfaces on a remote node.">
+<article class="route-row" data-text="nodes get /api/nodes/&lt;int:nid&gt;/interfaces node_ifaces lists or creates interfaces on a remote node with optional automatic forwarding and NAT rules.">
   <button class="route-main" type="button" aria-expanded="false">
     <span class="method m-get">GET</span>
     <code class="route-path">/api/nodes/&lt;int:nid&gt;/interfaces</code>
-    <span class="route-desc">Lists or creates interfaces on a remote node.</span>
+    <span class="route-desc">Lists or creates interfaces on a remote node with optional automatic forwarding and NAT rules.</span>
     <span class="auth-pill">Login or API key</span>
     <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
   </button>
@@ -2470,7 +2474,7 @@ https://panel.example.com/users"><i class="fa-regular fa-copy"></i> Copy</button
     <div class="detail-grid">
       <div class="detail-card">
         <div class="detail-title">What it does</div>
-        <p>Lists or creates interfaces on a remote node.</p>
+        <p>Creates an interface through the selected node. The payload is forwarded to the node agent. With <code>auto_firewall</code> enabled, the node detects its IPv4 egress interface and writes persistent subnet-scoped <code>PostUp</code>/<code>PostDown</code> FORWARD and MASQUERADE rules. DNS remains client metadata rather than a server-side resolver directive.</p>
         <div class="meta-line"><span>app.py</span><span>handler: <code>node_ifaces</code></span></div>
       </div>
       <div class="detail-card command-card">
@@ -2483,11 +2487,11 @@ https://panel.example.com/users"><i class="fa-regular fa-copy"></i> Copy</button
     </div>
   </div>
 </article>
-<article class="route-row" data-text="nodes post /api/nodes/&lt;int:nid&gt;/interfaces node_ifaces lists or creates interfaces on a remote node.">
+<article class="route-row" data-text="nodes post /api/nodes/&lt;int:nid&gt;/interfaces node_ifaces lists or creates interfaces on a remote node with optional automatic forwarding and NAT rules.">
   <button class="route-main" type="button" aria-expanded="false">
     <span class="method m-post">POST</span>
     <code class="route-path">/api/nodes/&lt;int:nid&gt;/interfaces</code>
-    <span class="route-desc">Lists or creates interfaces on a remote node.</span>
+    <span class="route-desc">Lists or creates interfaces on a remote node with optional automatic forwarding and NAT rules.</span>
     <span class="auth-pill">Login or API key</span>
     <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
   </button>
@@ -2495,7 +2499,7 @@ https://panel.example.com/users"><i class="fa-regular fa-copy"></i> Copy</button
     <div class="detail-grid">
       <div class="detail-card">
         <div class="detail-title">What it does</div>
-        <p>Lists or creates interfaces on a remote node.</p>
+        <p>Creates an interface through the selected node. The payload is forwarded to the node agent. With <code>auto_firewall</code> enabled, the node detects its IPv4 egress interface and writes persistent subnet-scoped <code>PostUp</code>/<code>PostDown</code> FORWARD and MASQUERADE rules. DNS remains client metadata rather than a server-side resolver directive.</p>
         <div class="meta-line"><span>app.py</span><span>handler: <code>node_ifaces</code></span></div>
       </div>
       <div class="detail-card command-card">
@@ -2507,8 +2511,10 @@ https://panel.example.com/users"><i class="fa-regular fa-copy"></i> Copy</button
   &quot;name&quot;: &quot;wg0&quot;,
   &quot;address&quot;: &quot;10.70.0.1/24&quot;,
   &quot;listen_port&quot;: 51820,
-  &quot;dns&quot;: &quot;1.1.1.1&quot;,
-  &quot;auto_up&quot;: true
+  &quot;dns&quot;: &quot;1.1.1.1, 1.0.0.1&quot;,
+  &quot;mtu&quot;: 1420,
+  &quot;auto_up&quot;: true,
+  &quot;auto_firewall&quot;: true
 }&#x27;</code></pre>
         <button class="copy-btn" type="button" data-copy="curl -X POST &quot;https://panel.example.com/api/nodes/1/interfaces&quot; \
   -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot; \
@@ -2517,8 +2523,10 @@ https://panel.example.com/users"><i class="fa-regular fa-copy"></i> Copy</button
   &quot;name&quot;: &quot;wg0&quot;,
   &quot;address&quot;: &quot;10.70.0.1/24&quot;,
   &quot;listen_port&quot;: 51820,
-  &quot;dns&quot;: &quot;1.1.1.1&quot;,
-  &quot;auto_up&quot;: true
+  &quot;dns&quot;: &quot;1.1.1.1, 1.0.0.1&quot;,
+  &quot;mtu&quot;: 1420,
+  &quot;auto_up&quot;: true,
+  &quot;auto_firewall&quot;: true
 }&#x27;"><i class="fa-regular fa-copy"></i> Copy</button>
       </div>
     </div>
@@ -5203,11 +5211,11 @@ https://panel.example.com/"><i class="fa-regular fa-copy"></i> Copy</button>
     </div>
   </div>
 </article>
-<article class="route-row" data-text="node agent get /api/interfaces interfaces lists interfaces or creates an interface.">
+<article class="route-row" data-text="node agent get /api/interfaces interfaces lists interfaces or creates an interface with optional automatic forwarding and NAT rules.">
   <button class="route-main" type="button" aria-expanded="false">
     <span class="method m-get">GET</span>
     <code class="route-path">/api/interfaces</code>
-    <span class="route-desc">Lists interfaces or creates an interface.</span>
+    <span class="route-desc">Lists interfaces or creates an interface with optional automatic forwarding and NAT rules.</span>
     <span class="auth-pill">Node API key</span>
     <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
   </button>
@@ -5215,7 +5223,7 @@ https://panel.example.com/"><i class="fa-regular fa-copy"></i> Copy</button>
     <div class="detail-grid">
       <div class="detail-card">
         <div class="detail-title">What it does</div>
-        <p>Lists interfaces or creates an interface.</p>
+        <p>Creates a local WireGuard interface. When <code>auto_firewall</code> is true, the panel detects the default IPv4 egress interface, enables IPv4 forwarding, and writes idempotent subnet-scoped <code>PostUp</code>/<code>PostDown</code> FORWARD and MASQUERADE rules. The submitted DNS value is retained as client metadata and is not written as a server-side <code>DNS =</code> directive.</p>
         <div class="meta-line"><span>node_agent.py</span><span>handler: <code>interfaces</code></span></div>
       </div>
       <div class="detail-card command-card">
@@ -5228,11 +5236,11 @@ https://panel.example.com/"><i class="fa-regular fa-copy"></i> Copy</button>
     </div>
   </div>
 </article>
-<article class="route-row" data-text="node agent post /api/interfaces/create create_interface creates a wireguard interface.">
+<article class="route-row" data-text="node agent post /api/interfaces/create create_interface creates a wireguard interface with optional automatic forwarding and NAT rules.">
   <button class="route-main" type="button" aria-expanded="false">
     <span class="method m-post">POST</span>
     <code class="route-path">/api/interfaces/create</code>
-    <span class="route-desc">Creates a WireGuard interface.</span>
+    <span class="route-desc">Creates a WireGuard interface with optional automatic forwarding and NAT rules.</span>
     <span class="auth-pill">Node API key</span>
     <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
   </button>
@@ -5240,7 +5248,7 @@ https://panel.example.com/"><i class="fa-regular fa-copy"></i> Copy</button>
     <div class="detail-grid">
       <div class="detail-card">
         <div class="detail-title">What it does</div>
-        <p>Creates a WireGuard interface.</p>
+        <p>Creates a WireGuard interface on the node. With <code>auto_firewall</code> enabled, the agent detects the default IPv4 egress interface, enables IPv4 forwarding, and writes idempotent subnet-scoped <code>PostUp</code>/<code>PostDown</code> FORWARD and MASQUERADE rules. The response may include <code>auto_firewall</code>, <code>egress_interface</code>, <code>post_up</code>, <code>post_down</code>, and <code>up_error</code>. DNS is kept for generated client configurations and is not written into the server interface file.</p>
         <div class="meta-line"><span>node_agent.py</span><span>handler: <code>create_interface</code></span></div>
       </div>
       <div class="detail-card command-card">
@@ -5252,8 +5260,10 @@ https://panel.example.com/"><i class="fa-regular fa-copy"></i> Copy</button>
   &quot;name&quot;: &quot;wg0&quot;,
   &quot;address&quot;: &quot;10.66.0.1/24&quot;,
   &quot;listen_port&quot;: 51820,
-  &quot;dns&quot;: &quot;1.1.1.1&quot;,
-  &quot;auto_up&quot;: true
+  &quot;dns&quot;: &quot;1.1.1.1, 1.0.0.1&quot;,
+  &quot;mtu&quot;: 1420,
+  &quot;auto_up&quot;: true,
+  &quot;auto_firewall&quot;: true
 }&#x27;</code></pre>
         <button class="copy-btn" type="button" data-copy="curl -X POST &quot;https://node-1.example.net:9109/api/interfaces/create&quot; \
   -H &quot;Authorization: Bearer &lt;NODE_API_KEY&gt;&quot; \
@@ -5262,8 +5272,10 @@ https://panel.example.com/"><i class="fa-regular fa-copy"></i> Copy</button>
   &quot;name&quot;: &quot;wg0&quot;,
   &quot;address&quot;: &quot;10.66.0.1/24&quot;,
   &quot;listen_port&quot;: 51820,
-  &quot;dns&quot;: &quot;1.1.1.1&quot;,
-  &quot;auto_up&quot;: true
+  &quot;dns&quot;: &quot;1.1.1.1, 1.0.0.1&quot;,
+  &quot;mtu&quot;: 1420,
+  &quot;auto_up&quot;: true,
+  &quot;auto_firewall&quot;: true
 }&#x27;"><i class="fa-regular fa-copy"></i> Copy</button>
       </div>
     </div>
