@@ -639,6 +639,455 @@ function fmtDurShort(sec) {
   if (h > 0) return `${h}h${m ? ` ${m}m` : ''}`;
   return `${m}m`;
 }
+function ipv4NetworkFromCidr(cidr) {
+  const raw = String(cidr || '')
+    .split(',')[0]
+    .trim();
+
+  const match = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(raw);
+
+  if (!match) return '';
+
+  const octets = match[1]
+    .split('.')
+    .map(Number);
+
+  const prefix = Number(match[2]);
+
+  if (
+    octets.length !== 4 ||
+    octets.some(x => !Number.isInteger(x) || x < 0 || x > 255) ||
+    prefix < 0 ||
+    prefix > 32
+  ) {
+    return '';
+  }
+
+  const ip =
+    (
+      ((octets[0] << 24) >>> 0) |
+      (octets[1] << 16) |
+      (octets[2] << 8) |
+      octets[3]
+    ) >>> 0;
+
+  const mask = prefix === 0
+    ? 0
+    : (0xffffffff << (32 - prefix)) >>> 0;
+
+  const network = (ip & mask) >>> 0;
+
+  return [
+    (network >>> 24) & 255,
+    (network >>> 16) & 255,
+    (network >>> 8) & 255,
+    network & 255,
+  ].join('.') + `/${prefix}`;
+}
+
+
+function appendAllowedIp(current, subnet) {
+  const values = String(current || '')
+    .split(',')
+    .map(x => x.trim())
+    .filter(Boolean);
+
+  const normalizedSubnet = String(
+    subnet || ''
+  ).trim();
+
+  if (
+    !normalizedSubnet ||
+    values.includes(normalizedSubnet)
+  ) {
+    return values.join(', ');
+  }
+
+  values.push(normalizedSubnet);
+
+  return values.join(', ');
+}
+
+
+function selectedInterfaceObject() {
+  const all = Array.isArray(window.IFACES)
+    ? window.IFACES
+    : (
+        Array.isArray(IFACES)
+          ? IFACES
+          : []
+      );
+
+  return all.find(iface => {
+    const idMatch =
+      SELECTED_IFACE_ID != null &&
+      String(iface.id ?? '') ===
+      String(SELECTED_IFACE_ID);
+
+    const nameMatch =
+      !!SELECTED_IFACE_NAME &&
+      String(iface.name || '') ===
+      String(SELECTED_IFACE_NAME);
+
+    return idMatch || nameMatch;
+  }) || null;
+}
+
+
+function applyInternalNetworkToAllowedIps(
+  allowedInput,
+  checkbox,
+  ifaceOverride = null
+) {
+  if (
+    !allowedInput ||
+    !checkbox ||
+    !checkbox.checked
+  ) {
+    return true;
+  }
+
+  const iface =
+    ifaceOverride ||
+    selectedInterfaceObject();
+
+  if (!iface) {
+    toastSafe(
+      'No WireGuard interface is selected.',
+      'warning'
+    );
+    return false;
+  }
+
+  const interfaceCidr = String(
+    iface.address ||
+    iface.server_cidr ||
+    iface.interface_address ||
+    iface.cidr ||
+    ''
+  ).trim();
+
+  const subnet = ipv4NetworkFromCidr(
+    interfaceCidr
+  );
+
+  if (!subnet) {
+    toastSafe(
+      `Could not detect the internal network for ${iface.name || 'the selected interface'}.`,
+      'warning'
+    );
+    return false;
+  }
+
+  const currentValues = String(
+    allowedInput.value || ''
+  )
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+
+  if (currentValues.includes('0.0.0.0/0')) {
+    return true;
+  }
+
+  allowedInput.value = appendAllowedIp(
+    allowedInput.value,
+    subnet
+  );
+
+  allowedInput.dispatchEvent(
+    new Event(
+      'input',
+      { bubbles: true }
+    )
+  );
+
+  allowedInput.dispatchEvent(
+    new Event(
+      'change',
+      { bubbles: true }
+    )
+  );
+
+  return true;
+}
+  
+
+function routingModeValue(prefix) {
+  return document.querySelector(`input[name="${prefix}_routing_mode"]:checked`)?.value || 'full';
+}
+
+function routingInterfaceNetwork(ifaceOverride = null) {
+  const iface = ifaceOverride || selectedInterfaceObject();
+  if (!iface) return '';
+  return ipv4NetworkFromCidr(
+    iface.address || iface.server_cidr || iface.interface_address || iface.cidr || ''
+  );
+}
+
+function updateRoutingControl(prefix, allowedInput, ifaceOverride = null) {
+  const mode = routingModeValue(prefix);
+  const customToggle = document.getElementById(`${prefix}-routing-custom-toggle`);
+  const preview = document.getElementById(`${prefix}-routing-preview`);
+  const help = document.getElementById(`${prefix}-routing-help`);
+  const subnet = routingInterfaceNetwork(ifaceOverride);
+
+  if (customToggle) customToggle.hidden = mode !== 'custom';
+
+  if (allowedInput) {
+    allowedInput.readOnly = mode !== 'custom';
+    allowedInput.classList.toggle('routing-readonly', mode !== 'custom');
+  }
+
+  if (mode === 'full') {
+    if (allowedInput) allowedInput.value = '0.0.0.0/0, ::/0';
+    if (preview) preview.textContent = 'Full tunnel';
+    if (help) help.textContent = 'Internet access and the internal WireGuard network are already included.';
+    return true;
+  }
+
+  if (mode === 'internal') {
+    if (!subnet) {
+      if (allowedInput) allowedInput.value = '';
+      if (preview) preview.textContent = 'Network unavailable';
+      if (help) help.textContent = 'Select a WireGuard interface so its internal network can be detected.';
+      return false;
+    }
+    if (allowedInput) allowedInput.value = subnet;
+    if (preview) preview.textContent = subnet;
+    if (help) help.textContent = `Detected from the selected interface: ${subnet}`;
+    return true;
+  }
+
+  if (preview) preview.textContent = subnet || 'Custom routes';
+  if (help) help.textContent = subnet
+    ? `Enter custom routes. Optional detected network: ${subnet}`
+    : 'Enter one or more comma-separated routes.';
+  return true;
+}
+
+function applyRoutingMode(prefix, allowedInput, ifaceOverride = null) {
+  const mode = routingModeValue(prefix);
+  const subnet = routingInterfaceNetwork(ifaceOverride);
+
+  if (!allowedInput) return false;
+
+  if (mode === 'full') {
+    allowedInput.value = '0.0.0.0/0, ::/0';
+    return true;
+  }
+
+  if (mode === 'internal') {
+    if (!subnet) {
+      toastSafe('The selected WireGuard interface network could not be detected.', 'warning');
+      return false;
+    }
+    allowedInput.value = subnet;
+    return true;
+  }
+
+  if (document.getElementById(`${prefix}-custom-add-internal`)?.checked) {
+    if (!subnet) {
+      toastSafe('The selected WireGuard interface network could not be detected.', 'warning');
+      return false;
+    }
+    allowedInput.value = appendAllowedIp(allowedInput.value, subnet);
+  }
+
+  if (!String(allowedInput.value || '').trim()) {
+    toastSafe('Enter at least one custom AllowedIPs route.', 'warning');
+    return false;
+  }
+
+  return true;
+}
+
+function wireRoutingControl(prefix, allowedSelector, ifaceProvider = null) {
+  const allowedInput = document.querySelector(allowedSelector);
+  const update = () => updateRoutingControl(
+    prefix,
+    allowedInput,
+    typeof ifaceProvider === 'function' ? ifaceProvider() : null
+  );
+
+  document.querySelectorAll(`input[name="${prefix}_routing_mode"]`).forEach(radio => {
+    if (radio.dataset.routingWired === '1') return;
+    radio.addEventListener('change', update);
+    radio.dataset.routingWired = '1';
+  });
+
+  update();
+}
+
+
+function ensureInternalNetworkRoute(
+  allowedInput,
+  ifaceOverride = null
+) {
+  if (!allowedInput) return true;
+
+  const current = String(
+    allowedInput.value || ''
+  )
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+
+  if (
+    current.includes('0.0.0.0/0') ||
+    current.includes('::/0')
+  ) {
+    return true;
+  }
+
+  const iface =
+    ifaceOverride ||
+    selectedInterfaceObject();
+
+  if (!iface) {
+    toastSafe(
+      'Select a WireGuard interface before creating the peer.',
+      'warning'
+    );
+    return false;
+  }
+
+  const subnet = ipv4NetworkFromCidr(
+    iface.address ||
+    iface.server_cidr ||
+    iface.interface_address ||
+    iface.cidr ||
+    ''
+  );
+
+  if (!subnet) {
+    toastSafe(
+      `Could not detect the WireGuard network for ${iface.name || 'the selected interface'}.`,
+      'warning'
+    );
+    return false;
+  }
+
+  allowedInput.value = appendAllowedIp(
+    allowedInput.value,
+    subnet
+  );
+
+  return true;
+}
+
+
+function peerRouteList(value){
+  return String(value || '').split(',').map(v => v.trim()).filter(Boolean);
+}
+function peerUniqueRoutes(value){
+  return [...new Set(peerRouteList(value))];
+}
+function peerScopeNetworks(ifaceOverride=null){
+  const interfaces = Array.isArray(window.IFACES)
+    ? window.IFACES
+    : (typeof IFACES !== 'undefined' && Array.isArray(IFACES) ? IFACES : []);
+  const out = [];
+  const add = value => {
+    const n = ipv4NetworkFromCidr(value);
+    if(n && !out.includes(n)) out.push(n);
+  };
+  for(const iface of interfaces){
+    const scope = iface?.scope_networks;
+    if(Array.isArray(scope)) scope.forEach(add);
+    else if(scope) String(scope).split(',').forEach(add);
+    add(iface?.address || iface?.server_cidr || iface?.interface_address || iface?.cidr || '');
+  }
+  if(!out.length && ifaceOverride){
+    const scope = ifaceOverride?.scope_networks;
+    if(Array.isArray(scope)) scope.forEach(add);
+    else if(scope) String(scope).split(',').forEach(add);
+    add(ifaceOverride?.address || ifaceOverride?.server_cidr || ifaceOverride?.interface_address || ifaceOverride?.cidr || '');
+  }
+  return out;
+}
+function setDetectedInternalNetwork(prefix,ifaceOverride=null){
+  const input=document.getElementById(`${prefix}-internal-network`);
+  if(!input)return'';
+  const networks=peerScopeNetworks(ifaceOverride||selectedInterfaceObject());
+  input.value=networks.join(', ');
+  return input.value;
+}
+function applyInternalNetworks(prefix,allowedInput,ifaceOverride=null){
+  if(!allowedInput)return false;
+  const hidden=document.getElementById(`${prefix}-internal-network`);
+  const toggle=document.getElementById(`${prefix}-include-internal-network`);
+  if(!hidden)return true;
+
+  setDetectedInternalNetwork(prefix,ifaceOverride);
+  const previouslyAdded=peerUniqueRoutes(allowedInput.dataset.autoInternalNetworks||'');
+  let current=peerUniqueRoutes(allowedInput.value);
+
+  if(prefix === 'peer' && current.length === 0){
+    current = ['0.0.0.0/0', '::/0'];
+  }
+
+  if(previouslyAdded.length){
+    const remove=new Set(previouslyAdded);
+    current=current.filter(route=>!remove.has(route));
+  }
+
+  const enabled=!!toggle?.checked;
+  const networks=[];
+  if(enabled){
+    for(const raw of peerRouteList(hidden.value)){
+      const norm=ipv4NetworkFromCidr(raw);
+      if(norm&&!networks.includes(norm))networks.push(norm);
+    }
+    for(const network of networks){
+      if(!current.includes(network))current.push(network);
+    }
+  }
+
+  allowedInput.dataset.autoInternalNetworks=enabled?networks.join(', '):'';
+  allowedInput.value=current.join(', ');
+  allowedInput.dispatchEvent(new Event('input',{bubbles:true}));
+  allowedInput.dispatchEvent(new Event('change',{bubbles:true}));
+  return true;
+}
+function applyEditInternalNetworks() {
+  const allowedInput = document.querySelector(
+    '#edit-peer-form [name="allowed_ips"], #edit-peer-allowed-ips'
+  );
+  const toggle = document.getElementById('edit-include-internal-network');
+
+  if (!allowedInput || !toggle) return true;
+
+  const previouslyAdded = peerUniqueRoutes(
+    allowedInput.dataset.autoInternalNetworks || ''
+  );
+  let current = peerUniqueRoutes(allowedInput.value);
+
+  if (current.length === 0) {
+    current = ['0.0.0.0/0', '::/0'];
+  }
+
+  if (previouslyAdded.length) {
+    const remove = new Set(previouslyAdded);
+    current = current.filter(route => !remove.has(route));
+  }
+
+  const networks = toggle.checked
+    ? peerScopeNetworks(selectedInterfaceObject())
+    : [];
+
+  for (const network of networks) {
+    if (!current.includes(network)) current.push(network);
+  }
+
+  allowedInput.dataset.autoInternalNetworks = toggle.checked
+    ? networks.join(', ')
+    : '';
+  allowedInput.value = current.join(', ');
+  allowedInput.dispatchEvent(new Event('input', { bubbles: true }));
+  allowedInput.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
 
 function getScopeId() {
   const el = document.getElementById('peer-scope');
@@ -671,9 +1120,16 @@ function getScopeId() {
     return '–';
   };
   const usedBytes = p => {
-  const live = Number(p.used_bytes) || 0;
-  const snap = Number(p.used_bytes_db) || 0;
-  return live || snap;
+  return Math.max(
+    0,
+    Number(
+      p.used_effective_bytes ??
+      p.used_bytes_total ??
+      p.used_bytes ??
+      p.used_bytes_db ??
+      0
+    ) || 0
+  );
 };
   const remainingMiB = p => {
   if (p.unlimited) return Infinity;
@@ -735,7 +1191,19 @@ function getScopeId() {
   }
 
   function timeBadge(p) {
-    if (p.unlimited) return 'Unlimited';
+    if (p.unlimited) {
+      const firstTs =
+        p.first_used_at_ts != null
+          ? Number(p.first_used_at_ts)
+          : tsFrom(p.first_used_at);
+
+      if (firstTs) {
+        return `Active since ${fmtLocalTs(firstTs)}`;
+      }
+
+      const createdTs = p.created_at_ts != null ? Number(p.created_at_ts) : tsFrom(p.created_at);
+      return createdTs ? `Active since ${fmtLocalTs(createdTs)}` : 'Unlimited';
+    }
 
     const started = itStarted(p);
     const capSec = timeLimitCapSeconds(p);
@@ -1002,8 +1470,9 @@ function peerProgressBar(p, ttl, started) {
 }
 
 function cardHTML(p, i) {
-  const limitStr   = fmtLimit(p);
-  const remainStr  = p.unlimited ? 'Unlimited' : fmtAmountMiB(remainingMiB(p), p.limit_unit);
+  const limitStr = fmtLimit(p);
+  const usedStr = fmtAmountMiB(usedBytes(p) / 1048576,'Mi');
+  const remainStr = p.unlimited? `${usedStr} used`: fmtAmountMiB(remainingMiB(p),p.limit_unit);
   const timerStr   = timeBadge(p);
   const epStr      = endpointDisplay(p);
 
@@ -1015,15 +1484,19 @@ function cardHTML(p, i) {
   const expTs      = (p.expires_at_ts != null) ? p.expires_at_ts : tsFrom(p.expires_at);
   const exp        = expTs ? fmtLocalTs(expTs) : '–';
   const ttl        = (p.ttl_seconds != null) ? p.ttl_seconds : (expTs ? Math.max(0, expTs - nowSec()) : null);
-  const remainTime = p.unlimited ? 'Unlimited' : (ttl != null ? prettyTtl(ttl) : '–');
+  const activeSince = first !== '–' ? first : created;
+  const remainTime = p.unlimited ? (activeSince !== '–' ? `Active since ${activeSince}` : 'Unlimited') : (ttl != null ? prettyTtl(ttl) : '–');
 
-  const totalBytes = (Number(p.used_bytes) || 0) + (Number(p.used_bytes_db) || 0);
+  const totalBytes = usedBytes(p);
   const totalMiB   = Math.round(totalBytes / 1048576);
   const totalStr   = fmtAmountMiB(totalMiB, 'Mi');
 
   const started    = (!p.start_on_first_use) || (p.first_used_at_ts != null) || (!!p.first_used_at);
-  const capLabel   = started ? 'Active time cap' : 'Time cap';
-  const capTail    = (!started && p.start_on_first_use) ? ' (starts on first use)' : '';
+  const capLabel = 'Time limit';
+  const capTail =
+    (!started && p.start_on_first_use)
+      ? ' (starts on first use)'
+      : '';
 
   const isOpen     = openMore.has(String(p.id));
 
@@ -1047,35 +1520,42 @@ function cardHTML(p, i) {
 
     <div class="peer-main peer-main-nowrap">
       <span class="peer-index">${i + 1})</span>
-      <span class="peer-name truncate">${p.name || ''}</span>
 
-      <div class="peer-tags">
-        ${peerTagsHTML(p)}
+      <div class="peer-identity-block">
+        <span class="peer-name" title="${peerEsc(p.name || '')}">${p.name || ''}</span>
+        <span class="peer-iface-line"><i class="fas fa-network-wired"></i>${p.iface || '—'}</span>
       </div>
 
-      <div class="peer-traffic">
-        <i class="fas fa-download"></i> <span class="rx">${String(p.rx || '0')}</span> MB |
-        <i class="fas fa-upload"></i> <span class="tx">${String(p.tx || '0')}</span> MB
+      <div class="peer-live-block">
+        <div class="peer-tags">${peerTagsHTML(p)}</div>
+        <div class="peer-traffic">
+          <span><i class="fas fa-download"></i><b class="rx">${String(p.rx || '0')}</b> MB</span>
+          <span><i class="fas fa-upload"></i><b class="tx">${String(p.tx || '0')}</b> MB</span>
+        </div>
       </div>
 
-      <div class="peer-ip">
-        <i class="fas fa-network-wired"></i>
-        <span class="address truncate">${p.address || ''}</span>
-        <span class="endpoint-wrap"${epStr ? '' : ' style="display:none"'}> /
-          <i class="fas fa-globe"></i> <span class="endpoint truncate">${epStr}</span>
-        </span>
+      <div class="peer-usage-block">
+        <div class="peer-data" title="${p.unlimited ? `${usedStr} used · No data cap` : `${remainStr} remaining · ${limitStr} limit`}">
+          <i class="fas fa-database"></i>
+          <span class="data-summary">${p.unlimited ? `${usedStr} used · No data cap` : `${remainStr} left · ${limitStr} limit`}</span>
+        </div>
+        <div class="peer-timer" title="${
+          p.unlimited && activeSince !== '–'
+            ? `Active since ${activeSince}`
+            : timerStr
+        }">
+          <i class="fas fa-clock"></i>
+          <span class="timer-text">${timerStr}</span>
+        </div>
       </div>
 
-      <div class="peer-data chip" title="Remaining / Limit">
-        <i class="fas fa-database"></i>
-        <span class="data-remaining truncate">${remainStr}</span>
-        <span>&nbsp;/&nbsp;</span>
-        <span class="data-limit truncate">${limitStr}</span>
-      </div>
-
-      <div class="peer-timer chip" title="Time status">
-        <i class="fas fa-clock"></i>
-        <span class="timer-text truncate">${timerStr}</span>
+      <div class="peer-network-block">
+        <div class="peer-address-line" title="${peerEsc(p.address || '')}">
+          <i class="fas fa-network-wired"></i><span class="address">${p.address || '—'}</span>
+        </div>
+        <div class="endpoint-wrap"${epStr ? '' : ' style="display:none"'} title="${peerEsc(epStr)}">
+          <i class="fas fa-globe"></i><span class="endpoint">${epStr}</span>
+        </div>
       </div>
 
       <div class="peer-info-wrap" data-id="${pKey}">
@@ -1135,10 +1615,188 @@ function cardHTML(p, i) {
   </div>`;
 }
 
-  function hover(card) {
-  // Hover is now controlled by CSS ..
+function ensureStablePeerActionDockStyle() {
+  if (document.getElementById('peer-action-dock-stable-style')) return;
+
+  const style = document.createElement('style');
+  style.id = 'peer-action-dock-stable-style';
+  style.textContent = `
+    /*
+     * Keep a permanent geometry slot for the peer action dock.
+     * Only visibility changes. The card height never changes on hover,
+     * preventing pointerleave/pointerenter oscillation.
+     */
+    .peer-card {
+      position: relative !important;
+    }
+
+    .peer-card .peer-actions-row {
+      display: flex !important;
+      width: 100% !important;
+      min-height: 42px !important;
+      height: 42px !important;
+      max-height: 42px !important;
+      margin: 0 !important;
+      padding: 5px 8px !important;
+      overflow: visible !important;
+
+      opacity: 0 !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+      transform: none !important;
+
+      transition:
+        opacity 120ms ease,
+        visibility 0s linear 120ms !important;
+    }
+
+    .peer-card:hover .peer-actions-row,
+    .peer-card:focus-within .peer-actions-row,
+    .peer-card.peer-actions-open .peer-actions-row,
+    .peer-card.peer-actions-locked .peer-actions-row {
+      opacity: 1 !important;
+      visibility: visible !important;
+      pointer-events: auto !important;
+      transform: none !important;
+      transition:
+        opacity 120ms ease,
+        visibility 0s !important;
+    }
+
+    .peer-card .peer-action-dock {
+      display: flex !important;
+      width: 100% !important;
+      min-height: 32px !important;
+      align-items: center !important;
+      justify-content: flex-end !important;
+      flex-wrap: nowrap !important;
+      gap: 6px !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      overflow-x: auto !important;
+      overflow-y: hidden !important;
+      scrollbar-width: thin;
+    }
+
+    .peer-card .peer-action-dock > button {
+      flex: 0 0 auto !important;
+    }
+
+    .peer-card.peer-action-busy .peer-actions-row {
+      opacity: 1 !important;
+      visibility: visible !important;
+      pointer-events: auto !important;
+    }
+
+    .peer-card.peer-action-busy .peer-action-dock > button {
+      pointer-events: none !important;
+    }
+
+    @media (hover: none), (pointer: coarse) {
+      .peer-card .peer-actions-row {
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+      }
+    }
+  `;
+
+  document.head.appendChild(style);
+}
+
+function unlockPeerActionCards() {
+  document.querySelectorAll(
+    '.peer-card.peer-actions-locked, .peer-card.peer-action-busy'
+  ).forEach(card => {
+    card.classList.remove('peer-actions-locked', 'peer-action-busy');
+
+    if (!card.matches(':hover') && !card.contains(document.activeElement)) {
+      card.classList.remove('peer-actions-open');
+    }
+  });
+}
+
+function hover(card) {
+  if (!card) return;
+
+  ensureStablePeerActionDockStyle();
+
   if (card.dataset.enhancedToolbar === '1') return;
   card.dataset.enhancedToolbar = '1';
+
+  let closeTimer = null;
+
+  const cancelClose = () => {
+    if (closeTimer) {
+      clearTimeout(closeTimer);
+      closeTimer = null;
+    }
+  };
+
+  const keepOpen = () => {
+    cancelClose();
+    card.classList.add('peer-actions-open');
+  };
+
+  const mayClose = () => {
+    cancelClose();
+
+    closeTimer = setTimeout(() => {
+      const locked =
+        card.classList.contains('peer-actions-locked') ||
+        card.classList.contains('peer-action-busy');
+
+      const modalOpen = !!document.querySelector(
+        '.modal.open, .peer-confirm-overlay.open, .peer-confirm-overlay[style*="display: flex"]'
+      );
+
+      const pointerInside = card.matches(':hover');
+      const focusInside = card.contains(document.activeElement);
+
+      if (!locked && !modalOpen && !pointerInside && !focusInside) {
+        card.classList.remove('peer-actions-open');
+      }
+    }, 350);
+  };
+
+  card.addEventListener('pointerenter', keepOpen);
+  card.addEventListener('pointermove', keepOpen);
+  card.addEventListener('pointerleave', mayClose);
+
+  card.addEventListener('focusin', keepOpen);
+  card.addEventListener('focusout', mayClose);
+
+  card.addEventListener('pointerdown', event => {
+    const action = event.target.closest(
+      '.peer-actions-row button, .peer-info-wrap button'
+    );
+
+    if (!action) return;
+
+    keepOpen();
+    card.classList.add('peer-actions-locked');
+
+    /*
+     * Do not unlock immediately after click. Some actions open a modal
+     * asynchronously and some refresh the peer list.
+     */
+    setTimeout(() => {
+      const modalOpen = !!document.querySelector(
+        '.modal.open, .peer-confirm-overlay.open, .peer-confirm-overlay[style*="display: flex"]'
+      );
+
+      if (!modalOpen && !card.classList.contains('peer-action-busy')) {
+        card.classList.remove('peer-actions-locked');
+        mayClose();
+      }
+    }, 900);
+  }, true);
+
+  card.addEventListener('click', event => {
+    if (event.target.closest('.peer-actions-row, .peer-info-wrap')) {
+      keepOpen();
+    }
+  });
 }
 
 function updateCard(card, p, i) {
@@ -1182,8 +1840,11 @@ function updateCard(card, p, i) {
   }
 
   const remMiB = remainingMiB(p);
-  set('.peer-data .data-remaining', p.unlimited ? 'Unlimited' : fmtAmountMiB(remMiB, p.limit_unit));
-  set('.peer-data .data-limit', fmtLimit(p));
+  const currentUsedStr = fmtAmountMiB(usedBytes(p) / 1048576, 'Mi');
+  const currentDataText = p.unlimited
+    ? `${currentUsedStr} used · No data cap`
+    : `${fmtAmountMiB(remMiB, p.limit_unit)} left · ${fmtLimit(p)} limit`;
+  set('.peer-data .data-summary', currentDataText);
   set('.peer-timer .timer-text', timeBadge(p));
 
   const en = card.querySelector('.enable-btn');
@@ -1215,18 +1876,19 @@ function updateCard(card, p, i) {
   const exp   = (started && expTs) ? fmtLocalTs(expTs) : '—';
   const remainTime = p.unlimited ? 'Unlimited' : (started && ttl != null ? prettyTtl(ttl) : '—');
 
-  const totalBytes = (Number(p.used_bytes) || 0) + (Number(p.used_bytes_db) || 0);
+  const totalBytes = usedBytes(p);
   const totalMiB   = Math.round(totalBytes / 1048576);
   const totalStr   = fmtAmountMiB(totalMiB, 'Mi');
 
   const capDays = (p.time_limit_days != null) ? p.time_limit_days : null;
-  const capLabel = started ? 'Active time cap' : 'Time cap';
   const capTail  = (!started && p.start_on_first_use) ? ' (starts on first use)' : '';
-  const capStr   = (capDays != null) ? fmtDaysOrHours(capDays) : '–';
+  const capStr   = p.unlimited
+    ? 'Unlimited'
+    : `${capDays != null ? fmtDaysOrHours(capDays) : '–'}${capTail}`;
 
   setHTML('.mi-limit',   peerDetailInner('database', 'Limit', fmtLimit(p)));
-  setHTML('.mi-days',    peerDetailInner('calendar-alt', capLabel, `${capStr}${capTail}`));
-  setHTML('.mi-first',   peerDetailInner('play-circle', 'First used', first));
+  setHTML('.mi-days',    peerDetailInner('play-circle', 'Started', first));
+  setHTML('.mi-first',   peerDetailInner('calendar-alt', 'Time limit', capStr));
   setHTML('.mi-created', peerDetailInner('calendar-plus', 'Created', created));
   setHTML('.mi-exp',     peerDetailInner('calendar-times', 'Expires', exp));
   setHTML('.mi-remain',  peerDetailInner('hourglass-half', 'Time remaining', remainTime));
@@ -1918,29 +2580,153 @@ if (isRefreshTimeout) {
 }
 
 async function postEdit(path, okMsg, failMsg) {
-  const loader = toastSafe(okMsg.replace('Peer ', '') + '…', 'info', true);
-  try {
-    const r = await fetch(apiPath(path), { method: 'POST', credentials: 'same-origin' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    toastSafe(okMsg, 'success');
+  const pathId =
+    (String(path).match(/\/peer\/([^/]+)/) || [])[1];
 
-    if (/\/reset_data$/.test(path)) {
-      const id = (path.match(/\/peer\/([^/]+)/) || [])[1];
-      const peer = id ? findPeer(id) : null;
-      if (peer) {
-        peer.used_bytes = 0;
-        peer.used_bytes_db = 0;
-        const card = document.querySelector(`.peer-card[data-id="${peerEsc(peerKey(peer))}"]`);
-        if (card) updateCard(card, peer, 0);
+  const actionCard = pathId
+    ? document.querySelector(
+        `.peer-card[data-id="${CSS.escape(
+          decodeURIComponent(pathId)
+        )}"]`
+      )
+    : null;
+
+  if (actionCard) {
+    actionCard.classList.add(
+      'peer-actions-open',
+      'peer-actions-locked',
+      'peer-action-busy'
+    );
+  }
+
+  const loader = toastSafe(
+    okMsg.replace('Peer ', '') + '…',
+    'info',
+    true
+  );
+
+  try {
+    const response = await fetch(apiPath(path), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json'
+      }
+    });
+
+    const contentType = String(
+      response.headers.get('content-type') || ''
+    ).toLowerCase();
+
+    let payload = {};
+
+    if (contentType.includes('application/json')) {
+      payload = await response.json().catch(() => ({}));
+    } else {
+      const text = await response.text().catch(() => '');
+
+      if (text) {
+        payload = {
+          detail: text
+        };
       }
     }
 
-    refreshPeers(); 
-  } catch (e) {
-    console.error(e);
-    toastSafe(failMsg, 'error');
+    if (!response.ok) {
+      const message =
+        payload.detail ||
+        payload.message ||
+        payload.error ||
+        payload.hint ||
+        `HTTP ${response.status}`;
+
+      const error = new Error(message);
+      error.status = response.status;
+      error.payload = payload;
+
+      throw error;
+    }
+
+    toastSafe(
+      payload.message || okMsg,
+      'success'
+    );
+
+    if (/\/reset_data$/.test(path)) {
+      const id =
+        (path.match(/\/peer\/([^/]+)/) || [])[1];
+
+      const peer = id
+        ? findPeer(decodeURIComponent(id))
+        : null;
+
+      if (peer) {
+        peer.used_effective_bytes = 0;
+        peer.used_bytes_total = 0;
+        peer.used_bytes = 0;
+        peer.used_bytes_db = 0;
+      }
+    }
+
+    await refreshPeers({
+      abortPrev: true
+    });
+
+    return payload;
+
+  } catch (error) {
+    console.error('Peer action failed:', {
+      path,
+      status: error?.status,
+      payload: error?.payload,
+      error
+    });
+
+    const message =
+      error?.payload?.detail ||
+      error?.payload?.message ||
+      error?.payload?.error ||
+      error?.message ||
+      failMsg;
+
+    toastSafe(
+      `${failMsg}: ${message}`,
+      'error'
+    );
+
+    return null;
+
   } finally {
-    if (loader) { loader.classList.add('hide'); setTimeout(() => loader.remove(), 500); }
+    if (loader) {
+      loader.classList.add('hide');
+
+      setTimeout(() => {
+        try {
+          loader.remove();
+        } catch (_) {}
+      }, 500);
+    }
+
+    if (actionCard) {
+      actionCard.classList.remove(
+        'peer-action-busy'
+      );
+
+      setTimeout(() => {
+        actionCard.classList.remove(
+          'peer-actions-locked'
+        );
+
+        if (
+          !actionCard.matches(':hover') &&
+          !actionCard.contains(document.activeElement)
+        ) {
+          actionCard.classList.remove(
+            'peer-actions-open'
+          );
+        }
+      }, 500);
+    }
   }
 }
 
@@ -2021,7 +2807,10 @@ async function getShortLink(idOrPeer) {
     editForm.dataset.id = id;
     editForm.name && (editForm.name.value = p.name || '');
     const sel = editForm.querySelector('select[name="address"]'); if (sel) sel.innerHTML = `<option value="${p.address}">${p.address}</option>`;
-    editForm.allowed_ips && (editForm.allowed_ips.value = p.allowed_ips || '');
+    editForm.allowed_ips && (editForm.allowed_ips.value = p.allowed_ips || '0.0.0.0/0, ::/0');
+    if (editForm.allowed_ips) editForm.allowed_ips.dataset.autoInternalNetworks = '';
+    const editInternalToggle = document.getElementById('edit-include-internal-network');
+    if (editInternalToggle) editInternalToggle.checked = false;
     editForm.endpoint && (editForm.endpoint.value = p.endpoint || '');
     editForm.persistent_keepalive && (editForm.persistent_keepalive.value = p.persistent_keepalive || '');
     editForm.mtu && (editForm.mtu.value = p.mtu || '');
@@ -2048,6 +2837,7 @@ async function getShortLink(idOrPeer) {
   async function subEdit(e) {
     e.preventDefault();
     const id = editForm.dataset.id;
+    applyEditInternalNetworks();
     const form = new FormData(editForm);
     const data = Object.fromEntries(form.entries());
     if (editForm.start_on_first_use) data.start_on_first_use = !!editForm.start_on_first_use.checked;
@@ -2439,6 +3229,17 @@ function uiConfirm() {
   return bd;
 }
 
+let modalOpenEpoch = 0;
+
+function beginModalOpenRequest() {
+  modalOpenEpoch += 1;
+  return modalOpenEpoch;
+}
+
+function modalOpenRequestIsCurrent(ticket) {
+  return ticket === modalOpenEpoch;
+}
+
   function openModal(m) {
   document.querySelectorAll('.modal.open').forEach(el => el.classList.remove('open'));
   if (m) {
@@ -2449,6 +3250,8 @@ function uiConfirm() {
 }
 
 function closeModal(m) {
+  modalOpenEpoch += 1;
+
   if (m) m.classList.remove('open');
   if (!document.querySelector('.modal.open')) {
     document.body.classList.remove('modal-open');
@@ -2568,6 +3371,7 @@ function modalOpen(el) {
   return !!(el && getComputedStyle(el).display !== 'none' && el.classList.contains('open'));
 }
 function refreshDefaultIface(iface) {
+  applyInternalNetworks('peer', document.getElementById('peer-allowed-ips'), iface);
   const ep = document.querySelector('#peer-modal input[name="endpoint"]');
   if (!ep || !iface) return;
   if (ep.dataset.lastIface !== String(SELECTED_IFACE_ID)) ep.dataset.userEdited = '0';
@@ -2601,6 +3405,7 @@ function refreshDefaultIface(iface) {
 }
 
 function refreshBulkIface(iface) {
+  applyInternalNetworks('bulk', document.getElementById('bulk-allowed_ips'), iface);
   const input = document.querySelector('#bulk-endpoint');
   if (!input || !iface) return;
   if (input.dataset.lastIface !== String(SELECTED_IFACE_ID)) input.dataset.userEdited = '0';
@@ -2656,7 +3461,13 @@ async function refreshInterfacesUI({ keepSelection = true, updateCreate = true, 
         id:   (it.id != null ? String(it.id) : syntheticId),
         name: (it.name || it.id || `wg${idx}`)
       };
-    });
+    }).sort((a, b) =>
+      String(a.name || '').localeCompare(
+        String(b.name || ''),
+        undefined,
+        { numeric: true, sensitivity: 'base' }
+      )
+    );
   } catch (e) {
     console.warn('refreshInterfacesUI: failed to fetch interfaces', e);
     return;
@@ -3288,9 +4099,25 @@ if (!scopeId && !ifaceId) {
 
   const phoneNumbers = parseListByName('phone_numbers', '#bulk-phones');
   const telegramIds  = parseListByName('telegram_ids',  '#bulk-telegrams');
-  const val  = q => document.querySelector(q)?.value || '';
-  const num  = q => (document.querySelector(q)?.value ? Number(document.querySelector(q).value) : null);
-  const bool = q => !!document.querySelector(q)?.checked;
+  const val = q =>
+  document.querySelector(q)?.value || '';
+
+  const num = q =>
+  document.querySelector(q)?.value
+    ? Number(document.querySelector(q).value)
+    : null;
+
+  const bool = q =>
+  !!document.querySelector(q)?.checked;
+
+  const bulkAllowedInput = document.querySelector(
+  '#bulk-allowed_ips, ' +
+  '#bulk-allowed-ips, ' +
+  '#bulk-modal [name="allowed_ips"]');
+
+  const internalRouteOk = applyInternalNetworks('bulk', bulkAllowedInput, iface);
+
+  if (!internalRouteOk) {return;}
 
   const payload = {
     scope: scopeId ? 'node' : 'local',
@@ -3302,7 +4129,7 @@ if (!scopeId && !ifaceId) {
     name_prefix: prefix,  
     base_name: prefix,   
     start_index: startIdx,
-    allowed_ips: val('#bulk-allowed_ips, #bulk-modal [name="allowed_ips"]'),
+    allowed_ips: val('#bulk-allowed_ips, ' +'#bulk-allowed-ips, ' +'#bulk-modal [name="allowed_ips"]'),
     endpoint:    val('#bulk-endpoint,     #bulk-modal [name="endpoint"]'),
     persistent_keepalive: num('#bulk-keepalive, #bulk-modal [name="persistent_keepalive"]'),
     mtu:         num('#bulk-mtu,          #bulk-modal [name="mtu"]'),
@@ -3527,93 +4354,96 @@ async function clickList(e) {
   }
 
   if (btn.classList.contains('reset-data-btn')) {
-  const path = scopeId
-    ? nodeFunc('reset_data')
-    : localFunc('reset_data');
+    const path = scopeId
+      ? nodeFunc('reset_data')
+      : localFunc('reset_data');
 
-  if (!path) return;
+    if (!path) return;
 
-  try {
-    const r = await fetch(apiPath(path), {
-      method: 'POST',
-      credentials: 'same-origin'
-    });
+    btn.disabled = true;
 
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-
-    toastSafe('Data reset', 'success');
-    refreshPeers?.({ abortPrev: true });
-  } catch (err) {
-    console.error(err);
-    toastSafe('Reset failed', 'error');
-  }
-
-  return;
-}
-
-if (btn.classList.contains('reset-timer-btn')) {
-  const path = scopeId
-    ? nodeFunc('reset_timer')
-    : localFunc('reset_timer');
-
-  if (!path) return;
-
-  try {
-    const r = await fetch(apiPath(path), {
-      method: 'POST',
-      credentials: 'same-origin'
-    });
-
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-
-    toastSafe('Timer reset', 'success');
-    refreshPeers?.({ abortPrev: true });
-  } catch (err) {
-    console.error(err);
-    toastSafe('Reset failed', 'error');
-  }
-
-  return;
-}
-
-if (btn.classList.contains('reset-timer-btn')) {
-  const path = scopeId
-    ? nodeFunc('reset_timer')
-    : localFunc('reset_timer');
-
-  if (!path) return;
-
-  try {
-    const r = await fetch(apiPath(path), {
-      method: 'POST',
-      credentials: 'same-origin'
-    });
-
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-
-    toastSafe('Timer reset', 'success');
-    refreshPeers?.({ abortPrev: true });
-  } catch (err) {
-    console.error(err);
-    toastSafe('Reset failed', 'error');
-  }
-
-  return;
-}
-
-  if (btn.classList.contains('reset-timer-btn')) {
     try {
-      const r = await fetch(api(`/api/peer/${encodeURIComponent(id)}/reset_timer`), {
+      const r = await fetch(apiPath(path), {
         method: 'POST',
         credentials: 'same-origin'
       });
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      toastSafe('Timer reset', 'success');
-      refreshPeers?.({ abortPrev: true });
+
+      const payload = await r.json().catch(() => ({}));
+
+      if (!r.ok) {
+        throw new Error(
+          payload.detail ||
+          payload.message ||
+          payload.error ||
+          `HTTP ${r.status}`
+        );
+      }
+
+      toastSafe('Data reset', 'success');
+
+      await refreshPeers?.({
+        abortPrev: true
+      });
+
     } catch (err) {
-      console.error(err);
-      toastSafe('Reset failed', 'error');
+      console.error('Reset data failed:', err);
+
+      toastSafe(
+        `Reset data failed: ${err.message || 'Unknown error'}`,
+        'error'
+      );
+
+    } finally {
+      btn.disabled = false;
     }
+
+    return;
+  }
+
+  if (btn.classList.contains('reset-timer-btn')) {
+    const path = scopeId
+      ? nodeFunc('reset_timer')
+      : localFunc('reset_timer');
+
+    if (!path) return;
+
+    btn.disabled = true;
+
+    try {
+      const r = await fetch(apiPath(path), {
+        method: 'POST',
+        credentials: 'same-origin'
+      });
+
+      const payload = await r.json().catch(() => ({}));
+
+      if (!r.ok) {
+        throw new Error(
+          payload.detail ||
+          payload.message ||
+          payload.error ||
+          `HTTP ${r.status}`
+        );
+      }
+
+      toastSafe('Timer reset', 'success');
+
+      await refreshPeers?.({
+        abortPrev: true
+      });
+
+    } catch (err) {
+      console.error('Reset timer failed:', err);
+
+      toastSafe(
+        `Reset timer failed: ${err.message || 'Unknown error'}`,
+        'error'
+      );
+
+    } finally {
+      btn.disabled = false;
+    }
+
     return;
   }
 
@@ -3649,7 +4479,43 @@ if (btn.classList.contains('reset-timer-btn')) {
 }
 
 function attachOpen(container) { container.addEventListener('auxclick', (e) => handleClick(e)); }
+
+document.addEventListener('click', event => {
+  if (event.target.closest(
+    '.modal-close, [data-modal-close], #edit-close, #logs-close, #qr-close, #confirm-no, #confirm-yes'
+  )) {
+    setTimeout(unlockPeerActionCards, 180);
+  }
+}, true);
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    setTimeout(unlockPeerActionCards, 180);
+  }
+}, true);
+
 window.addEventListener('DOMContentLoaded', async () => {
+
+  let modalClosedAt = 0;
+  const closeSelectors = [
+    '.modal-close', '#modal-close', '#edit-close', '#bulk-close',
+    '#bulk-close-btn', '#iface-create-close', '#iface-create-cancel',
+    '[data-modal-close]'
+  ].join(',');
+  const openSelectors = [
+    '#create-peer-btn', '#bulk-btn', '#create-iface-btn', '[data-open-modal]'
+  ].join(',');
+
+  document.addEventListener('pointerdown', (event) => {
+    if (event.target.closest?.(closeSelectors)) modalClosedAt = Date.now();
+  }, true);
+
+  document.addEventListener('click', (event) => {
+    if (Date.now() - modalClosedAt > 450) return;
+    if (!event.target.closest?.(openSelectors)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
   try { if (window.peerScopeReady) await window.peerScopeReady; } catch (_) {}
   await getPresets(); 
 (function wireCreateFormSubmit(){
@@ -3665,8 +4531,25 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
 
   form.addEventListener('submit', async (e) => {
-    const scopeId = getScopeId();
-    if (!scopeId) return;
+  const allowedInput = document.querySelector(
+    '#peer-allowed-ips, ' +
+    '#peer-modal [name="allowed_ips"]'
+  );
+
+  const internalRouteOk = applyInternalNetworks('peer', allowedInput);
+
+  if (!internalRouteOk) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    return;
+  }
+
+  const scopeId = getScopeId();
+
+    if (!scopeId) {
+      return;
+    }
 
     e.preventDefault();
     e.stopPropagation();
@@ -3682,24 +4565,6 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (!iface) { toastSafe('No interface selected', 'error'); return; }
 
     const fd = new FormData(form);
-    const payload = {
-      name: (fd.get('name') || '').trim(),
-      iface_name: iface.name,               
-      address: document.getElementById('create-address')?.value || '',
-      allowed_ips: (fd.get('allowed_ips') || '').trim(),
-      endpoint: (fd.get('endpoint') || '').trim(),
-      persistent_keepalive: fd.get('persistent_keepalive') || null,
-      mtu: fd.get('mtu') || null,
-      dns: (fd.get('dns') || '').trim(),
-      data_limit: fd.get('data_limit') || null,
-      limit_unit: fd.get('limit_unit') || null,
-      time_limit_days: fd.get('time_limit_days') || null,
-      time_limit_hours: fd.get('time_limit_hours') || null,
-      start_on_first_use: !!fd.get('start_on_first_use'),
-      unlimited: !!fd.get('unlimited'),
-      phone_number: (fd.get('phone_number') || '').trim(),
-      telegram_id: (fd.get('telegram_id') || '').trim()
-    };
 
     const loader = toastSafe('Creating peer on node…', 'info', true);
     
@@ -3759,6 +4624,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 const scopeEl = document.getElementById('peer-scope');
 if (scopeEl) {
   scopeEl.addEventListener('change', async () => {
+    modalOpenEpoch += 1;
     SELECTED_IFACE_ID = null;
     SELECTED_IFACE_NAME = null;
     try { localStorage.removeItem('selected_iface_id'); } catch {}
@@ -3790,6 +4656,12 @@ if (scopeEl) {
     $('#edit-close')?.addEventListener('click', () => closeModal(editModal));
     editForm.onsubmit = subEdit;
     attachEndpoint(editModal);
+
+    const editInternalToggle = document.getElementById('edit-include-internal-network');
+    if (editInternalToggle && editInternalToggle.dataset.wired !== '1') {
+      editInternalToggle.addEventListener('change', applyEditInternalNetworks);
+      editInternalToggle.dataset.wired = '1';
+    }
   }
 
   itsBulkModal(); 
@@ -3829,23 +4701,34 @@ if (scopeEl) {
 
   const openBulkFresh = async (e) => {
     e?.preventDefault?.();
+    e?.stopPropagation?.();
+
+    const openTicket = beginModalOpenRequest();
+
     await refreshInterfacesUI({ keepSelection: true, updateCreate: false, updateBulk: true });
+
+    if (!modalOpenRequestIsCurrent(openTicket)) return;
+
     resolveBulkModal?.();
     if (typeof bulkOptions === 'function') bulkOptions();
     if (typeof bulkAvailability === 'function') bulkAvailability();
+
+    if (!modalOpenRequestIsCurrent(openTicket)) return;
     openModal(bulkModal);
   };
 
   if (bulkBtn) bulkBtn.onclick = openBulkFresh;
-  document.addEventListener('click', (e) => {
-    const b = e.target.closest && e.target.closest('#bulk-btn');
-    if (!b) return;
-    openBulkFresh(e);
-  });
 
   if (createBtn && createModal) {
-    createBtn.onclick = async () => {
+    createBtn.onclick = async (e) => {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+
+      const openTicket = beginModalOpenRequest();
+
       await refreshInterfacesUI({ keepSelection: true, updateCreate: true, updateBulk: false });
+
+      if (!modalOpenRequestIsCurrent(openTicket)) return;
 
       const sel = $('#create-iface-id');
       if (sel && SELECTED_IFACE_ID != null) sel.value = String(SELECTED_IFACE_ID);
@@ -3855,9 +4738,10 @@ if (scopeEl) {
         refreshDefaultIface(iface);
       }
 
+      if (!modalOpenRequestIsCurrent(openTicket)) return;
       openModal(createModal);
       wireContainedPickers();
-      window.createPeerModal?.();  
+      window.createPeerModal?.();
       attachEndpoint(createModal);
     };
   }
@@ -3961,7 +4845,7 @@ if (scopeEl) {
   const ifaceCreateBtn = document.getElementById('create-iface-btn');
   const ifaceCreateModal = document.getElementById('iface-create-modal');
   const ifaceCreateForm = document.getElementById('iface-create-form');
-  ifaceCreateBtn?.addEventListener('click', openIfaceCreateModal);
+  if (ifaceCreateBtn) ifaceCreateBtn.onclick = openIfaceCreateModal;
   document.addEventListener('click', ifaceDelete);
   ifaceCreateForm?.addEventListener('submit', submitIfaceCreate);
   document.getElementById('iface-create-close')?.addEventListener('click', closeIfaceCreateModal);
@@ -3981,4 +4865,110 @@ if (scopeEl) {
 
 });
 
+
+
+})();
+
+(() => {
+  const routeList = value => String(value || '')
+    .split(',')
+    .map(v => v.trim())
+    .filter(Boolean);
+
+  const uniqueRoutes = value => [...new Set(routeList(value))];
+
+  function ipv4Network(cidr) {
+    const raw = String(cidr || '').trim();
+    const m = raw.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d|[12]\d|3[0-2])$/);
+    if (!m) return '';
+    const octets = m.slice(1, 5).map(Number);
+    if (octets.some(n => n < 0 || n > 255)) return '';
+    const prefix = Number(m[5]);
+    const value = (((octets[0] << 24) >>> 0) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>> 0;
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    const net = (value & mask) >>> 0;
+    return `${(net >>> 24) & 255}.${(net >>> 16) & 255}.${(net >>> 8) & 255}.${net & 255}/${prefix}`;
+  }
+
+  function currentScopeNetworks() {
+    const out = [];
+    const add = value => {
+      const network = ipv4Network(value);
+      if (network && !out.includes(network)) out.push(network);
+    };
+
+    const rows = Array.isArray(window.IFACES) ? window.IFACES : [];
+    for (const iface of rows) {
+      const scoped = iface && iface.scope_networks;
+      if (Array.isArray(scoped)) scoped.forEach(add);
+      else if (scoped) String(scoped).split(',').forEach(add);
+      add(iface && (iface.address || iface.server_cidr || iface.interface_address || iface.cidr));
+    }
+    return out;
+  }
+
+  function setValueAndNotify(input, routes) {
+    input.value = [...new Set(routes)].join(', ');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function apply(prefix, allowedInput) {
+    const toggle = document.getElementById(`${prefix}-include-internal-network`);
+    if (!toggle || !allowedInput) return;
+
+    const hidden = document.getElementById(`${prefix}-internal-network`);
+    let routes = uniqueRoutes(allowedInput.value);
+
+    if (prefix === 'peer' && routes.length === 0) {
+      routes = ['0.0.0.0/0', '::/0'];
+    }
+
+    const previousAdded = uniqueRoutes(allowedInput.dataset.autoInternalAdded || '');
+    const previousSet = new Set(previousAdded);
+
+    let next = routes.filter(route => !previousSet.has(route));
+    const detected = currentScopeNetworks();
+    if (hidden) hidden.value = detected.join(', ');
+
+    if (toggle.checked) {
+      const inserted = [];
+      for (const network of detected) {
+        if (!next.includes(network)) {
+          next.push(network);
+          inserted.push(network);
+        }
+      }
+      allowedInput.dataset.autoInternalAdded = inserted.join(', ');
+    } else {
+      allowedInput.dataset.autoInternalAdded = '';
+    }
+
+    setValueAndNotify(allowedInput, next);
+  }
+
+  function wire(prefix, selectors) {
+    const toggle = document.getElementById(`${prefix}-include-internal-network`);
+    const allowed = selectors.map(sel => document.querySelector(sel)).find(Boolean);
+    if (!toggle || !allowed || toggle.dataset.autoNetworkWired === '1') return;
+
+    toggle.dataset.autoNetworkWired = '1';
+    toggle.addEventListener('change', () => apply(prefix, allowed));
+
+    document.addEventListener('peer-interfaces-updated', () => {
+      if (toggle.checked) apply(prefix, allowed);
+    });
+  }
+
+  function run() {
+    wire('peer', ['#peer-allowed-ips', '#peer-modal [name="allowed_ips"]']);
+    wire('bulk', ['#bulk-allowed_ips', '#bulk-allowed-ips', '#bulk-modal [name="allowed_ips"]']);
+    wire('edit', ['#edit-allowed-ips', '#edit-peer-modal [name="allowed_ips"]']);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', run, { once: true });
+  } else {
+    run();
+  }
 })();
