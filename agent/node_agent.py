@@ -47,6 +47,52 @@ def _public_ipv4():
     except Exception:
         return None
 
+def _private_networks() -> list[str]:
+
+    networks = []
+
+    try:
+        output = subprocess.check_output(
+            ['ip', '-o', '-4', 'addr', 'show'],
+            stderr=subprocess.DEVNULL,
+            timeout=4,
+        ).decode('utf-8', 'replace')
+
+        for line in output.splitlines():
+            parts = line.split()
+
+            try:
+                inet_index = parts.index('inet')
+                cidr = parts[inet_index + 1]
+            except (ValueError, IndexError):
+                continue
+
+            try:
+                interface = ipa.ip_interface(cidr)
+            except ValueError:
+                continue
+
+            ip = interface.ip
+
+            if (
+                ip.is_loopback
+                or ip.is_link_local
+                or ip.is_unspecified
+                or not ip.is_private
+            ):
+                continue
+
+            network = str(interface.network)
+
+            if network not in networks:
+                networks.append(network)
+
+    except Exception:
+        app.logger.exception(
+            'Failed to detect private node networks'
+        )
+
+    return networks
 
 def _iface_up(name: str) -> bool:
     try:
@@ -458,27 +504,213 @@ def _validate_new_interface(name: str, address: str, listen_port: int):
             raise ValueError(f'Subnet overlaps with existing interface {meta.get("name")} ({old.network})')
     return name
 
+def _egress_interface() -> str:
+    try:
+        output = subprocess.check_output(
+            [
+                'ip',
+                '-4',
+                'route',
+                'get',
+                '1.1.1.1',
+            ],
+            stderr=subprocess.DEVNULL,
+            timeout=4,
+        ).decode(
+            'utf-8',
+            'replace',
+        )
 
-def _write_interface_conf(path: str, *, address: str, listen_port: int, private_key: str, dns: str = '', mtu=None):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+        matches = re.findall(
+            r'\bdev\s+([A-Za-z0-9_.:-]+)',
+            output,
+        )
+
+        for candidate in matches:
+            candidate = candidate.strip()
+
+            if not candidate:
+                continue
+
+            if candidate == 'lo':
+                continue
+
+            if re.match(
+                r'^(wg|tun|tap|docker|br-|veth)',
+                candidate,
+                re.IGNORECASE,
+            ):
+                continue
+
+            return candidate
+
+    except Exception:
+        app.logger.exception(
+            "Could not detect the node's default IPv4 egress interface"
+        )
+
+    return ''
+
+def _wireguard_network(address_field: str) -> str:
+    for raw_value in re.split(
+        r"[\s,]+",
+        str(address_field or "").strip(),
+    ):
+        value = raw_value.strip()
+
+        if not value or "/" not in value:
+            continue
+
+        try:
+            interface = ipa.ip_interface(value)
+        except ValueError:
+            continue
+
+        if (
+            interface.version == 4
+            and interface.ip.is_private
+        ):
+            return str(interface.network)
+
+    return ""
+
+
+def _wg_rules(
+    interface_name: str,
+    address_field: str,
+) -> tuple[str, str]:
+    network = _wireguard_network(
+        address_field
+    )
+
+    if not network:
+        raise ValueError(
+            "Automatic forwarding requires a private IPv4 WireGuard subnet."
+        )
+
+    egress = _egress_interface()
+
+    if not egress:
+        raise ValueError(
+            "The node's default IPv4 network interface could not be detected."
+        )
+
+    if not re.fullmatch(
+        r"[A-Za-z0-9_.:-]{1,32}",
+        egress,
+    ):
+        raise ValueError(
+            "The detected outbound interface name is invalid."
+        )
+
+    post_up = (
+        "sysctl -w net.ipv4.ip_forward=1 >/dev/null; "
+        "iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null "
+        "|| iptables -A FORWARD -i %i -j ACCEPT; "
+        "iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null "
+        "|| iptables -A FORWARD -o %i -j ACCEPT; "
+        f"iptables -t nat -C POSTROUTING -s {network} "
+        f"-o {egress} -j MASQUERADE 2>/dev/null "
+        f"|| iptables -t nat -A POSTROUTING -s {network} "
+        f"-o {egress} -j MASQUERADE"
+    )
+
+    post_down = (
+        "iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; "
+        "iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; "
+        f"iptables -t nat -D POSTROUTING -s {network} "
+        f"-o {egress} -j MASQUERADE 2>/dev/null || true"
+    )
+
+    return post_up, post_down
+
+def _write_interface_conf(
+    path: str,
+    *,
+    address: str,
+    listen_port: int,
+    private_key: str,
+    dns: str = '',
+    mtu=None,
+    post_up: str = '',
+    post_down: str = '',
+):
+    directory = os.path.dirname(path)
+
+    if directory:
+        os.makedirs(
+            directory,
+            exist_ok=True,
+        )
+
     lines = [
         '[Interface]',
         f'Address = {(address or "").strip()}',
         f'ListenPort = {int(listen_port)}',
         f'PrivateKey = {private_key.strip()}',
     ]
-    dns = (dns or '').strip()
+
+    dns = (
+        dns
+        or ''
+    ).strip()
+
     if dns:
-        lines.append(f'DNS = {dns}')
+        lines.append(
+            f'DNS = {dns}'
+        )
+
     if str(mtu or '').strip():
-        lines.append(f'MTU = {int(mtu)}')
+        lines.append(
+            f'MTU = {int(mtu)}'
+        )
+
+    if (
+        post_up
+        or ''
+    ).strip():
+        lines.append(
+            f'PostUp = {post_up.strip()}'
+        )
+
+    if (
+        post_down
+        or ''
+    ).strip():
+        lines.append(
+            f'PostDown = {post_down.strip()}'
+        )
+
     lines.append('')
-    with open(path, 'w') as f:
-        f.write('\n'.join(lines))
-    try:
-        os.chmod(path, 0o600)
-    except Exception:
-        pass
+
+    temporary_path = (
+        path
+        + '.tmp'
+    )
+
+    with open(
+        temporary_path,
+        'w',
+        encoding='utf-8',
+    ) as f:
+        f.write(
+            '\n'.join(lines)
+        )
+
+        f.flush()
+        os.fsync(
+            f.fileno()
+        )
+
+    os.chmod(
+        temporary_path,
+        0o600,
+    )
+
+    os.replace(
+        temporary_path,
+        path,
+    )
 
 def _first_cidr(s: str | None) -> str | None:
     """
@@ -515,48 +747,196 @@ def _first_cidr(s: str | None) -> str | None:
 @require_api_key
 def create_interface():
     j = request.get_json(silent=True) or {}
-    try:
-        name = _safe_iface_name(j.get('name') or '')
-        address = (j.get('address') or '').strip()
-        listen_port = int(j.get('listen_port') or 0)
-        dns = (j.get('dns') or '').strip()
-        mtu = int(j.get('mtu')) if str(j.get('mtu') or '').strip() else None
-        auto_up = bool(j.get('auto_up', True))
 
-        _validate_new_interface(name, address, listen_port)
-        private_key = subprocess.check_output(['wg', 'genkey'], stderr=subprocess.DEVNULL, timeout=3).decode().strip()
+    try:
+        name = _safe_iface_name(
+            j.get('name') or ''
+        )
+
+        address = (
+            j.get('address')
+            or ''
+        ).strip()
+
+        listen_port = int(
+            j.get('listen_port')
+            or 0
+        )
+
+        dns = (
+            j.get('dns')
+            or ''
+        ).strip()
+
+        mtu = (
+            int(j.get('mtu'))
+            if str(j.get('mtu') or '').strip()
+            else None
+        )
+
+        auto_up = bool(
+            j.get('auto_up', True)
+        )
+
+        auto_firewall = bool(
+            j.get('auto_firewall', True)
+        )
+
+        _validate_new_interface(
+            name,
+            address,
+            listen_port,
+        )
+
+        post_up = ''
+        post_down = ''
+
+        if auto_firewall:
+            post_up, post_down = _wg_rules(
+                name,
+                address,
+            )
+
+        private_key = subprocess.check_output(
+            ['wg', 'genkey'],
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        ).decode().strip()
+
         path = _iface_conf_path(name)
+
         _write_interface_conf(
-        path,
-        address=address,
-        listen_port=listen_port,
-        private_key=private_key,
-        dns='',
-        mtu=None
+            path,
+            address=address,
+            listen_port=listen_port,
+            private_key=private_key,
+            dns='',
+            mtu=mtu,
+            post_up=post_up,
+            post_down=post_down,
         )
 
         up_error = None
-        if auto_up:
-            proc = subprocess.run(['wg-quick', 'up', name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=20)
-            if proc.returncode != 0:
-                up_error = (proc.stderr or proc.stdout or '').strip() or f'wg-quick up {name} failed'
 
-        meta = _read_iface(path) or {'name': name, 'address': address, 'listen_port': listen_port, 'mtu': mtu, 'dns': dns}
+        if auto_up:
+            proc = subprocess.run(
+                [
+                    'wg-quick',
+                    'up',
+                    name,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+
+            if proc.returncode != 0:
+                up_error = (
+                    proc.stderr
+                    or proc.stdout
+                    or ''
+                ).strip() or (
+                    f'wg-quick up {name} failed'
+                )
+
+            else:
+
+                try:
+                    subprocess.run(
+                        [
+                            'systemctl',
+                            'enable',
+                            f'wg-quick@{name}.service',
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                        check=False,
+                    )
+
+                except Exception:
+                    app.logger.warning(
+                        'Could not enable wg-quick@%s at boot',
+                        name,
+                        exc_info=True,
+                    )
+
+        meta = _read_iface(path) or {
+            'name': name,
+            'address': address,
+            'listen_port': listen_port,
+            'mtu': mtu,
+            'dns': dns,
+        }
+        meta['dns'] = dns
         meta['is_up'] = _iface_up(name)
+
+        meta['post_up'] = post_up
+        meta['post_down'] = post_down
+        meta['auto_firewall'] = auto_firewall
+        meta['egress_interface'] = (
+            _egress_interface()
+            if auto_firewall
+            else ''
+        )
+
         try:
-            prim = _first_cidr(meta.get('address'))
-            meta['available_ips'] = available_ips(name, prim, WG_CONF_PATH) if prim else []
+            primary_cidr = _first_cidr(
+                meta.get('address')
+            )
+
+            meta['available_ips'] = (
+                available_ips(
+                    name,
+                    primary_cidr,
+                    WG_CONF_PATH,
+                )
+                if primary_cidr
+                else []
+            )
+
         except Exception:
             meta['available_ips'] = []
-        return jsonify(ok=True, interface=meta, up_error=up_error), 201
-    except ValueError as e:
-        return jsonify(error='invalid_interface', detail=str(e)), 400
-    except subprocess.CalledProcessError as e:
-        return jsonify(error='wg_genkey_failed', detail=str(e)), 500
-    except Exception as e:
-        app.logger.exception('interface create failed')
-        return jsonify(error='interface_create_failed', detail=str(e)), 500
 
+        return jsonify(
+            ok=True,
+            interface=meta,
+            up_error=up_error,
+        ), 201
+
+    except ValueError as e:
+        return jsonify(
+            error='invalid_interface',
+            detail=str(e),
+        ), 400
+
+    except subprocess.CalledProcessError as e:
+        return jsonify(
+            error='wg_genkey_failed',
+            detail=str(e),
+        ), 500
+
+    except subprocess.TimeoutExpired as e:
+        app.logger.exception(
+            'Interface command timed out'
+        )
+
+        return jsonify(
+            error='interface_command_timeout',
+            detail=str(e),
+        ), 504
+
+    except Exception as e:
+        app.logger.exception(
+            'interface create failed'
+        )
+
+        return jsonify(
+            error='interface_create_failed',
+            detail=str(e),
+        ), 500
 
 @app.route('/api/interfaces')
 @require_api_key
@@ -565,6 +945,7 @@ def interfaces():
     fast = str(request.args.get('fast', '')).lower() in ('1', 'true', 'yes')
 
     out = []
+    scope_networks = _private_networks()
     if os.path.isdir(WG_CONF_PATH):
         for fn in os.listdir(WG_CONF_PATH):
             if not fn.endswith('.conf'):
@@ -592,10 +973,10 @@ def interfaces():
                 except Exception as e:
                     app.logger.warning("available_ips error on %s: %s", meta.get('name'), e)
                     meta['available_ips'] = []
-
+            meta['scope_networks'] = scope_networks
             out.append(meta)
 
-    return jsonify(interfaces=out, public_ipv4=_public_ipv4())
+    return jsonify(interfaces=out,public_ipv4=_public_ipv4(),scope_networks=scope_networks,)
 
 
 def _node_plain_ip(allowed: str) -> str:
@@ -699,8 +1080,6 @@ def peers():
                 'connection_status': 'online' if online else 'offline',
                 'conn_reason': reason,
                 'conn_probe': bool(probed),
-
-                # Keep this for backward compatibility only.
                 'status': 'online' if online else 'offline'
             })
 
@@ -793,7 +1172,6 @@ def add_peer():
 
             blocks = _peer_blocks_from_conf(conf)
 
-            # Idempotency: same public key already exists.
             for block in blocks:
                 existing_pub = _block_public_key(block)
                 if existing_pub == pub:
