@@ -11,8 +11,12 @@ import time
 import shutil
 import signal
 import socket
+import ipaddress
 import tarfile
+import zipfile
 import ssl
+import urllib.request
+import urllib.error
 import threading
 import http.server
 import socketserver
@@ -407,27 +411,73 @@ def list_confs() -> List[Path]:
         return []
     return sorted([p for p in d.glob("*.conf") if p.is_file()])
 
-def _wg_conf(address: str, listen_port: str, privkey: str, egress: str, dns: str = "", mtu: str = "") -> str:
+def _wireguard_ipv4_network(address: str) -> str:
+    """Return the first private IPv4 network from a WireGuard Address value."""
+    for raw in re.split(r"[\s,]+", str(address or "").strip()):
+        if not raw or "/" not in raw:
+            continue
+        try:
+            iface = ipaddress.ip_interface(raw)
+        except ValueError:
+            continue
+        if iface.version == 4 and iface.ip.is_private:
+            return str(iface.network)
+    return ""
+
+
+def _wg_conf(
+    address: str,
+    listen_port: str,
+    privkey: str,
+    egress: str,
+    dns: str = "",
+    mtu: str = "",
+) -> str:
+    network = _wireguard_ipv4_network(address)
+    if not network:
+        raise ValueError(
+            "Automatic NAT requires a private IPv4 WireGuard address."
+        )
+
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,32}", egress or ""):
+        raise ValueError("Invalid outbound interface name.")
+
     post_up = (
-        f"iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %i -j ACCEPT; "
-        f"iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -o %i -j ACCEPT; "
-        f"iptables -t nat -C POSTROUTING -o {egress} -j MASQUERADE 2>/dev/null || "
-        f"iptables -t nat -A POSTROUTING -o {egress} -j MASQUERADE"
+        "sysctl -w net.ipv4.ip_forward=1 >/dev/null; "
+        "iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null "
+        "|| iptables -A FORWARD -i %i -j ACCEPT; "
+        "iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null "
+        "|| iptables -A FORWARD -o %i -j ACCEPT; "
+        f"iptables -t nat -C POSTROUTING -s {network} -o {egress} "
+        "-j MASQUERADE 2>/dev/null "
+        f"|| iptables -t nat -A POSTROUTING -s {network} -o {egress} "
+        "-j MASQUERADE"
     )
     post_down = (
-        f"iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; "
-        f"iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; "
-        f"iptables -t nat -D POSTROUTING -o {egress} -j MASQUERADE 2>/dev/null || true"
+        "iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; "
+        "iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; "
+        f"iptables -t nat -D POSTROUTING -s {network} -o {egress} "
+        "-j MASQUERADE 2>/dev/null || true"
     )
-    lines = ["[Interface]",
-             f"Address = {address}",
-             f"ListenPort = {listen_port}",
-             f"PrivateKey = {privkey}"]
-    if mtu.strip(): lines.append(f"MTU = {mtu.strip()}")
-    if dns.strip(): lines.append(f"DNS = {dns.strip()}")
-    lines += [f"PostUp = {post_up}",
-              f"PostDown = {post_down}",
-              ""]
+
+    lines = [
+        "[Interface]",
+        f"Address = {address}",
+        f"ListenPort = {listen_port}",
+        f"PrivateKey = {privkey}",
+    ]
+
+    if mtu.strip():
+        lines.append(f"MTU = {mtu.strip()}")
+
+    if dns.strip():
+        lines.append(f"# Client DNS default: {dns.strip()}")
+
+    lines.extend([
+        f"PostUp = {post_up}",
+        f"PostDown = {post_down}",
+        "",
+    ])
     return "\n".join(lines)
 
 def wg_flow():
@@ -1334,6 +1384,422 @@ def uninstall_all(root: Path):
 
     pause()
 
+
+RELEASES_API = "https://api.github.com/repos/Azumi67/WG_Panel/releases"
+RELEASE_BACKUP_PREFIX = "release-rollback-"
+
+RELEASE_PRESERVE_TOP = {
+    ".git",
+    ".env",
+    "instance",
+    "backups",
+    "venv",
+    "__pycache__",
+}
+
+RELEASE_PRESERVE_REL = {
+    "agent/.env",
+    "agent/venv",
+    "agent/__pycache__",
+}
+
+
+def _github_json(url: str, timeout: int = 20):
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "WG-Panel-Installer",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+    return json.loads(raw.decode("utf-8", errors="replace"))
+
+
+def _release_rows(limit: int = 30) -> List[dict]:
+    rows = _github_json(f"{RELEASES_API}?per_page={max(1, min(limit, 100))}")
+    out = []
+    for rel in rows if isinstance(rows, list) else []:
+        tag = str(rel.get("tag_name") or "").strip()
+        if not tag or rel.get("draft"):
+            continue
+        out.append({
+            "tag": tag,
+            "name": str(rel.get("name") or tag).strip(),
+            "published_at": str(rel.get("published_at") or "").strip(),
+            "prerelease": bool(rel.get("prerelease")),
+            "zipball_url": str(rel.get("zipball_url") or "").strip(),
+            "html_url": str(rel.get("html_url") or "").strip(),
+        })
+    return out
+
+
+def _current_release_tag(root: Path) -> str:
+    if not _cmd("git") or not (root / ".git").exists():
+        return ""
+    rc, out, _ = run_out([
+        "git", "-C", str(root),
+        "describe", "--tags", "--exact-match", "HEAD"
+    ])
+    return out.strip() if rc == 0 else ""
+
+
+def _release_backup_path(root: Path, tag: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", tag or "unknown")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return backups_dir(root) / f"{RELEASE_BACKUP_PREFIX}{stamp}-before-{safe}.tar.gz"
+
+
+def _release_should_preserve(rel: Path) -> bool:
+    s = rel.as_posix().strip("/")
+    if not s:
+        return False
+    top = s.split("/", 1)[0]
+    if top in RELEASE_PRESERVE_TOP:
+        return True
+    return s in RELEASE_PRESERVE_REL or any(
+        s.startswith(x.rstrip("/") + "/") for x in RELEASE_PRESERVE_REL
+    )
+
+
+def _make_release_rollback_backup(root: Path, target_tag: str) -> Path:
+    out = _release_backup_path(root, target_tag)
+    root_resolved = root.resolve()
+
+    def filt(info: tarfile.TarInfo):
+        try:
+            rel = Path(info.name).relative_to(root_resolved.name)
+        except Exception:
+            return info
+        if _release_should_preserve(rel):
+            return None
+        return info
+
+    with tarfile.open(out, "w:gz") as tar:
+        tar.add(root, arcname=root.name, filter=filt)
+
+    return out
+
+
+def _safe_extract_zip(zip_path: Path, dest: Path) -> Path:
+    dest.mkdir(parents=True, exist_ok=True)
+    dest_real = dest.resolve()
+
+    with zipfile.ZipFile(zip_path, "r") as z:
+        members = z.infolist()
+        if not members:
+            raise RuntimeError("Downloaded release ZIP is empty.")
+
+        for member in members:
+            name = member.filename.replace("\\", "/")
+            if name.startswith("/") or ".." in Path(name).parts:
+                raise RuntimeError(f"Unsafe ZIP member: {name}")
+
+            target = (dest / name).resolve()
+            if target != dest_real and dest_real not in target.parents:
+                raise RuntimeError(f"ZIP path escapes extraction directory: {name}")
+
+        z.extractall(dest)
+
+    roots = [p for p in dest.iterdir() if p.is_dir()]
+    if len(roots) != 1:
+        raise RuntimeError("Release ZIP has an unexpected directory layout.")
+    return roots[0]
+
+
+def _download_release_zip(url: str, out: Path) -> None:
+    if not url.startswith("https://api.github.com/") and not url.startswith("https://github.com/"):
+        raise RuntimeError("Refusing an unexpected release download URL.")
+
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "WG-Panel-Installer",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp, out.open("wb") as fh:
+        while True:
+            chunk = resp.read(1024 * 1024)
+            if not chunk:
+                break
+            fh.write(chunk)
+
+    if out.stat().st_size < 1024:
+        raise RuntimeError("Downloaded release archive is unexpectedly small.")
+
+
+def _remove_old_release_code(root: Path) -> None:
+    for child in list(root.iterdir()):
+        if child.name in RELEASE_PRESERVE_TOP:
+            continue
+        try:
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _copy_release_tree(src: Path, root: Path) -> None:
+    for child in src.iterdir():
+        if child.name in RELEASE_PRESERVE_TOP:
+            continue
+
+        dest = root / child.name
+
+        if child.name == "agent" and child.is_dir():
+            dest.mkdir(parents=True, exist_ok=True)
+            for sub in child.iterdir():
+                rel = Path("agent") / sub.name
+                if _release_should_preserve(rel):
+                    continue
+                target = dest / sub.name
+                if target.exists() or target.is_symlink():
+                    if target.is_dir() and not target.is_symlink():
+                        shutil.rmtree(target)
+                    else:
+                        target.unlink()
+                if sub.is_dir() and not sub.is_symlink():
+                    shutil.copytree(sub, target, symlinks=True)
+                else:
+                    shutil.copy2(sub, target, follow_symlinks=False)
+            continue
+
+        if child.is_dir() and not child.is_symlink():
+            shutil.copytree(child, dest, symlinks=True)
+        else:
+            shutil.copy2(child, dest, follow_symlinks=False)
+
+
+def _restore_release_backup(root: Path, backup: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="wgpanel-release-rollback-") as td:
+        tmp = Path(td)
+        with tarfile.open(backup, "r:gz") as tar:
+            for member in tar.getmembers():
+                name = member.name.replace("\\", "/")
+                if name.startswith("/") or ".." in Path(name).parts:
+                    raise RuntimeError(f"Unsafe rollback archive member: {name}")
+            tar.extractall(tmp)
+
+        restored = tmp / root.name
+        if not restored.is_dir():
+            raise RuntimeError("Rollback archive layout is invalid.")
+
+        _remove_old_release_code(root)
+        _copy_release_tree(restored, root)
+
+
+def _release_python_checks(root: Path) -> Tuple[bool, str]:
+    checks = [
+        root / "app.py",
+        root / "wg.py",
+        root / "agent" / "node.py",
+        root / "agent" / "node_agent.py",
+    ]
+    existing = [p for p in checks if p.is_file()]
+    if not existing:
+        return False, "No expected Python entry points exist in the selected release."
+
+    for p in existing:
+        py = root / "venv" / "bin" / "python"
+        if "agent" in p.parts and (root / "agent/venv/bin/python").exists():
+            py = root / "agent/venv/bin/python"
+        if not py.exists():
+            py = Path(sys.executable)
+
+        proc = subprocess.run(
+            [str(py), "-m", "py_compile", str(p)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if proc.returncode != 0:
+            return False, (proc.stderr or proc.stdout or f"py_compile failed: {p}").strip()
+
+    return True, ""
+
+
+def _refresh_release_requirements(root: Path) -> None:
+    pairs = [
+        (root / "requirements.txt", root / "venv/bin/pip"),
+        (root / "agent/requirements.txt", root / "agent/venv/bin/pip"),
+    ]
+    for req, pip in pairs:
+        if req.is_file() and pip.is_file():
+            rc = _live(
+                [str(pip), "install", "-r", str(req)],
+                f"Refresh dependencies: {req.relative_to(root)}",
+                timeout=1200,
+            )
+            if rc != 0:
+                raise RuntimeError(f"Dependency installation failed for {req.relative_to(root)}")
+
+
+def _known_project_services() -> List[str]:
+    names = []
+    for service in ("wg-panel.service", "wg-node-agent.service"):
+        unit = Path("/etc/systemd/system") / service
+        rc, _, _ = run_out(["systemctl", "status", service]) if _cmd("systemctl") else (1, "", "")
+        if unit.exists() or rc in (0, 3):
+            names.append(service)
+    return names
+
+
+def _restart_release_services(services: List[str]) -> None:
+    if not _cmd("systemctl"):
+        return
+    run(["systemctl", "daemon-reload"], "systemctl daemon-reload")
+    for service in services:
+        rc = run(["systemctl", "restart", service], f"restart {service}")
+        if rc != 0:
+            raise RuntimeError(f"Could not restart {service}")
+        time.sleep(1)
+        state = svc_state(service)
+        if state != "active":
+            raise RuntimeError(f"{service} is {state} after restart")
+
+
+def downgrade_release(root: Path):
+    if not isitroot():
+        err("Release downgrade requires sudo/root.")
+        pause()
+        return
+
+    clear()
+    header("Downgrade", "GitHub release ZIP + automatic rollback")
+    print(box("Safety", [
+        "• Downloads only a published GitHub release ZIP.",
+        "• Creates a rollback archive before replacing code.",
+        "• Preserves .env, instance, backups, venvs and .git.",
+        "• Refreshes dependencies and validates Python entry points.",
+        "• Restarts detected panel/node services.",
+        "• Restores the previous code automatically if validation fails.",
+        "",
+        "Important: an older release may not understand a newer database schema.",
+        "The database is preserved, but you should also keep a full panel backup.",
+    ], BR_YEL))
+    print()
+
+    try:
+        releases = _release_rows(40)
+    except Exception as exc:
+        err(f"Could not read GitHub releases: {exc}")
+        pause()
+        return
+
+    if not releases:
+        warn("No published releases were returned by GitHub.")
+        pause()
+        return
+
+    current_tag = _current_release_tag(root)
+    lines = []
+    for idx, rel in enumerate(releases, 1):
+        pre = " [pre-release]" if rel["prerelease"] else ""
+        published = rel["published_at"][:10] if rel["published_at"] else "unknown date"
+        here = " [current]" if current_tag and rel["tag"] == current_tag else ""
+        lines.append(f"{idx}) {rel['tag']} — {rel['name']} — {published}{pre}{here}")
+
+    print(box("Published releases", lines[:40], BR_CYN))
+    print()
+
+    selected = ask("Select release number", "", False).strip()
+    if not selected.isdigit() or not (1 <= int(selected) <= len(releases)):
+        warn("Invalid release selection.")
+        pause()
+        return
+
+    rel = releases[int(selected) - 1]
+    tag = rel["tag"]
+
+    if current_tag and tag == current_tag:
+        warn(f"{tag} is already checked out.")
+        pause()
+        return
+
+    print(box("Selected downgrade", [
+        f"Release: {c(tag, BR_WHT)}",
+        f"Name: {c(rel['name'], BR_WHT)}",
+        f"Published: {c(rel['published_at'] or 'unknown', BR_WHT)}",
+        f"Project root: {c(_paths(str(root)), BR_WHT)}",
+    ], BR_YEL))
+
+    if not confirm(f"Downgrade code to {tag}?", False):
+        warn("Canceled.")
+        pause()
+        return
+
+    services = _known_project_services()
+    rollback = None
+
+    try:
+        info("Creating pre-downgrade rollback archive...")
+        rollback = _make_release_rollback_backup(root, tag)
+        ok(f"Rollback archive: {_paths(str(rollback))}")
+
+        with tempfile.TemporaryDirectory(prefix="wgpanel-release-") as td:
+            tmp = Path(td)
+            archive = tmp / f"{tag}.zip"
+            extract_dir = tmp / "extract"
+
+            info(f"Downloading GitHub release {tag}...")
+            _download_release_zip(rel["zipball_url"], archive)
+            release_root = _safe_extract_zip(archive, extract_dir)
+
+            if not (release_root / "app.py").exists() and not (release_root / "agent").exists():
+                raise RuntimeError("Selected archive does not look like WG_Panel.")
+
+            for service in services:
+                run(["systemctl", "stop", service], f"stop {service}")
+
+            _remove_old_release_code(root)
+            _copy_release_tree(release_root, root)
+
+        _refresh_release_requirements(root)
+
+        valid, detail = _release_python_checks(root)
+        if not valid:
+            raise RuntimeError(detail)
+
+        _restart_release_services(services)
+
+        marker = backups_dir(root) / "last_release_change.json"
+        _write(marker, json.dumps({
+            "action": "downgrade",
+            "target_tag": tag,
+            "changed_at": _now_stamp(),
+            "rollback_archive": str(rollback),
+            "services": services,
+        }, indent=2) + "\n")
+
+        ok(f"Downgrade to {tag} completed.")
+        ok(f"Rollback archive kept at: {_paths(str(rollback))}")
+
+    except Exception as exc:
+        err(f"Downgrade failed: {exc}")
+
+        if rollback and rollback.exists():
+            warn("Restoring the previous code automatically...")
+            try:
+                _restore_release_backup(root, rollback)
+                valid, detail = _release_python_checks(root)
+                if not valid:
+                    warn(f"Rollback code validation warning: {detail}")
+                _restart_release_services(services)
+                ok("Previous code restored successfully.")
+            except Exception as rollback_exc:
+                err(f"Automatic rollback also failed: {rollback_exc}")
+                warn(f"Manual rollback archive: {rollback}")
+        else:
+            warn("No rollback archive was created.")
+
+    pause()
+
+
 def update_menu(root: Path):
     while True:
         clear()
@@ -1343,8 +1809,9 @@ def update_menu(root: Path):
 
         items = [
             c("1) Show git status", BR_CYN),
-            c("2) Safe update (git pull --ff-only)", BR_GRN),
-            c("3) Force update (overwrite code, keep backups)", BR_YEL),
+            c("2) Update to latest (safe git pull)", BR_GRN),
+            c("3) Update to latest (force overwrite, keep local data)", BR_YEL),
+            c("4) Downgrade (choose from published releases)", BR_RED),
             "",
             c("0) Back", DIM),
         ]
@@ -1353,6 +1820,10 @@ def update_menu(root: Path):
         ch = ask("Select", "", False).strip()
         if ch == "0":
             return
+
+        if ch == "4":
+            downgrade_release(root)
+            continue
 
         if not _cmd("git") or not (root / ".git").exists():
             err("This root is not a git repository.")
@@ -1371,7 +1842,30 @@ def update_menu(root: Path):
             pause()
 
         elif ch == "2":
-            _live(["git", "-C", str(root), "pull", "--ff-only"], "git pull --ff-only", timeout=300)
+            services = _known_project_services()
+            rc = _live(
+                ["git", "-C", str(root), "pull", "--ff-only"],
+                "Update to latest release/branch",
+                timeout=300,
+            )
+            if rc != 0:
+                err("Update failed. Services were not restarted.")
+                pause()
+                continue
+
+            try:
+                _refresh_release_requirements(root)
+                valid, detail = _release_python_checks(root)
+                if not valid:
+                    raise RuntimeError(detail)
+                _restart_release_services(services)
+                ok("Updated to the latest available version.")
+                if services:
+                    ok("Restarted: " + ", ".join(services))
+                else:
+                    warn("No related systemd service was detected to restart.")
+            except Exception as exc:
+                err(f"Update completed, but validation/service restart failed: {exc}")
             pause()
 
         elif ch == "3":
@@ -1386,18 +1880,55 @@ def update_menu(root: Path):
                 "venv", "__pycache__",
             ]
 
-            _live(["git", "-C", str(root), "fetch", "--all", "--prune"], "git fetch", timeout=300)
+            services = _known_project_services()
 
-            rc, branch, _ = run_out(["git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"])
+            rc = _live(
+                ["git", "-C", str(root), "fetch", "--all", "--prune"],
+                "Fetch latest repository state",
+                timeout=300,
+            )
+            if rc != 0:
+                err("Fetch failed. Nothing was changed.")
+                pause()
+                continue
+
+            rc, branch, _ = run_out([
+                "git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"
+            ])
             branch = (branch or "main").strip() if rc == 0 else "main"
-            _live(["git", "-C", str(root), "reset", "--hard", f"origin/{branch}"], "git reset --hard", timeout=300)
+
+            rc = _live(
+                ["git", "-C", str(root), "reset", "--hard", f"origin/{branch}"],
+                f"Reset code to latest origin/{branch}",
+                timeout=300,
+            )
+            if rc != 0:
+                err("Force update failed during git reset. Services were not restarted.")
+                pause()
+                continue
 
             cmd = ["git", "-C", str(root), "clean", "-fd"]
             for e in excludes:
                 cmd += ["-e", e]
-            _live(cmd, "git clean -fd (preserve local data)", timeout=300)
+            rc = _live(cmd, "Clean old code while preserving local data", timeout=300)
+            if rc != 0:
+                err("Force update failed during cleanup. Services were not restarted.")
+                pause()
+                continue
 
-            ok("Force update completed.")
+            try:
+                _refresh_release_requirements(root)
+                valid, detail = _release_python_checks(root)
+                if not valid:
+                    raise RuntimeError(detail)
+                _restart_release_services(services)
+                ok("Force update to the latest available version completed.")
+                if services:
+                    ok("Restarted: " + ", ".join(services))
+                else:
+                    warn("No related systemd service was detected to restart.")
+            except Exception as exc:
+                err(f"Force update completed, but validation/service restart failed: {exc}")
             pause()
 
         else:
