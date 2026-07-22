@@ -274,8 +274,8 @@
             <summary><span class="adv-title"><i class="fas fa-sliders"></i><b>Advanced options</b><small>Optional WireGuard values</small></span><span class="adv-arrow" aria-hidden="true"><i class="fas fa-chevron-down"></i></span></summary>
             <div class="subx-section-subtitle">Optional WireGuard values. Most users can leave these unchanged.</div>
             <div class="subx-form-grid compact">
-              <label><span>Name prefix</span><input class="input" name="peer_name_prefix" placeholder="empty = client-name-1, 2, 3"></label>
-              <label><span>Allowed IPs</span><input class="input" name="allowed_ips" value="0.0.0.0/0, ::/0"></label>
+              <label class="subx-name-prefix-field"><span>Name prefix</span><input class="input" name="peer_name_prefix" placeholder="empty = client-name-1, 2, 3"></label>
+              <label class="subx-allowed-routes"><span>Allowed IPs</span><input class="input" name="allowed_ips" value="0.0.0.0/0, ::/0"><div class="subx-auto-network-row"><label class="subx-auto-network-toggle"><input type="checkbox" id="sub-include-internal-network" name="include_internal_network" value="1"><span class="subx-auto-network-switch"></span><span class="subx-auto-network-copy"><b>Include local networks</b><small>Add detected local and selected-node private networks to the current Allowed IPs.</small></span></label></div><input id="sub-internal-networks" type="hidden" value=""></label>
               <label><span>Endpoint override</span><input class="input" name="endpoint" placeholder="optional host:port"></label>
               <div class="two">
                 <label><span>Keepalive</span><input class="input" name="persistent_keepalive" type="number" min="0" placeholder="25"></label>
