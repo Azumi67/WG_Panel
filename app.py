@@ -46,9 +46,9 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 # ----------------------------------
 # Panel version / update checker
 # ----------------------------------
-PANEL_VERSION = "1.0.2"
+PANEL_VERSION = "1.0.3"
 PANEL_REPO = "Azumi67/WG_Panel"
-PANEL_UPDATE_TTL = 1800  
+PANEL_UPDATE_TTL = 1800
 _PANEL_UPDATE_CACHE = {
     "ts": 0,
     "data": None,
@@ -63,7 +63,7 @@ def verify_recovery(code: str, stored: str) -> bool:
     if stored.startswith("sha256$"):
         return stored == hash_recovery(code)
     try:
-        import bcrypt as pybcrypt   
+        import bcrypt as pybcrypt
         if stored.startswith("$2") or stored.startswith("$bcrypt$"):
             return pybcrypt.checkpw(code.encode("utf-8"), stored.encode("utf-8"))
     except Exception:
@@ -202,14 +202,14 @@ app.config.from_object(Config)
 os.makedirs(app.instance_path, exist_ok=True)
 db.init_app(app)
 
-PEER_PROFILE_FILE  = os.path.join(app.instance_path, 'peer_profile.json')         
-PEER_PROFILES_FILE = os.path.join(app.instance_path, 'peer_profiles.json')       
+PEER_PROFILE_FILE  = os.path.join(app.instance_path, 'peer_profile.json')
+PEER_PROFILES_FILE = os.path.join(app.instance_path, 'peer_profiles.json')
 
 _DEF_PROFILE = {
     'dns': '1.1.1.1, 1.0.0.1',
     'allowed_ips': '0.0.0.0/0, ::/0',
-    'persistent_keepalive': None, 
-    'mtu': None,                  
+    'persistent_keepalive': None,
+    'mtu': None,
     'endpoint': '',
     'data_limit_value': 0,
     'data_limit_unit': 'Gi',
@@ -350,7 +350,7 @@ def _effective_dns(peer):
     return (peer.dns or getattr(peer.iface, 'dns', None) or _panel_default_dns())
 
 #---------------
-# logging 
+# logging
 #_______________
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
 os.makedirs(app.instance_path, exist_ok=True)
@@ -392,7 +392,7 @@ if not any(isinstance(h, logging.StreamHandler) for h in root.handlers):
 for name in ('werkzeug', 'gunicorn.error', 'gunicorn.access', 'urllib3', 'requests', 'sqlalchemy.engine'):
     lg = logging.getLogger(name)
     lg.setLevel(LOG_LEVEL)
-    lg.propagate = True  
+    lg.propagate = True
 
 #-----------------
 # Secure cookie
@@ -405,7 +405,7 @@ csrf = CSRFProtect(app)
 def _csrf_protect_ui():
     if request.method in ("POST", "PUT", "PATCH", "DELETE"):
         if request.path.startswith("/api/"):
-            return  
+            return
         csrf.protect()
 
 
@@ -458,7 +458,7 @@ def inject_sec_headers(resp):
             generate_csrf(),
             samesite="Lax",
             secure=secure_flag,
-            httponly=False,  
+            httponly=False,
         )
     except Exception as e:
         app.logger.debug("inject_sec_headers: failed to set csrf_token cookie: %s", e)
@@ -568,7 +568,7 @@ def security_headers(resp):
             "style-src-elem 'self' 'unsafe-inline'; "
             "img-src 'self' data:; "
             "font-src 'self' data:; "
-            "connect-src 'self'; "          
+            "connect-src 'self'; "
             "object-src 'none'; base-uri 'none'; "
             "form-action 'none'; "
             "frame-ancestors 'self'"
@@ -661,7 +661,7 @@ def _validate_node_base_url(base_url: str) -> tuple[bool, str]:
 _fernet = None
 try:
     from cryptography.fernet import Fernet
-    key = os.environ.get('FERNET_KEY') 
+    key = os.environ.get('FERNET_KEY')
     if key:
         _fernet = Fernet(key)
 except Exception:
@@ -683,7 +683,7 @@ def _probably_decrypt(s: str) -> str:
         try:
             return _fernet.decrypt(s.encode()).decode()
         except Exception:
-            return s 
+            return s
     return s
 
 def _read_api_key(node) -> str:
@@ -749,7 +749,7 @@ def _read_admin_logs(max_lines=2000):
 
 def _whoami_logs() -> tuple[str, str]:
     try:
-        from flask_login import current_user as cu 
+        from flask_login import current_user as cu
         if cu and getattr(cu, "is_authenticated", False):
             aid = str(getattr(cu, "id", "") or getattr(cu, "username", "") or "")
             uname = getattr(cu, "username", None) or ""
@@ -829,7 +829,7 @@ def _last_cleared(persist_key: str | None):
         return
     try:
         cur = _load_retention()
-        group = persist_key.split(":", 1)[0] 
+        group = persist_key.split(":", 1)[0]
         if group not in cur:
             cur[group] = _src_defaults()
         cur[group]["last_cleared_utc"] = datetime.utcnow().isoformat(
@@ -900,7 +900,7 @@ def run_log():
         pass
 
 _RETENTION_THREAD_STARTED = False
-_RETENTION_INTERVAL_SEC = 1 * 60  
+_RETENTION_INTERVAL_SEC = 1 * 60
 
 
 def _retention_loop():
@@ -1023,7 +1023,7 @@ def logs_settings_get():
     cfg.setdefault('mutes', [])
     cfg.setdefault('sources', {'app': True, 'admin': True, 'telegram': True, 'iface': True})
     cfg.setdefault('mute_save', False)
-    cfg.setdefault('keep_last_lines', 0)  
+    cfg.setdefault('keep_last_lines', 0)
 
     return jsonify(cfg)
 
@@ -1215,7 +1215,7 @@ def app_logs():
     out = []
     for line in text.splitlines():
         rec = _app_log_line(line)
-        if not rec: 
+        if not rec:
             continue
         if level and rec['level'] != level:
             continue
@@ -1308,11 +1308,11 @@ def admin_logs():
 
         q        = (request.args.get('q') or '').strip().lower()
         action   = (request.args.get('action') or '').strip().lower()
-        channel  = (request.args.get('channel') or '').strip().lower()  
+        channel  = (request.args.get('channel') or '').strip().lower()
         limit    = max(10, min(int(request.args.get('limit') or 1000), 5000))
         from_s   = request.args.get('from') or ''
         to_s     = request.args.get('to') or ''
-        logs     = _read_admin_logs(max_lines=max(1000, limit * 5))  
+        logs     = _read_admin_logs(max_lines=max(1000, limit * 5))
 
         def _iso_z(s: str):
             if not s:
@@ -1341,7 +1341,7 @@ def admin_logs():
                 return False
             if action and (rec.get('action', '').lower() != action):
                 return False
-            if channel and (rec.get('channel', '').lower() != channel):  
+            if channel and (rec.get('channel', '').lower() != channel):
                 return False
             ts = rec.get('ts')
             if ts and not in_range(ts):
@@ -1359,7 +1359,7 @@ def admin_logs():
         except Exception:
             return jsonify(error="auth_required"), 401
 
-        ch = (request.args.get('channel') or '').strip().lower() 
+        ch = (request.args.get('channel') or '').strip().lower()
         try:
             if not ch:
                 open(ADMIN_LOG_FILE, 'w').close()
@@ -1392,7 +1392,7 @@ def admin_logs():
     if not isinstance(data, dict):
         data = {}
 
-    _norm_adminlog(data)  
+    _norm_adminlog(data)
     return jsonify(ok=True), 201
 
 
@@ -1474,7 +1474,7 @@ def _json_save(path, data):
         json.dump(data, f, indent=2, sort_keys=True)
     os.replace(tmp, path)
     try:
-        os.chmod(path, 0o600) 
+        os.chmod(path, 0o600)
     except Exception:
         pass
 
@@ -1664,7 +1664,7 @@ def tg_logs_get():
 
     out = []
     for s in lines:
-        rec = _parse_tg(s) 
+        rec = _parse_tg(s)
         if level and rec.get('kind') != level:
             continue
         if q and q not in rec.get('raw','').lower():
@@ -1952,7 +1952,6 @@ def _backup_restore_impl():
                 dest_root.mkdir(parents=True, exist_ok=True)
                 dest = dest_root / tail
 
-                # Final safety: ensure the resolved output stays inside dest_root.
                 root_resolved = dest_root.resolve()
                 dest_resolved = dest.resolve() if dest.exists() else dest.parent.resolve() / dest.name
 
@@ -3123,7 +3122,7 @@ def _load_backup_schedule():
         "enabled": bool(d.get("enabled", False)),
         "freq": d.get("freq", "daily"),
         "time": d.get("time", "03:00"),
-        "timezone": (d.get("timezone") or "UTC"),  
+        "timezone": (d.get("timezone") or "UTC"),
         "dow":  list(map(str, d.get("dow", []))),
         "dom":  int(d.get("dom", 1)),
         "cron": d.get("cron", ""),
@@ -3139,7 +3138,7 @@ def _save_backup_schedule(partial: dict):
         "enabled": bool(partial.get("enabled", cur["enabled"])),
         "freq": (partial.get("freq") or cur["freq"]).lower(),
         "time": partial.get("time") or cur["time"],
-        "timezone": (partial.get("timezone") or cur.get("timezone") or "UTC"), 
+        "timezone": (partial.get("timezone") or cur.get("timezone") or "UTC"),
         "dow":  [str(x) for x in (partial.get("dow") or cur["dow"] or [])],
         "dom":  int(partial.get("dom") or cur["dom"] or 1),
         "cron": (partial.get("cron") or cur["cron"]).strip(),
@@ -3199,7 +3198,7 @@ def _next_run(sched: dict) -> str | None:
             cand_local += timedelta(days=1)
 
     elif freq == "weekly":
-        dows = [int(x) for x in (sched.get("dow") or [])] or [1]  
+        dows = [int(x) for x in (sched.get("dow") or [])] or [1]
         best = None
         for d in range(8):
             tmp = at_local(now_local, hh, mm) + timedelta(days=d)
@@ -3273,7 +3272,7 @@ def _load_runtime():
             return None
     return {
         'bind':             (s.get('bind') or '').strip(),
-        'port':             _i(s.get('port')),                     
+        'port':             _i(s.get('port')),
         'workers':          _i(s.get('workers')),
         'threads':          _i(s.get('threads')),
         'timeout':          _i(s.get('timeout')),
@@ -3319,7 +3318,7 @@ def _confirm_runtime(p):
     except Exception:
         raise ValueError('numeric fields must be integers')
 
-    workers = max(0, min(workers, 16))      
+    workers = max(0, min(workers, 16))
     threads = max(1, min(threads, 64))
     timeout = max(10, min(timeout, 600))
     gtime   = max(5,  min(gtime,   600))
@@ -3399,7 +3398,7 @@ def api_panel_restart():
         current_app.logger.exception("panel_restart failed: %s", e)
         return jsonify(error=str(e)), 500
 
-@csrf.exempt  
+@csrf.exempt
 @app.post('/api/runtime')
 @login_required
 @admin_required
@@ -3522,7 +3521,7 @@ def now_ts() -> int:
 def to_ts(dt):
     if not dt:
         return None
-    return int(dt.timestamp())  
+    return int(dt.timestamp())
 #_____Local > Native__________
 def from_ts(ts):
     if ts is None:
@@ -3716,14 +3715,51 @@ def _wg_handshake(peer):
         return 0
 
 def _wg_enable(peer):
+
     dev = iface_devname(peer.iface)
     host_cidr = _host_peer(peer)
-    cmd = ['wg', 'set', dev, 'peer', peer.public_key, 'allowed-ips', host_cidr]
-    if peer.endpoint:
-        cmd += ['endpoint', peer.endpoint]
+
+    if not dev:
+        raise RuntimeError('Peer interface device name is missing.')
+
+    if not host_cidr:
+        raise RuntimeError('Peer WireGuard address is missing.')
+
+    cmd = [
+        'wg',
+        'set',
+        dev,
+        'peer',
+        peer.public_key,
+        'allowed-ips',
+        host_cidr,
+    ]
+
     if peer.persistent_keepalive:
-        cmd += ['persistent-keepalive', str(peer.persistent_keepalive)]
-    subprocess.check_call(cmd, stderr=subprocess.DEVNULL)
+        cmd += [
+            'persistent-keepalive',
+            str(int(peer.persistent_keepalive)),
+        ]
+
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        error_text = (
+            result.stderr or
+            result.stdout or
+            'WireGuard command failed.'
+        ).strip()
+
+        raise RuntimeError(
+            f'Could not enable peer on {dev}: {error_text}'
+        )
+
     _unblackhole(host_cidr)
 
 def _wg_disable(peer):
@@ -3740,7 +3776,7 @@ def _blackhole(host_cidr):
 def _unblackhole(host_cidr):
     subprocess.run(['ip', 'route', 'del', 'blackhole', host_cidr],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    
+
 def _iface_up(name: str) -> bool:
     try:
         subprocess.check_call(
@@ -3751,7 +3787,7 @@ def _iface_up(name: str) -> bool:
     except Exception:
         return False
 
-#___________________________________________________#    
+#___________________________________________________#
 """
 Check if -iface.name- exists and is up (LOCAL ONLY).
 Node-backed ifaces are controlled by the node_agent.
@@ -3772,7 +3808,7 @@ def _run_capture(cmd, timeout=20.0):
 def _fix_route(iid: int, wgquick_output: str):
     """
     If wg-quick failed because 'ip route add ...' returned 'File exists',
-    
+
     """
     if "RTNETLINK answers: File exists" not in (wgquick_output or ""):
         return False
@@ -3939,7 +3975,7 @@ def _check_iface_up(iface: InterfaceConfig):
         raise RuntimeError(f"Interface {dev} bring-up failed; see Interface logs for details.")
 
 # -----------------------------
-# Endpoint & Interface presets 
+# Endpoint & Interface presets
 # _____________________________
 ENDPOINT_PRESETS_FILE = os.path.join(app.instance_path, 'endpoint_presets.json')
 IFACE_LOG_DIR = os.path.join(app.instance_path, 'iface_logs')
@@ -3965,7 +4001,7 @@ def iface_status(iid):
         return jsonify(error="bad_iface_name"), 500
 
     try:
-        up = _iface_up(dev) 
+        up = _iface_up(dev)
         return jsonify({'is_up': up, 'name': iface.name, 'dev': dev})
     except Exception as e:
         current_app.logger.exception("iface status failed: %s", e)
@@ -3981,9 +4017,9 @@ def iface_logs(iid):
         try:
             Path(IFACE_LOG_DIR).mkdir(parents=True, exist_ok=True)
             if os.path.exists(p):
-                open(p, 'w').close()          
+                open(p, 'w').close()
             try:
-                _last_cleared("iface")   
+                _last_cleared("iface")
             except Exception:
                 pass
         except Exception:
@@ -3991,14 +4027,14 @@ def iface_logs(iid):
             return jsonify(ok=False, error="clear_failed"), 500
 
         return jsonify(ok=True)
-    
-    # retention 
+
+    # retention
     ret = _load_retention()["iface"]
     _may_autoclear(Path(p), ret, persist_key="iface")
 
     try:
         with open(p, 'r', encoding='utf-8', errors='ignore') as f:
-            txt = f.read()[-20000:] 
+            txt = f.read()[-20000:]
     except Exception:
         txt = ''
 
@@ -4233,8 +4269,8 @@ def api_settings():
 
         return jsonify({
         **s_out,
-        "tls_enabled": bool(s.get("tls_enabled")),    
-        "tls_effective": tls_effective,               
+        "tls_enabled": bool(s.get("tls_enabled")),
+        "tls_effective": tls_effective,
         "tls_cert_exists": tls_cert_exists,
         "tls_key_exists": tls_key_exists,
         "domain": domain,
@@ -4430,7 +4466,7 @@ def tg_adminlog():
 def user_peer_page(token):
     _peer_from_shortlink_token(token)
 
-    ts = _load_template_settings() 
+    ts = _load_template_settings()
     sel = (ts.get('selected') or 'default').lower()
     s   = ts.get('socials') or {}
 
@@ -4480,7 +4516,7 @@ def preview_template(name):
     html = render_template(
         tpl,
         token="PREVIEW_TOKEN",
-        preview=True,  
+        preview=True,
         support_telegram=socials['telegram'],
         support_whatsapp=socials['whatsapp'],
         support_instagram=socials['instagram'],
@@ -4504,8 +4540,8 @@ def preview_template(name):
         status: "offline",
         unlimited: false,
         limit_unit: "Mi",
-        data_limit: 1024,                
-        used_bytes: 5632 * 1024 * 1024,  
+        data_limit: 1024,
+        used_bytes: 5632 * 1024 * 1024,
         expires_at_ts: now + 14*24*3600,
         ttl_seconds:  14*24*3600
       }};
@@ -4566,11 +4602,11 @@ def user_peer(token):
     lim_bytes = 0
     if lim_val and not getattr(p, 'unlimited', False):
         lim_bytes = lim_val * (1024*1024 if unit == 'Mi' else 1024*1024*1024)
-    
+
     used_eff = used_db
     if lim_bytes:
         used_eff = min(used_eff, lim_bytes)
-    
+
     if getattr(p, 'status', '') == 'blocked' and lim_bytes:
         used_eff = lim_bytes
 
@@ -4584,8 +4620,8 @@ def user_peer(token):
     'limit_unit': unit,
     'data_limit': lim_val,
     'used_bytes': used_eff,
-    'used_bytes_db': used_db,                
-    'used_effective_bytes': used_eff,         
+    'used_bytes_db': used_db,
+    'used_effective_bytes': used_eff,
     'time_limit_days': getattr(p, 'time_limit_days', None),
     'start_on_first_use': bool(getattr(p, 'start_on_first_use', False)),
     'first_used_at': isoz(getattr(p, 'first_used_at', None)),
@@ -4685,7 +4721,7 @@ def _public_ipv6():
         return ""
     except Exception:
         return _ipv6_cache.get("val") or ""
-    
+
 # ---------------------------
 # WireGuard interface config
 # ___________________________
@@ -4847,7 +4883,7 @@ def _read_iface_conf(conf_path: str | None) -> str | None:
 def _available_ips(iface):
     """
     Available IPs are derived from the interface subnet (Address=...).
-    For LOCAL interfaces: prefer reading Address from /etc/wireguard/<iface>.conf 
+    For LOCAL interfaces: prefer reading Address from /etc/wireguard/<iface>.conf
 
     """
     if not iface:
@@ -5116,7 +5152,7 @@ def _panel_base() -> str:
         return f"http://{pub_ip}:{rport}/"
     return f"http://{pub_ip}/"
 
-    
+
 PANEL_SETTINGS_FILE = os.path.join(app.instance_path, "panel_settings.json")
 
 def _load_panel_settings():
@@ -5233,20 +5269,116 @@ def _endpoint_fallback(iface) -> str:
     port = getattr(iface, 'listen_port', None)
     return _norm_hostport(host, port) if host and port else ''
 
+def _node_endpoint_fallback(
+    node,
+    iface_name: str,
+    remote_iface=None,
+    interfaces_payload=None,
+) -> str:
+
+    remote_iface = (
+        remote_iface
+        if isinstance(remote_iface, dict)
+        else {}
+    )
+
+    interfaces_payload = (
+        interfaces_payload
+        if isinstance(interfaces_payload, dict)
+        else {}
+    )
+
+    host = str(
+        interfaces_payload.get('public_ipv4') or ''
+    ).strip()
+
+    if not host:
+        try:
+            health = node_get(
+                node,
+                '/api/health',
+                timeout=6,
+            ) or {}
+
+            if isinstance(health, dict):
+                host = str(
+                    health.get('public_ipv4') or ''
+                ).strip()
+
+        except Exception:
+            host = ''
+
+    if not host:
+        try:
+            parsed = urlparse(
+                (
+                    getattr(node, 'base_url', '')
+                    or ''
+                ).strip()
+            )
+
+            host = (
+                parsed.hostname
+                or ''
+            ).strip()
+
+        except Exception:
+            host = ''
+
+    try:
+        port = int(
+            remote_iface.get('listen_port') or 0
+        )
+    except Exception:
+        port = 0
+
+    if not port and iface_name:
+        try:
+            data = node_get(
+                node,
+                '/api/interfaces',
+                timeout=10,
+            ) or {}
+
+            rows = (
+                data.get('interfaces', [])
+                if isinstance(data, dict)
+                else data
+            )
+
+            for row in rows or []:
+                if str(
+                    (row or {}).get('name') or ''
+                ) == str(iface_name):
+
+                    port = int(
+                        (row or {}).get('listen_port')
+                        or 0
+                    )
+                    break
+
+        except Exception:
+            port = 0
+
+    if not host or not port:
+        return ''
+
+    return _norm_hostport(host, port)
+
 def _server_publickey(iface):
     try:
         nid = getattr(iface, 'node_id', None)
         if nid is not None:
             from models import Node
             n = db.session.get(Node, nid)
-            dev = iface_devname(iface)        
+            dev = iface_devname(iface)
             try:
                 j = node_get(n, f"/api/iface/{dev}/pubkey", timeout=6)
                 pk = (j.get("public_key") or "").strip()
                 if pk:
                     return pk
             except Exception:
-                pass  
+                pass
     except Exception:
         pass
 
@@ -5331,7 +5463,7 @@ def node_peer_config_qr(nid, pub):
         mimetype="image/png",
         as_attachment=False,
         download_name=f"{peer.name or 'peer'}-{peer.id}.png",
-    )   
+    )
 
 @app.route('/api/nodes/<int:nid>/peer/<path:pub>/shortlink', methods=['GET', 'POST'])
 @require_api_key_or_login
@@ -5356,7 +5488,7 @@ def node_peer_shortlink(nid, pub):
         abort(404)
 
     return _shortlink_response_for_peer(peer)
- 
+
 # ------------------------------------------------------------
 # Node peer logs
 # ------------------------------------------------------------
@@ -5591,7 +5723,7 @@ def _load_template_settings():
             j = json.load(f)
     except Exception:
         j = {}
-    j.setdefault('selected', 'default') 
+    j.setdefault('selected', 'default')
     j.setdefault('socials', {
         'telegram': '',
         'whatsapp': '',
@@ -5635,14 +5767,64 @@ def _expire():
 
     for peer in Peer.query.all():
 
-        if getattr(peer, 'start_on_first_use', False) and not getattr(peer, 'first_used_at', None):
-            hs = _latest_handshake(peer)  
+        should_track_first_use = bool(
+            getattr(
+                peer,
+                'start_on_first_use',
+                False,
+            )
+            or getattr(
+                peer,
+                'unlimited',
+                False,
+            )
+        )
+
+        if (
+            should_track_first_use
+            and not getattr(
+                peer,
+                'first_used_at',
+                None,
+            )
+        ):
+            hs = _latest_handshake(peer)
+
             if hs and hs > 0:
-                peer.first_used_at = from_ts(now)
-                if getattr(peer, 'time_limit_days', None) and not getattr(peer, 'unlimited', False):
-                    exp_ts = add_days_ts(now, float(peer.time_limit_days))
-                    peer.expires_at = from_ts(exp_ts)
-                log_event(peer, 'first_use', 'Timer started on first handshake')
+                peer.first_used_at = from_ts(hs)
+
+                if (
+                    getattr(
+                        peer,
+                        'start_on_first_use',
+                        False,
+                    )
+                    and getattr(
+                        peer,
+                        'time_limit_days',
+                        None,
+                    )
+                    and not getattr(
+                        peer,
+                        'unlimited',
+                        False,
+                    )
+                ):
+                    exp_ts = add_days_ts(
+                        hs,
+                        float(peer.time_limit_days),
+                    )
+
+                    peer.expires_at = from_ts(
+                        exp_ts
+                    )
+
+                log_event(
+                    peer,
+                    'first_use',
+                    'First WireGuard handshake recorded',
+                )
+
                 changed = True
 
         if (not getattr(peer, 'start_on_first_use', False)
@@ -5777,12 +5959,12 @@ def _expiry_tick_on_requests():
         pass
 
 @app.post('/api/peer/<int:pid>/clear_total')
-@login_required   
+@login_required
 def peer_clear_total(pid):
     p = Peer.query.get_or_404(pid)
 
     prev = int(getattr(p, 'used_bytes_total', 0) or 0)
-    p.used_bytes_total = 0  
+    p.used_bytes_total = 0
     db.session.commit()
 
     log_event(p, 'clear_total', f'Lifetime cleared (was {prev} bytes)')
@@ -5871,7 +6053,7 @@ def bootstrap():
             app.logger.info("DB initialized / migrated OK")
         except OperationalError:
             app.logger.exception("DB init failed")
-        from models import InterfaceConfig 
+        from models import InterfaceConfig
 
         p = (app.config.get('WG_CONF_PATH')
              or app.config.get('WIREGUARD_CONF_PATH')
@@ -5941,7 +6123,7 @@ def node_health(nid):
         return jsonify(online=True, info=j)
     except Exception:
         return jsonify(online=False), 200
-    
+
 def _wg_rx_tx(peer):
     try:
         out = subprocess.check_output(
@@ -6097,7 +6279,7 @@ def _peer_conn_status(
         allow_probe:
             When True, an enabled peer may be actively pinged.
             Automatic peer-list refresh must pass False so it doesn't launch ping process
-            
+
     """
     now = now_ts()
 
@@ -6345,28 +6527,138 @@ def node_ifaces(nid):
 
         return jsonify(created if isinstance(created, dict) else {"ok": True, "result": created}), 201
 
-    data = node_get(n, '/api/interfaces', timeout=15) or {}
-    base = data.get('interfaces') if isinstance(data, dict) else (data or [])
+    data = node_get(n,'/api/interfaces',timeout=15,) or {}
+
+    if isinstance(data, dict):
+        base = data.get('interfaces') or []
+        node_scope_networks = (
+           data.get('scope_networks')
+           or []
+        )
+    else:
+        base = data or []
+        node_scope_networks = []
+
     if not isinstance(base, list):
         base = []
 
+    if not isinstance(node_scope_networks, list):
+        node_scope_networks = [
+            value.strip()
+            for value in str(
+                node_scope_networks or ''
+            ).split(',')
+            if value.strip()
+        ]
+
     out = []
-    for it in base:
-        name = (it or {}).get('name') or ''
+
+    for raw_item in base:
+        if not isinstance(raw_item, dict):
+            continue
+
+        it = dict(raw_item)
+
+        name = (
+            it.get('name')
+            or it.get('iface')
+            or ''
+        ).strip()
+
+        if not name:
+            continue
+
+        item_scope_networks = (
+            it.get('scope_networks')
+            or node_scope_networks
+            or []
+        )
+
+        if not isinstance(item_scope_networks, list):
+            item_scope_networks = [
+                value.strip()
+                for value in str(
+                    item_scope_networks or ''
+                ).split(',')
+                if value.strip()
+            ]
+
+        item_scope_networks = list(
+            dict.fromkeys(item_scope_networks)
+        )
+
+        interface_address = (
+            it.get('address')
+            or it.get('server_cidr')
+            or it.get('interface_address')
+            or ''
+        ).strip()
+
+        it['name'] = name
+        it['address'] = interface_address
+        it['server_cidr'] = interface_address
+        it['scope_networks'] = item_scope_networks
+
         try:
-            j = node_get(n, f'/api/iface/{name}/available_ips', timeout=8) or {}
-            it['available_ips'] = j.get('available_ips', []) or []
+            j = node_get(
+                n,
+                f'/api/iface/{name}/available_ips',
+                timeout=8,
+            ) or {}
+
+            it['available_ips'] = (
+                j.get('available_ips', [])
+                if isinstance(j, dict)
+                else []
+            ) or []
+
         except Exception:
             it['available_ips'] = []
+
         out.append(it)
 
+    pub = ''
+
     try:
-        h = node_get(n, '/api/health', timeout=6) or {}
-        pub = (h.get('public_ipv4') or '').strip()
+        parsed_node_url = urlparse(
+            (
+                getattr(n, 'base_url', '')
+                or ''
+            ).strip()
+        )
+
+        pub = str(
+            parsed_node_url.hostname
+            or ''
+        ).strip()
+
     except Exception:
         pub = ''
 
-    return jsonify(interfaces=out, public_ipv4=pub)
+    if not pub:
+        try:
+            h = node_get(
+                n,
+                '/api/health',
+                timeout=6,
+            ) or {}
+
+            if isinstance(h, dict):
+                pub = str(
+                    h.get('public_ipv4')
+                    or ''
+                ).strip()
+
+        except Exception:
+            pub = ''
+
+    return jsonify(
+    interfaces=out,
+    public_ipv4=pub,
+    scope_networks=list(
+        dict.fromkeys(node_scope_networks)
+    ),
+    )
 
 @app.route('/api/nodes/<int:nid>/iface/<name>/available_ips')
 @admin_required
@@ -6537,7 +6829,7 @@ def iface_settings(iid):
             'listen_port': iface.listen_port,
             'dns': iface.dns,
             'mtu': iface.mtu,
-            'is_up': _iface_up(iface_devname(iface)), 
+            'is_up': _iface_up(iface_devname(iface)),
         })
 
     data = request.get_json(silent=True) or {}
@@ -6620,7 +6912,7 @@ def iface_updown(iid, action):
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            timeout=20.0,          
+            timeout=20.0,
             check=True
         )
         text = out.stdout.decode(errors='ignore')
@@ -6710,7 +7002,7 @@ def node_peers(nid):
                     rx_mib = float(rx)
                 except Exception:
                     rx_mib = 0.0
-                
+
                 try:
                     tx_mib = float(tx)
                 except Exception:
@@ -6784,7 +7076,7 @@ def node_peers(nid):
                 'created_at_ts': to_ts(getattr(p, 'created_at', None)),
                 'expires_at_ts': exp_ts,
                 'ttl_seconds': ttl_seconds,
-                'used_bytes': used_live,    
+                'used_bytes': used_live,
                 'used_bytes_db': used_live,
                 'rx': str(rx_mib),
                 'tx': str(tx_mib),
@@ -6988,7 +7280,7 @@ def node_disable_peer(nid, pub):
     payload = {}
     if p:
         try:
-            payload['host_cidr'] = _host_peer(p)  
+            payload['host_cidr'] = _host_peer(p)
         except Exception:
             pass
 
@@ -7004,38 +7296,15 @@ def node_disable_peer(nid, pub):
 @app.route('/api/nodes/<int:nid>/peer/<path:pub>/enable', methods=['POST'])
 @admin_required
 def node_enable_peer(nid, pub):
+
     n = Node.query.get_or_404(nid)
-    p = (db.session.query(Peer)
-         .join(InterfaceConfig, Peer.iface_id == InterfaceConfig.id)
-         .filter(Peer.public_key == pub)
-         .filter(or_(InterfaceConfig.name.like(f"n{nid}:%"),
-                     InterfaceConfig.node_id == nid))
-         .first())
 
-    payload = {}
-    if p:
-        try:
-            payload['host_cidr'] = _host_peer(p)
-        except Exception:
-            pass
-
-    node_post(n, f'/api/peer/{pub}/enable', payload)
-
-    if p:
-        p.first_used_at = None
-        p.expires_at = None
-        p.bytes_offset = _node_peer_live_total_bytes(n, p)
-        p.used_bytes_total = 0
-        p.status = 'online'
-        log_event(p, 'enabled', 'Node: enabled (timer+data reset)')
-        logpanel_action("peer_enable", f"pid={p.id}; iface={p.iface}")
-        db.session.commit()
-    return jsonify(ok=True)
-
-def _node_peer_db_row(nid, pub):
-    return (
+    p = (
         db.session.query(Peer)
-        .join(InterfaceConfig, Peer.iface_id == InterfaceConfig.id)
+        .join(
+            InterfaceConfig,
+            Peer.iface_id == InterfaceConfig.id
+        )
         .filter(Peer.public_key == pub)
         .filter(or_(
             InterfaceConfig.name.like(f"n{nid}:%"),
@@ -7043,6 +7312,133 @@ def _node_peer_db_row(nid, pub):
         ))
         .first()
     )
+
+    if not p:
+        return jsonify(
+            success=False,
+            error='peer_not_found'
+        ), 404
+
+    payload = {}
+
+    try:
+        payload['host_cidr'] = _host_peer(p)
+    except Exception:
+        pass
+
+    try:
+        node_post(
+            n,
+            f'/api/peer/{pub}/enable',
+            payload,
+            timeout=15
+        )
+
+        current_live_total = int(
+            _node_peer_live_total_bytes(n, p) or 0
+        )
+        current_live_total = max(0, current_live_total)
+
+        p.bytes_offset = current_live_total
+        p.used_bytes_total = 0
+        p.first_used_at = None
+
+        try:
+            time_limit_days = float(
+                getattr(p, 'time_limit_days', 0) or 0
+            )
+        except (TypeError, ValueError):
+            time_limit_days = 0.0
+
+        if getattr(p, 'unlimited', False):
+            p.expires_at = None
+
+        elif getattr(p, 'start_on_first_use', False):
+            p.expires_at = None
+
+        elif time_limit_days > 0:
+            p.expires_at = from_ts(
+                add_days_ts(
+                    now_ts(),
+                    time_limit_days
+                )
+            )
+
+        else:
+            p.expires_at = None
+
+        p.status = 'online'
+
+        db.session.commit()
+
+        try:
+            log_event(
+                p,
+                'enabled',
+                (
+                    'Node peer enabled; timer and data reset; '
+                    f'new traffic offset={current_live_total}'
+                )
+            )
+
+            logpanel_action(
+                'node_peer_enable',
+                (
+                    f'node={nid}; pid={p.id}; '
+                    f'timer_reset=1; data_reset=1; '
+                    f'unlimited={int(bool(getattr(p, "unlimited", False)))}; '
+                    f'offset={current_live_total}'
+                )
+            )
+        except Exception:
+            pass
+
+        return jsonify(
+            success=True,
+            ok=True,
+            status='online',
+            timer_reset=True,
+            data_reset=True,
+            unlimited=bool(getattr(p, 'unlimited', False)),
+            used_bytes_total=0,
+            bytes_offset=current_live_total
+        )
+
+    except requests.HTTPError as exc:
+        db.session.rollback()
+
+        response = getattr(exc, 'response', None)
+        upstream_status = getattr(response, 'status_code', None)
+        upstream_body = getattr(response, 'text', '') or ''
+
+        current_app.logger.exception(
+            'Node peer enable failed: node=%s peer=%s',
+            nid,
+            pub
+        )
+
+        return jsonify(
+            success=False,
+            error='node_enable_failed',
+            detail=str(exc),
+            upstream_status=upstream_status,
+            upstream_body=upstream_body[:800]
+        ), 502
+
+    except Exception as exc:
+        db.session.rollback()
+
+        current_app.logger.exception(
+            'Node peer enable failed: node=%s peer=%s',
+            nid,
+            pub
+        )
+
+        return jsonify(
+            success=False,
+            error='node_enable_failed',
+            detail=str(exc)
+        ), 502
 
 
 def _node_peer_live_total_bytes(node, peer):
@@ -7152,7 +7548,7 @@ def node_one(nid):
         db.session.delete(n)
         db.session.commit()
         return jsonify(ok=True)
-    
+
     data = request.get_json(silent=True) or {}
     updated = False
 
@@ -7211,7 +7607,7 @@ def login():
         otp = (request.form.get('twofa_code') or request.form.get('otp_or_recovery') or '').strip().replace(' ', '')
 
         acc = AdminAccount.query.filter_by(username=u).first()
-        if not acc or not acc.verify_pw(pw): 
+        if not acc or not acc.verify_pw(pw):
             flash('Invalid username or password', 'error')
             return render_template('login.html')
 
@@ -7411,7 +7807,7 @@ def admin_rename():
 def twofa_begin():
     username = getattr(current_user, 'username', 'admin')
     secret = pyotp.random_base32()
-    session['twofa_pending_secret'] = secret  
+    session['twofa_pending_secret'] = secret
     session.modified = True
     label = f"WG-Panel:{username}"
     issuer = "WG-Panel"
@@ -7436,18 +7832,18 @@ def twofa_confirm():
         if not totp.verify(otp, valid_window=1):
             return jsonify(error='Incorrect or expired code'), 400
 
-        rec = _create_twofa(username) 
-        _set_secret(rec, pending)             
+        rec = _create_twofa(username)
+        _set_secret(rec, pending)
 
         recovery_plain = [f"{secrets.token_hex(4)}-{secrets.token_hex(4)}" for _ in range(10)]
         rec.recovery_hashes = json.dumps([hash_recovery(c) for c in recovery_plain])
         rec.enabled = True
         db.session.commit()
-        
+
         acc = AdminAccount.query.filter_by(username=username).first()
         if acc:
             acc.twofa_enabled = True
-            acc.totp_secret = pending 
+            acc.totp_secret = pending
             acc.recovery_codes = '\n'.join(hash_recovery(c) for c in recovery_plain)
             db.session.commit()
 
@@ -7662,7 +8058,7 @@ def endpoint_presets():
 def _global_ip(ip: str) -> bool:
     try:
         addr = ipaddress.ip_address(ip)
-        return addr.is_global  
+        return addr.is_global
     except Exception:
         return False
 
@@ -7680,7 +8076,7 @@ def _wg_endpoint_ips(timeout=1.5):
             line = line.strip()
             if not line or "(none)" in line:
                 continue
-            tok = line.split()[-1]  
+            tok = line.split()[-1]
             host = tok
             if host.startswith('['):
                 host = host.split(']')[0].lstrip('[')
@@ -7708,7 +8104,7 @@ def _rate_mb(cur_bytes, prev_bytes, dt):
 def api_peer_counts():
     scope = (request.args.get('scope') or 'local').strip().lower()
 
-    ACTIVE_WITHIN_SECONDS = 180  
+    ACTIVE_WITHIN_SECONDS = 180
 
     def _wg_dump_all():
         try:
@@ -7755,9 +8151,9 @@ def api_peer_counts():
                 hs = 0
 
             if hs and (now - hs) <= ACTIVE_WITHIN_SECONDS:
-                out['online'] += 1      
+                out['online'] += 1
             else:
-                out['offline'] += 1    
+                out['offline'] += 1
         return out
 
     base_rows = db.session.query(Peer.status, Peer.public_key, InterfaceConfig.name).join(InterfaceConfig)
@@ -7912,7 +8308,7 @@ def api_stats():
     public_ips |= _wg_endpoint_ips()
     unique_public = {
         "count": len(public_ips),
-        "list": sorted(public_ips)[:20] 
+        "list": sorted(public_ips)[:20]
     }
 
     uptime        = max(0, int(time.time() - psutil.boot_time()))
@@ -7995,9 +8391,9 @@ def stats_mini():
             "cpu": cpu,
             "mem": mem,
             "disk": disk,
-            "uptime_value": uptime_value,  
-            "uptime_unit":  uptime_unit,    
-            "uptime_str":   uptime_str,    
+            "uptime_value": uptime_value,
+            "uptime_unit":  uptime_unit,
+            "uptime_str":   uptime_str,
             "counts": counts,
         }), 200
     except Exception:
@@ -8057,7 +8453,7 @@ def peers_create():
         n = Node.query.get_or_404(nid)
 
         name = (data.get('name') or '').strip() or 'peer'
-        endpoint = (data.get('endpoint') or '').strip()
+        endpoint = ''
         allowed_ips = (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip()
         keepalive = _clean_keepalive(data.get('persistent_keepalive'))
         mtu = _clean_mtu(data.get('mtu'))
@@ -8081,15 +8477,120 @@ def peers_create():
         start_on_first_use = _as_bool(data.get('start_on_first_use'))
         unlimited = _as_bool(data.get('unlimited'))
 
-        # Get remote interface metadata and available IPs.
+        node_ifaces = {}
+        remote_iface = {}
         try:
-            node_ifaces = node_get(n, "/api/interfaces") or {}
-            rows = node_ifaces.get("interfaces") if isinstance(node_ifaces, dict) else node_ifaces
-            rows = rows or []
-            remote_iface = next((x for x in rows if str(x.get("name")) == iface_name), {}) or {}
+            parsed_node_url = urlparse(
+                (
+                    getattr(n, 'base_url', '')
+                    or ''
+                ).strip()
+            )
+
+            node_endpoint_host = str(
+                parsed_node_url.hostname
+                or ''
+            ).strip()
+
         except Exception:
-            current_app.logger.exception("Failed to fetch node interfaces for node_id=%s", nid)
+            node_endpoint_host = ''
+
+        try:
+            node_ifaces = node_get(
+                n,
+                "/api/interfaces",
+                timeout=10,
+            ) or {}
+
+            if isinstance(node_ifaces, dict):
+                rows = node_ifaces.get("interfaces") or []
+                if not node_endpoint_host:
+                    node_endpoint_host = str(
+                        node_ifaces.get("public_ipv4")
+                        or ""
+                    ).strip()
+            else:
+                rows = node_ifaces or []
+
+            if not isinstance(rows, list):
+                rows = []
+
+            remote_iface = next(
+                (
+                    row
+                    for row in rows
+                    if str((row or {}).get("name") or "") == iface_name
+                ),
+                {},
+            ) or {}
+
+        except Exception:
+            current_app.logger.exception(
+                "Failed to fetch node interfaces for node_id=%s",
+                nid,
+            )
+            node_ifaces = {}
             remote_iface = {}
+
+        if not endpoint:
+            # First fallback: ask the node health endpoint for its public IPv4.
+            if not node_endpoint_host:
+                try:
+                    node_health = node_get(
+                        n,
+                        "/api/health",
+                        timeout=6,
+                    ) or {}
+
+                    if isinstance(node_health, dict):
+                        node_endpoint_host = str(
+                            node_health.get("public_ipv4") or ""
+                        ).strip()
+
+                except Exception:
+                    node_endpoint_host = ""
+
+            # Final fallback: use the hostname/IP saved in the node base_url.
+            # Example:
+            #   base_url = http://5.2.71.144:8001
+            #   endpoint host becomes 5.2.71.144, not port 8001.
+            if not node_endpoint_host:
+                try:
+                    parsed_node_url = urlparse(
+                        (
+                            getattr(n, "base_url", "")
+                            or ""
+                        ).strip()
+                    )
+                    node_endpoint_host = str(
+                        parsed_node_url.hostname or ""
+                    ).strip()
+                except Exception:
+                    node_endpoint_host = ""
+
+            try:
+                listen_port = int(
+                    remote_iface.get("listen_port")
+                    or data.get("listen_port")
+                    or 51820
+                )
+            except Exception:
+                listen_port = 51820
+
+            if node_endpoint_host and listen_port:
+                endpoint = _norm_hostport(
+                    node_endpoint_host,
+                    listen_port,
+                )
+
+        if not endpoint:
+            current_app.logger.warning(
+                "Could not auto-detect node endpoint: "
+                "node_id=%s iface=%s base_url=%s",
+                nid,
+                iface_name,
+                getattr(n, "base_url", ""),
+            )
 
         addr = (data.get('address') or '').strip()
         if not addr:
@@ -8803,7 +9304,7 @@ def panel_peers():
     ), 200
 
 # ------------
-# Bulk create 
+# Bulk create
 # ____________
 @csrf.exempt
 @app.route('/api/peers/bulk', methods=['POST'])
@@ -8845,7 +9346,7 @@ def panel_peers_bulk():
         })
 
         allowed_ips = (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip()
-        endpoint = (data.get('endpoint') or '').strip()
+        endpoint = ''
 
         try:
             keepalive = int(data.get('persistent_keepalive') or 0)
@@ -8891,20 +9392,119 @@ def panel_peers_bulk():
             data.get('telegram')
         )
 
+        node_ifaces = {}
+        remote_iface = {}
         try:
-            node_ifaces = node_get(n, "/api/interfaces") or {}
-            rows = node_ifaces.get("interfaces") if isinstance(node_ifaces, dict) else node_ifaces
-            rows = rows or []
-            remote_iface = next(
-                (x for x in rows if str((x or {}).get("name") or "") == iface_name),
-                {}
+            parsed_node_url = urlparse(
+                (
+                    getattr(n, 'base_url', '')
+                    or ''
+                ).strip()
+            )
+
+            node_endpoint_host = str(
+                parsed_node_url.hostname
+                or ''
+            ).strip()
+
+        except Exception:
+            node_endpoint_host = ''
+
+        try:
+            node_ifaces = node_get(
+                n,
+                "/api/interfaces",
+                timeout=10,
             ) or {}
+
+            if isinstance(node_ifaces, dict):
+                rows = node_ifaces.get("interfaces") or []
+                if not node_endpoint_host:
+                    node_endpoint_host = str(
+                        node_ifaces.get("public_ipv4")
+                        or ""
+                    ).strip()
+            else:
+                rows = node_ifaces or []
+
+            if not isinstance(rows, list):
+                rows = []
+
+            remote_iface = next(
+                (
+                    row
+                    for row in rows
+                    if str((row or {}).get("name") or "") == iface_name
+                ),
+                {},
+            ) or {}
+
         except Exception:
             current_app.logger.exception(
                 "Failed to fetch node interfaces for node_id=%s",
-                nid
+                nid,
             )
+            node_ifaces = {}
             remote_iface = {}
+
+
+        if not endpoint:
+            # First fallback: ask the node health endpoint for its public IPv4.
+            if not node_endpoint_host:
+                try:
+                    node_health = node_get(
+                        n,
+                        "/api/health",
+                        timeout=6,
+                    ) or {}
+
+                    if isinstance(node_health, dict):
+                        node_endpoint_host = str(
+                            node_health.get("public_ipv4") or ""
+                        ).strip()
+
+                except Exception:
+                    node_endpoint_host = ""
+
+            # Final fallback: use the hostname/IP saved in the node base_url.
+            # The node-agent HTTP port is not used as the WireGuard port.
+            if not node_endpoint_host:
+                try:
+                    parsed_node_url = urlparse(
+                        (
+                            getattr(n, "base_url", "")
+                            or ""
+                        ).strip()
+                    )
+                    node_endpoint_host = str(
+                        parsed_node_url.hostname or ""
+                    ).strip()
+                except Exception:
+                    node_endpoint_host = ""
+
+            try:
+                listen_port = int(
+                    remote_iface.get("listen_port")
+                    or data.get("listen_port")
+                    or 51820
+                )
+            except Exception:
+                listen_port = 51820
+
+            if node_endpoint_host and listen_port:
+                endpoint = _norm_hostport(
+                    node_endpoint_host,
+                    listen_port,
+                )
+
+        if not endpoint:
+            current_app.logger.warning(
+                "Could not auto-detect bulk node endpoint: "
+                "node_id=%s iface=%s base_url=%s",
+                nid,
+                iface_name,
+                getattr(n, "base_url", ""),
+            )
 
         try:
             avail = node_get(n, f"/api/iface/{iface_name}/available_ips", timeout=10)
@@ -9244,7 +9844,7 @@ def panel_peers_bulk():
 
     phones = _social_list(
         data.get('phone_numbers') or
-        data.get('phone_number')  or 
+        data.get('phone_number')  or
         data.get('phones') or
         data.get('mobile_numbers') or
         data.get('mobiles')
@@ -9365,8 +9965,60 @@ def iface_available_ips(iface_id):
     iface = db.session.get(InterfaceConfig, iface_id) or abort(404)
     return jsonify(available_ips=_available_ips(iface))
 
+def _private_networks():
+
+    networks = []
+
+    try:
+        for interface_name, addresses in psutil.net_if_addrs().items():
+            if interface_name == 'lo':
+                continue
+
+            for address in addresses:
+                if getattr(address, 'family', None) != socket.AF_INET:
+                    continue
+
+                ip_value = (
+                    getattr(address, 'address', '')
+                    or ''
+                ).split('%', 1)[0]
+
+                netmask = getattr(address, 'netmask', None)
+
+                if not ip_value or not netmask:
+                    continue
+
+                try:
+                    interface = ipaddress.ip_interface(
+                        f"{ip_value}/{netmask}"
+                    )
+
+                    if (
+                        interface.ip.is_loopback
+                        or interface.ip.is_link_local
+                        or interface.ip.is_unspecified
+                    ):
+                        continue
+
+                    if not interface.ip.is_private:
+                        continue
+
+                    network = str(interface.network)
+
+                    if network not in networks:
+                        networks.append(network)
+
+                except (ValueError, TypeError):
+                    continue
+
+    except Exception:
+        current_app.logger.exception(
+            'Failed to detect local private networks'
+        )
+
+    return networks
 # ---------------
-# Interfaces API 
+# Interfaces API
 # _______________
 
 @app.get("/api/get-interfaces")
@@ -9384,7 +10036,7 @@ def get_interfaces():
         parsed = find_iface(conf)
         if not parsed:
             continue
-        
+
         existing = InterfaceConfig.query.filter_by(name=name).first()
         if not existing:
             db.session.add(parsed)
@@ -9401,18 +10053,26 @@ def get_interfaces():
     db.session.commit()
 
     out = []
+
+    scope_networks = _private_networks()
+
     for i in InterfaceConfig.query.all():
         if ':' in (i.name or ''):
             continue
+
         out.append({
-            'id': i.id,
-            'name': i.name,
-            'listen_port': i.listen_port,
-            'mtu': i.mtu,
-            'dns': i.dns,
-            'available_ips': _available_ips(i),
-            'is_up': _iface_up(i.name),    
+        'id': i.id,
+        'name': i.name,
+        'address': i.address or '',
+        'server_cidr': i.address or '',
+        'scope_networks': scope_networks,
+        'listen_port': i.listen_port,
+        'mtu': i.mtu,
+        'dns': i.dns,
+        'available_ips': _available_ips(i),
+        'is_up': _iface_up(i.name),
         })
+
     return jsonify({'interfaces': out})
 
 def _iface_down(name: str):
@@ -9428,6 +10088,113 @@ def _iface_down(name: str):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False
         )
 
+def _egress_interface() -> str:
+
+    try:
+        output = subprocess.check_output(
+            [
+                "ip",
+                "-4",
+                "route",
+                "get",
+                "1.1.1.1",
+            ],
+            stderr=subprocess.DEVNULL,
+            timeout=4,
+        ).decode(
+            "utf-8",
+            "replace",
+        )
+
+        match = re.search(
+            r"\bdev\s+([A-Za-z0-9_.:-]+)",
+            output,
+        )
+
+        if match:
+            return match.group(1).strip()
+
+    except Exception:
+        current_app.logger.exception(
+            "Could not detect the default IPv4 egress interface"
+        )
+
+    return ""
+
+
+def _wireguard_network(address_field: str) -> str:
+
+    for raw_value in re.split(
+        r"[\s,]+",
+        str(address_field or "").strip(),
+    ):
+        value = raw_value.strip()
+
+        if not value or "/" not in value:
+            continue
+
+        try:
+            interface = ipaddress.ip_interface(value)
+        except ValueError:
+            continue
+
+        if (
+            interface.version == 4
+            and interface.ip.is_private
+        ):
+            return str(interface.network)
+
+    return ""
+
+
+def _wg_firewall_rules(
+    interface_name: str,
+    address_field: str,
+) -> tuple[str, str]:
+
+    network = _wireguard_network(address_field)
+
+    if not network:
+        raise ValueError(
+            "Automatic forwarding requires a private IPv4 WireGuard subnet."
+        )
+
+    egress = _egress_interface()
+
+    if not egress:
+        raise ValueError(
+            "The server's default IPv4 network interface could not be detected."
+        )
+
+    if not re.fullmatch(
+        r"[A-Za-z0-9_.:-]{1,32}",
+        egress,
+    ):
+        raise ValueError(
+            "The detected outbound interface name is invalid."
+        )
+
+    post_up = (
+        "sysctl -w net.ipv4.ip_forward=1 >/dev/null; "
+        "iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null "
+        "|| iptables -A FORWARD -i %i -j ACCEPT; "
+        "iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null "
+        "|| iptables -A FORWARD -o %i -j ACCEPT; "
+        f"iptables -t nat -C POSTROUTING -s {network} "
+        f"-o {egress} -j MASQUERADE 2>/dev/null "
+        f"|| iptables -t nat -A POSTROUTING -s {network} "
+        f"-o {egress} -j MASQUERADE"
+    )
+
+    post_down = (
+        "iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; "
+        "iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; "
+        f"iptables -t nat -D POSTROUTING -s {network} "
+        f"-o {egress} -j MASQUERADE 2>/dev/null || true"
+    )
+
+    return post_up, post_down
+
 @app.post("/api/interfaces")
 @login_required
 def create_local_interface():
@@ -9437,6 +10204,9 @@ def create_local_interface():
     address = (data.get("address") or "").strip()
     dns = (data.get("dns") or "").strip() or None
     auto_up = bool(data.get("auto_up"))
+    auto_firewall = bool(
+    data.get("auto_firewall", True)
+    )
 
     try:
         listen_port = int(data.get("listen_port") or 0)
@@ -9484,6 +10254,22 @@ def create_local_interface():
     except Exception as e:
         return jsonify(error="wg_genkey_failed", detail=str(e)), 500
 
+    post_up = ""
+    post_down = ""
+
+    if auto_firewall:
+        try:
+            post_up, post_down = _wg_firewall_rules(
+                name,
+                address,
+            )
+        except ValueError as e:
+            return jsonify(
+               error="firewall_detection_failed",
+               detail=str(e),
+            ), 400
+
+
     lines = [
         "[Interface]",
         f"PrivateKey = {private_key}",
@@ -9491,11 +10277,14 @@ def create_local_interface():
         f"ListenPort = {listen_port}",
     ]
 
-    if dns:
-        lines.append(f"DNS = {dns}")
-
     if mtu:
         lines.append(f"MTU = {mtu}")
+
+    if post_up:
+        lines.append(f"PostUp = {post_up}")
+
+    if post_down:
+        lines.append(f"PostDown = {post_down}")
 
     conf_text = "\n".join(lines) + "\n"
 
@@ -9514,6 +10303,8 @@ def create_local_interface():
         private_key=private_key,
         mtu=mtu,
         dns=dns,
+        post_up=post_up or None,
+        post_down=post_down or None,
     )
 
     db.session.add(iface)
@@ -9523,6 +10314,8 @@ def create_local_interface():
     if auto_up:
         try:
             _check_iface_up(iface)
+            subprocess.run(["systemctl","enable",f"wg-quick@{name}.service",],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10,check=False,)
+
         except Exception as e:
             up_error = str(e)
 
@@ -9622,7 +10415,6 @@ def iface_delete(iface_id):
         except Exception:
             current_app.logger.exception("Failed to bring interface down before delete: %s", dev)
 
-        # Delete peers if explicitly requested.
         _delete_shortlinks_for_peer_ids([p.id for p in peers if p])
         if delete_peers:
             for peer in peers:
@@ -9637,7 +10429,6 @@ def iface_delete(iface_id):
                     except Exception:
                         pass
 
-                    # Remove subscription inbound links that point to this peer.
                     SubscriptionPeer.query.filter_by(peer_id=peer.id).delete(synchronize_session=False)
 
                     db.session.delete(peer)
@@ -9703,34 +10494,460 @@ def iface_delete(iface_id):
             error='interface_delete_failed',
             detail=str(e)
         ), 500
-    
-# -------------
-# Peer actions
-# _____________
+
+# -----------------------------
+# Peer enable / reset actions
+# -----------------------------
+
 @app.route('/api/peer/<int:pid>/enable', methods=['POST'])
 @csrf.exempt
 @require_api_key_or_login
 def api_enable(pid):
+
     p = db.session.get(Peer, pid) or abort(404)
-    p.first_used_at = None
-    p.expires_at = None
-    p.bytes_offset = _wg_transfer(p)
-    p.used_bytes_total = 0
+    iface = getattr(p, 'iface', None)
+
+    if not iface:
+        return jsonify(
+            success=False,
+            error='peer_interface_missing',
+            detail='This peer is not attached to a WireGuard interface.'
+        ), 409
+
+    if getattr(iface, 'node_id', None) is not None:
+        return jsonify(
+            success=False,
+            error='remote_peer',
+            detail='This peer belongs to a remote node.'
+        ), 409
+
+    dev = ''
+    host_cidr = ''
+
     try:
+        dev = iface_devname(iface)
+        host_cidr = _host_peer(p)
+
+        if not dev:
+            raise RuntimeError(
+                'The peer interface has no valid device name.'
+            )
+
+        if not host_cidr:
+            raise RuntimeError(
+                'The peer has no valid WireGuard host address.'
+            )
+
+        if not _iface_up(dev):
+            _check_iface_up(iface)
+
+        if not _iface_up(dev):
+            return jsonify(
+                success=False,
+                error='interface_down',
+                detail=f"WireGuard interface '{dev}' is not running.",
+                interface=dev,
+                hint=(
+                    f"Run: systemctl status "
+                    f"wg-quick@{dev} --no-pager"
+                )
+            ), 409
+
+        try:
+            _unblackhole(host_cidr)
+        except Exception:
+            current_app.logger.warning(
+                'Could not remove blackhole route for peer %s, route %s',
+                pid,
+                host_cidr,
+                exc_info=True
+            )
+
         _wg_enable(p)
         _sync_peer(p)
-    except subprocess.CalledProcessError as e:
-        dev = iface_devname(p.iface)
-        current_app.logger.warning("wg set failed for %s on %s: %s", p.name, dev, e)
+
+        try:
+            live_total = int(_wg_transfer(p) or 0)
+        except Exception:
+            current_app.logger.warning(
+                'Could not read WireGuard transfer value for peer %s',
+                pid,
+                exc_info=True
+            )
+            live_total = 0
+
+        live_total = max(0, live_total)
+
+        p.bytes_offset = live_total
+        p.used_bytes_total = 0
+        p.first_used_at = None
+
+        try:
+            time_limit_days = float(
+                getattr(p, 'time_limit_days', 0) or 0
+            )
+        except (TypeError, ValueError):
+            time_limit_days = 0.0
+
+        unlimited = bool(
+            getattr(p, 'unlimited', False)
+        )
+
+        start_on_first_use = bool(
+            getattr(p, 'start_on_first_use', False)
+        )
+
+        if unlimited:
+            p.expires_at = None
+
+        elif start_on_first_use:
+            p.expires_at = None
+
+        elif time_limit_days > 0:
+            p.expires_at = from_ts(
+                add_days_ts(
+                    now_ts(),
+                    time_limit_days
+                )
+            )
+
+        else:
+            p.expires_at = None
+
+        p.status = 'online'
+
+        db.session.commit()
+
+        try:
+            log_event(
+                p,
+                'enabled',
+                (
+                    'Peer enabled; timer and data reset; '
+                    f'unlimited={int(unlimited)}; '
+                    f'offset={live_total}'
+                )
+            )
+
+            logpanel_action(
+                'peer_enable',
+                (
+                    f'pid={p.id}; '
+                    f'iface={dev}; '
+                    f'host_cidr={host_cidr}; '
+                    f'timer_reset=1; '
+                    f'data_reset=1; '
+                    f'unlimited={int(unlimited)}; '
+                    f'offset={live_total}'
+                )
+            )
+        except Exception:
+            current_app.logger.warning(
+                'Peer %s was enabled, but enable logging failed',
+                pid,
+                exc_info=True
+            )
+
         return jsonify(
-            error="wg_failed",
-            message=str(e),
-            hint=f"Is interface '{dev}' up? Try: systemctl start wg-quick@{dev}"
+            success=True,
+            ok=True,
+            message='Peer enabled. Timer and data usage were reset.',
+            status='online',
+            interface=dev,
+            host_cidr=host_cidr,
+            timer_reset=True,
+            data_reset=True,
+            unlimited=unlimited,
+            used_bytes_total=0,
+            bytes_offset=live_total
+        )
+
+    except RuntimeError as exc:
+        db.session.rollback()
+
+        current_app.logger.exception(
+            'Peer enable failed for peer %s on interface %s',
+            pid,
+            dev or 'unknown'
+        )
+
+        return jsonify(
+            success=False,
+            error='peer_enable_failed',
+            detail=str(exc),
+            interface=dev,
+            host_cidr=host_cidr,
+            hint=(
+                f"Run: wg show {dev}; "
+                f"ip route show {host_cidr}; "
+                f"systemctl status wg-quick@{dev} --no-pager"
+            ) if dev else ''
         ), 409
-    p.status = 'online'
-    db.session.commit()
-    log_event(p, 'enabled', 'Timer+data reset on enable')
-    return jsonify(success=True)
+
+    except Exception as exc:
+        db.session.rollback()
+
+        current_app.logger.exception(
+            'Unexpected enable failure for peer %s',
+            pid
+        )
+
+        return jsonify(
+            success=False,
+            error='peer_enable_unexpected_error',
+            detail=str(exc),
+            interface=dev,
+            host_cidr=host_cidr
+        ), 500
+
+@app.route('/api/peer/<int:pid>/reset_data', methods=['POST'])
+@require_api_key
+def reset_data(pid):
+    """
+    Reset traffic counters
+    This does NOT re-enable the peer and does NOT change timer fields.
+    """
+    p = db.session.get(Peer, pid) or abort(404)
+
+    try:
+        current = int(_wg_transfer(p) or 0)
+    except Exception:
+        current = 0
+
+    try:
+        p.bytes_offset = max(0, current)
+        p.used_bytes_total = 0
+
+        db.session.commit()
+
+        try:
+            log_event(
+                p,
+                'reset_data',
+                (
+                    f'Traffic usage reset; runtime offset={current}; '
+                    f'status preserved as {p.status}'
+                )
+            )
+            logpanel_action(
+                'peer_reset_data',
+                (
+                    f'pid={p.id}; offset={current}; '
+                    f'status_preserved={p.status}; timer_preserved=1'
+                )
+            )
+        except Exception:
+            pass
+
+        return jsonify(
+            success=True,
+            status=p.status,
+            timer_preserved=True,
+            data_reset=True
+        )
+
+    except Exception as exc:
+        db.session.rollback()
+
+        current_app.logger.exception(
+            'Data reset failed for peer %s',
+            pid
+        )
+
+        return jsonify(
+            success=False,
+            error='reset_data_failed',
+            detail=str(exc)
+        ), 500
+
+
+@app.route('/api/peer/<int:pid>/reset_timer', methods=['POST'])
+@require_api_key
+def api_reset_timer(pid):
+    """
+    Reset the peer timer only.
+
+    The peer is re-enabled when necessary, but traffic usage is preserved.
+
+    """
+    p = db.session.get(Peer, pid) or abort(404)
+
+    iface = getattr(p, 'iface', None)
+    if not iface:
+        return jsonify(
+            success=False,
+            error='peer_interface_missing',
+            detail='This peer is not attached to a WireGuard interface.'
+        ), 409
+
+    original_bytes_offset = int(
+        getattr(p, 'bytes_offset', 0) or 0
+    )
+    original_used_total = int(
+        getattr(p, 'used_bytes_total', 0) or 0
+    )
+
+    try:
+        time_limit = float(
+            getattr(p, 'time_limit_days', 0) or 0
+        )
+    except (TypeError, ValueError):
+        time_limit = 0.0
+
+    try:
+        p.first_used_at = None
+
+        if getattr(p, 'unlimited', False) or time_limit <= 0:
+            p.expires_at = None
+            detail = 'Timer cleared'
+
+        elif getattr(p, 'start_on_first_use', False):
+            p.expires_at = None
+            detail = 'Timer cleared; timer will start on first use'
+
+        else:
+            p.expires_at = from_ts(
+                add_days_ts(
+                    now_ts(),
+                    time_limit
+                )
+            )
+            detail = f'Timer restarted for {time_limit:g} days'
+
+        is_node_peer = (
+            getattr(iface, 'node_id', None) is not None
+            or ':' in str(getattr(iface, 'name', '') or '')
+        )
+
+        if is_node_peer:
+            node = db.session.get(
+                Node,
+                getattr(iface, 'node_id', None)
+            )
+
+            if not node:
+                return jsonify(
+                    success=False,
+                    error='node_not_found',
+                    detail='The node for this peer was not found.'
+                ), 404
+
+            node_post(
+                node,
+                f'/api/peer/{p.public_key}/enable',
+                {
+                    'host_cidr': _host_peer(p),
+                    'reset_timer': False,
+                    'reset_data': False,
+                    'preserve_usage': True,
+                },
+                timeout=15
+            )
+
+        else:
+            dev = iface_devname(iface)
+
+            if not _iface_up(dev):
+                _check_iface_up(iface)
+
+            if not _iface_up(dev):
+                raise RuntimeError(
+                    f"WireGuard interface '{dev}' is not running."
+                )
+
+            _wg_enable(p)
+            _sync_peer(p)
+
+        p.status = 'online'
+        p.bytes_offset = original_bytes_offset
+        p.used_bytes_total = original_used_total
+
+        db.session.commit()
+
+        try:
+            log_event(
+                p,
+                'reset_timer',
+                (
+                    f'{detail}; peer enabled; '
+                    f'data usage preserved at {original_used_total} bytes'
+                )
+            )
+            logpanel_action(
+                'peer_reset_timer',
+                (
+                    f'pid={p.id}; {detail}; '
+                    f'data_preserved=1; used={original_used_total}; '
+                    f'offset={original_bytes_offset}'
+                )
+            )
+        except Exception:
+            pass
+
+        return jsonify(
+            success=True,
+            status=p.status,
+            timer_reset=True,
+            data_preserved=True,
+            used_bytes_total=original_used_total
+        )
+
+    except requests.HTTPError as exc:
+        db.session.rollback()
+
+        response = getattr(exc, 'response', None)
+        status_code = getattr(response, 'status_code', None)
+        response_text = getattr(response, 'text', '') or ''
+
+        current_app.logger.exception(
+            'Node timer reset enable failed for peer %s',
+            pid
+        )
+
+        return jsonify(
+            success=False,
+            error='node_enable_failed',
+            detail=str(exc),
+            node_status=status_code,
+            node_body=response_text[:800]
+        ), 502
+
+    except subprocess.CalledProcessError as exc:
+        db.session.rollback()
+
+        try:
+            dev = iface_devname(iface)
+        except Exception:
+            dev = ''
+
+        current_app.logger.exception(
+            'Timer reset enable failed for peer %s',
+            pid
+        )
+
+        return jsonify(
+            success=False,
+            error='wg_failed',
+            detail='The timer was not reset because the peer could not be enabled.',
+            interface=dev,
+            returncode=getattr(exc, 'returncode', None),
+            data_preserved=True
+        ), 409
+
+    except Exception as exc:
+        db.session.rollback()
+
+        current_app.logger.exception(
+            'Timer reset failed for peer %s',
+            pid
+        )
+
+        return jsonify(
+            success=False,
+            error='reset_timer_failed',
+            detail=str(exc),
+            data_preserved=True
+        ), 500
 
 
 @app.route('/api/peer/<int:pid>/disable', methods=['POST'])
@@ -9782,88 +10999,6 @@ def api_edit(pid):
     logpanel_action("peer_edit", f"pid={p.id}; fields={', '.join(updated)}")
     return jsonify(success=True)
 
-@app.route('/api/peer/<int:pid>/reset_data', methods=['POST'])
-@require_api_key
-def reset_data(pid):
-    """
-    Reset traffic counters
-    This does NOT re-enable the peer and does NOT change timer fields.
-    """
-    p = db.session.get(Peer, pid) or abort(404)
-
-    try:
-        current = _wg_transfer(p)
-    except Exception:
-        current = 0
-
-    p.bytes_offset = int(current or 0)
-    p.used_bytes_total = 0
-
-    db.session.commit()
-
-    try:
-        log_event(p, 'reset_data', f'Offset set to {current}; status kept as {p.status}')
-        logpanel_action("peer_reset_data", f"pid={p.id}; new_offset={current}; status_kept={p.status}")
-    except Exception:
-        pass
-
-    return jsonify(success=True, status=p.status)
-
-
-@app.route('/api/peer/<int:pid>/reset_timer', methods=['POST'])
-@require_api_key
-def api_reset_timer(pid):
-    """
-    Reset timer and re-enable peer.
-    This does NOT reset data usage/counters.
-    """
-    p = db.session.get(Peer, pid) or abort(404)
-
-    tl_days = getattr(p, 'time_limit_days', None)
-    try:
-        tl_days_f = float(tl_days) if tl_days is not None else 0.0
-    except Exception:
-        tl_days_f = 0.0
-
-    p.first_used_at = None
-
-    if getattr(p, 'unlimited', False) or tl_days_f <= 0:
-        p.expires_at = None
-        detail = 'Timer cleared; peer re-enabled'
-    elif getattr(p, 'start_on_first_use', False):
-        p.expires_at = None
-        detail = 'Timer cleared; will start on first use; peer re-enabled'
-    else:
-        p.expires_at = from_ts(add_days_ts(now_ts(), tl_days_f))
-        detail = f'Timer restarted for {tl_days_f} days; peer re-enabled'
-
-    try:
-        _wg_enable(p)
-        _sync_peer(p)
-        p.status = 'online'
-    except subprocess.CalledProcessError as e:
-        db.session.commit()
-        dev = iface_devname(p.iface)
-        current_app.logger.warning("reset_timer wg set failed for %s on %s: %s", p.name, dev, e)
-        return jsonify(
-            error="wg_failed",
-            message=str(e),
-            hint=f"Is interface '{dev}' up? Try: systemctl start wg-quick@{dev}"
-        ), 409
-    except Exception as e:
-        db.session.commit()
-        current_app.logger.exception("reset_timer failed for peer %s", p.id)
-        return jsonify(error="reset_timer_failed", detail=str(e)), 500
-
-    db.session.commit()
-
-    try:
-        log_event(p, 'reset_timer', detail)
-        logpanel_action("peer_reset_timer", f"pid={p.id}; {detail}")
-    except Exception:
-        pass
-
-    return jsonify(success=True, status=p.status)
 
 @app.route('/api/peer/<int:pid>', methods=['DELETE'])
 @require_api_key
@@ -9892,14 +11027,14 @@ def peer_logs(pid):
         .limit(500)
         .all())
 
-    return jsonify(logs=[{'time': isoz(e.timestamp), 'event': e.event, 'details': e.details} 
+    return jsonify(logs=[{'time': isoz(e.timestamp), 'event': e.event, 'details': e.details}
                      for e in rows])
 
 # ------------
 # Config & QR
 # ____________
 @app.route('/api/peer/<int:pid>/config')
-@csrf.exempt           
+@csrf.exempt
 @require_api_key_or_login
 def peer_config(pid):
     p = db.session.get(Peer, pid) or abort(404)
@@ -9919,7 +11054,7 @@ def peer_config(pid):
 
 
 @app.route('/api/peer/<int:pid>/config_qr')
-@csrf.exempt           
+@csrf.exempt
 @require_api_key_or_login
 def peer_config_qr(pid):
     p = db.session.get(Peer, pid) or abort(404)
@@ -9968,7 +11103,7 @@ def _subscription_settings_default():
         'display_mode': 'hybrid',  # bars | rings | hybrid
         'animation': 'rich',       # rich | soft | minimal
 
-        # Public page 
+        # Public page
         'portal_label': 'Secure WireGuard portal',
         'portal_icon': 'fas fa-bolt',
         'portal_title': '',
@@ -10218,22 +11353,61 @@ def _sub_config_url(sub):
     return url_for('subscription_public_config', token=sub.token, _external=True)
 
 def _apply_subscription_timer(sub):
-    """Recalculate the shared subscription expiry """
-    if getattr(sub, 'unlimited', False) or not _sub_float(getattr(sub, 'time_limit_days', 0)):
+
+    unlimited = bool(
+        getattr(
+            sub,
+            'unlimited',
+            False,
+        )
+    )
+
+    days = _sub_float(
+        getattr(
+            sub,
+            'time_limit_days',
+            0,
+        )
+    )
+
+    if unlimited or not days:
         sub.expires_at = None
-        if not getattr(sub, 'start_on_first_use', False):
-            sub.first_used_at = None
         return
-    days = _sub_float(sub.time_limit_days)
-    if getattr(sub, 'start_on_first_use', False):
-        if getattr(sub, 'first_used_at', None):
-            sub.expires_at = from_ts(add_days_ts(to_ts(sub.first_used_at), days))
+
+    if bool(
+        getattr(
+            sub,
+            'start_on_first_use',
+            False,
+        )
+    ):
+        first_used_at = getattr(
+            sub,
+            'first_used_at',
+            None,
+        )
+
+        if first_used_at:
+            sub.expires_at = from_ts(
+                add_days_ts(
+                    to_ts(first_used_at),
+                    days,
+                )
+            )
         else:
             sub.expires_at = None
-    else:
-        if not getattr(sub, 'first_used_at', None):
-            sub.first_used_at = from_ts(now_ts())
-        sub.expires_at = from_ts(add_days_ts(to_ts(sub.first_used_at), days))
+
+        return
+
+    if not getattr(sub, 'first_used_at', None):
+        sub.first_used_at = from_ts(now_ts())
+
+    sub.expires_at = from_ts(
+        add_days_ts(
+            to_ts(sub.first_used_at),
+            days,
+        )
+    )
 
 def _sync_peer_subscription(peer, sub, idx=None, rename=True):
     if rename:
@@ -10300,10 +11474,74 @@ def _block_subscription_runtime(sub, reason='subscription_blocked'):
 
 def _subscription_row(sub):
     used = _sub_used_bytes(sub)
-    if bool(getattr(sub, 'start_on_first_use', False)) and not getattr(sub, 'first_used_at', None) and used > 0 and not bool(getattr(sub, 'unlimited', False)):
-        sub.first_used_at = from_ts(now_ts())
+
+    linked_first_use = []
+
+    for link in (
+        getattr(
+            sub,
+            'links',
+            [],
+        )
+        or []
+    ):
+        peer = getattr(
+            link,
+            'peer',
+            None,
+        )
+
+        peer_first_used = getattr(
+            peer,
+            'first_used_at',
+            None,
+        ) if peer else None
+
+        if peer_first_used:
+            linked_first_use.append(
+                peer_first_used
+            )
+
+    if (
+        not getattr(
+            sub,
+            'first_used_at',
+            None,
+        )
+        and linked_first_use
+    ):
+        sub.first_used_at = min(
+            linked_first_use
+        )
+
+    if (
+        not getattr(
+            sub,
+            'first_used_at',
+            None,
+        )
+        and used > 0
+    ):
+        sub.first_used_at = from_ts(
+            now_ts()
+        )
+
         _apply_subscription_timer(sub)
-        _sync_all_subscription_peers(sub, rename=False)
+
+        _sync_all_subscription_peers(
+            sub,
+            rename=False,
+        )
+
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            current_app.logger.exception(
+                "Failed to save subscription first-use date "
+                "for subscription_id=%s",
+                getattr(sub, 'id', '?'),
+            )
     limit = _sub_limit_bytes(sub)
     remaining = None if limit is None else max(0, int(limit) - int(used))
     expired = _subscription_time_expired(sub)
@@ -10333,8 +11571,34 @@ def _subscription_row(sub):
             'allowed_ips': peer.allowed_ips or '',
             'dns': peer.dns or '',
             'status': peer.status or 'offline',
-            'used_bytes': int(getattr(peer, 'used_bytes_total', 0) or 0),
-            'location_label': link.location_label or '',
+                        'used_bytes': int(
+                getattr(
+                    peer,
+                    'used_bytes_total',
+                    0,
+                )
+                or 0
+            ),
+
+            'first_used_at': isoz(
+                getattr(
+                    peer,
+                    'first_used_at',
+                    None,
+                )
+            ),
+
+            'first_used_at_ts': to_ts(
+                getattr(
+                    peer,
+                    'first_used_at',
+                    None,
+                )
+            ),
+
+            'location_label':
+                link.location_label
+                or '',
             'country_code': link.country_code or '',
             'flag': link.flag or '',
         })
@@ -10350,10 +11614,12 @@ def _subscription_row(sub):
         'remaining_bytes': remaining,
         'usage_pct': (round((used / limit) * 100, 2) if limit else 0),
         'time_limit_days': _sub_float(getattr(sub, 'time_limit_days', 0)),
-        'ttl_seconds': _sub_ttl_seconds(sub),
-        'start_on_first_use': bool(getattr(sub, 'start_on_first_use', False)),
-        'first_used_at': isoz(getattr(sub, 'first_used_at', None)),
-        'expires_at': isoz(getattr(sub, 'expires_at', None)),
+        'ttl_seconds': _sub_ttl_seconds(sub),'start_on_first_use': bool(getattr(sub,'start_on_first_use',False,)),
+        'created_at': isoz(getattr(sub,'created_at',None,)),
+        'created_at_ts': to_ts(getattr(sub,'created_at',None,)),
+        'first_used_at': isoz(getattr(sub,'first_used_at',None,)),
+        'first_used_at_ts': to_ts(getattr(sub,'first_used_at',None,)),
+        'expires_at': isoz(getattr(sub,'expires_at',None,)),
         'unlimited': bool(getattr(sub, 'unlimited', False)),
         'phone_number': getattr(sub, 'phone_number', '') or '',
         'telegram_id': getattr(sub, 'telegram_id', '') or '',
@@ -10363,26 +11629,79 @@ def _subscription_row(sub):
         'locations': locs,
     }
 
-def _peer_payload_subscription(sub, target, data, idx=0, total=1):
-    name = (target.get('peer_name') or '').strip()
+def _network_int_cidr(value):
+
+    raw = str(value or '').split(',', 1)[0].strip()
+
+    if not raw:
+        return ''
+
+    try:
+        return str(
+            ipaddress.ip_interface(
+                raw
+            ).network
+        )
+    except Exception:
+        return ''
+
+
+def _apnd_allowed_route(allowed_ips, route):
+    values = [
+        item.strip()
+        for item in str(
+            allowed_ips or ''
+        ).split(',')
+        if item.strip()
+    ]
+
+    route = str(route or '').strip()
+
+    if not route:
+        return ', '.join(values)
+
+    if route not in values:
+        values.append(route)
+
+    return ', '.join(values)
+
+def _peer_payload_subscription(sub,target,data,idx=0,total=1,):
+
+    name = (target.get('peer_name')or '').strip()
+
     if not name:
-        base = (sub.name or data.get('name') or 'subscription').strip() or 'subscription'
-        name = base if total <= 1 else f'{base}-{idx + 1}'
+        base = (
+            sub.name
+            or data.get('name')
+            or 'subscription'
+        ).strip() or 'subscription'
+
+        name = (
+            base
+            if total <= 1
+            else f'{base}-{idx + 1}')
+
+    allowed_ips = (data.get('allowed_ips')or '0.0.0.0/0, ::/0').strip()
+
+    if bool(data.get('include_internal_network',False,)):
+        interface_cidr = (target.get('server_cidr')or target.get('interface_address')or target.get('iface_address')or target.get('address')or '')
+        internal_network = (_network_int_cidr(interface_cidr))
+        allowed_ips = _apnd_allowed_route(allowed_ips,internal_network,)
+
     return {
         'name': name,
-        'allowed_ips': (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip(),
-        'endpoint': (data.get('endpoint') or '').strip(),
-        'persistent_keepalive': data.get('persistent_keepalive') or None,
-        'mtu': data.get('mtu') or None,
-        'dns': data.get('dns') or None,
-        'data_limit_value': int(getattr(sub, 'data_limit_value', 0) or 0),
-        'data_limit_unit': getattr(sub, 'data_limit_unit', None) or 'Gi',
-        'time_limit_days': _sub_float(getattr(sub, 'time_limit_days', 0)) or None,
-        'start_on_first_use': bool(getattr(sub, 'start_on_first_use', False)),
-        'unlimited': bool(getattr(sub, 'unlimited', False)),
-        'phone_number': getattr(sub, 'phone_number', '') or '',
-        'telegram_id': getattr(sub, 'telegram_id', '') or '',
-    }
+        'allowed_ips': allowed_ips,
+        'endpoint': (data.get('endpoint')or '').strip(),
+        'persistent_keepalive':data.get('persistent_keepalive') or None,
+        'mtu':data.get('mtu') or None,
+        'dns':data.get('dns') or None,
+        'data_limit_value': int(getattr(sub,'data_limit_value',0,) or 0),
+        'data_limit_unit': (getattr(sub,'data_limit_unit',None,)or 'Gi'),
+        'time_limit_days': (_sub_float(getattr(sub,'time_limit_days',0,))or None),
+        'start_on_first_use': bool(getattr(sub,'start_on_first_use',False,)),
+        'unlimited': bool(getattr(sub,'unlimited',False,)),
+        'phone_number': (getattr(sub,'phone_number','',)or ''),
+        'telegram_id': (getattr(sub,'telegram_id','',)or ''),}
 
 def _create_subscription_peer(target, payload):
     scope = (target.get('scope') or 'local').lower()
@@ -10591,42 +11910,248 @@ def api_subscription_settings():
 @app.get('/api/subscriptions/locations')
 @require_api_key_or_login
 def api_subscriptions_locations():
-    locals_ = []
-    for iface in InterfaceConfig.query.order_by(InterfaceConfig.name).all():
-        if getattr(iface, 'node_id', None) is not None or (iface.name or '').startswith('n') and ':' in (iface.name or ''):
+
+    local_locations = []
+
+    for iface in InterfaceConfig.query.order_by(
+        InterfaceConfig.name
+    ).all():
+
+        iface_name = (
+            getattr(iface, 'name', '')
+            or ''
+        )
+
+        is_node_interface = (
+            getattr(iface, 'node_id', None)
+            is not None
+            or (
+                iface_name.startswith('n')
+                and ':' in iface_name
+            )
+        )
+
+        if is_node_interface:
             continue
-        locals_.append({
-            'scope': 'local', 'iface_id': iface.id, 'iface': iface.name, 'label': iface.name,
-            'listen_port': iface.listen_port, 'dns': iface.dns or '', 'mtu': iface.mtu,
-            'available': len(_available_ips(iface)),
+
+        interface_address = (
+            getattr(iface, 'address', None)
+            or ''
+        )
+
+        local_locations.append({
+            'scope': 'local',
+            'iface_id': iface.id,
+            'iface': iface_name,
+            'label': iface_name,
+            'address': interface_address,
+            'server_cidr': interface_address,
+            'scope_networks': _private_networks(),
+            'listen_port': iface.listen_port,
+            'dns': iface.dns or '',
+            'mtu': iface.mtu,
+            'available': len(
+                _available_ips(iface)
+            ),
         })
-    nodes = []
-    for n in Node.query.order_by(Node.name).all():
+
+    node_locations = []
+
+    for node in Node.query.order_by(
+        Node.name
+    ).all():
+
         interfaces = []
+
         try:
-            remote = node_get(n, '/api/interfaces') or []
-            for it in remote:
-                name = it.get('name') or it.get('iface') or ''
-                if not name:
+            remote_payload = node_get(
+                node,
+                '/api/interfaces',
+                timeout=10,
+            ) or {}
+
+            if isinstance(remote_payload, dict):
+                node_scope_networks = (
+                remote_payload.get('scope_networks')
+                or []
+            )
+            else:
+                node_scope_networks = []
+
+            if not isinstance(node_scope_networks, list):
+                node_scope_networks = [
+                    value.strip()
+                    for value in str(
+                        node_scope_networks or ''
+                    ).split(',')
+                    if value.strip()
+                ]
+
+            node_scope_networks = list(
+                dict.fromkeys(node_scope_networks)
+            )
+
+            if isinstance(remote_payload, dict):
+                remote_interfaces = (
+                    remote_payload.get('interfaces')
+                    or []
+                )
+            else:
+                remote_interfaces = (
+                    remote_payload
+                    or []
+                )
+
+            if not isinstance(
+                remote_interfaces,
+                list,
+            ):
+                remote_interfaces = []
+
+            for item in remote_interfaces:
+                if not isinstance(item, dict):
                     continue
-                mirror = InterfaceConfig.query.filter_by(name=f'n{n.id}:{name}').first()
+
+                remote_name = (
+                    item.get('name')
+                    or item.get('iface')
+                    or ''
+                ).strip()
+
+                if not remote_name:
+                    continue
+
+                mirror_name = (
+                    f'n{node.id}:{remote_name}'
+                )
+
+                mirror = (
+                    InterfaceConfig.query
+                    .filter_by(name=mirror_name)
+                    .first()
+                )
+
+                interface_address = (
+                    item.get('address')
+                    or (
+                        mirror.address
+                        if mirror
+                        else ''
+                    )
+                    or ''
+                )
+
                 interfaces.append({
-                    'scope': 'node', 'node_id': n.id, 'node_name': n.name,
-                    'iface_id': mirror.id if mirror else None, 'iface': name,
-                    'label': f'{n.name} · {name}', 'listen_port': it.get('listen_port'),
-                    'dns': it.get('dns') or '', 'mtu': it.get('mtu'),
+                    'scope': 'node',
+                    'node_id': node.id,
+                    'node_name': node.name,
+
+                    'iface_id': (
+                        mirror.id
+                        if mirror
+                        else None
+                    ),
+
+                    'iface': remote_name,
+
+                    'label': (
+                        f'{node.name} · '
+                        f'{remote_name}'
+                    ),
+
+                    'address': interface_address,
+                    'server_cidr': interface_address,
+                    'scope_networks': list(dict.fromkeys((item.get('scope_networks')if isinstance(item.get('scope_networks'),list,)else node_scope_networks)or node_scope_networks)),
+
+                    'listen_port': (
+                        item.get('listen_port')
+                    ),
+
+                    'dns': (
+                        item.get('dns')
+                        or ''
+                    ),
+
+                    'mtu': item.get('mtu'),
+
+                    'available': len(
+                        item.get('available_ips')
+                        or []
+                    ),
                 })
+
         except Exception:
-            # Fallback to mirrored DB interfaces if node cannot be reached.
-            for iface in InterfaceConfig.query.filter(InterfaceConfig.name.like(f'n{n.id}:%')).all():
+            current_app.logger.exception(
+                'Failed to load subscription '
+                'interfaces from node_id=%s',
+                node.id,
+            )
+
+            mirrored_interfaces = (
+                InterfaceConfig.query
+                .filter(
+                    InterfaceConfig.name.like(
+                        f'n{node.id}:%'
+                    )
+                )
+                .all()
+            )
+
+            for iface in mirrored_interfaces:
+                stored_name = (
+                    iface.name
+                    or ''
+                )
+
+                remote_name = (
+                    stored_name.split(':', 1)[1]
+                    if ':' in stored_name
+                    else stored_name
+                )
+
+                interface_address = (
+                    iface.address
+                    or ''
+                )
+
                 interfaces.append({
-                    'scope': 'node', 'node_id': n.id, 'node_name': n.name,
-                    'iface_id': iface.id, 'iface': iface.name.split(':',1)[1],
-                    'label': f'{n.name} · {iface.name.split(":",1)[1]}',
-                    'listen_port': iface.listen_port, 'dns': iface.dns or '', 'mtu': iface.mtu,
+                    'scope': 'node',
+                    'node_id': node.id,
+                    'node_name': node.name,
+                    'iface_id': iface.id,
+                    'iface': remote_name,
+
+                    'label': (
+                        f'{node.name} · '
+                        f'{remote_name}'
+                    ),
+
+                    'address': interface_address,
+                    'server_cidr': interface_address,
+
+                    'listen_port': (
+                        iface.listen_port
+                    ),
+
+                    'dns': iface.dns or '',
+                    'mtu': iface.mtu,
+
+                    'available': len(
+                        _available_ips(iface)
+                    ),
                 })
-        nodes.append({'id': n.id, 'name': n.name, 'online': bool(n.enabled), 'interfaces': interfaces})
-    return jsonify(local=locals_, nodes=nodes)
+
+        node_locations.append({
+            'id': node.id,
+            'name': node.name,
+            'online': bool(node.enabled),
+            'interfaces': interfaces,
+        })
+
+    return jsonify(
+        local=local_locations,
+        nodes=node_locations,
+    )
 
 @app.get('/api/subscriptions/inbounds_catalog')
 @require_api_key_or_login
@@ -10775,7 +12300,7 @@ def api_subscription_delete(sid):
     delete_peers = True if delete_peers is None else _sub_bool(delete_peers)
     peers = [l.peer for l in list(sub.links or []) if l.peer]
     try:
-        db.session.delete(sub)  
+        db.session.delete(sub)
         if delete_peers:
             _delete_shortlinks_for_peer_ids([p.id for p in peers if p])
             for peer in peers:
@@ -11328,8 +12853,8 @@ if __name__ == "__main__":
         except Exception:
             return dflt
 
-    http_port  = _valid_port(ps.get("http_port")  or 8000, 8000)  
-    https_port = _valid_port(ps.get("https_port") or 443, 443)   
+    http_port  = _valid_port(ps.get("http_port")  or 8000, 8000)
+    https_port = _valid_port(ps.get("https_port") or 443, 443)
 
     tls_toggle = bool(ps.get("tls_enabled"))
     tls_files  = bool(
