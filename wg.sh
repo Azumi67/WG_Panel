@@ -7,7 +7,30 @@ PY="$VENV_DIR/bin/python"
 
 DEFAULT_WG_URL="https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main/wg.py"
 
-APT_PKGS=(python3 python3-venv python3-pip ca-certificates curl)
+APT_PKGS=(
+  sudo
+  ca-certificates
+  curl
+  wget
+  git
+  jq
+  rsync
+  unzip
+  openssl
+  python3
+  python3-venv
+  python3-pip
+  python3-dev
+  build-essential
+  pkg-config
+  libffi-dev
+  libssl-dev
+  wireguard
+  wireguard-tools
+  iproute2
+  iptables
+  procps
+)
 c_info="\033[96m"; c_ok="\033[92m"; c_warn="\033[93m"; c_err="\033[91m"; c_reset="\033[0m"
 if [ -n "${NO_COLOR:-}" ] || [ ! -t 1 ]; then c_info=""; c_ok=""; c_warn=""; c_err=""; c_reset=""; fi
 log()  { echo -e "${c_info}[INFO]${c_reset} $*"; }
@@ -56,17 +79,71 @@ install_stuff() {
     warn "Skipping apt install (--no-apt)."
     return 0
   fi
-  command -v apt-get >/dev/null 2>&1 || { warn "apt-get not found; skipping OS deps."; return 0; }
+
+  command -v apt-get >/dev/null 2>&1 || {
+    die "apt-get not found. This launcher supports Debian/Ubuntu."
+  }
 
   if [ "$(id -u)" -ne 0 ]; then
-    die "apt install needs root. Re-run: sudo $0 (or use --no-apt)"
+    if command -v sudo >/dev/null 2>&1; then
+      die "apt install needs root. Re-run: sudo bash $0"
+    fi
+
+    die "Root is required and sudo is not installed. Run: su -  then  bash $0"
   fi
 
-  log "Installing minimal OS dependencies (python3/venv/pip/curl)..."
+  if [ -r /etc/os-release ]; then
+    . /etc/os-release
+
+    case "${ID:-}" in
+      debian)
+        case "${VERSION_ID:-}" in
+          12|13)
+            log "Detected ${PRETTY_NAME:-Debian}."
+            ;;
+          *)
+            warn "Detected Debian ${VERSION_ID:-unknown}; continuing with Debian-compatible packages."
+            ;;
+        esac
+        ;;
+      ubuntu)
+        log "Detected ${PRETTY_NAME:-Ubuntu}."
+        ;;
+      *)
+        warn "Detected ${PRETTY_NAME:-unknown OS}; apt compatibility is not guaranteed."
+        ;;
+    esac
+  fi
+
+  log "Installing Debian 13 / Ubuntu OS requirements..."
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -y
-  apt-get install -y --no-install-recommends "${APT_PKGS[@]}"
+  export NEEDRESTART_MODE=a
+
+  apt-get update \
+    -o Dpkg::Use-Pty=0 \
+    -o Acquire::Retries=3
+
+  apt-get install -y \
+    -o Dpkg::Use-Pty=0 \
+    --no-install-recommends \
+    "${APT_PKGS[@]}"
+
   ok "OS dependencies installed."
+
+  local missing=()
+  local cmd
+
+  for cmd in python3 git curl rsync unzip wg ip iptables; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      missing+=("$cmd")
+    fi
+  done
+
+  if [ "${#missing[@]}" -gt 0 ]; then
+    die "Required commands are still missing: ${missing[*]}"
+  fi
+
+  ok "Required commands verified."
 }
 
 _venv() {
@@ -90,12 +167,62 @@ _fetch_wg_py() {
     return 0
   fi
 
-  command -v curl >/dev/null 2>&1 || die "curl not found (install it or run with --no-apt and install curl)."
-
   echo -e "${c_info}[INFO]${c_reset} Downloading wg.py from: $url" >&2
-  curl -fsSL "$url" -o "$out" || die "Failed to download wg.py from URL."
-  echo -e "${c_ok}[ OK ]${c_reset} Downloaded wg.py -> $out" >&2
 
+  local tmp="${out}.download"
+  rm -f "$tmp"
+
+  if command -v curl >/dev/null 2>&1; then
+    curl \
+      --fail \
+      --silent \
+      --show-error \
+      --location \
+      --retry 3 \
+      --retry-delay 2 \
+      --connect-timeout 15 \
+      --max-time 180 \
+      "$url" \
+      -o "$tmp" || die "Failed to download wg.py with curl."
+
+  elif command -v wget >/dev/null 2>&1; then
+    wget \
+      --quiet \
+      --tries=3 \
+      --timeout=30 \
+      -O "$tmp" \
+      "$url" || die "Failed to download wg.py with wget."
+
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$url" "$tmp" <<'PY'
+import pathlib
+import sys
+import urllib.request
+
+url = sys.argv[1]
+target = pathlib.Path(sys.argv[2])
+
+request = urllib.request.Request(
+    url,
+    headers={"User-Agent": "WG-Panel-Bootstrap"},
+)
+
+with urllib.request.urlopen(request, timeout=180) as response:
+    target.write_bytes(response.read())
+PY
+  else
+    die "No downloader found. Install curl, wget, or python3."
+  fi
+
+  [ -s "$tmp" ] || die "Downloaded wg.py is empty."
+
+  python3 -m py_compile "$tmp" ||
+    die "Downloaded wg.py failed Python syntax validation."
+
+  mv -f "$tmp" "$out"
+  chmod 755 "$out"
+
+  echo -e "${c_ok}[ OK ]${c_reset} Downloaded and validated wg.py -> $out" >&2
   echo "$out"
 }
 
@@ -106,16 +233,10 @@ install_requirements() {
   log "Updating pip tools..."
   "$PY" -m pip install -U pip setuptools wheel
 
-  local pkgs=()
-
-  if grep -qE '(^|[[:space:]])from[[:space:]]+passlib\.|(^|[[:space:]])import[[:space:]]+passlib\b' "$wg_py"; then
-    pkgs+=("passlib[bcrypt]>=1.7" "bcrypt>=4.1")
-  fi
-
-  if [ "${#pkgs[@]}" -eq 0 ]; then
-    ok "wg.py has no external pip dependencies detected by this installer."
-    return 0
-  fi
+  local pkgs=(
+    "passlib[bcrypt]>=1.7.4"
+    "bcrypt>=4.1"
+  )
 
   log "Installing wg.py requirements: ${pkgs[*]}"
   "$PY" -m pip install -U "${pkgs[@]}"
