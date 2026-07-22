@@ -96,6 +96,11 @@ function subConfirm(opts = {}) {
   });
 }
 const fmtBytes = b => { b=Number(b||0); const u=['B','KiB','MiB','GiB','TiB']; let i=0; while(b>=1024&&i<u.length-1){b/=1024;i++} return `${b.toFixed(i?2:0)} ${u[i]}`; };
+function subDate(value) {
+  if (!value) return 'Not used yet';
+  const d = new Date(value);if (Number.isNaN(d.getTime())) {return String(value);
+  }return d.toLocaleString([], {year: 'numeric',month: 'short',day: '2-digit',hour: '2-digit',minute: '2-digit',});}
+function subscriptionTimeLabel(s) {if (s.unlimited) {return s.first_used_at? `Active since ${subDate(s.first_used_at)}`: 'Unlimited · not used yet';}return ttlText(s.ttl_seconds);}
 if(!window.CSS) window.CSS = {}; if(!CSS.escape) CSS.escape = s => String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
 const ttlText = sec => {
   if (sec == null) return 'No timer';
@@ -239,6 +244,7 @@ async function loadPickers(){
   for(const n of (lj.nodes||[])) for(const it of (n.interfaces||[])) NEW_ITEMS.push({...it, pick_kind:'new', node_online:n.online});
   CURRENT_ITEMS = (cj.inbounds||[]).map((x, idx)=>({...x, pick_kind:'current', __idx: idx}));
   renderPicker();
+  refreshSubscriptionInternalNetworks();
 }
 
 function sourceItems(){
@@ -281,8 +287,29 @@ function itemTitle(x){
   return `${esc(x.name || 'Unnamed config')}`;
 }
 function itemSub(x){
-  if(MODE === 'new') return `${x.scope==='node'?'Node interface':'Local interface'}${x.listen_port?' · port '+esc(x.listen_port):''}`;
-  return `${esc(x.address || 'no address')}${x.endpoint?' · '+esc(x.endpoint):''}`;
+  if (MODE === 'new') {
+    const source =
+      x.scope === 'node'
+        ? 'Node interface'
+        : 'Local interface';
+
+    const address =
+      x.address ||
+      x.server_cidr ||
+      'network unavailable';
+
+    return `${source} · ${esc(address)}${
+      x.listen_port
+        ? ' · port ' + esc(x.listen_port)
+        : ''
+    }`;
+  }
+
+  return `${esc(x.address || 'no address')}${
+    x.endpoint
+      ? ' · ' + esc(x.endpoint)
+      : ''
+  }`;
 }
 function itemTags(x){
   const tags = [`<span class="pick-tag">${x.scope==='node'?'Node':'Local'}</span>`];
@@ -605,7 +632,7 @@ function updateSelected(){
   $$('[data-group-count]').forEach(el => {
     const n = counts[el.dataset.groupCount] || 0;
     el.textContent = n ? `${n} selected` : '';
-  });
+  });  refreshSubscriptionInternalNetworks();
 }
 
 function subscriptionPeerCounts(s){
@@ -675,7 +702,7 @@ function rowHtml(s){
   const state = subscriptionState(s);
   const dataLabel = s.limit_bytes ? `${fmtBytes(s.used_bytes)} / ${fmtBytes(s.limit_bytes)}` : `${fmtBytes(s.used_bytes)} · unlimited`;
   const remaining = s.remaining_bytes == null ? 'Unlimited' : fmtBytes(s.remaining_bytes);
-  const timerLabel = ttlText(s.ttl_seconds);
+  const timerLabel = subscriptionTimeLabel(s);
   const locCount = uniqueLocationCount(s);
   const inboundSmall = locs.length ? `${locs.length} inbound${locs.length>1?'s':''}` : 'No inbound';
   return `<article class="subx-row state-${state.cls}" data-sub="${s.id}">
@@ -699,8 +726,7 @@ function rowHtml(s){
         </div>
         <div class="subx-summary-card">
           <span><i class="fas fa-clock"></i> Time</span>
-          <b>${timerLabel}</b>
-          <small>${s.start_on_first_use ? 'starts on first use' : 'fixed expiry'}</small>
+          <b>${timerLabel}</b><small>${s.unlimited? (s.first_used_at? 'First connection recorded': 'Waiting for first connection'): (s.start_on_first_use? 'starts on first use': 'fixed expiry')}</small>
         </div>
         <div class="subx-summary-card status-card ${state.cls}">
           <span><i class="fas fa-signal"></i> Client status</span>
@@ -788,6 +814,7 @@ function setEditLayout(isEdit, allowInboundPicker=false){
 }
 
 function fillForm(s=null){
+  const internalAllowed = document.querySelector('#sub-form [name="allowed_ips"]'); if(internalAllowed) internalAllowed.dataset.autoInternalNetworks = ''; 
   const f=$('#sub-form'); f.reset(); $('#sub-sid').value=s?.id||''; EDIT_ID=s?.id||null;
   $('#sub-modal-title').innerHTML = s ? '<i class="fas fa-pen"></i> Edit client subscription' : '<i class="fas fa-user-plus"></i> Create client subscription';
   const headHint = $('#sub-modal .subx-modal-head p');
@@ -815,7 +842,39 @@ async function openCreate(){
   $$('#inbound-list input[type="checkbox"]').forEach(ch => ch.checked = false);
   if(typeof updateSelected === 'function') updateSelected();
 
-  await loadPickers(); setModeButtons(); openModal();
+  const list = $('#inbound-list');
+  if(list){
+    list.innerHTML = `
+      <div class="subx-empty subx-loading-state" style="padding:28px;display:grid">
+        <span class="subx-loading-spinner" aria-hidden="true"></span>
+        <b>Loading interfaces…</b>
+        <span>Please wait while local and node interfaces are loaded.</span>
+      </div>
+    `;
+  }
+  const count = $('#picker-count');
+  if(count) count.textContent = 'Loading…';
+  const hint = $('#picker-hint');
+  if(hint) hint.textContent = 'Fetching local and node interfaces.';
+
+  openModal();
+
+  try {
+    await loadPickers();
+    setModeButtons();
+  } catch (err) {
+    if(list){
+      list.innerHTML = `
+        <div class="subx-empty" style="padding:28px;display:grid">
+          <b>Could not load interfaces</b>
+          <span>Close this window and try again.</span>
+        </div>
+      `;
+    }
+    if(count) count.textContent = 'Unavailable';
+    if(hint) hint.textContent = 'Interface loading failed.';
+    toastBad('Could not load local and node interfaces.');
+  }
 }
 
 async function openEdit(id, opts={}){
@@ -893,16 +952,214 @@ function setModeButtons(){
   renderPicker();
 }
 
-function payloadFromForm(){
-  const f=$('#sub-form'), fd=new FormData(f);
-  const body=Object.fromEntries(fd.entries());
-  body.time_limit_days=Number(fd.get('time_limit_days')||0)+(Number(fd.get('time_limit_hours')||0)/24)+(Number(fd.get('time_limit_minutes')||0)/1440);
-  body.start_on_first_use=fd.has('start_on_first_use'); body.unlimited=fd.has('unlimited');
-  body.sync_existing=$('#sync-existing').checked;
+
+function subIpv4NetworkFromCidr(cidr) {
+  const raw = String(cidr || '')
+    .split(',')[0]
+    .trim();
+
+  const match =
+    /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/
+      .exec(raw);
+
+  if (!match) return '';
+
+  const octets = match[1]
+    .split('.')
+    .map(Number);
+
+  const prefix = Number(match[2]);
+
+  if (
+    octets.length !== 4 ||
+    octets.some(
+      value =>
+        !Number.isInteger(value) ||
+        value < 0 ||
+        value > 255
+    ) ||
+    prefix < 0 ||
+    prefix > 32
+  ) {
+    return '';
+  }
+
+  const ip = (
+    ((octets[0] << 24) >>> 0) |
+    (octets[1] << 16) |
+    (octets[2] << 8) |
+    octets[3]
+  ) >>> 0;
+
+  const mask =
+    prefix === 0
+      ? 0
+      : (0xffffffff << (32 - prefix)) >>> 0;
+
+  const network = (ip & mask) >>> 0;
+
+  return [
+    (network >>> 24) & 255,
+    (network >>> 16) & 255,
+    (network >>> 8) & 255,
+    network & 255,
+  ].join('.') + `/${prefix}`;
+}
+
+function subAppendAllowedRoute(current, route) {
+  const routes = String(current || '')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+
+  if (route && !routes.includes(route)) {
+    routes.push(route);
+  }
+
+  return routes.join(', ');
+}
+
+function subscriptionAllowedIpsWithNetworks(
+  allowedIps,
+  items
+) {
+  let result = String(allowedIps || '').trim();
+
+  const routes = result
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+
+  if (
+    routes.includes('0.0.0.0/0') ||
+    routes.includes('::/0')
+  ) {
+    return result || '0.0.0.0/0, ::/0';
+  }
+
+  for (const item of items || []) {
+    const network = subIpv4NetworkFromCidr(
+      item?.address ||
+      item?.server_cidr ||
+      item?.interface_address ||
+      item?.cidr ||
+      ''
+    );
+
+    if (network) {
+      result = subAppendAllowedRoute(
+        result,
+        network
+      );
+    }
+  }
+
+  return result;
+}
+
+
+function subNormalizeNetworkList(v){const o=[];for(const x of String(v||'').split(',')){const n=subIpv4NetworkFromCidr(x.trim());if(n&&!o.includes(n))o.push(n);}return o;}
+function detectSelectedSubscriptionNetworks() {
+  const chosen =
+    MODE === 'new'
+      ? selectedItems()
+      : [];
+
+  const source =
+    chosen.length
+      ? chosen
+      : (
+          Array.isArray(NEW_ITEMS)
+            ? NEW_ITEMS
+            : []
+        );
+
+  const networks = [];
+
+  const addNetwork = value => {
+    const network = subIpv4NetworkFromCidr(value);
+    if (network && !networks.includes(network)) networks.push(network);
+  };
+
+  for (const item of source) {
+    const scopeNetworks = item?.scope_networks;
+    if (Array.isArray(scopeNetworks)) {
+      scopeNetworks.forEach(addNetwork);
+    } else if (scopeNetworks) {
+      String(scopeNetworks).split(',').forEach(addNetwork);
+    }
+
+    addNetwork(
+      item?.address ||
+      item?.server_cidr ||
+      item?.interface_address ||
+      item?.cidr ||
+      ''
+    );
+  }
+
+  return networks;
+}
+function subRouteList(value){
+  return String(value || '').split(',').map(v => v.trim()).filter(Boolean);
+}
+function subUniqueRoutes(value){
+  return [...new Set(subRouteList(value))];
+}
+function subApplyInternalNetworksToAllowed(){
+  const allowed = document.querySelector('#sub-form [name="allowed_ips"]');
+  const detectedInput = document.getElementById('sub-internal-networks');
+  const toggle = document.getElementById('sub-include-internal-network');
+  if(!allowed || !detectedInput) return;
+
+  const previouslyAdded = subUniqueRoutes(allowed.dataset.autoInternalNetworks || '');
+  let current = subUniqueRoutes(allowed.value);
+
+  if(previouslyAdded.length){
+    const remove = new Set(previouslyAdded);
+    current = current.filter(route => !remove.has(route));
+  }
+
+  const enabled = !!toggle?.checked;
+  const detected = enabled ? subNormalizeNetworkList(detectedInput.value) : [];
+  for(const route of detected){
+    if(!current.includes(route)) current.push(route);
+  }
+
+  allowed.dataset.autoInternalNetworks = enabled ? detected.join(', ') : '';
+  allowed.value = current.join(', ');
+  allowed.dispatchEvent(new Event('input', {bubbles:true}));
+  allowed.dispatchEvent(new Event('change', {bubbles:true}));
+}
+function refreshSubscriptionInternalNetworks(){
+  const input=document.getElementById('sub-internal-networks');
+  if(!input)return;
+  const detected=detectSelectedSubscriptionNetworks();
+  input.value=detected.join(', ');
+  subApplyInternalNetworksToAllowed();
+}
+function payloadFromForm() {
+  const form = $('#sub-form');
+  const fd = new FormData(form);
+  const body = Object.fromEntries(fd.entries());
+  body.time_limit_days =Number(fd.get('time_limit_days') || 0) +(Number(fd.get('time_limit_hours') || 0) / 24) +(Number(fd.get('time_limit_minutes') || 0) / 1440);
+  body.start_on_first_use = fd.has('start_on_first_use'); body.unlimited = fd.has('unlimited'); body.include_internal_network = fd.has('include_internal_network'); body.sync_existing = !!$('#sync-existing')?.checked;
+  if (MODE === 'new' && body.include_internal_network) {for (const network of subNormalizeNetworkList(document.getElementById('sub-internal-networks')?.value)){body.allowed_ips=subAppendAllowedRoute(body.allowed_ips,network);}}
+
   const prefix=(fd.get('peer_name_prefix')||'').trim();
   body.targets=selectedItems().map((x,i)=>{
     if(MODE==='current') return {peer_id:x.peer_id, scope:x.scope, location_label:x.location_label||`${x.scope==='node'?x.node_name:'Local'} · ${x.iface}`, flag:x.flag, country_code:x.country_code||''};
-    return {scope:x.scope, iface_id:x.iface_id, iface:x.iface, node_id:x.node_id, label:x.label, location:x.location, peer_name:prefix?`${prefix}-${i+1}`:''};
+    return {
+      scope: x.scope,
+      iface_id: x.iface_id,
+      iface: x.iface,
+      node_id: x.node_id,
+      label: x.label,
+      location: x.location,
+      address: x.address || x.server_cidr || '',
+      server_cidr: x.server_cidr || x.address || '',
+      peer_name: prefix ? `${prefix}-${i+1}` : ''
+    };
   });
   return body;
 }
@@ -1450,16 +1707,53 @@ function rowHtml(s){
   const locs = s.locations || [];
   const state = subxSubscriptionState(s);
   const locCount = uniqueLocationCount(s);
-  const inboundText = locs.length ? `${locs.length} config${locs.length > 1 ? 's' : ''}` : 'No config attached';
-  const limitText = s.limit_bytes ? fmtBytes(s.limit_bytes) : 'No data cap';
-  const remaining = s.remaining_bytes == null ? 'Unlimited' : fmtBytes(s.remaining_bytes);
+  const inboundText = locs.length
+    ? `${locs.length} config${locs.length > 1 ? 's' : ''}`
+    : 'No config attached';
+
   const used = fmtBytes(s.used_bytes || 0);
-  const dataPct = subxRemainingPct(s);
-  const timePct = subxTimePct(s);
+  const unlimited = !!s.unlimited || !s.limit_bytes;
+  const dataHeadline = unlimited
+    ? `${used} used`
+    : `${fmtBytes(s.remaining_bytes || 0)} left`;
+
+  const dataDetail = unlimited
+    ? 'No data cap'
+    : `${used} used · ${fmtBytes(s.limit_bytes)} limit`;
+
+  const startedValue =
+    s.first_used_at ||
+    (
+      Array.isArray(locs)
+        ? locs.map(x => x.first_used_at).filter(Boolean).sort()[0]
+        : null
+    );
+
+  const startedText = startedValue
+    ? `Active since ${subDate(startedValue)}`
+    : (
+        Number(s.used_bytes || 0) > 0
+          ? 'Active · start time pending refresh'
+          : 'Not started yet'
+      );
+
+  const timeHeadline = unlimited
+    ? startedText
+    : subxTtlText(s.ttl_seconds);
+
+  const timeDetail = unlimited
+    ? 'No expiry limit'
+    : subxTimeHint(s);
+
+  const dataPct = unlimited ? 100 : subxRemainingPct(s);
+  const timePct = unlimited ? 100 : subxTimePct(s);
   const note = s.note || 'Multi-location client';
   const scope = subxScopeOf(s);
-  const scopeText = scope === 'mixed' ? 'Local + nodes' : scope === 'node' ? 'Nodes only' : scope === 'local' ? 'Local only' : 'No location yet';
-  const timeHint = subxTimeHint(s);
+  const scopeText =
+    scope === 'mixed' ? 'Local + nodes' :
+    scope === 'node' ? 'Nodes only' :
+    scope === 'local' ? 'Local only' :
+    'No location yet';
 
   return `<article class="subx-row subx-row-line state-${state.cls}" data-sub="${s.id}">
     <div class="subx-line-id">
@@ -1471,22 +1765,39 @@ function rowHtml(s){
       <div class="subx-line-top">
         <span><i class="fas fa-location-dot"></i> ${locCount} location${locCount === 1 ? '' : 's'} · ${esc(inboundText)}</span>
         <span><i class="fas fa-layer-group"></i> ${esc(scopeText)}</span>
-        <span><i class="fas fa-database"></i> ${used} used · ${esc(limitText)}</span>
+        <span><i class="fas fa-database"></i> ${used} used · ${unlimited ? 'No data cap' : esc(fmtBytes(s.limit_bytes)) + ' limit'}</span>
+        <span><i class="fas fa-play-circle"></i> ${esc(startedText)}</span>
       </div>
+
       <div class="subx-bars">
-        <div class="subx-hbar data" title="${esc(remaining)} remaining">
-          <span class="subx-hbar-label"><b>Data</b><em>${esc(remaining)} remaining</em></span>
+        <div class="subx-hbar data" title="${esc(dataHeadline + ' · ' + dataDetail)}">
+          <span class="subx-hbar-label">
+            <b>Data</b>
+            <span class="subx-hbar-copy">
+              <strong>${esc(dataHeadline)}</strong>
+              <em>${esc(dataDetail)}</em>
+            </span>
+          </span>
           <i style="width:${Math.max(3, dataPct)}%"></i>
         </div>
-        <div class="subx-hbar time" title="${esc(timeHint)}">
-          <span class="subx-hbar-label"><b>Time</b><em>${esc(subxTtlText(s.ttl_seconds))} · ${esc(timeHint)}</em></span>
+
+        <div class="subx-hbar time" title="${esc(timeHeadline + ' · ' + timeDetail)}">
+          <span class="subx-hbar-label">
+            <b>Started</b>
+            <span class="subx-hbar-copy">
+              <strong>${esc(timeHeadline)}</strong>
+              <em>${esc(timeDetail)}</em>
+            </span>
+          </span>
           <i style="width:${Math.max(3, timePct)}%"></i>
         </div>
       </div>
     </div>
 
     <div class="subx-line-state">
-      <span class="subx-state-pill ${state.cls}"><i class="fas ${subxIconForState(state.cls)}"></i>${esc(state.label)}</span>
+      <span class="subx-state-pill ${state.cls}">
+        <i class="fas ${subxIconForState(state.cls)}"></i>${esc(state.label)}
+      </span>
       <small>${esc(state.sub)}</small>
     </div>
 
@@ -1593,3 +1904,15 @@ async function loadSubs(opts={}){
 }
 
 setTimeout(()=>renderSubscriptions(), 0);
+
+
+(() => {
+  const run = () => {
+    const toggle = document.getElementById('sub-include-internal-network');
+    if (!toggle || toggle.dataset.autoNetworkWired === '1') return;
+    toggle.dataset.autoNetworkWired = '1';
+    toggle.addEventListener('change', subApplyInternalNetworksToAllowed);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run, {once:true});
+  else run();
+})();
