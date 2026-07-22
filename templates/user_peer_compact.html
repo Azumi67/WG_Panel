@@ -1,139 +1,37 @@
-<!doctype html>
-<html lang="en">
-
-<head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>WG Access — Compact</title>
-
-    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Regular.woff2') }}" as="font" type="font/woff2"
-        crossorigin>
-    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-SemiBold.woff2') }}" as="font" type="font/woff2"
-        crossorigin>
-    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Bold.woff2') }}" as="font" type="font/woff2"
-        crossorigin>
-
-    <link rel="stylesheet" href="/static/css/userlink_compact.css" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}">
-   
-    <script defer src="{{ url_for('static', filename='js/qrcode.min.js', v='1') }}"></script>
-    <script defer src="/static/js/userlink_compact.js"></script>
-</head>
-
-<body class="ulc-body">
-    <div class="ulc-bg"><canvas id="ulc-bg"></canvas></div>
-    <main class="ulc-wrap">
-        <section class="ulc-card ulc-idcard">
-            <div class="ulc-id-main">
-                <div class="ulc-title">
-                    <i class="fas fa-shield-halved"></i>
-                    <span>WireGuard Access</span>
-                </div>
-                <div class="ulc-actions">
-                    <button id="ulc-theme" class="ulc-icon ghost" title="Toggle theme"><i
-                            class="fas fa-moon"></i></button>
-                </div>
-            </div>
-
-            <div class="ulc-grid">
-                <div class="ulc-kv">
-                    <div class="k">Peer</div>
-                    <div class="v" id="ulc-name">—</div>
-                </div>
-                <div class="ulc-kv">
-                    <div class="k">Status</div>
-                    <div class="v"><span id="ulc-status" class="ulc-badge">—</span></div>
-                </div>
-                <div class="ulc-kv">
-                    <div class="k">Address</div>
-                    <div class="v mono" id="ulc-address">—</div>
-                </div>
-                <div class="ulc-kv">
-                    <div class="k">Endpoint</div>
-                    <div class="v mono" id="ulc-endpoint">—</div>
-                </div>
-            </div>
-        </section>
-
-        <section class="ulc-card ulc-gauges">
-            <div class="ulc-gauge">
-                <div class="radial" id="ulc-time-gauge" aria-label="Time remaining" title="Time remaining">
-                    <div class="ring"></div>
-                    <div class="center">
-                        <div class="value" id="ulc-time-left">0d 0h</div>
-                        <div class="label">Time left</div>
-                    </div>
-                </div>
-                <div class="ulc-g-caption">
-                    <i class="fas fa-hourglass-half"></i>
-                    <span id="ulc-exp-sub">Expires —</span>
-                </div>
-            </div>
-
-            <div class="ulc-gauge">
-                <div class="radial" id="ulc-data-gauge" aria-label="Data remaining" title="Data remaining">
-                    <div class="ring"></div>
-                    <div class="center">
-                        <div class="value" id="ulc-data-left">0 MiB</div>
-                        <div class="label">Remaining</div>
-                    </div>
-                </div>
-                <div class="ulc-g-caption">
-                    <i class="fas fa-database"></i>
-                    <span id="ulc-limit-sub">Limit —</span>
-                </div>
-            </div>
-        </section>
-
-        <section class="ulc-card ulc-config">
-            <div class="ulc-row ulc-row-between">
-                <h4 class="ulc-h"><i class="fas fa-qrcode"></i> Config</h4>
-                <div class="ulc-btns">
-                    <a id="ulc-download" class="ulc-icon solid" download title="Download config"><i
-                            class="fas fa-download"></i></a>
-                    <button id="ulc-copy" class="ulc-icon ghost" title="Copy config"><i
-                            class="fas fa-clipboard"></i></button>
-                </div>
-            </div>
-
-            <div class="ulc-config-grid">
-                <div id="ulc-qr" class="ulc-qr" aria-live="polite" aria-busy="true"></div>
-                <ul class="ulc-tips">
-                    <li><i class="fas fa-mobile-screen"></i> Mobile: scan QR in WireGuard app</li>
-                    <li><i class="fas fa-laptop"></i> Desktop: import the <code>.conf</code> file</li>
-                </ul>
-            </div>
-        </section>
-
-        <section class="ulc-card ulc-contact">
-            <h4 class="ulc-h"><i class="fas fa-user-headset"></i> Support</h4>
-            <div class="ulc-contacts">
-                <!-- 
-        {% if support_telegram %}
-        <a class="ulc-chip" id="ulc-tg" href="https://t.me/{{ support_telegram }}" target="_blank">
-          <i class="fab fa-telegram"></i><span>{{ support_telegram }}</span>
-        </a>
-        {% endif %}
-        -->
-                <div id="ulc-support-slot"></div>
-            </div>
-        </section>
-    </main>
-
-    <div id="toast-container"></div>
-    <script>
-        window.USER_LINK_TOKEN = "{{ token }}";
-        window.SOCIALS = {
-            telegram: "{{ support_telegram|default('', true) }}",
-            whatsapp: "{{ support_whatsapp|default('', true) }}",
-            instagram: "{{ support_instagram|default('', true) }}",
-            phone: "{{ support_phone|default('', true) }}",
-            website: "{{ support_website|default('', true) }}",
-            email: "{{ support_email|default('', true) }}"
-        };
-    </script>
-
-
-</body>
-
-</html>
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><meta content="width=device-width,initial-scale=1" name="viewport"/><meta content="{{ token }}" name="user-token"/><link href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}" rel="stylesheet"/><link as="font" crossorigin="" href="{{ url_for('static', filename='fonts/Poppins-Regular.woff2') }}" rel="preload" type="font/woff2"/><link as="font" crossorigin="" href="{{ url_for('static', filename='fonts/Poppins-SemiBold.woff2') }}" rel="preload" type="font/woff2"/><link as="font" crossorigin="" href="{{ url_for('static', filename='fonts/Poppins-Bold.woff2') }}" rel="preload" type="font/woff2"/><title>WireGuard Access · Compact</title><link href="/static/css/userlink_compact.css" rel="stylesheet"/><script defer="" src="/static/js/qrcode.min.js"></script><script defer="" src="/static/js/userlink_compact.js"></script></head><body class="template-compact"><canvas aria-hidden="true" class="live-background" id="live-background"></canvas><main class="compact-shell"><header class="compact-bar"><div class="compact-brand"><i class="fas fa-shield-halved"></i><span>WireGuard Access</span></div><button class="icon-button" id="theme-toggle"><i class="fas fa-moon"></i></button></header><section class="compact-hero glass-card"><div><span class="eyebrow">Connection profile</span><h1 id="peer-name">Loading…</h1><div class="compact-meta"><span class="status-pill offline" id="peer-status"><span class="status-dot"></span><span id="peer-status-label">Loading</span></span><span><i class="fas fa-play-circle"></i><b id="activation-label">Activation</b>: <span id="active-since">—</span></span></div></div><div class="compact-identities"><div><small>Address</small><strong id="peer-address">—</strong></div><div><small>Endpoint</small><strong id="peer-endpoint">—</strong></div></div></section>
+<section class="metric-grid">
+<article class="metric-card glass-card">
+<div class="metric-header"><span class="metric-icon time"><i class="fas fa-hourglass-half"></i></span><div><small>Time remaining</small><strong id="time-left">—</strong></div><span class="metric-pct" id="time-pct">—</span></div>
+<div class="meter-track"><span class="meter-fill" id="time-bar"></span></div>
+<p class="metric-foot" id="time-expiry">Checking expiration…</p>
+</article>
+<article class="metric-card glass-card">
+<div class="metric-header"><span class="metric-icon data"><i class="fas fa-database"></i></span><div><small>Data remaining</small><strong id="data-left">—</strong></div><span class="metric-pct" id="data-pct">—</span></div>
+<div class="meter-track"><span class="meter-fill" id="data-bar"></span></div>
+<p class="metric-foot"><span id="data-used">—</span><span id="data-limit">—</span></p>
+</article>
+</section><section class="utility-grid"><section class="config-card glass-card">
+<div class="section-heading"><div><span class="section-kicker">Ready to connect</span><h2>WireGuard configuration</h2></div><div class="config-actions"><a class="action-button primary" download="" id="download-config"><i class="fas fa-download"></i><span>Download</span></a><button class="action-button" id="copy-config"><i class="fas fa-copy"></i><span>Copy</span></button></div></div>
+<div class="config-layout"><div aria-busy="true" aria-live="polite" class="qr-shell" id="config-qr"><div class="qr-loader"><i class="fas fa-spinner fa-spin"></i><span>Generating QR</span></div></div><div class="connection-guide"><div class="guide-step"><span>1</span><div><strong>Mobile</strong><p>Open WireGuard and scan the QR code.</p></div></div><div class="guide-step"><span>2</span><div><strong>Desktop</strong><p>Download or copy the configuration and import it.</p></div></div><div class="security-note"><i class="fas fa-lock"></i><span>Keep this configuration private. It contains your client key.</span></div></div></div>
+</section><section class="apps-card glass-card">
+<div class="section-heading compact-heading">
+<div><span class="section-kicker">Official clients</span><h2>Get the WireGuard app</h2></div>
+<span class="section-icon"><i class="fas fa-download"></i></span>
+</div>
+<p class="apps-intro">Install the official WireGuard client, then scan the QR code or import the downloaded configuration.</p>
+<div class="app-grid">
+<a class="app-link" href="https://www.wireguard.com/install/" rel="noopener" target="_blank"><span class="app-icon"><i class="fas fa-mobile-screen-button"></i></span><span><strong>Mobile</strong><small>Android and iPhone/iPad</small></span><i class="fas fa-arrow-up-right-from-square"></i></a>
+<a class="app-link" href="https://www.wireguard.com/install/" rel="noopener" target="_blank"><span class="app-icon"><i class="fas fa-desktop"></i></span><span><strong>PC</strong><small>Windows, macOS and Linux</small></span><i class="fas fa-arrow-up-right-from-square"></i></a>
+</div>
+</section><section class="support-card glass-card"><div class="section-heading compact-heading"><div><span class="section-kicker">Need assistance?</span><h2>Support</h2></div><span class="section-icon"><i class="fas fa-headset"></i></span></div><div class="support-links" id="support-links"></div></section></section><footer class="page-footer"><i class="fas fa-shield-check"></i><span>Encrypted access powered by WireGuard</span></footer><div aria-live="polite" id="toast-container"></div></main><script>
+window.USER_LINK_TOKEN = "{{ token }}";
+window.SOCIALS = {
+  telegram: {{ support_telegram|default('', true)|tojson }},
+  whatsapp: {{ support_whatsapp|default('', true)|tojson }},
+  instagram: {{ support_instagram|default('', true)|tojson }},
+  phone: {{ support_phone|default('', true)|tojson }},
+  website: {{ support_website|default('', true)|tojson }},
+  email: {{ support_email|default('', true)|tojson }}
+};
+</script></body></html>
