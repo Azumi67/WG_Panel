@@ -2443,3 +2443,26 @@ input#peer-search,.peer-search-row input,.peers-filter-row input,.peers-filter-r
   .peer-page-hero,.peer-scope-panel,#iface-bar.iface-bar,.peer-page-actions,.peer-summary-card,.summary-stat,.peer-card,.peer-hero-live span,.iface-dot{animation:none!important;transition:none!important;}
   .peer-page-hero:before,.iface-btn:after,.peer-page-actions .btn:after,.summary-stat:after{display:none!important;}
 }
+
+
+#peer-modal .peerx-form-grid.limits>.peerx-switch:first-of-type,
+#edit-peer-modal .peerx-form-grid.limits>.peerx-switch:first-of-type,
+#bulk-modal .peerx-form-grid.limits>.peerx-switch:first-of-type{grid-column:1/3!important}
+#peer-modal .peerx-form-grid.limits>.peerx-switch:last-of-type,
+#edit-peer-modal .peerx-form-grid.limits>.peerx-switch:last-of-type,
+#bulk-modal .peerx-form-grid.limits>.peerx-switch:last-of-type{grid-column:3/5!important}
+#peer-modal .peerx-form-grid.limits>.peerx-switch,
+#edit-peer-modal .peerx-form-grid.limits>.peerx-switch,
+#bulk-modal .peerx-form-grid.limits>.peerx-switch{width:100%!important;min-width:0!important;max-width:100%!important;box-sizing:border-box!important;display:grid!important;grid-template-columns:38px minmax(0,1fr)!important;align-items:center!important;gap:9px!important;padding:8px 10px!important;overflow:hidden!important}
+#peer-modal .peerx-form-grid.limits>.peerx-switch>span,
+#edit-peer-modal .peerx-form-grid.limits>.peerx-switch>span,
+#bulk-modal .peerx-form-grid.limits>.peerx-switch>span{width:38px!important;min-width:38px!important;max-width:38px!important;flex:0 0 38px!important}
+#peer-modal .peerx-form-grid.limits>.peerx-switch>b,
+#edit-peer-modal .peerx-form-grid.limits>.peerx-switch>b,
+#bulk-modal .peerx-form-grid.limits>.peerx-switch>b{display:block!important;min-width:0!important;max-width:100%!important;margin:0!important;white-space:normal!important;overflow-wrap:anywhere!important;word-break:normal!important;font-size:11.5px!important;line-height:1.18!important}
+@media(max-width:720px){
+#peer-modal .peerx-form-grid.limits>.peerx-switch,
+#edit-peer-modal .peerx-form-grid.limits>.peerx-switch,
+#bulk-modal .peerx-form-grid.limits>.peerx-switch{grid-column:1/-1!important}
+}
+
