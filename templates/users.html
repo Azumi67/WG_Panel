@@ -174,8 +174,10 @@
                     <label class="form-group">{{ form.limit_unit.label }} {{ form.limit_unit(class="input", id="peer-data-limit-unit") }}</label>
                     <label class="form-group"><span>Days</span>{{ form.time_limit_days(class="input", id="time_limit_days", min="0", placeholder="0") }}</label>
                     <label class="form-group"><span>Hours</span>{{ form.time_limit_hours(class="input", id="time_limit_hours", min="0", max="23", placeholder="0–23") }}</label>
+                    <div class="peerx-limit-switch-row">
                     <label class="peerx-switch">{{ form.start_on_first_use(id="peer-start-first-use") }}<span></span><b>Start timer on first connection</b></label>
                     <label class="peerx-switch">{{ form.unlimited(id="peer-unlimited") }}<span></span><b>Unlimited</b></label>
+                    </div>
                 </div>
             </section>
             </div>
@@ -236,8 +238,19 @@
                     <label class="form-group"><span>Unit</span><select name="data_limit_unit" class="input"><option value="Mi">MiB</option><option value="Gi">GiB</option></select></label>
                     <label class="form-group"><span>Days</span><input name="time_limit_days" type="number" class="input" min="0" placeholder="0"></label>
                     <label class="form-group"><span>Hours</span><input name="time_limit_hours" type="number" class="input" min="0" max="23" placeholder="0–23"></label>
-                    <label class="peerx-switch"><input type="checkbox" name="start_on_first_use"><span></span><b>Start timer on first connection</b></label>
-                    <label class="peerx-switch"><input type="checkbox" name="unlimited"><span></span><b>Unlimited</b></label>
+                    <div class="peerx-limit-switch-row">
+                        <label class="peerx-switch">
+                            <input type="checkbox" name="start_on_first_use">
+                            <span></span>
+                            <b>Start timer on first connection</b>
+                        </label>
+                    
+                        <label class="peerx-switch">
+                            <input type="checkbox" name="unlimited">
+                            <span></span>
+                            <b>Unlimited</b>
+                        </label>
+                    </div>
                 </div>
             </section>
             </div>
@@ -306,8 +319,19 @@
                     <label class="form-group"><span>Unit</span><select id="bulk-data_limit_unit" name="data_limit_unit" class="input"><option value="Mi">MiB</option><option value="Gi" selected>GiB</option></select></label>
                     <label class="form-group"><span>Days</span><input id="bulk-time-days" name="time_limit_days" type="number" class="input" min="0" placeholder="0"></label>
                     <label class="form-group"><span>Hours</span><input id="bulk-time-hours" name="time_limit_hours" type="number" class="input" min="0" max="23" placeholder="0–23"></label>
-                    <label class="peerx-switch"><input id="bulk-start-first" type="checkbox" name="start_on_first_use"><span></span><b>Start timer on first connection</b></label>
-                    <label class="peerx-switch"><input id="bulk-unlimited" type="checkbox" name="unlimited"><span></span><b>Unlimited</b></label>
+                    <div class="peerx-limit-switch-row">
+                        <label class="peerx-switch">
+                            <input id="bulk-start-first" type="checkbox" name="start_on_first_use">
+                            <span></span>
+                            <b>Start timer on first connection</b>
+                        </label>
+                    
+                        <label class="peerx-switch">
+                            <input id="bulk-unlimited" type="checkbox" name="unlimited">
+                            <span></span>
+                            <b>Unlimited</b>
+                        </label>
+                    </div>
                 </div>
             </section>
             </div>
@@ -444,4 +468,147 @@
         }
     }
 </style>
+
+<style id="peer-limit-switch-row-final">
+#peer-modal .peerx-limit-switch-row,
+#edit-peer-modal .peerx-limit-switch-row,
+#bulk-modal .peerx-limit-switch-row{
+  grid-column:1/-1!important;
+  display:grid!important;
+  grid-template-columns:minmax(0,1.55fr) minmax(150px,.75fr)!important;
+  gap:10px!important;
+  width:100%!important;
+  min-width:0!important;
+  box-sizing:border-box!important;
+  margin-top:2px!important
+}
+
+#peer-modal .peerx-limit-switch-row>.peerx-switch,
+#edit-peer-modal .peerx-limit-switch-row>.peerx-switch,
+#bulk-modal .peerx-limit-switch-row>.peerx-switch{
+  width:100%!important;
+  min-width:0!important;
+  max-width:100%!important;
+  min-height:52px!important;
+  box-sizing:border-box!important;
+  display:grid!important;
+  grid-template-columns:46px minmax(0,1fr)!important;
+  align-items:center!important;
+  gap:12px!important;
+  margin:0!important;
+  padding:9px 12px!important;
+  border:1px solid #dbe3ee!important;
+  border-radius:15px!important;
+  background:linear-gradient(180deg,#fff,#f8fafc)!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.9)!important;
+  overflow:hidden!important;
+  cursor:pointer!important
+}
+
+#peer-modal .peerx-limit-switch-row>.peerx-switch:hover,
+#edit-peer-modal .peerx-limit-switch-row>.peerx-switch:hover,
+#bulk-modal .peerx-limit-switch-row>.peerx-switch:hover{
+  border-color:#b8c4d4!important;
+  background:#fff!important
+}
+
+#peer-modal .peerx-limit-switch-row>.peerx-switch>input,
+#edit-peer-modal .peerx-limit-switch-row>.peerx-switch>input,
+#bulk-modal .peerx-limit-switch-row>.peerx-switch>input{
+  position:absolute!important;
+  opacity:0!important;
+  pointer-events:none!important
+}
+
+#peer-modal .peerx-limit-switch-row>.peerx-switch>span,
+#edit-peer-modal .peerx-limit-switch-row>.peerx-switch>span,
+#bulk-modal .peerx-limit-switch-row>.peerx-switch>span{
+  position:relative!important;
+  display:block!important;
+  width:46px!important;
+  min-width:46px!important;
+  max-width:46px!important;
+  height:26px!important;
+  min-height:26px!important;
+  border-radius:999px!important;
+  background:#cbd5e1!important;
+  transition:background .16s ease!important;
+  box-shadow:inset 0 1px 2px rgba(15,23,42,.12)!important
+}
+
+#peer-modal .peerx-limit-switch-row>.peerx-switch>span:after,
+#edit-peer-modal .peerx-limit-switch-row>.peerx-switch>span:after,
+#bulk-modal .peerx-limit-switch-row>.peerx-switch>span:after{
+  content:""!important;
+  position:absolute!important;
+  top:3px!important;
+  left:3px!important;
+  width:20px!important;
+  height:20px!important;
+  border-radius:50%!important;
+  background:#fff!important;
+  box-shadow:0 2px 5px rgba(15,23,42,.24)!important;
+  transition:transform .16s ease!important
+}
+
+#peer-modal .peerx-limit-switch-row>.peerx-switch>input:checked+span,
+#edit-peer-modal .peerx-limit-switch-row>.peerx-switch>input:checked+span,
+#bulk-modal .peerx-limit-switch-row>.peerx-switch>input:checked+span{
+  background:#111827!important
+}
+
+#peer-modal .peerx-limit-switch-row>.peerx-switch>input:checked+span:after,
+#edit-peer-modal .peerx-limit-switch-row>.peerx-switch>input:checked+span:after,
+#bulk-modal .peerx-limit-switch-row>.peerx-switch>input:checked+span:after{
+  transform:translateX(20px)!important
+}
+
+#peer-modal .peerx-limit-switch-row>.peerx-switch>b,
+#edit-peer-modal .peerx-limit-switch-row>.peerx-switch>b,
+#bulk-modal .peerx-limit-switch-row>.peerx-switch>b{
+  display:block!important;
+  min-width:0!important;
+  max-width:100%!important;
+  margin:0!important;
+  color:#111827!important;
+  font-size:12px!important;
+  font-weight:900!important;
+  line-height:1.2!important;
+  white-space:normal!important;
+  overflow-wrap:normal!important;
+  word-break:normal!important
+}
+
+@media(max-width:820px){
+  #peer-modal .peerx-limit-switch-row,
+  #edit-peer-modal .peerx-limit-switch-row,
+  #bulk-modal .peerx-limit-switch-row{
+    grid-template-columns:1fr!important
+  }
+}
+
+@media(prefers-color-scheme:dark){
+  #peer-modal .peerx-limit-switch-row>.peerx-switch,
+  #edit-peer-modal .peerx-limit-switch-row>.peerx-switch,
+  #bulk-modal .peerx-limit-switch-row>.peerx-switch{
+    background:linear-gradient(180deg,#111827,#0f172a)!important;
+    border-color:#263244!important;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.04)!important
+  }
+
+  #peer-modal .peerx-limit-switch-row>.peerx-switch:hover,
+  #edit-peer-modal .peerx-limit-switch-row>.peerx-switch:hover,
+  #bulk-modal .peerx-limit-switch-row>.peerx-switch:hover{
+    background:#111827!important;
+    border-color:#3b4b61!important
+  }
+
+  #peer-modal .peerx-limit-switch-row>.peerx-switch>b,
+  #edit-peer-modal .peerx-limit-switch-row>.peerx-switch>b,
+  #bulk-modal .peerx-limit-switch-row>.peerx-switch>b{
+    color:#e5e7eb!important
+  }
+}
+</style>
+
 {% endblock %}
