@@ -944,6 +944,33 @@ async function openEdit(id, opts={}){
   openModal();
 }
 
+
+function showSubscriptionPickerLoading(mode) {
+  const list = $('#inbound-list');
+  const count = $('#picker-count');
+  const hint = $('#picker-hint');
+  const existing = mode === 'current';
+
+  if (list) {
+    list.innerHTML = `
+      <div class="subx-empty subx-loading-state" style="padding:28px;display:grid">
+        <span class="subx-loading-spinner" aria-hidden="true"></span>
+        <b>${existing ? 'Loading existing configs…' : 'Loading interfaces…'}</b>
+        <span>${existing
+          ? 'Please wait while local and node configs are loaded.'
+          : 'Please wait while local and node interfaces are loaded.'}</span>
+      </div>
+    `;
+  }
+
+  if (count) count.textContent = 'Loading…';
+  if (hint) {
+    hint.textContent = existing
+      ? 'Fetching existing local and node configurations.'
+      : 'Fetching local and node interfaces.';
+  }
+}
+
 function setModeButtons(){
   $$('.subx-mode button').forEach(b=>b.classList.toggle('active', b.dataset.mode===MODE));
   $$('.subx-filters button[data-scope]').forEach(b=>b.classList.toggle('active', b.dataset.scope===SCOPE));
@@ -1176,7 +1203,56 @@ document.querySelectorAll('input[name="sub-layout"]').forEach(r=>r.addEventListe
 
 $('#sub-modal').addEventListener('click',e=>{if(e.target.dataset.close) closeModal();});
 $('#details-modal').addEventListener('click',e=>{if(e.target.dataset.closeDetails) closeDetails();});
-$$('.subx-mode button').forEach(b=>b.onclick=()=>{MODE=b.dataset.mode; setModeButtons();});
+$$('.subx-mode button').forEach(button => {
+  button.onclick = async () => {
+    const nextMode = button.dataset.mode || 'new';
+    if (MODE === nextMode) return;
+
+    MODE = nextMode;
+    SEARCH = '';
+    EXISTING_GROUP_LIMITS = {};
+
+    const search = $('#inbound-search');
+    if (search) search.value = '';
+
+    showSubscriptionPickerLoading(MODE);
+
+    const modeButtons = $$('.subx-mode button');
+    modeButtons.forEach(item => {
+      item.classList.toggle('active', item.dataset.mode === MODE);
+      item.disabled = true;
+    });
+
+    try {
+      await loadPickers();
+      setModeButtons();
+    } catch (error) {
+      console.error('Subscription picker loading failed:', error);
+
+      const list = $('#inbound-list');
+      const count = $('#picker-count');
+      const hint = $('#picker-hint');
+      const existing = MODE === 'current';
+
+      if (list) {
+        list.innerHTML = `
+          <div class="subx-empty" style="padding:28px;display:grid">
+            <b>${existing ? 'Could not load existing configs' : 'Could not load interfaces'}</b>
+            <span>Please try again.</span>
+          </div>
+        `;
+      }
+
+      if (count) count.textContent = 'Unavailable';
+      if (hint) hint.textContent = 'Loading failed.';
+      toastBad(existing
+        ? 'Could not load existing configurations.'
+        : 'Could not load interfaces.');
+    } finally {
+      modeButtons.forEach(item => { item.disabled = false; });
+    }
+  };
+});
 $$('.subx-filters button[data-scope]').forEach(b=>b.onclick=()=>{SCOPE=b.dataset.scope; setModeButtons();});
 
 const searchEl = $('#inbound-search');
@@ -1428,8 +1504,6 @@ loadSubs({force:true});
 SUBS_LIVE_TIMER = setInterval(()=>loadSubs({force:false}), SUBS_REFRESH_MS);
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) loadSubs({force:true}); });
 
-
-/* ===== Subscription redesign behavior overrides ===== */
 function subxDisplayMode(){ return (SUB_SETTINGS && SUB_SETTINGS.display_mode) || localStorage.getItem('subx-display-mode') || 'hybrid'; }
 function subxClampPct(v){ v=Number(v||0); return Math.max(0, Math.min(100, Math.round(v))); }
 function subxIconForState(cls){ return cls === 'blocked' ? 'fa-ban' : cls === 'disabled' ? 'fa-pause' : cls === 'offline' ? 'fa-circle-dot' : 'fa-signal'; }
@@ -1526,8 +1600,6 @@ function updateLayoutPreview(layout){
 document.querySelectorAll('input[name="sub-display-mode"]').forEach(r=>r.addEventListener('change',()=>updateLayoutPreview(document.querySelector('input[name="sub-layout"]:checked')?.value||'aurora')));
 try { setTimeout(() => loadSubs({force:true}), 0); } catch(_) {}
 
-
-/* ===== v52 final admin list UX: compact horizontal rows, filters, pagination ===== */
 const SUBX_LIST = {
   q: '',
   status: 'all',
