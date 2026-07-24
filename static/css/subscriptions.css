@@ -787,10 +787,9 @@
 .subx-config-head,
 .subx-config-row {
   display: grid;
-  grid-template-columns: minmax(160px, 1.4fr) minmax(
-      105px,
-      0.8fr
-    ) 84px 84px minmax(140px, 1fr);
+  grid-template-columns:
+    minmax(160px, 1.4fr) minmax(105px, 0.8fr)
+    84px 84px minmax(140px, 1fr);
   gap: 8px;
   align-items: center;
 }
@@ -886,10 +885,9 @@
 }
 .subx-config-head,
 .subx-config-row {
-  grid-template-columns: 28px minmax(145px, 1.25fr) minmax(96px, 0.75fr) minmax(
-      125px,
-      1fr
-    ) 78px 78px minmax(150px, 1fr) !important;
+  grid-template-columns:
+    28px minmax(145px, 1.25fr) minmax(96px, 0.75fr) minmax(125px, 1fr)
+    78px 78px minmax(150px, 1fr) !important;
 }
 .subx-config-head span:first-child {
   display: none;
@@ -4843,10 +4841,9 @@ body:has(.sidebar.sb2.is-collapsed).subx-modal-open
 
 .subx-row-line {
   display: grid !important;
-  grid-template-columns: minmax(230px, 270px) minmax(420px, 1fr) minmax(
-      128px,
-      150px
-    ) minmax(146px, 146px) !important;
+  grid-template-columns:
+    minmax(230px, 270px) minmax(420px, 1fr) minmax(128px, 150px)
+    minmax(146px, 146px) !important;
   gap: 12px !important;
   align-items: center !important;
   min-height: 86px !important;
