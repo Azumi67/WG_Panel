@@ -1,7 +1,7 @@
 import os, glob, subprocess, time, shlex, logging, ipaddress, psutil, requests, json, tempfile, sys, zipfile, datetime as dt, ipaddress, platform, re, qrcode, multiprocessing, threading
 from io import BytesIO
 from logging.handlers import RotatingFileHandler
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from flask import (
     Flask, render_template, redirect, url_for, flash, request,
     jsonify, abort, current_app, make_response, send_file, session, g
@@ -46,7 +46,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 # ----------------------------------
 # Panel version / update checker
 # ----------------------------------
-PANEL_VERSION = "1.0.3"
+PANEL_VERSION = "1.0.4"
 PANEL_REPO = "Azumi67/WG_Panel"
 PANEL_UPDATE_TTL = 1800
 _PANEL_UPDATE_CACHE = {
@@ -1611,9 +1611,11 @@ def tg_token_clear():
     return jsonify(ok=True)
 
 @app.get('/api/telegram/admins')
-@require_api_key
+@require_api_key_or_login
 def tg_admins_get():
-    return jsonify(admins=_load_tg_admins())
+    return jsonify(
+        admins=_load_tg_admins()
+    )
 
 @app.post('/api/telegram/admins')
 @login_required
@@ -2473,24 +2475,488 @@ def backups_autolist():
     return jsonify(files=files)
 
 
-@app.get('/api/backups/file/<path:fname>')
-@login_required
+@app.route(
+    '/api/backups/file/<path:fname>',
+    methods=['GET', 'DELETE'],
+)
+@require_api_key_or_login
 def backups_auto(fname):
+    safe_name = os.path.basename(
+        str(fname or '')
+    )
 
-    safe_name = os.path.basename(fname)
-    path = Path(BACKUP_AUTO_DIR) / safe_name
-    if not path.is_file():
-        abort(404)
+    if (
+        not safe_name
+        or not safe_name.lower().endswith('.zip')
+    ):
+        return jsonify(
+            ok=False,
+            error='invalid_filename',
+            message='Invalid backup filename.',
+        ), 400
+
+    backup_root = Path(
+        BACKUP_AUTO_DIR
+    ).resolve()
+
+    backup_path = (
+        backup_root / safe_name
+    ).resolve()
+
+    try:
+        backup_path.relative_to(
+            backup_root
+        )
+    except ValueError:
+        return jsonify(
+            ok=False,
+            error='invalid_path',
+            message='Invalid backup path.',
+        ), 400
+
+    if not backup_path.is_file():
+        return jsonify(
+            ok=False,
+            error='not_found',
+            message='The saved backup was not found.',
+        ), 404
+
+    if request.method == 'DELETE':
+        try:
+            file_size = backup_path.stat().st_size
+
+            backup_path.unlink()
+
+            current_app.logger.info(
+                'Automatic backup deleted: '
+                'file=%s size=%s',
+                safe_name,
+                file_size,
+            )
+
+            try:
+                _norm_adminlog({
+                    'action': 'auto_backup_delete',
+                    'details': (
+                        f'file={safe_name}; '
+                        f'size={file_size}'
+                    ),
+                    'channel': (
+                        'api'
+                        if (
+                            request.headers.get(
+                                'Authorization'
+                            )
+                            or request.headers.get(
+                                'X-API-KEY'
+                            )
+                        )
+                        else 'web'
+                    ),
+                })
+            except Exception:
+                pass
+
+            return jsonify(
+                ok=True,
+                deleted=safe_name,
+                size=file_size,
+                message='Automatic backup deleted.',
+            )
+
+        except PermissionError:
+            return jsonify(
+                ok=False,
+                error='permission_denied',
+                message=(
+                    'The panel does not have permission '
+                    'to delete this backup.'
+                ),
+            ), 403
+
+        except Exception as exc:
+            current_app.logger.exception(
+                'Could not delete automatic backup '
+                '%s: %s',
+                safe_name,
+                exc,
+            )
+
+            return jsonify(
+                ok=False,
+                error='delete_failed',
+                message=str(exc),
+            ), 500
+
+    download = (
+        request.args.get('download')
+        == '1'
+    )
 
     return send_file(
-        str(path),
+        str(backup_path),
         mimetype='application/zip',
-        as_attachment=False,
-        download_name=path.name,
+        as_attachment=download,
+        download_name=backup_path.name,
+        conditional=True,
     )
 
 
+@app.get('/api/backups/inspect/<path:fname>')
+@require_api_key_or_login
+def inspect_saved_auto_backup(fname):
+    """
+    Inspect a saved automatic backup directly on the server.
 
+    The ZIP is read on the panel server instead of being downloaded
+    through the browser first.
+    """
+    safe_name = os.path.basename(
+        str(fname or '')
+    )
+
+    if (
+        not safe_name
+        or not safe_name.lower().endswith('.zip')
+    ):
+        return jsonify(
+            ok=False,
+            error='invalid_filename',
+            message='Invalid backup filename.',
+        ), 400
+
+    backup_root = Path(BACKUP_AUTO_DIR).resolve()
+    backup_path = (
+        backup_root / safe_name
+    ).resolve()
+
+    # Prevent path traversal.
+    try:
+        backup_path.relative_to(backup_root)
+    except ValueError:
+        return jsonify(
+            ok=False,
+            error='invalid_path',
+            message='Invalid backup path.',
+        ), 400
+
+    if not backup_path.is_file():
+        return jsonify(
+            ok=False,
+            error='not_found',
+            message=(
+                'The saved backup file was not found.'
+            ),
+        ), 404
+
+    try:
+        with zipfile.ZipFile(
+            backup_path,
+            'r',
+        ) as archive:
+            names = archive.namelist()
+
+            def existing_files(prefix):
+                return [
+                    name
+                    for name in names
+                    if (
+                        name.startswith(prefix)
+                        and not name.endswith('/')
+                    )
+                ]
+
+            def read_text(member):
+                if member not in names:
+                    return None
+
+                try:
+                    return (
+                        archive.read(member)
+                        .decode(
+                            'utf-8',
+                            'replace',
+                        )
+                        .strip()
+                    )
+                except Exception:
+                    return None
+
+            def read_json(member):
+                text = read_text(member)
+
+                if not text:
+                    return None
+
+                try:
+                    return json.loads(text)
+                except Exception:
+                    return None
+
+            db_files = existing_files('db/')
+            instance_files = existing_files(
+                'instance/'
+            )
+
+            local_wg_files = sorted([
+                os.path.basename(name)
+                for name in names
+                if (
+                    name.startswith('wg/')
+                    and name.endswith('.conf')
+                )
+            ])
+
+            node_wg_files = []
+            node_wg_nodes = {}
+
+            node_env_files = []
+            node_env_nodes = {}
+
+            for member in names:
+                match = re.match(
+                    r'^nodes/(\d+)/wg/'
+                    r'([^/]+\.conf)$',
+                    member,
+                )
+
+                if match:
+                    node_id = int(
+                        match.group(1)
+                    )
+
+                    filename = os.path.basename(
+                        match.group(2)
+                    )
+
+                    node_wg_files.append({
+                        'node_id': node_id,
+                        'file': filename,
+                        'path': member,
+                    })
+
+                    node_key = str(node_id)
+
+                    node_wg_nodes[node_key] = (
+                        node_wg_nodes.get(
+                            node_key,
+                            0,
+                        )
+                        + 1
+                    )
+
+                    continue
+
+                match = re.match(
+                    r'^nodes/(\d+)/env/\.env$',
+                    member,
+                )
+
+                if match:
+                    node_id = int(
+                        match.group(1)
+                    )
+
+                    node_env_files.append({
+                        'node_id': node_id,
+                        'file': '.env',
+                        'path': member,
+                    })
+
+                    node_key = str(node_id)
+
+                    node_env_nodes[node_key] = (
+                        node_env_nodes.get(
+                            node_key,
+                            0,
+                        )
+                        + 1
+                    )
+
+            has_db = bool(db_files)
+            has_settings = bool(
+                instance_files
+            )
+            has_wg = bool(
+                local_wg_files
+            )
+            has_node_wg = bool(
+                node_wg_files
+            )
+            has_env = (
+                'env/.env'
+                in names
+            )
+            has_node_env = bool(
+                node_env_files
+            )
+
+            if has_db and has_settings:
+                kind = 'full'
+            elif has_db:
+                kind = 'db'
+            elif has_settings:
+                kind = 'settings'
+            else:
+                kind = 'unknown'
+
+            manifest = (
+                read_json(
+                    'meta/manifest.json'
+                )
+                or {}
+            )
+
+            node_backup_results = (
+                read_json(
+                    'meta/node_wg_backup.json'
+                )
+                or []
+            )
+
+            runtime_settings = (
+                read_json(
+                    'instance/runtime.json'
+                )
+                or {}
+            )
+
+            panel_settings = (
+                read_json(
+                    'instance/panel_settings.json'
+                )
+                or {}
+            )
+
+            app_meta = (
+                read_json(
+                    'meta/app.json'
+                )
+                or {}
+            )
+
+            contains = {
+                'database': has_db,
+                'settings': has_settings,
+                'env_file': has_env,
+                'local_wireguard_conf': (
+                    has_wg
+                ),
+                'remote_node_wireguard_conf': (
+                    has_node_wg
+                ),
+                'remote_node_env': (
+                    has_node_env
+                ),
+                'short_links': (
+                    'instance/short_links.json'
+                    in names
+                ),
+                'manifest': bool(manifest),
+            }
+
+            counts = {
+                'db_files': len(
+                    db_files
+                ),
+                'instance_files': len(
+                    instance_files
+                ),
+                'local_wg_files': len(
+                    local_wg_files
+                ),
+                'node_wg_files': len(
+                    node_wg_files
+                ),
+                'node_wg_nodes': len(
+                    node_wg_nodes
+                ),
+                'node_env_files': len(
+                    node_env_files
+                ),
+                'node_env_nodes': len(
+                    node_env_nodes
+                ),
+            }
+
+            stat = backup_path.stat()
+
+            return jsonify(
+                ok=True,
+                filename=backup_path.name,
+                size=stat.st_size,
+                modified=int(
+                    stat.st_mtime
+                ),
+                kind=kind,
+                created=read_text(
+                    'meta/created.txt'
+                ),
+                host=read_text(
+                    'meta/host.txt'
+                ),
+
+                has_db=has_db,
+                has_settings=has_settings,
+                has_wg=has_wg,
+                has_node_wg=has_node_wg,
+                has_env=has_env,
+                has_node_env=has_node_env,
+
+                contains=contains,
+                counts=counts,
+
+                local_wg_files=(
+                    local_wg_files
+                ),
+                node_wg_files=(
+                    node_wg_files
+                ),
+                node_wg_nodes=(
+                    node_wg_nodes
+                ),
+                node_env_files=(
+                    node_env_files
+                ),
+                node_env_nodes=(
+                    node_env_nodes
+                ),
+
+                manifest=manifest,
+                node_wg_backup=(
+                    node_backup_results
+                ),
+                runtime=runtime_settings,
+                panel_settings=(
+                    panel_settings
+                ),
+                app_meta=app_meta,
+            )
+
+    except zipfile.BadZipFile:
+        return jsonify(
+            ok=False,
+            error='invalid_zip',
+            message=(
+                'The saved file is not a valid '
+                'ZIP backup.'
+            ),
+        ), 400
+
+    except Exception as exc:
+        app.logger.exception(
+            'Saved auto-backup inspection '
+            'failed for %s: %s',
+            safe_name,
+            exc,
+        )
+
+        return jsonify(
+            ok=False,
+            error='inspection_failed',
+            message=str(exc),
+        ), 500
+    
 @app.get('/api/backup/prefs')
 @require_api_key_or_login
 def backup_get():
@@ -2510,33 +2976,137 @@ def _tg_chatid():
             return str(a['id'])
     return None
 
-def _send_zip_telegram(data_bytes: bytes, filename: str) -> tuple[bool, str]:
-    s = _load_tg_settings()
-    if not s.get('enabled'):
+
+def _send_zip_telegram(
+    data_bytes: bytes,
+    filename: str,
+    chat_id: str | None = None,
+) -> tuple[bool, str]:
+    settings = _load_tg_settings()
+
+    if not settings.get("enabled"):
         return False, "Telegram disabled."
-    token = (s.get('bot_token') or '').strip()
+
+    token = (
+        settings.get("bot_token")
+        or ""
+    ).strip()
+
     if not token:
         return False, "Telegram token missing."
-    chat_id = _tg_chatid()
-    if not chat_id:
-        return False, "No active Telegram admins."
+
+    selected_chat_id = str(
+        chat_id
+        or _tg_chatid()
+        or ""
+    ).strip()
+
+    if not selected_chat_id:
+        return False, "No active Telegram admin selected."
+
+    active_admin_ids = {
+        str(admin.get("id") or "").strip()
+        for admin in (_load_tg_admins() or [])
+        if (
+            not admin.get("muted")
+            and str(admin.get("id") or "").strip()
+        )
+    }
+
+    if selected_chat_id not in active_admin_ids:
+        return False, (
+            "Selected Telegram recipient is not an "
+            "active panel administrator."
+        )
+
+    created_at = datetime.now(
+        timezone.utc
+    ).strftime(
+        "%d %B %Y at %H:%M:%S UTC"
+    )
+
+    caption = (
+        "WG Panel automatic backup\n\n"
+        f"Created: {created_at}\n"
+        f"Filename: {filename}\n"
+        "Stored locally: Yes"
+    )
 
     try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{token}/sendDocument",
-            data={"chat_id": chat_id, "disable_notification": True, "caption": filename},
-            files={"document": (filename, data_bytes, "application/zip")},
-            timeout=30
+        response = requests.post(
+            (
+                "https://api.telegram.org/"
+                f"bot{token}/sendDocument"
+            ),
+            data={
+                "chat_id": selected_chat_id,
+                "disable_notification": True,
+                "caption": caption,
+            },
+            files={
+                "document": (
+                    filename,
+                    data_bytes,
+                    "application/zip",
+                )
+            },
+            timeout=(10, 120),
         )
-        j = {}
-        try: j = r.json()
-        except Exception: pass
-        if r.ok and j.get("ok"):
-            return True, "Sent to Telegram."
-        return False, f"Telegram error: {r.status_code} {str(j)[:200] or r.text[:200]}"
-    except Exception as e:
-        return False, f"Telegram exception: {e!s}"
 
+        try:
+            result = response.json()
+        except Exception:
+            result = {}
+
+        if response.ok and result.get("ok"):
+            return True, (
+                "Backup sent to Telegram admin "
+                f"{selected_chat_id}."
+            )
+
+        description = (
+            result.get("description")
+            if isinstance(result, dict)
+            else ""
+        )
+
+        details = (
+            description
+            or str(result)[:300]
+            or response.text[:300]
+        )
+
+        return False, (
+            f"Telegram error: "
+            f"{response.status_code} {details}"
+        )
+
+    except requests.exceptions.ReadTimeout:
+        return False, (
+            "Telegram response timed out after upload. "
+            "The backup may still have been delivered."
+        )
+
+    except requests.exceptions.ConnectTimeout:
+        return False, (
+            "Could not connect to Telegram "
+            "within the timeout."
+        )
+
+    except requests.exceptions.RequestException as exc:
+        return False, (
+            f"Telegram request error: {exc}"
+        )
+
+    except Exception as exc:
+        current_app.logger.exception(
+            "Unexpected Telegram backup error: %s",
+            exc,
+        )
+
+        return False, (
+            f"Telegram exception: {exc}"
+        )
 
 @app.get('/api/backup/db')
 @require_api_key_or_login
@@ -2766,83 +3336,158 @@ def _bundle_node_wg_backups(z: zipfile.ZipFile) -> list[dict]:
     return results
 
 
-def _node_wg_payloads_zip(z: zipfile.ZipFile, names: list[str]) -> dict[int, dict[str, str]]:
+def _node_wg_payloads_zip(
+    z: zipfile.ZipFile,
+    names: list[str],
+) -> dict[int, dict]:
     """
-    Reads node WG files from a full backup ZIP.
-
+    Read node WireGuard files and optional node .env
+    from a full panel backup.
     """
-    payloads = {}
+    payloads: dict[int, dict] = {}
 
     for member in names:
-        m = re.match(r'^nodes/(\d+)/wg/([^/]+\.conf)$', member)
-        if not m:
+        # Node WireGuard configuration
+        match = re.match(
+            r'^nodes/(\d+)/wg/([^/]+\.conf)$',
+            member,
+        )
+
+        if match:
+            node_id = int(match.group(1))
+            filename = os.path.basename(
+                match.group(2)
+            )
+
+            try:
+                text = z.read(member).decode(
+                    'utf-8',
+                    'replace',
+                )
+            except Exception:
+                continue
+
+            payload = payloads.setdefault(
+                node_id,
+                {
+                    'files': {},
+                    'env_file': None,
+                },
+            )
+
+            payload['files'][filename] = text
             continue
 
-        node_id = int(m.group(1))
-        filename = os.path.basename(m.group(2))
+        # Node-agent .env
+        match = re.match(
+            r'^nodes/(\d+)/env/\.env$',
+            member,
+        )
 
-        try:
-            text = z.read(member).decode('utf-8', 'replace')
-        except Exception:
-            continue
+        if match:
+            node_id = int(match.group(1))
 
-        payloads.setdefault(node_id, {})[filename] = text
+            try:
+                text = z.read(member).decode(
+                    'utf-8',
+                    'replace',
+                )
+            except Exception:
+                continue
+
+            payload = payloads.setdefault(
+                node_id,
+                {
+                    'files': {},
+                    'env_file': None,
+                },
+            )
+
+            payload['env_file'] = text
 
     return payloads
 
 
-def _restore_node_wg_zip(z: zipfile.ZipFile, names: list[str]) -> list[dict]:
+def _restore_node_wg_zip(
+    z: zipfile.ZipFile,
+    names: list[str],
+) -> list[dict]:
     """
-    Restores node WG .conf files back to node_agent.
+    Restore node WireGuard configs and node-agent .env.
+    """
+    payloads = _node_wg_payloads_zip(
+        z,
+        names,
+    )
 
-    """
-    payloads = _node_wg_payloads_zip(z, names)
     results = []
 
-    for node_id, files in payloads.items():
-        node = db.session.get(Node, node_id)
+    for node_id, payload in payloads.items():
+        node = db.session.get(
+            Node,
+            node_id,
+        )
+
+        files = payload.get('files') or {}
+        env_file = payload.get('env_file')
 
         rec = {
             'node_id': node_id,
             'ok': False,
             'files': sorted(files.keys()),
+            'env_file': bool(env_file),
             'error': '',
         }
 
         if not node:
-            rec['error'] = 'node_not_found_in_current_db'
+            rec['error'] = (
+                'node_not_found_in_current_db'
+            )
             results.append(rec)
             continue
 
         try:
-            url = f"{node.base_url.rstrip('/')}/api/backup/wg/restore"
+            url = (
+                f"{node.base_url.rstrip('/')}"
+                "/api/backup/wg/restore"
+            )
 
-            r = requests.post(
+            response = requests.post(
                 url,
                 headers={
-                    'Authorization': f'Bearer {_read_api_key(node)}',
+                    'Authorization': (
+                        f'Bearer {_read_api_key(node)}'
+                    ),
                     'Content-Type': 'application/json',
                 },
                 json={
                     'files': files,
+                    'env_file': env_file,
                     'bring_up': False,
                 },
                 timeout=35,
             )
 
             try:
-                body = r.json()
+                body = response.json()
             except Exception:
-                body = {'raw': r.text[:500]}
+                body = {
+                    'raw': response.text[:500]
+                }
 
-            if not r.ok:
-                rec['error'] = f'HTTP {r.status_code}: {str(body)[:500]}'
+            if not response.ok:
+                rec['error'] = (
+                    f'HTTP {response.status_code}: '
+                    f'{str(body)[:500]}'
+                )
             else:
-                rec['ok'] = bool(body.get('ok', True))
+                rec['ok'] = bool(
+                    body.get('ok', True)
+                )
                 rec['result'] = body
 
-        except Exception as e:
-            rec['error'] = str(e)
+        except Exception as exc:
+            rec['error'] = str(exc)
 
         results.append(rec)
 
@@ -2880,6 +3525,7 @@ def backup_full():
     ) == '1'
 
     auto_flag = (request.args.get('auto') or '0') == '1'
+    selected_chat_id = (request.args.get("chat_id")or "").strip()
 
     node_wg_results = []
 
@@ -3047,8 +3693,18 @@ def backup_full():
     # -----------------------------
     # Send to Telegram
     # -----------------------------
+    telegram_ok = None
+    telegram_message = ""
+
     if send_tg:
-        ok, msg = _send_zip_telegram(data, fname)
+        telegram_ok, telegram_message = (
+            _send_zip_telegram(data,fname,chat_id=selected_chat_id or None,))
+
+    if not telegram_ok:
+        current_app.logger.warning(
+            "Backup Telegram send failed: %s",
+            telegram_message,
+        )
 
         if not ok:
             current_app.logger.warning("Backup Telegram send failed: %s", msg)
@@ -3127,7 +3783,7 @@ def _load_backup_schedule():
         "dom":  int(d.get("dom", 1)),
         "cron": d.get("cron", ""),
         "keep": int(d.get("keep", 7)),
-        "include_wg": bool(d.get("include_wg", False)),
+        "include_wg": bool(d.get("include_wg", True)),
         "send_to_telegram": bool(d.get("send_to_telegram", False)),
     }
 
@@ -3252,6 +3908,457 @@ def backup_schedule_post():
     s["next_run"] = _next_run(s)
     return jsonify(ok=True, **s)
 
+# ------------------------------------------------------------------
+# Real auto-backup scheduler
+# ------------------------------------------------------------------
+
+_BACKUP_SCHEDULER_STARTED = False
+_BACKUP_SCHEDULER_INTERVAL_SEC = 30
+
+_BACKUP_SCHEDULER_STATE_FILE = os.path.join(
+    app.instance_path,
+    'backup_scheduler_state.json',
+)
+
+_BACKUP_SCHEDULER_LOCK_FILE = os.path.join(
+    app.instance_path,
+    'backup_scheduler.lock',
+)
+
+
+def _cron_field_match(
+    value: int,
+    expr: str,
+    minimum: int,
+    maximum: int,
+) -> bool:
+    """
+    Match basic cron syntax:
+
+    *
+    */5
+    1,2,3
+    1-5
+    1-10/2
+    """
+    expr = (expr or '*').strip()
+
+    for part in expr.split(','):
+        part = part.strip()
+
+        if not part:
+            continue
+
+        step = 1
+
+        if '/' in part:
+            base, raw_step = part.split('/', 1)
+
+            try:
+                step = max(
+                    1,
+                    int(raw_step),
+                )
+            except Exception:
+                return False
+        else:
+            base = part
+
+        if base == '*':
+            low = minimum
+            high = maximum
+
+        elif '-' in base:
+            try:
+                low, high = map(
+                    int,
+                    base.split('-', 1),
+                )
+            except Exception:
+                return False
+
+        else:
+            try:
+                low = high = int(base)
+            except Exception:
+                return False
+
+        low = max(minimum, low)
+        high = min(maximum, high)
+
+        if (
+            low <= value <= high
+            and (value - low) % step == 0
+        ):
+            return True
+
+    return False
+
+
+def _backup_due_slot(
+    sched: dict,
+    now_utc=None,
+) -> str | None:
+    """
+    Return a unique schedule slot only when a backup is due.
+    """
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    if not sched.get('enabled'):
+        return None
+
+    now_utc = (
+        now_utc
+        or datetime.now(timezone.utc)
+    )
+
+    try:
+        timezone_name = (
+            sched.get('timezone')
+            or 'UTC'
+        ).strip() or 'UTC'
+
+        timezone_info = ZoneInfo(
+            timezone_name
+        )
+    except Exception:
+        timezone_info = ZoneInfo('UTC')
+
+    local_time = now_utc.astimezone(
+        timezone_info
+    )
+
+    frequency = (
+        sched.get('freq')
+        or 'daily'
+    ).lower()
+
+    # minute hour day month weekday
+    if frequency == 'custom':
+        fields = (
+            sched.get('cron')
+            or ''
+        ).split()
+
+        if len(fields) != 5:
+            return None
+
+        minute, hour, day, month, weekday = fields
+
+        # Python: Monday=0
+        # Cron: Sunday=0 or 7
+        cron_weekday = (
+            local_time.weekday() + 1
+        ) % 7
+
+        matched = all((
+            _cron_field_match(
+                local_time.minute,
+                minute,
+                0,
+                59,
+            ),
+            _cron_field_match(
+                local_time.hour,
+                hour,
+                0,
+                23,
+            ),
+            _cron_field_match(
+                local_time.day,
+                day,
+                1,
+                31,
+            ),
+            _cron_field_match(
+                local_time.month,
+                month,
+                1,
+                12,
+            ),
+            (
+                _cron_field_match(
+                    cron_weekday,
+                    weekday,
+                    0,
+                    7,
+                )
+                or (
+                    cron_weekday == 0
+                    and _cron_field_match(
+                        7,
+                        weekday,
+                        0,
+                        7,
+                    )
+                )
+            ),
+        ))
+
+        if not matched:
+            return None
+
+        return (
+            f"custom:"
+            f"{local_time:%Y-%m-%dT%H:%M}"
+        )
+
+    try:
+        hour, minute = map(
+            int,
+            (
+                sched.get('time')
+                or '03:00'
+            ).split(':', 1),
+        )
+    except Exception:
+        hour, minute = 3, 0
+
+    if (
+        local_time.hour != hour
+        or local_time.minute != minute
+    ):
+        return None
+
+    if frequency == 'weekly':
+        selected_days = [
+            int(value)
+            for value in (
+                sched.get('dow')
+                or []
+            )
+        ] or [1]
+
+        if (
+            local_time.weekday()
+            not in selected_days
+        ):
+            return None
+
+    elif frequency == 'monthly':
+        from calendar import monthrange
+
+        selected_day = max(
+            1,
+            min(
+                31,
+                int(sched.get('dom') or 1),
+            ),
+        )
+
+        final_day = min(
+            selected_day,
+            monthrange(
+                local_time.year,
+                local_time.month,
+            )[1],
+        )
+
+        if local_time.day != final_day:
+            return None
+
+    elif frequency != 'daily':
+        return None
+
+    return (
+        f"{frequency}:"
+        f"{local_time:%Y-%m-%dT%H:%M}"
+    )
+
+
+def _run_scheduled_backup(
+    sched: dict,
+    slot: str,
+) -> None:
+    """
+    Create the same complete ZIP used by Run once.
+    """
+    from urllib.parse import urlencode
+
+    query = {
+        'auto': '1',
+        'wg': (
+            '1'
+            if sched.get('include_wg', True)
+            else '0'
+        ),
+        'tg': (
+            '1'
+            if sched.get(
+                'send_to_telegram',
+                False,
+            )
+            else '0'
+        ),
+    }
+
+    request_path = (
+        '/api/backup/full?'
+        + urlencode(query)
+    )
+
+    with app.test_request_context(
+        request_path
+    ):
+        backup_function = backup_full
+
+        while hasattr(
+            backup_function,
+            '__wrapped__',
+        ):
+            backup_function = (
+                backup_function.__wrapped__
+            )
+
+        response = backup_function()
+
+        status_code = getattr(
+            response,
+            'status_code',
+            200,
+        )
+
+        if int(status_code or 200) >= 400:
+            raise RuntimeError(
+                'backup endpoint returned '
+                f'HTTP {status_code}'
+            )
+
+    state = _json_load(
+        _BACKUP_SCHEDULER_STATE_FILE,
+        {},
+    )
+
+    state.update({
+        'last_slot': slot,
+        'last_success': (
+            datetime.utcnow()
+            .isoformat(timespec='seconds')
+            + 'Z'
+        ),
+        'last_error': '',
+    })
+
+    _json_save(
+        _BACKUP_SCHEDULER_STATE_FILE,
+        state,
+    )
+
+
+def _backup_scheduler_loop():
+    """
+    Run the scheduler in only one Gunicorn worker.
+    """
+    lock_handle = None
+
+    try:
+        import fcntl
+
+        lock_handle = open(
+            _BACKUP_SCHEDULER_LOCK_FILE,
+            'a+',
+        )
+
+        fcntl.flock(
+            lock_handle.fileno(),
+            fcntl.LOCK_EX | fcntl.LOCK_NB,
+        )
+
+    except Exception:
+        # Another Gunicorn worker.
+        if lock_handle:
+            try:
+                lock_handle.close()
+            except Exception:
+                pass
+
+        return
+
+    while True:
+        try:
+            with app.app_context():
+                schedule = _load_backup_schedule()
+
+                slot = _backup_due_slot(
+                    schedule
+                )
+
+                state = _json_load(
+                    _BACKUP_SCHEDULER_STATE_FILE,
+                    {},
+                )
+
+                if (
+                    slot
+                    and state.get('last_slot') != slot
+                ):
+                    try:
+                        _run_scheduled_backup(
+                            schedule,
+                            slot,
+                        )
+
+                        app.logger.info(
+                            'Automatic backup completed: '
+                            'slot=%s',
+                            slot,
+                        )
+
+                    except Exception as exc:
+                        state.update({
+                            'last_slot': slot,
+                            'last_error': str(exc),
+                            'last_error_at': (
+                                datetime.utcnow()
+                                .isoformat(
+                                    timespec='seconds'
+                                )
+                                + 'Z'
+                            ),
+                        })
+
+                        _json_save(
+                            _BACKUP_SCHEDULER_STATE_FILE,
+                            state,
+                        )
+
+                        app.logger.exception(
+                            'Automatic backup failed: '
+                            'slot=%s error=%s',
+                            slot,
+                            exc,
+                        )
+
+        except Exception as exc:
+            try:
+                app.logger.exception(
+                    'Backup scheduler sweep failed: %s',
+                    exc,
+                )
+            except Exception:
+                pass
+
+        time.sleep(
+            _BACKUP_SCHEDULER_INTERVAL_SEC
+        )
+
+
+def _start_backup_scheduler():
+    global _BACKUP_SCHEDULER_STARTED
+
+    if _BACKUP_SCHEDULER_STARTED:
+        return
+
+    _BACKUP_SCHEDULER_STARTED = True
+
+    thread = threading.Thread(
+        target=_backup_scheduler_loop,
+        name='auto-backup-scheduler',
+        daemon=True,
+    )
+
+    thread.start()
 
 # _____ Runtime (port/threads/loglevel) Settings _______
 RUNTIME_FILE = os.path.join(app.instance_path, 'runtime.json')
@@ -8550,10 +9657,6 @@ def peers_create():
                 except Exception:
                     node_endpoint_host = ""
 
-            # Final fallback: use the hostname/IP saved in the node base_url.
-            # Example:
-            #   base_url = http://5.2.71.144:8001
-            #   endpoint host becomes 5.2.71.144, not port 8001.
             if not node_endpoint_host:
                 try:
                     parsed_node_url = urlparse(
@@ -8608,7 +9711,7 @@ def peers_create():
                 current_app.logger.exception("node available_ips failed: %s", e)
                 return jsonify(error="node_available_ips_failed", detail=str(e)), 502
 
-        # Make sure remote interface is up.
+        # Make sure remote interface is up. it should making sure that it is up otherwise pass.
         try:
             node_post(n, f"/api/iface/{iface_name}/up", {})
         except Exception:
@@ -9467,7 +10570,7 @@ def panel_peers_bulk():
                     node_endpoint_host = ""
 
             # Final fallback: use the hostname/IP saved in the node base_url.
-            # The node-agent HTTP port is not used as the WireGuard port.
+            # The node-agent HTTP port is not being used.
             if not node_endpoint_host:
                 try:
                     parsed_node_url = urlparse(
@@ -12824,6 +13927,7 @@ def subscription_public_inbound_geo(token, link_id):
 
 _start_retention()
 _start_expiry_enforcer()
+_start_backup_scheduler()
 if __name__ == "__main__":
 
     import multiprocessing, ssl
