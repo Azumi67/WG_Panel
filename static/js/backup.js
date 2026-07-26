@@ -41,11 +41,11 @@
   };
 
   const pillStatus = $("#status-pill");
-  const pillNext = $("#next-pill");
+  const pillNext = $("#next-run-pill") || $("#next-pill");
   const pillFull = $("#full-last");
   const pillDb = $("#db-last");
   const pillSettings = $("#settings-last");
-  const pillAuto = $("#auto-state");
+  const pillAuto = $("#schedule-state") || $("#auto-state");
 
   const btnFull = $("#btn-full");
   const btnDb = $("#btn-db");
@@ -56,17 +56,32 @@
   const livePreviewWrap = $("#live-backup-preview") || $("#backup-live-preview");
   const livePreviewSubtitle = $("#live-preview-subtitle");
 
-  const autoEnabled = $("#auto-enabled");
+  const autoEnabled = $("#schedule-enabled") || $("#auto-enabled");
   const selFreq = $("#freq");
   const inpTime = $("#time");
-  const selTz = $("#timezone");
+  const selTz = $("#tz") || $("#timezone");
   const inpKeep = $("#keep");
-  const autoWG = $("#auto-wg");
-  const autoTG = $("#auto-tg");
-  const btnSave = $("#save");
-  const btnRunNow = $("#run-now");
+  const autoWG = $("#schedule-include-wg") || $("#auto-wg");
+  const autoTG = $("#schedule-send-telegram") || $("#auto-tg");
+  const btnSave = $("#save-schedule") || $("#save");
+  const btnSaveRun = $("#save-run-schedule");
   const autoFilesList = $("#auto-files-list");
   const autoFilesCount = $("#auto-files-count");
+  const autoRunLoader = $("#auto-run-loader");
+  const autoRunLoaderTitle = $("#auto-run-loader-title");
+  const autoRunLoaderText = $("#auto-run-loader-text");
+  const autoTelegramWrap = $("#auto-telegram-target-wrap");
+  const autoTelegramAdmin = $("#auto-telegram-admin");
+  const autoTelegramHelp = $("#auto-telegram-help");
+  const autoInspectBox = $("#auto-inspect-box");
+  const autoInspectGrid = $("#auto-inspect-grid");
+  const autoInspectSubtitle = $("#auto-inspect-subtitle");
+  const autoInspectFiles = $("#auto-inspect-files");
+  const autoInspectModal = $("#auto-inspect-modal");
+  const autoInspectModalSubtitle = $("#auto-inspect-modal-subtitle");
+  const autoInspectModalGrid = $("#auto-inspect-modal-grid");
+  const autoInspectModalFiles = $("#auto-inspect-modal-files");
+  const autoInspectDownload = $("#auto-inspect-download");
 
   const restoreFile = $("#restore-file");
   const restoreBtn = $("#btn-restore");
@@ -96,6 +111,8 @@
   let lastSchedule = null;
   let lastInspect = null;
   let cachedInstallCommand = "";
+  const autoInspectCache = new Map();
+  let activeAutoInspectFilename = "";
 
   const safe = (s) => String(s ?? "")
     .replaceAll("&", "&amp;")
@@ -118,8 +135,44 @@
     }
   }
 
+  function setRunStep(name, state = "") {
+    const el = $(`#auto-run-step-${name}`);
+    if (!el) return;
+    el.classList.remove("active", "done");
+    if (state) el.classList.add(state);
+    const icon = el.querySelector("i");
+    if (icon && state === "done") {
+      icon.className = "fas fa-check-circle";
+    }
+  }
+
+  function showRunLoader(title, text) {
+    ["save", "build", "telegram", "refresh"].forEach((name) => setRunStep(name, ""));
+    if (autoRunLoaderTitle) autoRunLoaderTitle.textContent = title || "Creating complete backup";
+    if (autoRunLoaderText) autoRunLoaderText.textContent = text || "Please keep this page open.";
+    if (autoRunLoader) autoRunLoader.hidden = false;
+  }
+
+  function updateRunLoader(title, text) {
+    if (title && autoRunLoaderTitle) autoRunLoaderTitle.textContent = title;
+    if (text && autoRunLoaderText) autoRunLoaderText.textContent = text;
+  }
+
+  function hideRunLoader() {
+    if (autoRunLoader) autoRunLoader.hidden = true;
+  }
+
   function schedTZ() {
     return selTz && selTz.value ? selTz.value : "UTC";
+  }
+
+  function autoTelegramEnabled() {
+    return !!autoTG?.checked;
+  }
+
+  function setAutoTelegramEnabled(enabled) {
+    if (autoTG) autoTG.checked = !!enabled;
+    updateTelegramTargetVisibility();
   }
 
   function fmtISO(iso, withSeconds = false) {
@@ -250,7 +303,11 @@
       card("Short links", contains.short_links ? "Included" : "Not detected", "Public user links/settings", contains.short_links ? "ok" : "warn", "fa-link"),
     ].join("");
 
-    const grid = target === "backup" ? livePreview : restorePreviewGrid;
+    const grid = target === "backup"
+      ? livePreview
+      : target === "restore"
+        ? restorePreviewGrid
+        : null;
     if (grid) {
       grid.classList.remove("empty", "direct-notice");
       grid.style.display = "";
@@ -453,7 +510,7 @@
       livePreview.innerHTML = `
         <div class="bk-idm-notice" style="width:100%;box-sizing:border-box;display:flex;align-items:flex-start;gap:12px;padding:13px 14px;border:1px solid #f59e0b55;background:#fffbeb;border-radius:14px;color:#111827;min-width:0;">
           <div style="width:38px;height:38px;border-radius:12px;background:#111827;color:#fff;display:grid;place-items:center;flex:0 0 38px;">
-            <i class="fas fa-download"></i>
+            <i class="fas fa-download"></i><span class="bk-action-label">Download</span>
           </div>
           <div style="min-width:0;flex:1 1 auto;">
             <div style="font-weight:950;font-size:13.5px;line-height:1.25;white-space:normal;overflow-wrap:normal;word-break:normal;">${safe(label)} backup download started</div>
@@ -520,31 +577,579 @@
     }
   }
 
-  async function loadAutoFiles() {
-    if (!autoFilesList || !autoFilesCount) return;
-    autoFilesList.innerHTML = '<div class="bk-small bk-muted">Loading…</div>';
+  function updateTelegramTargetVisibility() {
+    const enabled = !!autoTG?.checked;
+    if (autoTelegramWrap) autoTelegramWrap.hidden = !enabled;
+  }
+
+  async function loadTelegramAdmins(selectedId = "") {
+    if (!autoTelegramAdmin) return;
+
+    autoTelegramAdmin.disabled = true;
+    autoTelegramAdmin.classList.remove("is-error", "is-ready");
+    autoTelegramAdmin.innerHTML =
+      '<option value="">Loading active Telegram admins…</option>';
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+
     try {
-      const r = await fetch("/api/backups/auto", { headers: csrfHeaders() });
-      if (!r.ok) throw new Error("status " + r.status);
-      const j = await r.json();
-      const files = Array.isArray(j.files) ? j.files : [];
-      autoFilesCount.textContent = `${files.length} file${files.length === 1 ? "" : "s"}`;
-      if (!files.length) {
-        autoFilesList.innerHTML = '<div class="bk-small bk-muted">No auto backups found yet.</div>';
+      const response = await fetch("/api/telegram/admins", {
+        headers: csrfHeaders(),
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          payload.message ||
+          payload.error ||
+          (
+            response.status === 401 || response.status === 403
+              ? "Telegram admin access was denied. Allow logged-in panel users to read /api/telegram/admins."
+              : `Could not load Telegram admins (HTTP ${response.status}).`
+          )
+        );
+      }
+
+      const rawAdmins = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload.admins)
+          ? payload.admins
+          : [];
+
+      const admins = rawAdmins.filter((admin) => {
+        const id = String(
+          admin.id ??
+          admin.tg_id ??
+          admin.chat_id ??
+          ""
+        ).trim();
+
+        return id && !Boolean(admin.muted);
+      });
+
+      if (!admins.length) {
+        autoTelegramAdmin.innerHTML =
+          '<option value="">No active Telegram admins</option>';
+        autoTelegramAdmin.disabled = true;
+        autoTelegramAdmin.classList.add("is-error");
+
+        if (autoTelegramHelp) {
+          autoTelegramHelp.textContent =
+            "No active recipient was found. Add or unmute an admin in Settings → Telegram.";
+        }
         return;
       }
-      autoFilesList.innerHTML = files.map((f) => `
-        <div class="bk-auto-item">
-          <div><div style="font-weight:850">${safe(fmtEpoch(f.ts))}</div><div class="bk-small bk-muted">${safe(f.name)} · ${safe(autoSize(f.size))}</div></div>
-          <button class="bk-icon-btn auto-restore-btn" data-file="${safe(f.name)}" title="Restore from this auto backup"><i class="fas fa-rotate-left"></i></button>
-        </div>`).join("");
-      $$(".auto-restore-btn", autoFilesList).forEach((b) => b.addEventListener("click", () => restoreAutoBackup(b.dataset.file)));
-    } catch (e) {
-      console.error(e);
-      autoFilesList.innerHTML = '<div class="bk-small bk-muted">Could not load auto backup list.</div>';
-      autoFilesCount.textContent = "0 files";
+
+      autoTelegramAdmin.innerHTML = admins.map((admin) => {
+        const id = String(
+          admin.id ??
+          admin.tg_id ??
+          admin.chat_id ??
+          ""
+        ).trim();
+
+        const username = String(
+          admin.username ??
+          admin.user ??
+          ""
+        ).replace(/^@/, "").trim();
+
+        const note = String(
+          admin.note ??
+          admin.name ??
+          ""
+        ).trim();
+
+        const label = [
+          username ? `@${username}` : "",
+          id,
+          note ? `— ${note}` : "",
+        ].filter(Boolean).join(" ");
+
+        return `<option value="${safe(id)}">${safe(label)}</option>`;
+      }).join("");
+
+      autoTelegramAdmin.disabled = false;
+      autoTelegramAdmin.classList.add("is-ready");
+
+      const wanted = String(selectedId || "").trim();
+
+      if (
+        wanted &&
+        admins.some((admin) => String(
+          admin.id ??
+          admin.tg_id ??
+          admin.chat_id ??
+          ""
+        ).trim() === wanted)
+      ) {
+        autoTelegramAdmin.value = wanted;
+      }
+
+      if (autoTelegramHelp) {
+        autoTelegramHelp.textContent =
+          "Each new automatic backup will be sent once to this active Telegram admin.";
+      }
+    } catch (error) {
+      console.error("Telegram admin loading failed:", error);
+
+      const message =
+        error?.name === "AbortError"
+          ? "Telegram admin request timed out."
+          : (
+              error.message ||
+              "Could not load Telegram admins."
+            );
+
+      autoTelegramAdmin.innerHTML =
+        `<option value="">${safe(message)}</option>`;
+      autoTelegramAdmin.disabled = true;
+      autoTelegramAdmin.classList.add("is-error");
+
+      if (autoTelegramHelp) {
+        autoTelegramHelp.textContent =
+          `${message} Check the panel Telegram admin API.`;
+      }
+
+      toast.error(message);
+    } finally {
+      clearTimeout(timer);
     }
   }
+
+
+  function closeAutoInspectModal() {
+    if (autoInspectModal) {
+      autoInspectModal.hidden = true;
+    }
+    activeAutoInspectFilename = "";
+  }
+
+  function renderAutoInspectModal(result, filename) {
+    const counts = result?.counts || {};
+    const contains = result?.contains || {};
+
+    const hasLocal = !!(
+      result?.has_wg ||
+      contains.local_wireguard_conf ||
+      counts.local_wg_files
+    );
+
+    const hasNode = !!(
+      result?.has_node_wg ||
+      contains.remote_node_wireguard_conf ||
+      counts.node_wg_files
+    );
+
+    const hasPanelEnv = !!(
+      result?.has_env ||
+      contains.env_file
+    );
+
+    const hasNodeEnv = !!(
+      result?.has_node_env ||
+      contains.remote_node_env ||
+      counts.node_env_files
+    );
+
+    activeAutoInspectFilename = filename;
+
+    if (autoInspectModalSubtitle) {
+      autoInspectModalSubtitle.textContent =
+        `${filename}${result?.created ? ` · Created ${result.created}` : ""}`;
+    }
+
+    if (autoInspectModalGrid) {
+      autoInspectModalGrid.innerHTML = [
+        card(
+          "Backup type",
+          String(result?.kind || "unknown").toUpperCase(),
+          "Detected from saved ZIP",
+          result?.kind === "unknown" ? "warn" : "ok",
+          "fa-file-zipper"
+        ),
+        card(
+          "Database",
+          result?.has_db || contains.database ? "Included" : "Missing",
+          `${counts.db_files || 0} file(s)`,
+          result?.has_db || contains.database ? "ok" : "bad",
+          "fa-database"
+        ),
+        card(
+          "Settings",
+          result?.has_settings || contains.settings ? "Included" : "Missing",
+          `${counts.instance_files || 0} file(s)`,
+          result?.has_settings || contains.settings ? "ok" : "warn",
+          "fa-sliders"
+        ),
+        card(
+          "Panel .env",
+          hasPanelEnv ? "Included" : "Missing",
+          "Panel migration secrets",
+          hasPanelEnv ? "ok" : "warn",
+          "fa-key"
+        ),
+        card(
+          "Local WG",
+          hasLocal ? "Included" : "Missing",
+          `${counts.local_wg_files || 0} file(s)`,
+          hasLocal ? "ok" : "warn",
+          "fa-network-wired"
+        ),
+        card(
+          "Node WG",
+          hasNode ? "Included" : "Missing",
+          `${counts.node_wg_files || 0} file(s)`,
+          hasNode ? "ok" : "warn",
+          "fa-server"
+        ),
+        card(
+          "Node .env",
+          hasNodeEnv ? "Included" : "Missing",
+          `${counts.node_env_files || 0} file(s)`,
+          hasNodeEnv ? "ok" : "warn",
+          "fa-shield-halved"
+        ),
+      ].join("");
+    }
+
+    const files = [
+      ...(result?.has_env ? ["env/.env"] : []),
+      ...(result?.local_wg_files || []).map((name) => `wg/${name}`),
+      ...(result?.node_wg_files || []).map(
+        (item) => item.path || `nodes/${item.node_id}/wg/${item.file}`
+      ),
+      ...(result?.node_env_files || []).map(
+        (item) => item.path || `nodes/${item.node_id}/env/.env`
+      ),
+    ];
+
+    if (autoInspectModalFiles) {
+      autoInspectModalFiles.innerHTML = files.length
+        ? files.map(
+            (name) =>
+              `<span><i class="fas fa-file-code"></i>${safe(name)}</span>`
+          ).join("")
+        : (
+            '<span><i class="fas fa-circle-info"></i>' +
+            "No WG or environment files detected</span>"
+          );
+    }
+  }
+
+  async function inspectAutoBackup(filename) {
+    if (!filename) {
+      toast.error("Backup filename is missing.");
+      return;
+    }
+
+    if (!autoInspectModal) {
+      toast.error("Inspection window is unavailable.");
+      return;
+    }
+
+    autoInspectModal.hidden = false;
+    activeAutoInspectFilename = filename;
+
+    if (autoInspectModalSubtitle) {
+      autoInspectModalSubtitle.textContent = `Inspecting ${filename}…`;
+    }
+
+    if (autoInspectModalGrid) {
+      autoInspectModalGrid.innerHTML = card(
+        "Inspection",
+        "Loading",
+        "Reading the saved ZIP on the panel server.",
+        "warn",
+        "fa-circle-notch"
+      );
+    }
+
+    if (autoInspectModalFiles) {
+      autoInspectModalFiles.innerHTML = "";
+    }
+
+    try {
+      let result = autoInspectCache.get(filename);
+
+      if (!result) {
+        const response = await fetch(
+          `/api/backups/inspect/${encodeURIComponent(filename)}`,
+          {
+            headers: csrfHeaders(),
+            credentials: "same-origin",
+            cache: "no-store",
+          }
+        );
+
+        result = await response.json().catch(() => ({}));
+
+        if (!response.ok || !result.ok) {
+          throw new Error(
+            result.message ||
+            result.error ||
+            `Could not inspect automatic backup (${response.status}).`
+          );
+        }
+
+        autoInspectCache.set(filename, result);
+      }
+
+      renderAutoInspectModal(result, filename);
+    } catch (error) {
+      console.error(error);
+
+      if (autoInspectModalSubtitle) {
+        autoInspectModalSubtitle.textContent =
+          error.message || "Inspection failed.";
+      }
+
+      if (autoInspectModalGrid) {
+        autoInspectModalGrid.innerHTML = card(
+          "Inspection",
+          "Failed",
+          error.message || "Could not inspect this backup.",
+          "bad",
+          "fa-triangle-exclamation"
+        );
+      }
+
+      toast.error(
+        error.message ||
+        "Could not inspect automatic backup."
+      );
+    }
+  }
+
+  function downloadAutoBackup(filename) {
+    if (!filename) return;
+
+    const link = document.createElement("a");
+    link.href =
+      `/api/backups/file/${encodeURIComponent(filename)}` +
+      `?download=1&_=${Date.now()}`;
+    link.download = filename;
+    link.rel = "noopener";
+    link.style.display = "none";
+
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
+  async function deleteAutoBackup(filename) {
+    if (!filename) return;
+
+    const confirmed = await confirmAction({
+      title: "Delete automatic backup",
+      message: `
+        <div>
+          Permanently delete
+          <code>${safe(filename)}</code>?
+        </div>
+        <div class="bk-small bk-muted" style="margin-top:8px">
+          This removes the ZIP from the panel server. Telegram copies are not deleted.
+        </div>
+      `,
+      confirmText: "Delete",
+      danger: true,
+    });
+
+    if (!confirmed) return;
+
+    const response = await fetch(
+      `/api/backups/file/${encodeURIComponent(filename)}`,
+      {
+        method: "DELETE",
+        headers: csrfHeaders(),
+        credentials: "same-origin",
+        cache: "no-store",
+      }
+    );
+
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok || !result.ok) {
+      throw new Error(
+        result.message ||
+        result.error ||
+        `Could not delete backup (${response.status}).`
+      );
+    }
+
+    autoInspectCache.delete(filename);
+
+    if (activeAutoInspectFilename === filename) {
+      closeAutoInspectModal();
+    }
+
+    toast.success("Automatic backup deleted.");
+    await loadAutoFiles();
+  }
+
+  async function loadAutoFiles() {
+    if (!autoFilesList) return;
+
+    autoFilesList.innerHTML =
+      '<div class="bk-small bk-muted">Loading…</div>';
+
+    try {
+      const response = await fetch("/api/backups/auto", {
+        headers: csrfHeaders(),
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          result.message ||
+          result.error ||
+          `Could not load automatic backups (${response.status}).`
+        );
+      }
+
+      const files = Array.isArray(result.files)
+        ? result.files
+        : [];
+
+      if (autoFilesCount) {
+        autoFilesCount.textContent =
+          `${files.length} file${files.length === 1 ? "" : "s"}`;
+      }
+
+      if (!files.length) {
+        autoFilesList.innerHTML =
+          '<div class="bk-small bk-muted">No automatic backups found.</div>';
+        return;
+      }
+
+      autoFilesList.innerHTML = files.map((file) => `
+        <div class="bk-auto-item" data-file="${safe(file.name)}">
+          <div class="bk-auto-meta">
+            <div class="bk-auto-date">${safe(fmtEpoch(file.ts))}</div>
+            <div class="bk-small bk-muted">
+              ${safe(file.name)} · ${safe(autoSize(file.size))}
+            </div>
+          </div>
+
+          <div class="bk-auto-actions">
+            <button
+              type="button"
+              class="bk-auto-action inspect"
+              data-auto-action="inspect"
+              data-file="${safe(file.name)}"
+              title="Inspect backup"
+              aria-label="Inspect backup"
+            >
+              <i class="fas fa-magnifying-glass"></i>
+              <span>Inspect</span>
+            </button>
+
+            <button
+              type="button"
+              class="bk-auto-action download"
+              data-auto-action="download"
+              data-file="${safe(file.name)}"
+              title="Download backup"
+              aria-label="Download backup"
+            >
+              <i class="fas fa-download"></i>
+              <span>Download</span>
+            </button>
+
+            <button
+              type="button"
+              class="bk-auto-action restore"
+              data-auto-action="restore"
+              data-file="${safe(file.name)}"
+              title="Restore backup"
+              aria-label="Restore backup"
+            >
+              <i class="fas fa-rotate-left"></i>
+              <span>Restore</span>
+            </button>
+
+            <button
+              type="button"
+              class="bk-auto-action delete"
+              data-auto-action="delete"
+              data-file="${safe(file.name)}"
+              title="Delete backup"
+              aria-label="Delete backup"
+            >
+              <i class="fas fa-trash-can"></i>
+              <span>Delete</span>
+            </button>
+          </div>
+        </div>
+      `).join("");
+    } catch (error) {
+      console.error(error);
+      autoFilesList.innerHTML =
+        '<div class="bk-small bk-muted">Could not load automatic backups.</div>';
+
+      if (autoFilesCount) {
+        autoFilesCount.textContent = "0 files";
+      }
+
+      toast.error(
+        error.message ||
+        "Could not load automatic backups."
+      );
+    }
+  }
+
+  autoFilesList?.addEventListener("click", async (event) => {
+    const button = event.target.closest(
+      "button[data-auto-action]"
+    );
+
+    if (!button || !autoFilesList.contains(button)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+
+    const action = button.dataset.autoAction || "";
+    const filename = button.dataset.file || "";
+
+    if (!filename) {
+      toast.error("Backup filename is missing.");
+      return;
+    }
+
+    try {
+      if (action === "inspect") {
+        await inspectAutoBackup(filename);
+      } else if (action === "download") {
+        downloadAutoBackup(filename);
+      } else if (action === "restore") {
+        await restoreAutoBackup(filename);
+      } else if (action === "delete") {
+        button.disabled = true;
+        await deleteAutoBackup(filename);
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error(
+        error.message ||
+        `Could not ${action || "process"} backup.`
+      );
+    } finally {
+      if (button.isConnected) {
+        button.disabled = false;
+      }
+    }
+  });
 
   async function loadAll() {
     try {
@@ -566,7 +1171,9 @@
       if (inpTime) inpTime.value = sched.time || "03:00";
       if (inpKeep) inpKeep.value = sched.keep || 7;
       if (autoWG) autoWG.checked = !!sched.include_wg;
-      if (autoTG) autoTG.checked = !!sched.send_to_telegram;
+      setAutoTelegramEnabled(!!sched.send_to_telegram);
+      updateTelegramTargetVisibility();
+      await loadTelegramAdmins(sched.telegram_chat_id || "");
       setNext(sched.next_run);
 
       const p = await fetch("/api/backup/prefs", { headers: csrfHeaders() }).then((r) => r.json());
@@ -580,8 +1187,8 @@
     }
   }
 
-  async function saveSchedule(wantEnabled = null) {
-    const old = !!lastSchedule?.enabled;
+  async function saveSchedule(wantEnabled = null, options = {}) {
+    const quiet = !!options.quiet;
     const payload = {
       enabled: wantEnabled === null ? !!autoEnabled?.checked : !!wantEnabled,
       freq: selFreq?.value || "daily",
@@ -589,26 +1196,207 @@
       timezone: selTz?.value || "UTC",
       keep: parseInt(inpKeep?.value || "7", 10),
       include_wg: !!autoWG?.checked,
-      send_to_telegram: !!autoTG?.checked,
+      send_to_telegram: autoTelegramEnabled(),
+      telegram_chat_id: autoTelegramEnabled() ? (autoTelegramAdmin?.value || "") : "",
     };
-    const resp = await fetch("/api/backup/schedule", { method: "POST", headers: csrfHeaders(true), body: JSON.stringify(payload) });
+
+    if (payload.send_to_telegram && !payload.telegram_chat_id) {
+      throw new Error("Choose an active Telegram recipient before saving.");
+    }
+
+    const resp = await fetch("/api/backup/schedule", {
+      method: "POST",
+      headers: csrfHeaders(true),
+      body: JSON.stringify(payload),
+      credentials: "same-origin",
+      cache: "no-store",
+    });
+
     const j = await resp.json().catch(() => ({}));
-    if (!resp.ok || !j.ok) throw new Error(j.error || "Could not save schedule.");
+    if (!resp.ok || !j.ok) {
+      throw new Error(j.error || j.message || "Could not save schedule.");
+    }
+
     lastSchedule = j;
     setNext(j.next_run);
-    toast.success("Auto-backup schedule saved.");
-    if (!old && j.enabled) await triggerAutoBackup();
-    else await loadAll();
+
+    if (!quiet) {
+      toast.success("Auto-backup schedule saved.");
+      await loadAll();
+    }
+
+    return j;
   }
 
-  async function triggerAutoBackup() {
-    const url = `/api/backup/full?auto=1&wg=${autoWG?.checked ? "1" : "0"}&tg=${autoTG?.checked ? "1" : "0"}`;
-    const r = await fetch(url, { headers: csrfHeaders() });
+  async function saveAndRunSchedule() {
+    showRunLoader(
+      "Saving schedule",
+      "The schedule and selected Telegram recipient are being saved."
+    );
+    setRunStep("save", "active");
+
+    await saveSchedule(null, { quiet: true });
+    setRunStep("save", "done");
+    setRunStep("build", "active");
+
+    await triggerAutoBackup({ useLoader: true });
+  }
+
+  async function triggerAutoBackup(options = {}) {
+    const useLoader = !!options.useLoader;
+    const telegramEnabled = autoTelegramEnabled();
+    const telegramChatId = autoTelegramAdmin?.value || "";
+
+    if (telegramEnabled && !telegramChatId) {
+      throw new Error("Choose an active Telegram recipient first.");
+    }
+
+    const params = new URLSearchParams({
+      auto: "1",
+      wg: autoWG?.checked ? "1" : "0",
+      tg: telegramEnabled ? "1" : "0",
+      chat_id: telegramChatId,
+    });
+
+    if (useLoader) {
+      updateRunLoader(
+        "Creating complete backup",
+        "Collecting database, panel settings, local WireGuard configs, and reachable node configs."
+      );
+    }
+
+    const r = await fetch(`/api/backup/full?${params.toString()}`, {
+      headers: csrfHeaders(),
+      credentials: "same-origin",
+      cache: "no-store",
+    });
     if (!r.ok) throw new Error("Could not create auto backup.");
-    toast.success("Auto backup created in instance/backups/.");
+
+    if (useLoader) {
+      setRunStep("build", "done");
+      if (telegramEnabled) {
+        setRunStep("telegram", "active");
+        updateRunLoader(
+          "Finalizing Telegram delivery",
+          "The backup was created. Waiting for Telegram delivery confirmation."
+        );
+      }
+    }
+
+    const telegramHeader = r.headers.get("X-Backup-Telegram-Sent");
+    const telegramMessage = r.headers.get("X-Backup-Telegram-Message") || "";
+    const telegramSent = telegramHeader === "1";
+
+    if (useLoader && telegramEnabled) {
+      setRunStep("telegram", "done");
+    }
+
+    if (telegramEnabled && telegramHeader === "0") {
+      const uncertain = /timeout|timed out|read timed out|connection reset/i.test(telegramMessage);
+      if (uncertain) {
+        toast.warn("Backup saved. Telegram delivery could not be confirmed by the panel; check Telegram before retrying.");
+      } else {
+        toast.warn(`Auto backup saved, but Telegram reported an error${telegramMessage ? `: ${telegramMessage}` : "."}`);
+      }
+    } else if (telegramEnabled && telegramHeader === null) {
+      toast.info("Backup saved and Telegram delivery was requested. The server did not expose a delivery-status header.");
+    } else if (telegramEnabled && telegramSent) {
+      toast.success("Auto backup created and sent to the selected Telegram admin.");
+    } else {
+      toast.success("Auto backup created in instance/backups/.");
+    }
+
+    if (useLoader) {
+      setRunStep("refresh", "active");
+      updateRunLoader("Refreshing saved backups", "Loading the new backup into the inspection list.");
+    }
+
     await loadAll();
+
+    if (useLoader) {
+      setRunStep("refresh", "done");
+    }
     const details = $("#auto-files-details");
     if (details) details.open = true;
+  }
+
+
+  async function confirmAction({
+    title = "Confirm action",
+    message = "",
+    confirmText = "Confirm",
+    danger = false,
+  } = {}) {
+    return new Promise((resolve) => {
+      const modal = $("#restore-confirm");
+      const body = $("#bk-modal-body");
+      const okBtn = $("#bk-modal-ok");
+      const titleEl = modal?.querySelector(".bk-modal-head strong");
+
+      if (!modal || !body || !okBtn) {
+        resolve(false);
+        return;
+      }
+
+      let finished = false;
+      const previousText = okBtn.textContent;
+      const previousClass = okBtn.className;
+      const previousTitle = titleEl?.textContent || "";
+
+      const cleanup = () => {
+        modal.removeEventListener("click", onModalClick);
+        okBtn.removeEventListener("click", onConfirm);
+        document.removeEventListener("keydown", onKeyDown);
+
+        okBtn.textContent = previousText;
+        okBtn.className = previousClass;
+
+        if (titleEl) {
+          titleEl.textContent = previousTitle;
+        }
+      };
+
+      const finish = (value) => {
+        if (finished) return;
+        finished = true;
+        modal.hidden = true;
+        cleanup();
+        resolve(value);
+      };
+
+      const onModalClick = (event) => {
+        if (event.target.closest('[data-close="1"]')) {
+          finish(false);
+        }
+      };
+
+      const onConfirm = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(true);
+      };
+
+      const onKeyDown = (event) => {
+        if (event.key === "Escape") {
+          finish(false);
+        }
+      };
+
+      if (titleEl) {
+        titleEl.textContent = title;
+      }
+
+      body.innerHTML = message;
+      okBtn.textContent = confirmText;
+      okBtn.className = danger
+        ? "bk-btn danger"
+        : "bk-btn primary";
+
+      modal.hidden = false;
+      modal.addEventListener("click", onModalClick);
+      okBtn.addEventListener("click", onConfirm);
+      document.addEventListener("keydown", onKeyDown);
+    });
   }
 
   async function confirmRestore(htmlMessage) {
@@ -693,7 +1481,11 @@
     const ok = await confirmRestore(`<div><strong>Restore auto backup?</strong></div><div class="bk-small bk-muted" style="margin-top:8px"><code>${safe(filename)}</code></div><div style="margin-top:10px">Server settings will use the mode selected in Restore options.</div>`);
     if (!ok) return;
     try {
-      const resp = await fetch(`/api/backups/file/${encodeURIComponent(filename)}`);
+      const resp = await fetch(`/api/backups/file/${encodeURIComponent(filename)}`, {
+        headers: csrfHeaders(),
+        credentials: "same-origin",
+        cache: "no-store",
+      });
       if (!resp.ok) throw new Error("Could not download auto backup file from server.");
       const blob = await resp.blob();
       const j = await doRestoreFromBlob(blob, filename, "auto");
@@ -724,9 +1516,47 @@
   btnDb?.addEventListener("click", () => downloadBackup("db", btnDb));
   btnSettings?.addEventListener("click", () => downloadBackup("settings", btnSettings));
   selTz?.addEventListener("change", () => { if (lastSchedule) setNext(lastSchedule.next_run); loadAutoFiles(); });
-  btnSave?.addEventListener("click", async () => { try { await saveSchedule(); } catch (e) { toast.error(e.message); } });
-  autoEnabled?.addEventListener("change", async () => { try { await saveSchedule(autoEnabled.checked); } catch (e) { toast.error(e.message); autoEnabled.checked = !!lastSchedule?.enabled; } });
-  btnRunNow?.addEventListener("click", async () => { try { setBusy(btnRunNow, true, "Running"); await triggerAutoBackup(); } catch (e) { toast.error(e.message || "Run once failed."); } finally { setBusy(btnRunNow, false); } });
+  btnSave?.addEventListener("click", async () => {
+    try {
+      setBusy(btnSave, true, "Saving");
+      await saveSchedule();
+    } catch (e) {
+      toast.error(e.message || "Could not save schedule.");
+    } finally {
+      setBusy(btnSave, false);
+    }
+  });
+
+  autoEnabled?.addEventListener("change", () => {
+    if (pillAuto) {
+      pillAuto.textContent = autoEnabled.checked ? "Unsaved: enabled" : "Unsaved: disabled";
+      pillAuto.className = "bk-pill warn";
+    }
+  });
+
+  autoTG?.addEventListener("change", () => {
+    updateTelegramTargetVisibility();
+
+    if (autoTelegramEnabled()) {
+      loadTelegramAdmins(
+        autoTelegramAdmin?.value ||
+        lastSchedule?.telegram_chat_id ||
+        ""
+      );
+    }
+  });
+
+  btnSaveRun?.addEventListener("click", async () => {
+    try {
+      setBusy(btnSaveRun, true, "Saving & running");
+      await saveAndRunSchedule();
+    } catch (e) {
+      toast.error(e.message || "Save & run failed.");
+    } finally {
+      hideRunLoader();
+      setBusy(btnSaveRun, false);
+    }
+  });
 
   restoreTrigger?.addEventListener("click", () => restoreFile?.click());
   restoreFile?.addEventListener("change", async () => {
@@ -780,6 +1610,24 @@
     } else {
       nodeCommandBox?.classList.remove("open");
       nodeGuideToggle.innerHTML = '<i class="fas fa-terminal"></i> Show install command';
+    }
+  });
+
+  $$("[data-auto-inspect-close='1']").forEach((button) => {
+    button.addEventListener("click", () => {
+      closeAutoInspectModal();
+    });
+  });
+
+  autoInspectDownload?.addEventListener("click", () => {
+    if (activeAutoInspectFilename) {
+      downloadAutoBackup(activeAutoInspectFilename);
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && autoInspectModal && !autoInspectModal.hidden) {
+      closeAutoInspectModal();
     }
   });
 
