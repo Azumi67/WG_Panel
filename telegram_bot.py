@@ -2736,7 +2736,11 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await edit_send(update, "⏳ Running backup and storing to disk…",
                             InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="backup:schedule")]])
                             )
-            url = f"{PANEL}/api/backup/full?wg={wg}&tg={tg}"
+            chat_id = str(s.get("telegram_chat_id") or "").strip()
+            url = (
+                f"{PANEL}/api/backup/full?auto=1&wg={wg}&tg={tg}"
+                f"&chat_id={chat_id}"
+            )
             dest = (AUTO_BACKUP_DIR / _auto_backupname("full"))
             ok, info = await asyncio.to_thread(_store_backuppanel, url, dest, "api", 900)
             if ok:
@@ -4073,7 +4077,8 @@ def _spawn(name: str, coro):
 # Backup scheduler (Telegram bot)
 
 
-TG_BACKUP_TICK_SEC = 30  
+TG_BACKUP_TICK_SEC = 30
+TG_BACKUP_SCHEDULER_ENABLED = os.getenv("TG_BACKUP_SCHEDULER_ENABLED", "0") == "1"  
 
 def _bot_tz_schedule(sched: dict):
     from datetime import timezone
@@ -4340,7 +4345,12 @@ async def _on_startup(app):
 
     _spawn("heartbeat", _heartbeat_loop(stop_event))
     _spawn("panel_watchdog", _panel_watchdog(stop_event, app.bot))
-    _spawn("backup_scheduler", _backup_scheduler_loop(stop_event))
+    if TG_BACKUP_SCHEDULER_ENABLED:
+        _spawn("backup_scheduler", _backup_scheduler_loop(stop_event))
+    else:
+        logging.info(
+            "Telegram backup scheduler disabled; the panel app scheduler is authoritative."
+        )
 
 
 
