@@ -397,56 +397,124 @@ def node_backup_wg():
 @app.post('/api/backup/wg/restore')
 @require_api_key
 def node_restore_wg():
+    data = request.get_json(
+        silent=True
+    ) or {}
 
-    data = request.get_json(silent=True) or {}
     files = data.get('files') or {}
-    bring_up = bool(data.get('bring_up', False))
+    env_file = data.get('env_file')
 
-    if not isinstance(files, dict) or not files:
-        return jsonify(ok=False, error='no_files'), 400
+    bring_up = bool(
+        data.get('bring_up', False)
+    )
+
+    if not isinstance(files, dict):
+        return jsonify(
+            ok=False,
+            error='invalid_files',
+        ), 400
+
+    if (
+        not files
+        and env_file in (None, '')
+    ):
+        return jsonify(
+            ok=False,
+            error='no_restore_payload',
+        ), 400
 
     root = _wg_conf_dir()
-    os.makedirs(root, exist_ok=True)
+    os.makedirs(
+        root,
+        exist_ok=True,
+    )
 
     restored = []
     errors = []
-    ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
 
+    timestamp = datetime.utcnow().strftime(
+        '%Y%m%d_%H%M%S'
+    )
+
+    # Restore WireGuard interface configurations
     for raw_name, content in files.items():
         try:
-            filename = _safe_conf_filename(raw_name)
-            iface = filename[:-5]
+            filename = _safe_conf_filename(
+                raw_name
+            )
+
+            interface_name = filename[:-5]
 
             if isinstance(content, bytes):
-                text = content.decode('utf-8', 'replace')
+                text = content.decode(
+                    'utf-8',
+                    'replace',
+                )
             else:
                 text = str(content or '')
 
-            if '[Interface]' not in text or 'PrivateKey' not in text:
-                raise ValueError(f'{filename} does not look like a WireGuard interface config')
+            if (
+                '[Interface]' not in text
+                or 'PrivateKey' not in text
+            ):
+                raise ValueError(
+                    f'{filename} does not look like '
+                    'a WireGuard interface config'
+                )
 
-            dest = os.path.join(root, filename)
+            destination = os.path.join(
+                root,
+                filename,
+            )
 
-            if os.path.isfile(dest):
-                backup_path = f'{dest}.restorebak.{ts}'
+            # Preserve the existing config before replacement
+            if os.path.isfile(destination):
+                safety_copy = (
+                    f'{destination}.restorebak.'
+                    f'{timestamp}'
+                )
+
                 try:
-                    os.replace(dest, backup_path)
+                    os.replace(
+                        destination,
+                        safety_copy,
+                    )
                 except Exception:
                     pass
 
-            tmp = f'{dest}.tmp.{ts}'
-            with open(tmp, 'w', encoding='utf-8') as f:
-                f.write(text.strip() + '\n')
+            temporary_path = (
+                f'{destination}.tmp.{timestamp}'
+            )
 
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, dest)
+            with open(
+                temporary_path,
+                'w',
+                encoding='utf-8',
+            ) as handle:
+                handle.write(
+                    text.strip() + '\n'
+                )
+
+            os.chmod(
+                temporary_path,
+                0o600,
+            )
+
+            os.replace(
+                temporary_path,
+                destination,
+            )
 
             restored.append(filename)
 
             if bring_up:
                 try:
                     subprocess.run(
-                        ['wg-quick', 'down', iface],
+                        [
+                            'wg-quick',
+                            'down',
+                            interface_name,
+                        ],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                         timeout=20,
@@ -455,23 +523,100 @@ def node_restore_wg():
                 except Exception:
                     pass
 
-                subprocess.run(
-                    ['wg-quick', 'up', iface],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                up_process = subprocess.run(
+                    [
+                        'wg-quick',
+                        'up',
+                        interface_name,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
                     timeout=20,
                     check=False,
                 )
 
-        except Exception as e:
+                if up_process.returncode != 0:
+                    errors.append({
+                        'file': filename,
+                        'error': (
+                            up_process.stderr
+                            or up_process.stdout
+                            or (
+                                'wg-quick up '
+                                f'{interface_name} failed'
+                            )
+                        ).strip(),
+                    })
+
+        except Exception as exc:
             errors.append({
                 'file': str(raw_name),
-                'error': str(e),
+                'error': str(exc),
+            })
+
+    # Restore node-agent .env
+    env_restored = False
+
+    if env_file not in (None, ''):
+        try:
+            env_path = (
+                _node_env_path()
+                or os.path.join(
+                    os.path.dirname(
+                        os.path.abspath(__file__)
+                    ),
+                    '.env',
+                )
+            )
+
+            # Preserve the current .env
+            if os.path.isfile(env_path):
+                safety_env = (
+                    f'{env_path}.restorebak.'
+                    f'{timestamp}'
+                )
+
+                os.replace(
+                    env_path,
+                    safety_env,
+                )
+
+            temporary_env = (
+                f'{env_path}.tmp.{timestamp}'
+            )
+
+            with open(
+                temporary_env,
+                'w',
+                encoding='utf-8',
+            ) as handle:
+                handle.write(
+                    str(env_file)
+                )
+
+            os.chmod(
+                temporary_env,
+                0o600,
+            )
+
+            os.replace(
+                temporary_env,
+                env_path,
+            )
+
+            env_restored = True
+
+        except Exception as exc:
+            errors.append({
+                'file': '.env',
+                'error': str(exc),
             })
 
     return jsonify(
         ok=(len(errors) == 0),
         restored=restored,
+        env_restored=env_restored,
         errors=errors,
     ), 200 if not errors else 207
 
