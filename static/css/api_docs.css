@@ -694,3 +694,55 @@ pre{
   .api-side-links{grid-template-columns:1fr;max-height:250px;overflow:auto}
 }
 @media (max-width:1180px){.api-side-links{grid-column:1/-1}.api-side{align-items:start}}
+
+
+/* API parameter and security notes — backup API v1.0.4 */
+.api-param-list{
+  display:grid;
+  gap:7px;
+  margin:10px 0 0;
+}
+.api-param-list > div{
+  display:grid;
+  grid-template-columns:minmax(112px,auto) minmax(0,1fr);
+  gap:9px;
+  align-items:start;
+  border:1px solid #dce6f2;
+  border-radius:11px;
+  background:#fff;
+  padding:8px 9px;
+}
+.api-param-list code{
+  color:#1d4ed8;
+  font-weight:850;
+  overflow-wrap:anywhere;
+}
+.api-param-list span{
+  color:#52647d;
+  font-size:12.4px;
+  line-height:1.45;
+}
+.api-security-note{
+  margin-top:10px!important;
+  border:1px solid #f5c2c7;
+  border-radius:11px;
+  background:#fff7f7;
+  color:#8a2630!important;
+  padding:9px 10px;
+}
+@media (prefers-color-scheme:dark){
+  .api-param-list > div{
+    background:#0b1020;
+    border-color:#33435b;
+  }
+  .api-param-list code{color:#93c5fd}
+  .api-param-list span{color:#b8c5d8}
+  .api-security-note{
+    background:#2a1218;
+    border-color:#6f2937;
+    color:#fecdd3!important;
+  }
+}
+@media (max-width:700px){
+  .api-param-list > div{grid-template-columns:1fr}
+}
