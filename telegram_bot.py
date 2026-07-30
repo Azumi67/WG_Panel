@@ -6,7 +6,7 @@ from datetime import datetime, time as dtime
 import os, io, json, logging, math, re, asyncio
 from functools import wraps
 from pathlib import Path
-from typing import Dict, Any, Tuple, List, Optional
+from typing import Dict, Any, Tuple, List, Optional, Set
 import requests
 from requests import HTTPError, RequestException
 from requests.exceptions import HTTPError
@@ -20,6 +20,7 @@ from telegram.ext import (
     MessageHandler, filters
 )
 from telegram.error import BadRequest
+import telegram_admin as admin_azumi
 import html as py_html
 try:
     from telegram.helpers import escape as tg_escape   
@@ -39,8 +40,23 @@ try:
 except Exception:
     pass
 
-BOT_VERSION = "wg-bot-1.1"
 HERE = Path(__file__).parent.resolve()
+
+def _read_project_version() -> str:
+    candidates = (HERE / "VERSION", HERE.parent / "VERSION")
+    for version_file in candidates:
+        try:
+            value = version_file.read_text(encoding="utf-8").strip().lstrip("vV")
+            if value and re.fullmatch(r"\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z.-]+)?", value):
+                return value
+        except FileNotFoundError:
+            continue
+        except Exception:
+            logging.getLogger(__name__).exception("Could not read VERSION from %s", version_file)
+    return "0.0.0"
+
+PROJECT_VERSION = _read_project_version()
+BOT_VERSION = f"wg-bot-{PROJECT_VERSION}"
 INSTANCE_DIR = Path(os.getenv("PANEL_INSTANCE_PATH", HERE / "instance")).resolve()
 INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
 TELEGRAM_SETTINGS_FILE = INSTANCE_DIR / "telegram_settings.json"
@@ -248,23 +264,20 @@ def log_tg(uid: str, uname: str, action: str, details: str = ""):
         pass
 
 class PanelLogHandler(logging.Handler):
-    """
-    Forwards Python logging records to the panel so they show up in Settings > Telegram > Logs.
-
-    """
+    _local = threading.local()
     def __init__(self, admin_id="bot", admin_username="bot", level=logging.INFO):
-        super().__init__(level)
-        self.admin_id = str(admin_id)
-        self.admin_username = str(admin_username)
-
+        super().__init__(level); self.admin_id=str(admin_id); self.admin_username=str(admin_username)
     def emit(self, record: logging.LogRecord) -> None:
+        if getattr(self._local, "active", False): return
+        if record.name.startswith(("urllib3","requests","httpcore","httpx","telegram")): return
         try:
-            msg = self.format(record)
-            sev = (record.levelname or "INFO").upper()
-            line = f"{sev}: {msg}"
-            log_tg(self.admin_id, self.admin_username, "log", line)
+            self._local.active=True
+            log_tg(self.admin_id, self.admin_username, "log", f"{(record.levelname or 'INFO').upper()}: {self.format(record)}")
         except Exception:
             pass
+        finally:
+            self._local.active=False
+
 
 def csrf_headers(extra: dict | None = None) -> dict:
     tok = (sess.cookies.get("csrf_token") or "").strip()
@@ -278,17 +291,18 @@ def csrf_headers(extra: dict | None = None) -> dict:
     return hdr
 
 async def _create_single_peer(panel_base, iface_id, payload, session="api"):
-    body = {**payload, "iface_id": int(iface_id)}
-    r = _post_soft(f"{panel_base}/api/peers", session=session, json=body)
-    j = _json_txt(r)
-    if isinstance(j, dict) and j.get("error"):
-        err = str(j.get("error"))
-        msg = str(j.get("message") or "")
-        summary += f"\n🧾 Server error: <code>{html(err)}</code>"
-        if msg:
-            summary += f"\n🧾 Details: <code>{html(msg)}</code>"
-    if isinstance(j, dict):
-        return j.get("id") or (j.get("peer") or {}).get("id")
+    body = {**(payload or {}), "iface_id": int(iface_id)}
+    response = await asyncio.to_thread(_post_soft, f"{panel_base}/api/peers", session=session, json=body, timeout=30)
+    data = _json_txt(response)
+    if not getattr(response, "ok", False):
+        if isinstance(data, dict):
+            detail = str(data.get("detail") or data.get("message") or data.get("error") or "")
+        else:
+            detail = str(data or "")
+        raise RuntimeError(detail or f"Peer creation failed with HTTP {response.status_code}.")
+    if isinstance(data, dict):
+        peer = data.get("peer") or {}
+        return data.get("id") or (peer.get("id") if isinstance(peer, dict) else None)
     return None
 
 def _post_soft(url: str, session="auto", **kw):
@@ -547,12 +561,40 @@ async def cmd_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def cmd_reload_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    _refresh_admin(force=True)
+    await asyncio.to_thread(_refresh_admin, True)
     await update.message.reply_text("Admin list reloaded from panel.")
 
+@admin_only
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await send_text(update, render_home(update), kb=KB.home())
 
-def html(s: str) -> str:
-    return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+@admin_only
+async def cmd_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text, keyboard = await asyncio.to_thread(render_update_center, fresh=True)
+    await send_text(update, text, kb=keyboard)
+
+
+
+@admin_only
+async def cmd_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text_out, keyboard = await asyncio.to_thread(admin_azumi.render_list, globals(), 1, "")
+    await send_text(update, text_out, kb=keyboard)
+
+
+@admin_only
+async def cmd_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text_out, keyboard = await asyncio.to_thread(admin_azumi.render_list, globals(), 1, "")
+    await send_text(update, text_out, kb=keyboard)
+
+
+@admin_only
+async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text_out, keyboard = await asyncio.to_thread(admin_azumi.diagnostics, globals())
+    await send_text(update, text_out, kb=keyboard)
+
+
+def html(value: Any) -> str:
+    return py_html.escape("" if value is None else str(value), quote=False)
 
 def pre(txt: str) -> str:
     return f"<pre>{html(txt.strip())}</pre>"
@@ -1080,7 +1122,7 @@ def update_peer(pid: int, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPError(f"{e} — {body}")
 
 def delete_peer(pid: int) -> None:
-    _delete(f"{PANEL}/api/peer/{pid}", session="sess")
+    _delete(f"{PANEL}/api/peer/{pid}", session="api", timeout=30)
 
 def _peer_config(pid: int) -> str:
     return _get(f"{PANEL}/api/peer/{pid}/config").text
@@ -1426,16 +1468,1012 @@ def kb_profile(pname: str):
         [InlineKeyboardButton("⬅️ Back", callback_data=f"profiles:open:{pname}")],
     ])
 
+
+def _api_data(method: str, path: str, *, payload: dict | None = None, timeout: int = 15) -> dict:
+    try:
+        url = f"{PANEL}{path}"
+        if method.upper() == "GET":
+            response = _get(url, session="api" if API_KEY else "auto", timeout=timeout)
+        elif method.upper() == "POST":
+            response = _post(url, session="api" if API_KEY else "auto", json=payload or {}, timeout=timeout)
+        elif method.upper() == "PUT":
+            response = _put(url, session="api" if API_KEY else "auto", json=payload or {}, timeout=timeout)
+        elif method.upper() == "DELETE":
+            response = _delete(url, session="api" if API_KEY else "auto", json=payload or {}, timeout=timeout)
+        else:
+            raise ValueError(f"Unsupported method: {method}")
+        data = _json_txt(response)
+        return data if isinstance(data, dict) else {"ok": bool(response.ok), "result": data}
+    except Exception as exc:
+        return {"ok": False, "error": type(exc).__name__, "detail": str(exc)}
+
+GITHUB_REPO = "Azumi67/WG_Panel"
+GITHUB_MAIN_ARCHIVE = (
+    "https://codeload.github.com/"
+    f"{GITHUB_REPO}/tar.gz/refs/heads/main"
+)
+
+
+def _normalize_version(value: Any) -> str:
+    text = str(value or "").strip().lstrip("vV")
+
+    if re.fullmatch(
+        r"\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z.-]+)?",
+        text,
+    ):
+        return text
+
+    return ""
+
+
+def _version_tuple(value: Any) -> tuple:
+    text = _normalize_version(value)
+    numbers = [
+        int(piece)
+        for piece in re.findall(r"\d+", text)[:4]
+    ]
+
+    while len(numbers) < 4:
+        numbers.append(0)
+
+    return tuple(numbers)
+
+
+def _github_source_info(*, fresh: bool = False) -> dict:
+    cache = getattr(
+        _github_source_info,
+        "_cache",
+        {
+            "value": {},
+            "ts": 0.0,
+        },
+    )
+
+    now = time.time()
+
+    if (
+        not fresh
+        and cache["value"]
+        and now - cache["ts"] < 180
+    ):
+        return dict(cache["value"])
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "WG-Panel-Telegram-Bot",
+    }
+
+    errors = []
+
+    raw_version_urls = (
+        (
+            "https://raw.githubusercontent.com/"
+            f"{GITHUB_REPO}/main/VERSION"
+        ),
+        (
+            "https://raw.githubusercontent.com/"
+            f"{GITHUB_REPO}/refs/heads/main/VERSION"
+        ),
+    )
+
+    for url in raw_version_urls:
+        try:
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=12,
+            )
+
+            if response.status_code == 200:
+                version = _normalize_version(response.text)
+
+                if version:
+                    result = {
+                        "ok": True,
+                        "latest": version,
+                        "target": "main",
+                        "source": "remote VERSION",
+                        "main_available": True,
+                    }
+
+                    _github_source_info._cache = {
+                        "value": result,
+                        "ts": now,
+                    }
+                    return dict(result)
+
+            errors.append(
+                f"remote VERSION HTTP {response.status_code}"
+            )
+
+        except Exception as exc:
+            errors.append(
+                f"remote VERSION: {type(exc).__name__}: {exc}"
+            )
+
+    try:
+        response = requests.get(
+            (
+                "https://api.github.com/repos/"
+                f"{GITHUB_REPO}/releases/latest"
+            ),
+            headers=headers,
+            timeout=12,
+        )
+
+        if response.status_code == 200:
+            payload = response.json() or {}
+            version = _normalize_version(
+                payload.get("tag_name")
+            )
+
+            if version:
+                result = {
+                    "ok": True,
+                    "latest": version,
+                    "target": version,
+                    "source": "GitHub release",
+                    "main_available": True,
+                }
+
+                _github_source_info._cache = {
+                    "value": result,
+                    "ts": now,
+                }
+                return dict(result)
+
+        errors.append(
+            f"release API HTTP {response.status_code}"
+        )
+
+    except Exception as exc:
+        errors.append(
+            f"release API: {type(exc).__name__}: {exc}"
+        )
+
+    try:
+        response = requests.get(
+            (
+                "https://api.github.com/repos/"
+                f"{GITHUB_REPO}/tags?per_page=30"
+            ),
+            headers=headers,
+            timeout=12,
+        )
+
+        if response.status_code == 200:
+            payload = response.json() or []
+            versions = []
+
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+
+                raw_name = str(
+                    item.get("name")
+                    or ""
+                ).strip()
+
+                normalized = _normalize_version(raw_name)
+
+                if normalized:
+                    versions.append(
+                        (
+                            _version_tuple(normalized),
+                            normalized,
+                            raw_name,
+                        )
+                    )
+
+            if versions:
+                versions.sort(reverse=True)
+                _, version, raw_target = versions[0]
+
+                result = {
+                    "ok": True,
+                    "latest": version,
+                    "target": raw_target,
+                    "source": "GitHub tag",
+                    "main_available": True,
+                }
+
+                _github_source_info._cache = {
+                    "value": result,
+                    "ts": now,
+                }
+                return dict(result)
+
+        errors.append(
+            f"tags API HTTP {response.status_code}"
+        )
+
+    except Exception as exc:
+        errors.append(
+            f"tags API: {type(exc).__name__}: {exc}"
+        )
+
+    try:
+        response = requests.get(
+            GITHUB_MAIN_ARCHIVE,
+            headers=headers,
+            timeout=20,
+            stream=True,
+            allow_redirects=True,
+        )
+
+        main_ok = (
+            response.status_code == 200
+            and "gzip" in (
+                response.headers.get(
+                    "content-type",
+                    "",
+                ).lower()
+            )
+        )
+
+        response.close()
+
+        if main_ok:
+            result = {
+                "ok": True,
+                "latest": "",
+                "target": "main",
+                "source": "main branch",
+                "main_available": True,
+                "detail": (
+                    "The repository main branch is reachable, "
+                    "but no remote VERSION, release, or semantic tag exists."
+                ),
+            }
+
+            _github_source_info._cache = {
+                "value": result,
+                "ts": now,
+            }
+            return dict(result)
+
+        errors.append(
+            f"main archive HTTP {response.status_code}"
+        )
+
+    except Exception as exc:
+        errors.append(
+            f"main archive: {type(exc).__name__}: {exc}"
+        )
+
+    result = {
+        "ok": False,
+        "latest": "",
+        "target": "",
+        "source": "unavailable",
+        "main_available": False,
+        "detail": " | ".join(errors[-4:]),
+    }
+
+    _github_source_info._cache = {
+        "value": result,
+        "ts": now,
+    }
+    return dict(result)
+
+def panel_version_info(*, fresh: bool = False) -> dict:
+    panel_data = _api_data(
+        "GET",
+        "/api/panel/version"
+        + ("?fresh=1" if fresh else ""),
+        timeout=15,
+    )
+
+    if not isinstance(panel_data, dict):
+        panel_data = {}
+
+    current = (
+        _normalize_version(panel_data.get("current"))
+        or PROJECT_VERSION
+    )
+
+    latest = _normalize_version(
+        panel_data.get("latest")
+    )
+
+    source = str(
+        panel_data.get("source")
+        or ""
+    ).strip()
+
+    target = str(
+        panel_data.get("target")
+        or latest
+        or ""
+    ).strip()
+
+    remote = {}
+
+    if not latest:
+        remote = _github_source_info(
+            fresh=fresh,
+        )
+
+        latest = _normalize_version(
+            remote.get("latest")
+        )
+
+        source = str(
+            remote.get("source")
+            or source
+            or ""
+        ).strip()
+
+        target = str(
+            remote.get("target")
+            or target
+            or ""
+        ).strip()
+
+    result = dict(panel_data)
+    result["current"] = current
+    result["latest"] = latest
+    result["source"] = source
+    result["target"] = target
+    result["main_available"] = bool(
+        panel_data.get("main_available")
+        or remote.get("main_available")
+    )
+
+    if latest:
+        result["update_available"] = (
+            _version_tuple(latest)
+            > _version_tuple(current)
+        )
+        result["ok"] = True
+
+    elif result["main_available"]:
+        result["ok"] = True
+        result["update_available"] = False
+        result["detail"] = str(
+            remote.get("detail")
+            or panel_data.get("detail")
+            or (
+                "The main branch is reachable, but the repository "
+                "does not publish a remote VERSION, release, or tag."
+            )
+        )
+
+    else:
+        result["ok"] = False
+        result["detail"] = str(
+            remote.get("detail")
+            or panel_data.get("detail")
+            or panel_data.get("error")
+            or "The repository could not be reached."
+        )
+
+    return result
+def panel_update_status() -> dict: return _api_data("GET", "/api/panel/update/status", timeout=10)
+def panel_update_targets() -> dict: return _api_data("GET", "/api/panel/update/targets", timeout=20)
+def start_panel_update(target: str = "latest") -> dict: return _api_data("POST", "/api/panel/update", payload={"target": target or "latest"}, timeout=20)
+def start_node_update(node_id: int, target: str = "latest") -> dict: return _api_data("POST", f"/api/nodes/{int(node_id)}/update", payload={"target": target or "latest"}, timeout=20)
+def node_update_status(node_id: int) -> dict: return _api_data("GET", f"/api/nodes/{int(node_id)}/update/status", timeout=12)
+
+def _update_busy(status: dict) -> bool:
+    return str((status or {}).get("status") or "").lower() in {"queued","running","downloading","installing","validating","restarting"}
+
+def _update_status_line(status: dict) -> str:
+    state=str((status or {}).get("status") or "idle").lower(); stage=str((status or {}).get("stage") or state)
+    try: percent=max(0,min(100,int((status or {}).get("percent") or 0)))
+    except Exception: percent=0
+    icon={"idle":"⚪","queued":"🟡","running":"🔵","downloading":"🔵","installing":"🟣","validating":"🟠","restarting":"🟠","done":"🟢","success":"🟢","failed":"🔴","error":"🔴","offline":"🔴"}.get(state,"⚪")
+    return f"{icon} <b>{html(stage.title())}</b> · <code>{percent}%</code>"
+
+def render_update_center(*, fresh: bool = False):
+    version = panel_version_info(fresh=fresh)
+    status = panel_update_status()
+    targets = panel_update_targets()
+
+    current = str(
+        version.get("current")
+        or PROJECT_VERSION
+        or "unknown"
+    )
+
+    latest_raw = version.get("latest")
+    latest = str(latest_raw or "")
+    check_ok = bool(latest_raw)
+    available = bool(
+        check_ok
+        and version.get("update_available")
+    )
+
+    nodes = (
+        targets.get("nodes")
+        if isinstance(targets, dict)
+        else []
+    ) or []
+
+    online = [
+        node for node in nodes
+        if node.get("online")
+    ]
+
+    updates = [
+        node for node in online
+        if (node.get("version") or {}).get("update_available")
+    ]
+
+    if not check_ok:
+        release_line = "⚠️ <b>Release check unavailable</b>"
+        latest_line = "🌐 <b>Latest</b>: <i>not available</i>"
+    elif available:
+        release_line = "🟠 <b>A panel update is available</b>"
+        latest_line = f"🌐 <b>Latest</b>: <code>v{html(latest)}</code>"
+    else:
+        release_line = "🟢 <b>Panel is up to date</b>"
+        latest_line = f"🌐 <b>Latest</b>: <code>v{html(latest)}</code>"
+
+    lines = [
+        "⬆️ <b>Update Center</b>",
+        "",
+        f"📦 <b>Installed</b>: <code>v{html(current)}</code>",
+        latest_line,
+        release_line,
+        "",
+        f"⚙️ <b>Local updater</b>: {_update_status_line(status)}",
+    ]
+
+    if nodes:
+        lines.extend([
+            "",
+            f"🖥 <b>Nodes online</b>: <code>{len(online)}/{len(nodes)}</code>",
+            f"⬆️ <b>Node updates</b>: <code>{len(updates)}</code>",
+        ])
+    else:
+        lines.extend([
+            "",
+            "🖥 <b>Nodes</b>: <i>none configured</i>",
+        ])
+
+    detail = str(status.get("message") or "").strip()
+    if detail and detail.lower() not in {
+        "no update is running.",
+        "no node update is running.",
+    }:
+        lines.extend(["", f"📝 {html(detail)}"])
+
+    rows = [[
+        InlineKeyboardButton("🔄 Check again", callback_data="system:refresh"),
+        InlineKeyboardButton("🖥 Nodes", callback_data="system:nodes"),
+    ]]
+
+    if available and not _update_busy(status):
+        rows.append([
+            InlineKeyboardButton(
+                f"⬆️ Install v{latest}",
+                callback_data="system:update:confirm",
+            )
+        ])
+
+    rows.append([
+        InlineKeyboardButton("⬅️ Home", callback_data="home:main")
+    ])
+
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+def render_node_updates():
+    targets=panel_update_targets(); nodes=(targets.get("nodes") if isinstance(targets,dict) else []) or []; rows=[]; lines=["🖥 <b>Node Updates</b>",""]
+    if not nodes: lines.append("No nodes were returned by the panel.")
+    for node in nodes:
+        nid=int(node.get("id") or 0); name=str(node.get("name") or f"Node {nid}"); online=bool(node.get("online")); v=node.get("version") or {}; cur=str(v.get("current") or "—"); latest=str(v.get("latest") or "—"); avail=bool(v.get("update_available")); icon="🟠" if online and avail else ("🟢" if online else "🔴")
+        lines.append(f"{icon} <b>{html(name)}</b> <code>v{html(cur)}</code> → <code>v{html(latest)}</code>"); rows.append([InlineKeyboardButton(f"{icon} {name}",callback_data=f"system:node:{nid}")])
+    rows.append([InlineKeyboardButton("🔄 Refresh",callback_data="system:nodes"),InlineKeyboardButton("⬅️ Update Center",callback_data="home:system")])
+    return "\n".join(lines),InlineKeyboardMarkup(rows)
+
+def render_node_update(node_id:int):
+    targets=panel_update_targets(); nodes=(targets.get("nodes") if isinstance(targets,dict) else []) or []; node=next((n for n in nodes if int(n.get("id") or 0)==int(node_id)),None)
+    if not node: return "Node not found.", KB.back("system:nodes")
+    name=str(node.get("name") or f"Node {node_id}"); online=bool(node.get("online")); v=node.get("version") or {}; cur=str(v.get("current") or "—"); latest=str(v.get("latest") or "—"); avail=bool(v.get("update_available")); status=node.get("update") or node_update_status(node_id) or {}
+    lines=[f"🖥 <b>{html(name)}</b>","",f"🌐 <b>Connectivity</b>: {'Online' if online else 'Offline'}",f"📦 <b>Installed</b>: <code>v{html(cur)}</code>",f"⬆️ <b>Latest</b>: <code>v{html(latest)}</code>",f"⚙️ <b>Status</b>: {_update_status_line(status)}"]
+    msg=str(status.get("message") or "").strip()
+    if msg: lines += ["",f"📝 {html(msg)}"]
+    rows=[[InlineKeyboardButton("🔄 Refresh",callback_data=f"system:node:{node_id}")]]
+    if online and avail and not _update_busy(status): rows.append([InlineKeyboardButton(f"⬆️ Update {name}",callback_data=f"system:nodeupdate:confirm:{node_id}")])
+    rows.append([InlineKeyboardButton("⬅️ Nodes",callback_data="system:nodes")])
+    return "\n".join(lines),InlineKeyboardMarkup(rows)
+
+
+def _human_bytes(value: Any) -> str:
+    try:
+        amount = max(0, int(value or 0))
+    except Exception:
+        amount = 0
+
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    size = float(amount)
+    unit = units[0]
+
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            break
+        size /= 1024.0
+
+    return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
+
+
+def list_subscriptions() -> list[dict]:
+    data = _api_data("GET", "/api/subscriptions", timeout=20)
+    rows = data.get("subscriptions") if isinstance(data, dict) else []
+    return rows if isinstance(rows, list) else []
+
+
+def get_subscription(subscription_id: int) -> dict:
+    data = _api_data(
+        "GET",
+        f"/api/subscriptions/{int(subscription_id)}",
+        timeout=15,
+    )
+    row = data.get("subscription") if isinstance(data, dict) else None
+    return row if isinstance(row, dict) else {}
+
+
+def subscription_action(subscription_id: int, action: str) -> dict:
+    allowed = {"enable", "disable", "reset_data", "reset_timer"}
+    if action not in allowed:
+        return {"ok": False, "error": "unsupported_action"}
+    return _api_data(
+        "POST",
+        f"/api/subscriptions/{int(subscription_id)}/{action}",
+        timeout=45,
+    )
+
+
+def subscription_links(subscription_id: int) -> dict:
+    return _api_data(
+        "GET",
+        f"/api/subscriptions/{int(subscription_id)}/shortlink",
+        timeout=12,
+    )
+
+
+def render_subscriptions(page: int = 1):
+    subscriptions = list_subscriptions()
+    per_page = 7
+    pages = max(1, math.ceil(len(subscriptions) / per_page))
+    page = max(1, min(int(page or 1), pages))
+    start_index = (page - 1) * per_page
+    visible = subscriptions[start_index:start_index + per_page]
+
+    enabled = sum(1 for row in subscriptions if row.get("enabled"))
+    blocked = sum(
+        1 for row in subscriptions
+        if (
+            str(row.get("status") or "").lower() == "blocked"
+            or int((row.get("runtime_counts") or {}).get("blocked") or 0) > 0
+        )
+    )
+
+    lines = [
+        "🔗 <b>Subscriptions</b>",
+        "",
+        f"📊 <b>Total</b>: <code>{len(subscriptions)}</code>",
+        f"🟢 <b>Enabled</b>: <code>{enabled}</code>",
+        f"🔴 <b>Blocked</b>: <code>{blocked}</code>",
+    ]
+
+    rows = []
+    if not visible:
+        lines.extend(["", "No subscriptions have been created."])
+    else:
+        lines.extend(["", f"Page <code>{page}/{pages}</code>"])
+
+    for row in visible:
+        sid = int(row.get("id") or 0)
+        name = str(row.get("name") or f"Subscription {sid}")
+        counts = row.get("runtime_counts") or {}
+        is_blocked = int(counts.get("blocked") or 0) > 0
+        icon = "🔴" if is_blocked else ("🟢" if row.get("enabled") else "🟡")
+        rows.append([
+            InlineKeyboardButton(
+                f"{icon} {name}",
+                callback_data=f"subs:open:{sid}",
+            )
+        ])
+
+    nav = []
+    if page > 1:
+        nav.append(InlineKeyboardButton("‹ Prev", callback_data=f"subs:list:{page-1}"))
+    if page < pages:
+        nav.append(InlineKeyboardButton("Next ›", callback_data=f"subs:list:{page+1}"))
+    if nav:
+        rows.append(nav)
+
+    rows.extend([
+        [InlineKeyboardButton("🔄 Refresh", callback_data=f"subs:list:{page}")],
+        [InlineKeyboardButton("⬅️ Home", callback_data="home:main")],
+    ])
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+
+def _subscription_time(row: dict) -> str:
+    if row.get("unlimited"):
+        return "Unlimited"
+    ttl = row.get("ttl_seconds")
+    if ttl is not None:
+        return human_ttl(ttl)
+    expires = row.get("expires_at")
+    return str(expires or "Not started")
+
+
+def render_subscription(subscription_id: int):
+    row = get_subscription(subscription_id)
+    if not row:
+        return "Subscription not found.", KB.back("subs:list:1")
+
+    sid = int(row.get("id") or subscription_id)
+    name = str(row.get("name") or f"Subscription {sid}")
+    enabled = bool(row.get("enabled"))
+    counts = row.get("runtime_counts") or {}
+    locations = row.get("locations") or row.get("inbounds") or []
+    used = int(row.get("used_bytes") or 0)
+    remaining = row.get("remaining_bytes")
+    limit = row.get("limit_bytes")
+
+    state = "🔴 Blocked" if int(counts.get("blocked") or 0) else ("🟢 Enabled" if enabled else "🟡 Disabled")
+    data_line = (
+        f"{_human_bytes(used)} used · Unlimited"
+        if row.get("unlimited") or limit is None
+        else f"{_human_bytes(used)} used · {_human_bytes(remaining)} left"
+    )
+
+    lines = [
+        f"🔗 <b>{html(name)}</b>",
+        f"🆔 <code>{sid}</code> · {state}",
+        "",
+        f"📦 <b>Data</b>: {html(data_line)}",
+        f"⏳ <b>Time</b>: {html(_subscription_time(row))}",
+        f"🗺 <b>Configs</b>: <code>{int(counts.get('total') or len(locations))}</code>",
+        f"🟢 Active: <code>{int(counts.get('enabled') or 0)}</code>  🟡 Off: <code>{int(counts.get('disabled') or 0)}</code>  🔴 Blocked: <code>{int(counts.get('blocked') or 0)}</code>",
+    ]
+
+    phone = str(row.get("phone_number") or "").strip()
+    tg_id = str(row.get("telegram_id") or "").strip()
+    if phone or tg_id:
+        lines.extend([
+            "",
+            f"☎️ {html(phone or '—')}  ·  Telegram {html(tg_id or '—')}",
+        ])
+
+    rows = []
+    if enabled:
+        rows.append([InlineKeyboardButton("⏸ Disable", callback_data=f"subs:disable:confirm:{sid}")])
+    else:
+        rows.append([InlineKeyboardButton("▶️ Enable + reset", callback_data=f"subs:enable:confirm:{sid}")])
+
+    rows.append([
+        InlineKeyboardButton("♻️ Reset data", callback_data=f"subs:reset_data:confirm:{sid}"),
+        InlineKeyboardButton("⏱ Reset timer", callback_data=f"subs:reset_timer:confirm:{sid}"),
+    ])
+
+    links = subscription_links(sid)
+    public_url = str(links.get("url") or "").strip()
+    config_url = str(links.get("config_url") or "").strip()
+    link_row = []
+    if public_url.startswith(("http://", "https://")):
+        link_row.append(InlineKeyboardButton("🌐 Client portal", url=public_url))
+    if config_url.startswith(("http://", "https://")):
+        link_row.append(InlineKeyboardButton("📥 Config", url=config_url))
+    if link_row:
+        rows.append(link_row)
+
+    rows.extend([
+        [InlineKeyboardButton("🔄 Refresh", callback_data=f"subs:open:{sid}")],
+        [InlineKeyboardButton("⬅️ Subscriptions", callback_data="subs:list:1")],
+    ])
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+
+def render_clients():
+    text = "\n".join([
+        "📱 <b>WireGuard Clients</b>",
+        "",
+        "Install the official WireGuard application, then open a subscription portal or import a <code>.conf</code> file.",
+        "",
+        "For customer-specific QR codes and configs, open <b>Subscriptions</b> and select the customer.",
+    ])
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🪟 Windows", url="https://www.wireguard.com/install/"), InlineKeyboardButton("🍎 macOS", url="https://apps.apple.com/app/wireguard/id1451685025")],
+        [InlineKeyboardButton("🤖 Android", url="https://play.google.com/store/apps/details?id=com.wireguard.android"), InlineKeyboardButton("📱 iPhone/iPad", url="https://apps.apple.com/app/wireguard/id1441195209")],
+        [InlineKeyboardButton("🐧 Linux", url="https://www.wireguard.com/install/")],
+        [InlineKeyboardButton("🔗 Subscriptions", callback_data="subs:list:1")],
+        [InlineKeyboardButton("⬅️ Home", callback_data="home:main")],
+    ])
+    return text, keyboard
+
+
+def telegram_settings_data() -> dict:
+    return _api_data("GET", "/api/telegram/settings", timeout=12)
+
+
+def save_telegram_notifications(notify: dict, enabled: bool = True) -> dict:
+    return _api_data(
+        "POST",
+        "/api/telegram/settings",
+        payload={"enabled": bool(enabled), "notify": notify},
+        timeout=15,
+    )
+
+
+def subscription_portal_settings() -> dict:
+    return _api_data("GET", "/api/subscriptions/settings", timeout=12)
+
+
+def render_bot_settings():
+    tg = telegram_settings_data()
+    notify = tg.get("notify") or {}
+    portal = subscription_portal_settings()
+
+    def mark(key: str) -> str:
+        return "✅" if bool(notify.get(key)) else "❌"
+
+    lines = [
+        "⚙️ <b>Bot Settings</b>",
+        "",
+        f"🤖 <b>Telegram integration</b>: {'Enabled' if tg.get('enabled') else 'Disabled'}",
+        f"🔐 <b>Bot token</b>: {'Configured' if tg.get('has_token') else 'Missing'}",
+        "",
+        "🔔 <b>Notifications</b>",
+        f"{mark('app_down')} Panel availability",
+        f"{mark('iface_down')} Interface failures",
+        f"{mark('login_fail')} Failed logins",
+        f"{mark('suspicious_4xx')} Suspicious requests",
+        "",
+        "🌐 <b>Subscription portal</b>",
+        f"Layout: <code>{html(portal.get('layout') or 'aurora')}</code>",
+        f"Stats: <code>{html(portal.get('display_mode') or 'hybrid')}</code>",
+        f"Motion: <code>{html(portal.get('animation') or 'rich')}</code>",
+        "",
+        "TLS, ports, runtime workers, and certificates remain web-only to prevent accidental lockout.",
+    ]
+
+    rows = [
+        [InlineKeyboardButton(f"{mark('app_down')} Panel alert", callback_data="settings:notify:app_down"), InlineKeyboardButton(f"{mark('iface_down')} Interface alert", callback_data="settings:notify:iface_down")],
+        [InlineKeyboardButton(f"{mark('login_fail')} Login alert", callback_data="settings:notify:login_fail"), InlineKeyboardButton(f"{mark('suspicious_4xx')} Security alert", callback_data="settings:notify:suspicious_4xx")],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="home:settings")],
+        [InlineKeyboardButton("⬅️ Home", callback_data="home:main")],
+    ]
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+def render_update_center(*, fresh: bool = False):
+    version = panel_version_info(
+        fresh=fresh,
+    )
+    status = panel_update_status()
+    targets = panel_update_targets()
+
+    current = str(
+        version.get("current")
+        or PROJECT_VERSION
+        or "unknown"
+    )
+
+    latest = str(
+        version.get("latest")
+        or ""
+    )
+
+    source = str(
+        version.get("source")
+        or ""
+    ).strip()
+
+    target = str(
+        version.get("target")
+        or ""
+    ).strip()
+
+    main_available = bool(
+        version.get("main_available")
+    )
+
+    available = bool(
+        latest
+        and version.get("update_available")
+    )
+
+    lines = [
+        "⬆️ <b>Update Center</b>",
+        "",
+        f"📦 <b>Installed</b>: <code>v{html(current)}</code>",
+    ]
+
+    if latest:
+        lines.append(
+            f"🌐 <b>Latest</b>: <code>v{html(latest)}</code>"
+        )
+
+        if source:
+            lines.append(
+                f"🔎 <b>Source</b>: {html(source)}"
+            )
+
+        lines.append(
+            "🟠 <b>Update available</b>"
+            if available
+            else "🟢 <b>Panel is current</b>"
+        )
+
+    elif main_available:
+        lines.extend([
+            "🌿 <b>Source</b>: GitHub main branch",
+            (
+                "ℹ️ No remote <code>VERSION</code>, release, "
+                "or semantic tag was found."
+            ),
+            (
+                "The main branch can still be installed, but "
+                "its version cannot be compared automatically."
+            ),
+        ])
+
+    else:
+        detail = str(
+            version.get("detail")
+            or "The repository could not be reached."
+        ).strip()
+
+        lines.extend([
+            "🔴 <b>Repository check failed</b>",
+            f"<code>{html(detail[:300])}</code>",
+        ])
+
+    state = str(
+        status.get("status")
+        or "idle"
+    ).lower()
+
+    if status.get("ok") is False:
+        updater_line = "🔴 Updater route unavailable"
+    elif state == "idle":
+        updater_line = "🟢 Ready"
+    else:
+        updater_line = _update_status_line(status)
+
+    lines.extend([
+        "",
+        f"⚙️ <b>Updater</b>: {updater_line}",
+    ])
+
+    message = str(
+        status.get("message")
+        or ""
+    ).strip()
+
+    if (
+        message
+        and message.lower()
+        not in {
+            "no update is running.",
+            "no node update is running.",
+        }
+    ):
+        lines.append(
+            f"📝 {html(message)}"
+        )
+
+    nodes = (
+        targets.get("nodes")
+        if isinstance(targets, dict)
+        else []
+    ) or []
+
+    if (
+        isinstance(targets, dict)
+        and targets.get("ok") is False
+    ):
+        lines.extend([
+            "",
+            (
+                "🖥 <b>Nodes</b>: "
+                f"<code>{html(str(targets.get('detail') or targets.get('error'))[:180])}</code>"
+            ),
+        ])
+
+    elif nodes:
+        online = [
+            node
+            for node in nodes
+            if node.get("online")
+        ]
+
+        updates = [
+            node
+            for node in online
+            if (
+                node.get("version")
+                or {}
+            ).get("update_available")
+        ]
+
+        lines.extend([
+            "",
+            (
+                "🖥 <b>Nodes online</b>: "
+                f"<code>{len(online)}/{len(nodes)}</code>"
+            ),
+            (
+                "⬆️ <b>Node updates</b>: "
+                f"<code>{len(updates)}</code>"
+            ),
+        ])
+
+    else:
+        lines.extend([
+            "",
+            "🖥 <b>Nodes</b>: <i>none configured</i>",
+        ])
+
+    rows = [
+        [
+            InlineKeyboardButton(
+                "🔄 Check again",
+                callback_data="system:refresh",
+            ),
+            InlineKeyboardButton(
+                "🖥 Nodes",
+                callback_data="system:nodes",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🐙 Repository",
+                url="https://github.com/Azumi67/WG_Panel",
+            ),
+            InlineKeyboardButton(
+                "🏷 Releases",
+                url="https://github.com/Azumi67/WG_Panel/releases",
+            ),
+        ],
+    ]
+
+    if not _update_busy(status):
+        if available:
+            rows.append([
+                InlineKeyboardButton(
+                    f"⬆️ Install v{latest}",
+                    callback_data=(
+                        "system:update:confirm:"
+                        f"{target or latest}"
+                    ),
+                )
+            ])
+
+        elif main_available:
+            rows.append([
+                InlineKeyboardButton(
+                    "🌿 Update from main",
+                    callback_data="system:update:confirm:main",
+                )
+            ])
+
+    rows.append([
+        InlineKeyboardButton(
+            "⬅️ Home",
+            callback_data="home:main",
+        )
+    ])
+
+    return (
+        "\n".join(lines),
+        InlineKeyboardMarkup(rows),
+    )
+
+
 class KB:
     @staticmethod
     def home():
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("👥 Peers",     callback_data="peers:menu"),
-             InlineKeyboardButton("🎯 Profiles",  callback_data="profiles:menu")],
-            [InlineKeyboardButton("🗄️ Backup",    callback_data="backup:menu"),
-             InlineKeyboardButton("🧑‍💼 Admins",  callback_data="home:admins")],
-            [InlineKeyboardButton("🔄 Refresh",   callback_data="home:refresh"),
-             InlineKeyboardButton("❓ Help",      callback_data="home:help")],
+            [InlineKeyboardButton("👥 Peers", callback_data="peers:menu"), InlineKeyboardButton("👤 Clients", callback_data="client:list:1")],
+            [InlineKeyboardButton("🎯 Profiles", callback_data="profiles:menu"), InlineKeyboardButton("🗄️ Backup", callback_data="backup:menu")],
+            [InlineKeyboardButton("⬆️ Updates", callback_data="home:system"), InlineKeyboardButton("⚙️ Bot admin", callback_data="home:settings")],
+            [InlineKeyboardButton("🧑‍💼 Admins", callback_data="home:admins"), InlineKeyboardButton("🔄 Dashboard", callback_data="home:refresh")],
         ])
 
 
@@ -1635,14 +2673,6 @@ def _store_backuppanel(url: str, dest_path: Path, session: str = "api", timeout:
             pass
 
 
-async def _backup_scheduler_loop(stop_event):
-    while not stop_event.is_set():
-        try:
-            await _backup_scheduler()
-        except Exception:
-            pass
-        await asyncio.wait_for(stop_event.wait(), timeout=TG_BACKUP_TICK_SEC)
-
 
 def _last_backup() -> int | None:
 
@@ -1757,6 +2787,194 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             log_tg(uid, uname, action, details)
         except Exception:
             pass
+
+    if await admin_azumi.handle_callback(globals(), update, context):
+        return
+
+    if data.startswith("subs:list:"):
+        try:
+            page = int(data.rsplit(":", 1)[-1])
+        except Exception:
+            page = 1
+        text_out, keyboard = await asyncio.to_thread(render_subscriptions, page)
+        await edit_send(update, text_out, keyboard)
+        return
+
+    if data.startswith("subs:open:"):
+        sid = int(data.rsplit(":", 1)[-1])
+        text_out, keyboard = await asyncio.to_thread(render_subscription, sid)
+        await edit_send(update, text_out, keyboard)
+        return
+
+    for action, title, warning in (
+        ("enable", "Enable subscription", "Enabling resets both data usage and the timer."),
+        ("disable", "Disable subscription", "Disabling preserves the current timer and data usage."),
+        ("reset_data", "Reset subscription data", "This clears shared usage counters and may reactivate data-blocked configs."),
+        ("reset_timer", "Reset subscription timer", "This restarts the subscription timer and may reactivate time-blocked configs."),
+    ):
+        prefix = f"subs:{action}:confirm:"
+        if data.startswith(prefix):
+            sid = int(data.rsplit(":", 1)[-1])
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Confirm", callback_data=f"subs:{action}:run:{sid}")],
+                [InlineKeyboardButton("⬅️ Cancel", callback_data=f"subs:open:{sid}")],
+            ])
+            await edit_send(update, f"⚠️ <b>{title}?</b>\n\n{warning}", kb)
+            return
+
+        run_prefix = f"subs:{action}:run:"
+        if data.startswith(run_prefix):
+            sid = int(data.rsplit(":", 1)[-1])
+            result = await asyncio.to_thread(subscription_action, sid, action)
+            if not result.get("ok") and not result.get("partial"):
+                await edit_send(
+                    update,
+                    "❌ <b>Subscription action failed</b>\n\n"
+                    f"<code>{html(result.get('detail') or result.get('error') or result)}</code>",
+                    KB.back(f"subs:open:{sid}"),
+                )
+                return
+            _log_admin(f"subscription_{action}", f"sid={sid}")
+            text_out, keyboard = await asyncio.to_thread(render_subscription, sid)
+            message = str(result.get("message") or "Action completed.")
+            await edit_send(update, f"✅ {html(message)}\n\n{text_out}", keyboard)
+            return
+
+    # Client applications
+    if data == "home:clients":
+        text_out, keyboard = render_clients()
+        await edit_send(update, text_out, keyboard)
+        return
+
+    # settings
+    if data == "home:settings":
+        text_out, keyboard = await asyncio.to_thread(render_bot_settings)
+        await edit_send(update, text_out, keyboard)
+        return
+
+    if data.startswith("settings:notify:"):
+        key = data.rsplit(":", 1)[-1]
+        allowed = {"app_down", "iface_down", "login_fail", "suspicious_4xx"}
+        if key not in allowed:
+            await q.answer("Unsupported setting.", show_alert=True)
+            return
+        current = await asyncio.to_thread(telegram_settings_data)
+        notify = dict(current.get("notify") or {})
+        notify[key] = not bool(notify.get(key))
+        result = await asyncio.to_thread(
+            save_telegram_notifications,
+            notify,
+            bool(current.get("enabled", True)),
+        )
+        if not result.get("ok"):
+            await q.answer(str(result.get("detail") or result.get("error") or "Save failed"), show_alert=True)
+            return
+        _log_admin("telegram_notification_toggle", f"key={key}; enabled={int(bool(notify[key]))}")
+        text_out, keyboard = await asyncio.to_thread(render_bot_settings)
+        await edit_send(update, text_out, keyboard)
+        return
+
+    # Update Center
+    if data in {"home:system", "system:refresh"}:
+        text, keyboard = await asyncio.to_thread(render_update_center, fresh=(data == "system:refresh")); await edit_send(update, text, keyboard); return
+    if data.startswith("system:update:confirm:"):
+        target = data.split(
+            ":",
+            3,
+        )[-1].strip() or "main"
+
+        label = (
+            "✅ Install main branch"
+            if target == "main"
+            else f"✅ Install {target}"
+        )
+
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    label,
+                    callback_data=(
+                        "system:update:start:"
+                        f"{target}"
+                    ),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⬅️ Cancel",
+                    callback_data="home:system",
+                )
+            ],
+        ])
+
+        await edit_send(
+            update,
+            (
+                "⚠️ <b>Update local panel?</b>\n\n"
+                "A rollback backup is created before files are replaced. "
+                "The selected GitHub source is downloaded, Python is "
+                "validated, and the detected panel service is restarted."
+            ),
+            kb,
+        )
+        return
+
+    if data.startswith("system:update:start:"):
+        target = data.split(
+            ":",
+            3,
+        )[-1].strip() or "main"
+
+        result = await asyncio.to_thread(
+            start_panel_update,
+            target,
+        )
+
+        if not result.get("ok"):
+            await edit_send(
+                update,
+                (
+                    "❌ <b>Could not start panel update</b>\n\n"
+                    f"<code>{html(result.get('detail') or result.get('error') or result)}</code>"
+                ),
+                KB.back("home:system"),
+            )
+            return
+
+        _log_admin(
+            "panel_update_start",
+            f"target={target}",
+        )
+
+        text, keyboard = await asyncio.to_thread(
+            render_update_center,
+            fresh=True,
+        )
+
+        await edit_send(
+            update,
+            text,
+            keyboard,
+        )
+        return
+    if data == "system:nodes":
+        text,keyboard=await asyncio.to_thread(render_node_updates); await edit_send(update,text,keyboard); return
+    if data.startswith("system:node:"):
+        try: node_id=int(data.rsplit(":",1)[-1])
+        except Exception: await q.answer("Invalid node.",show_alert=True); return
+        text,keyboard=await asyncio.to_thread(render_node_update,node_id); await edit_send(update,text,keyboard); return
+    if data.startswith("system:nodeupdate:confirm:"):
+        try: node_id=int(data.rsplit(":",1)[-1])
+        except Exception: await q.answer("Invalid node.",show_alert=True); return
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Start node update",callback_data=f"system:nodeupdate:start:{node_id}")],[InlineKeyboardButton("⬅️ Cancel",callback_data=f"system:node:{node_id}")]])
+        await edit_send(update,"⚠️ <b>Update this node?</b>\n\nThe node creates a rollback backup, validates node_agent.py, and restarts its automatically detected service.",kb); return
+    if data.startswith("system:nodeupdate:start:"):
+        try: node_id=int(data.rsplit(":",1)[-1])
+        except Exception: await q.answer("Invalid node.",show_alert=True); return
+        result=await asyncio.to_thread(start_node_update,node_id,"latest")
+        if not result.get("ok"):
+            await edit_send(update,f"❌ <b>Could not start node update</b>\n\n<code>{html(result.get('detail') or result.get('error') or result)}</code>",KB.back(f"system:node:{node_id}")); return
+        _log_admin("node_update_start",f"node_id={node_id}; target=latest"); text,keyboard=await asyncio.to_thread(render_node_update,node_id); await edit_send(update,text,keyboard); return
 
     #  __Profiles
     if data == "profiles:menu":
@@ -3710,6 +4928,9 @@ async def wizard_bulk_node(update: Update):
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
 
+    if await admin_azumi.handle_text(globals(), update, context):
+        return
+
     stp1 = context.user_data.get(STATE.get("P_EDIT_ONE"))
     if stp1:
         pname = stp1["pname"]; key = stp1["key"]
@@ -3950,14 +5171,6 @@ def _state_get_int(st: dict, key: str, default: int = 0) -> int:
         return default
 
 
-async def _admin_refresh():
-    while True:
-        try:
-            _refresh_admin(force=True)
-        except Exception as e:
-            logging.warning("Admin refresh failed: %s", e)
-        await asyncio.sleep(90)
-
 TELEGRAM_ADMINS_FILE = INSTANCE_DIR / "telegram_admins.json"
 def _read_json(path: Path, default):
     try:
@@ -3990,8 +5203,8 @@ async def _panel_watchdog(stop_event: asyncio.Event, bot):
     while not stop_event.is_set():
         ok = False
         try:
-            r = requests.get(f"{PANEL}/api/healthz", timeout=5)
-            ok = (r.status_code == 200)
+            response = await asyncio.to_thread(_get, f"{PANEL}/api/healthz", session="api" if API_KEY else "auto", timeout=6)
+            ok = response.status_code == 200
         except Exception:
             ok = False
 
@@ -4054,13 +5267,6 @@ async def _heartbeat_loop(stop_event: asyncio.Event):
         except asyncio.TimeoutError:
             pass
 
-async def _post_init(application):
-    asyncio.create_task(_admin_refresh())
-
-    application.stop_event = asyncio.Event()
-    application.heartbeat_task = asyncio.create_task(_heartbeat_loop(application.stop_event))
-
-
 async def on_error(update, context):
     logging.exception("Unhandled bot error: %s", getattr(context, "error", None))
 
@@ -4073,8 +5279,6 @@ def _spawn(name: str, coro):
             logging.exception("%s crashed", name)
     t.add_done_callback(_done)
     return t
-
-# Backup scheduler (Telegram bot)
 
 
 TG_BACKUP_TICK_SEC = 30
@@ -4332,43 +5536,37 @@ async def _backup_scheduler_loop(stop_event: asyncio.Event):
                 pass
 
 
-async def _on_startup(app):
-    try:
-        asyncio.create_task(_admin_refresh())
-    except Exception:
-        pass
+async def _admin_refresh_loop(stop_event: asyncio.Event):
+    while not stop_event.is_set():
+        try: await asyncio.to_thread(_refresh_admin, True)
+        except Exception as exc: logging.warning("Admin refresh failed: %s", exc)
+        try: await asyncio.wait_for(stop_event.wait(), timeout=90)
+        except asyncio.TimeoutError: pass
 
-    stop_event = app.bot_data.get("stop_event")
-    if stop_event is None:
-        stop_event = asyncio.Event()
-        app.bot_data["stop_event"] = stop_event
+async def _on_startup(application):
+    stop_event=application.bot_data.get("stop_event") or asyncio.Event(); application.bot_data["stop_event"]=stop_event
+    tasks=[_spawn("admin_refresh",_admin_refresh_loop(stop_event)),_spawn("heartbeat",_heartbeat_loop(stop_event)),_spawn("panel_watchdog",_panel_watchdog(stop_event,application.bot))]
+    if TG_BACKUP_SCHEDULER_ENABLED: tasks.append(_spawn("backup_scheduler",_backup_scheduler_loop(stop_event)))
+    else: logging.info("Telegram backup scheduler disabled; the panel app scheduler is authoritative.")
+    application.bot_data["background_tasks"]=tasks
 
-    _spawn("heartbeat", _heartbeat_loop(stop_event))
-    _spawn("panel_watchdog", _panel_watchdog(stop_event, app.bot))
-    if TG_BACKUP_SCHEDULER_ENABLED:
-        _spawn("backup_scheduler", _backup_scheduler_loop(stop_event))
-    else:
-        logging.info(
-            "Telegram backup scheduler disabled; the panel app scheduler is authoritative."
-        )
-
-
-
-async def _on_shutdown(app):
-    try:
-        stop_event = app.bot_data.get("stop_event")
-        if stop_event:
-            stop_event.set()
-    except Exception:
-        pass
+async def _on_shutdown(application):
+    stop_event=application.bot_data.get("stop_event")
+    if stop_event: stop_event.set()
+    tasks=application.bot_data.get("background_tasks") or []
+    if tasks:
+        done,pending=await asyncio.wait(tasks,timeout=8)
+        for task in pending: task.cancel()
 
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     token = load_bot_token()
-    if not token:
-        raise SystemExit("Missing bot token. Set TG_BOT_TOKEN env or save it in panel.")
+    if not token: raise SystemExit("Missing bot token. Save it in Panel → Settings → Telegram.")
+    if not API_KEY and not USE_PANEL_SESSION: raise SystemExit("Missing PANEL_API_KEY/API_KEY. The bot requires the panel API key.")
+    logging.info("Starting WG Panel Telegram bot %s",BOT_VERSION)
+    logging.info("Panel API target: %s",PANEL)
 
     app = (
         Application.builder()
@@ -4386,19 +5584,19 @@ def main():
     app.add_handler(CommandHandler("id", cmd_id))
     app.add_handler(CommandHandler("admins", cmd_admins))
     app.add_handler(CommandHandler("reload_admins", cmd_reload_admins))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("updates", cmd_updates))
+    app.add_handler(CommandHandler("subscriptions", cmd_subscriptions))
+    app.add_handler(CommandHandler("clients", cmd_clients))
+    app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CallbackQueryHandler(on_cb))
     app.add_handler(MessageHandler(filters.Document.ALL, on_doc))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
-    _panel_handler = PanelLogHandler(admin_id="bot", admin_username="bot")
-    _panel_handler.setFormatter(logging.Formatter("%(name)s - %(message)s"))
-    logging.getLogger().addHandler(_panel_handler)
-    logging.getLogger("telegram").addHandler(_panel_handler)
-    logging.getLogger("telegram.ext").addHandler(_panel_handler)
-    logging.getLogger("telegram.application").addHandler(_panel_handler)
-
-
-    app.run_polling()  
+    root_logger=logging.getLogger()
+    if not any(isinstance(handler,PanelLogHandler) for handler in root_logger.handlers):
+        panel_handler=PanelLogHandler(admin_id="bot",admin_username="bot"); panel_handler.setFormatter(logging.Formatter("%(name)s - %(message)s")); root_logger.addHandler(panel_handler)
+    app.run_polling(allowed_updates=Update.ALL_TYPES,drop_pending_updates=False,close_loop=True)
 
 
 if __name__ == "__main__":
