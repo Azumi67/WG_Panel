@@ -12,6 +12,14 @@ document.addEventListener('alpine:init', () => {
         this.filter();
         this.setupActiveSectionObserver();
         this.ensureCopyToast();
+        this.bindThemeRefresh();
+      });
+    },
+
+
+    bindThemeRefresh() {
+      window.addEventListener('wg-theme-change', () => {
+        requestAnimationFrame(() => this.setupActiveSectionObserver());
       });
     },
 
@@ -176,7 +184,22 @@ document.addEventListener('alpine:init', () => {
         items.forEach(item => {
           if (!item.isIntersecting) return;
           sideLinks.forEach(link => {
-            link.classList.toggle('active', link.getAttribute('href') === `#${item.target.id}`);
+            const active = link.getAttribute('href') === `#${item.target.id}`;
+            link.classList.toggle('active', active);
+
+            if (active) {
+              const rail = link.closest('.api-side-links');
+              if (rail) {
+                const linkTop = link.offsetTop;
+                const linkBottom = linkTop + link.offsetHeight;
+                const visibleTop = rail.scrollTop;
+                const visibleBottom = visibleTop + rail.clientHeight;
+
+                if (linkTop < visibleTop + 8 || linkBottom > visibleBottom - 8) {
+                  link.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+                }
+              }
+            }
           });
         });
       }, { rootMargin: '-25% 0px -65% 0px', threshold: 0 });
