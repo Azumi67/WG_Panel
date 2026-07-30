@@ -272,12 +272,142 @@ function formatMessage(x, src, rawMsg, niceMsg){
     return raw;
   }
 
-  function humanIface(x){
-    const p = x.peer || x.name || '';
-    if (x.event && p) return `${x.event} — ${p}`;
-    if (x.action && p) return `${x.action} — ${p}`;
-    return x.msg || x.message || x.text || x.raw || JSON.stringify(x);
+  function humanIface(x) {
+  const peer = String(
+    x.peer ||
+    x.name ||
+    x.peer_name ||
+    ''
+  ).trim();
+
+  const raw = String(
+    x.msg ||
+    x.message ||
+    x.text ||
+    x.raw ||
+    ''
+  ).trim();
+
+  if (x.event && peer) {
+    return `${x.event} — ${peer}`;
   }
+
+  if (x.action && peer) {
+    return `${x.action} — ${peer}`;
+  }
+
+  let match;
+
+  match = raw.match(
+    /^\$?\s*wg-quick\s+up\s+([A-Za-z0-9_.:-]+)$/i
+  );
+
+  if (match) {
+    return `Starting WireGuard interface ${match[1]}`;
+  }
+
+  match = raw.match(
+    /^\$?\s*wg-quick\s+down\s+([A-Za-z0-9_.:-]+)$/i
+  );
+
+  if (match) {
+    return `Stopping WireGuard interface ${match[1]}`;
+  }
+
+  match = raw.match(
+    /^ip\s+link\s+add\s+([A-Za-z0-9_.:-]+)\s+type\s+wireguard$/i
+  );
+
+  if (match) {
+    return `Creating WireGuard interface ${match[1]}`;
+  }
+
+  match = raw.match(
+    /^wg\s+setconf\s+([A-Za-z0-9_.:-]+)\s+/i
+  );
+
+  if (match) {
+    return `Applying configuration to ${match[1]}`;
+  }
+
+  match = raw.match(
+    /^ip\s+(?:-4\s+|-6\s+)?address\s+add\s+(\S+)\s+dev\s+(\S+)/i
+  );
+
+  if (match) {
+    return `Assigning address ${match[1]} to ${match[2]}`;
+  }
+
+  match = raw.match(
+    /^ip\s+link\s+set\s+mtu\s+(\d+)\s+up\s+dev\s+(\S+)/i
+  );
+
+  if (match) {
+    return `Starting ${match[2]} with MTU ${match[1]}`;
+  }
+
+  match = raw.match(
+    /^ip\s+link\s+set\s+up\s+dev\s+(\S+)/i
+  );
+
+  if (match) {
+    return `Bringing interface ${match[1]} online`;
+  }
+
+  match = raw.match(
+    /^ip\s+link\s+set\s+down\s+dev\s+(\S+)/i
+  );
+
+  if (match) {
+    return `Taking interface ${match[1]} offline`;
+  }
+
+  match = raw.match(
+    /^ip\s+link\s+delete\s+(?:dev\s+)?(\S+)/i
+  );
+
+  if (match) {
+    return `Removing interface ${match[1]}`;
+  }
+
+  match = raw.match(
+    /^ip(?:\s+-[46])?\s+route\s+add\s+(.+)$/i
+  );
+
+  if (match) {
+    return `Adding network route — ${match[1]}`;
+  }
+
+  match = raw.match(
+    /^ip(?:\s+-[46])?\s+route\s+(?:del|delete)\s+(.+)$/i
+  );
+
+  if (match) {
+    return `Removing network route — ${match[1]}`;
+  }
+
+  if (/iptables.*MASQUERADE/i.test(raw)) {
+    return 'Configuring WireGuard internet sharing';
+  }
+
+  if (/net\.ipv4\.ip_forward\s*=\s*1/i.test(raw)) {
+    return 'Enabling IPv4 forwarding';
+  }
+
+  if (/RTNETLINK answers:\s*File exists/i.test(raw)) {
+    return 'A matching network route already exists';
+  }
+
+  if (/permission denied/i.test(raw)) {
+    return 'Interface command failed — permission denied';
+  }
+
+  if (/command not found/i.test(raw)) {
+    return 'Interface command failed — required command not found';
+  }
+
+  return stripLevels(raw) || 'Interface activity';
+}
 
   function humanRow(x, src){
     switch (src){
@@ -908,8 +1038,44 @@ nodeSel?.addEventListener('change', async () => {
     const applyTimeHdr = () => { if (thTime) thTime.textContent = (lt?.checked ? 'Time (local)' : 'Time (UTC)'); };
     applyTimeHdr();
 
-    fm?.addEventListener('change', () => { state.friendly = !!fm.checked; persistState(); getLogs(); });
-    lt?.addEventListener('change', () => { state.localTime = !!lt.checked; persistState(); applyTimeHdr(); getLogs(); });
+    fm?.addEventListener('change', async () => {
+  state.friendly = Boolean(
+    fm.checked
+  );
+
+  persistState();
+
+  try {
+    localStorage.setItem(
+      'logs_friendly',
+      JSON.stringify(
+        state.friendly
+      )
+    );
+  } catch {}
+
+  await getLogs();
+});
+
+lt?.addEventListener('change', async () => {
+  state.localTime = Boolean(
+    lt.checked
+  );
+
+  persistState();
+
+  try {
+    localStorage.setItem(
+      'logs_local_time',
+      JSON.stringify(
+        state.localTime
+      )
+    );
+  } catch {}
+
+  applyTimeHdr();
+  await getLogs();
+});
 
     const toggle = $('#filters-toggle');
     const adv = document.querySelector('.filters-advanced');
@@ -956,11 +1122,6 @@ nodeSel?.addEventListener('change', async () => {
     }
 
     bindFilters();
-
-    const fm = JSON.parse(localStorage.getItem('logs_friendly') || 'false');
-    const lt = JSON.parse(localStorage.getItem('logs_local_time') || 'false');
-    $('#friendly-mode').checked = fm;
-    $('#local-time').checked = lt;
 
     setPane('view');
     sourceTab(state.source || 'app');
