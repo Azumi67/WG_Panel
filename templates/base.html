@@ -12,6 +12,44 @@
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/wireguard-badge-180.png') }}" sizes="180x180" />
     <link rel="mask-icon" href="{{ url_for('static', filename='img/wireguard-badge.svg') }}" color="#6ee7b7" />
     <meta name="theme-color" content="#0b1020" />
+    <script>
+      (function () {
+        var allowed = { light: true, auto: true, dark: true };
+        var mode = 'auto';
+
+        try {
+          mode = String(localStorage.getItem('wg-theme') || '').toLowerCase();
+
+          if (!allowed[mode]) {
+            var legacy = String(
+              localStorage.getItem('wg-panel:theme-mode') || ''
+            ).toLowerCase();
+
+            mode = allowed[legacy] ? legacy : 'auto';
+            localStorage.setItem('wg-theme', mode);
+          }
+        } catch (_) {
+          mode = 'auto';
+        }
+
+        var systemDark = false;
+
+        try {
+          systemDark = window.matchMedia(
+            '(prefers-color-scheme: dark)'
+          ).matches;
+        } catch (_) {}
+
+        var effective = mode === 'auto'
+          ? (systemDark ? 'dark' : 'light')
+          : mode;
+
+        var root = document.documentElement;
+        root.dataset.themeMode = mode;
+        root.dataset.theme = effective;
+        root.style.colorScheme = effective;
+      })();
+    </script>
     <link rel="preload" as="image" href="{{ url_for('static', filename='img/wireguard-badge.svg') }}" />
 
     {% if current_user.is_authenticated and config is defined and config.get('API_KEY') %}
@@ -42,8 +80,11 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/panel-version.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/sidebar-compact.css') }}?v=20260730-v50" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/panel-update.css') }}?v=20260730-v50" />
 
     {% block head_extras %}{% endblock %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dark-dashboard-peers.css') }}?v=20260727-1" />
 
     {% if request.endpoint == 'index' %}
     <script defer src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js', v='4.4.4') }}"></script>
@@ -106,40 +147,75 @@
             </nav>
 
             <div class="sb2-bottom">
-                <a href="{{ PANEL_REPO_URL|default('https://github.com/Azumi67/WG_Panel') }}" target="_blank" rel="noopener" class="sb2-link github-link" data-tip="GitHub repository" aria-label="GitHub repository">
-                    <i class="fa-brands fa-github" aria-hidden="true"></i><span class="sb2-text">GitHub</span>
-                </a>
-
-                <a href="{{ PANEL_REPO_URL|default('https://github.com/Azumi67/WG_Panel') }}/releases" target="_blank" rel="noopener" class="sb2-version" id="sb2-version" data-current-version="{{ PANEL_VERSION|default('1.0.0') }}" data-tip="Panel version" aria-label="Panel version {{ PANEL_VERSION|default('1.0.0') }}">
-                    <span class="sb2-version-icon"><i class="fas fa-code-branch" aria-hidden="true"></i></span>
-                    <span class="sb2-version-text">
-                        <span class="sb2-version-k">Panel</span>
-                        <strong id="sb2-version-current">v{{ PANEL_VERSION|default('1.0.0') }}</strong>
+                <button
+                    type="button"
+                    class="sb2-update-card"
+                    id="sb2-update-open"
+                    data-current-version="{{ PANEL_VERSION|default('1.0.0') }}"
+                    aria-haspopup="dialog"
+                    aria-controls="panel-update-modal"
+                    data-tip="Open Update Center">
+                    <span class="sb2-update-icon">
+                        <i class="fas fa-code-branch" aria-hidden="true"></i>
                     </span>
-                    <span class="sb2-version-state" id="sb2-version-state">checking</span>
-                </a>
+                    <span class="sb2-update-copy">
+                        <span class="sb2-update-k">WG Panel</span>
+                        <strong class="sb2-update-versions">
+                            <span id="sb2-version-current">v{{ PANEL_VERSION|default('1.0.0') }}</span>
+                            <i class="fas fa-arrow-right sb2-version-direction" id="sb2-version-direction" hidden aria-hidden="true"></i>
+                            <span id="sb2-version-latest" hidden></span>
+                        </strong>
+                        <small class="sb2-update-hint" id="sb2-update-hint">Checking releases…</small>
+                    </span>
+                    <span class="sb2-update-badges">
+                        <span class="sb2-node-update-count" id="sb2-node-update-count" hidden></span>
+                        <span class="sb2-update-state" id="sb2-version-state">checking</span>
+                    </span>
+                    <i class="fas fa-chevron-right sb2-update-arrow" aria-hidden="true"></i>
+                </button>
 
-                {% if current_user.is_authenticated %}
-                {% set is_admin = current_user.is_authenticated and (current_user.is_admin|default(false) or current_user.is_superuser|default(false)) %}
-                <div class="userbox" aria-label="Account" {% if is_admin %}data-role="admin"{% endif %}>
-                    <div class="user-chip">
-                        <i class="fas fa-user-shield" aria-hidden="true"></i>
-                        <div class="user-text">
-                            <span class="user-name">{{ current_user.username|default(current_user.name|default('Admin')) }}</span>
-                            {% if is_admin %}<span class="role-pill">Admin</span>{% endif %}
-                        </div>
-                    </div>
-                    <div class="logout-row">
-                        <a class="logout-btn" href="{{ url_for('logout') }}" aria-label="Logout">
-                            <i class="fas fa-right-from-bracket" aria-hidden="true"></i><span>Logout</span>
+                <div class="sb2-utility-row">
+                    {% if current_user.is_authenticated %}
+                    {% set is_admin = current_user.is_authenticated and (current_user.is_admin|default(false) or current_user.is_superuser|default(false)) %}
+                    <div class="sb2-account-mini" {% if is_admin %}data-role="admin"{% endif %}>
+                        <span class="sb2-account-avatar"><i class="fas fa-user-shield" aria-hidden="true"></i></span>
+                        <span class="sb2-account-copy">
+                            <strong>{{ current_user.username|default(current_user.name|default('Admin')) }}</strong>
+                            {% if is_admin %}<small>Admin</small>{% endif %}
+                        </span>
+                        <a class="sb2-account-logout" href="{{ url_for('logout') }}" aria-label="Logout" title="Logout">
+                            <i class="fas fa-right-from-bracket" aria-hidden="true"></i>
                         </a>
                     </div>
-                </div>
-                {% endif %}
+                    {% endif %}
 
-                <button class="sb2-pin-ctl" id="sb2-pin" type="button" data-tip="Collapse / Expand sidebar" aria-pressed="false" aria-label="Collapse sidebar">
-                    <i class="fas fa-angles-left" aria-hidden="true"></i><span>Collapse sidebar</span>
-                </button>
+                    <div class="theme-switcher theme-switcher-compact" id="theme-switcher" role="group" aria-label="Color theme">
+                        <button type="button" data-theme-choice="light" title="Light mode" aria-label="Light mode">
+                            <i class="fas fa-sun"></i>
+                        </button>
+                        <button type="button" data-theme-choice="auto" title="Use system theme" aria-label="Use system theme">
+                            <i class="fas fa-desktop"></i>
+                        </button>
+                        <button type="button" data-theme-choice="dark" title="Dark mode" aria-label="Dark mode">
+                            <i class="fas fa-moon"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="sb2-footer-actions">
+                    <a href="{{ PANEL_REPO_URL|default('https://github.com/Azumi67/WG_Panel') }}"
+                       target="_blank" rel="noopener" class="sb2-footer-icon"
+                       aria-label="GitHub repository" title="GitHub repository">
+                        <i class="fa-brands fa-github" aria-hidden="true"></i>
+                    </a>
+
+                    <button class="sb2-pin-ctl sb2-pin-compact" id="sb2-pin" type="button"
+                        data-tip="Collapse / Expand sidebar" aria-pressed="false"
+                        aria-label="Collapse sidebar">
+                        <i class="fas fa-angles-left" aria-hidden="true"></i>
+                        <span>Collapse</span>
+                    </button>
+                </div>
             </div>
         </div>
     </aside>
@@ -164,6 +240,98 @@
     <script defer src="{{ url_for('static', filename='js/peers.js') }}"></script>
     {% endif %}
     <script defer src="{{ url_for('static', filename='js/panel-version.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/panel-update.js') }}?v=20260730-v50"></script>
+    <script defer src="{{ url_for('static', filename='js/theme.js') }}?v=20260730-v50"></script>
+
+
+    <div class="pu-modal" id="panel-update-modal" hidden aria-hidden="true" role="dialog"
+         aria-modal="true" aria-labelledby="pu-title">
+        <div class="pu-backdrop" data-pu-close></div>
+        <section class="pu-dialog">
+            <header class="pu-head">
+                <div class="pu-title-wrap">
+                    <span class="pu-logo"><i class="fas fa-cloud-arrow-down"></i></span>
+                    <div>
+                        <h2 id="pu-title">Panel Update Center</h2>
+                        <p>Safely update the local panel and registered nodes.</p>
+                    </div>
+                </div>
+                <button class="pu-close" type="button" data-pu-close aria-label="Close">
+                    <i class="fas fa-xmark"></i>
+                </button>
+            </header>
+
+            <div class="pu-summary">
+                <div><span>Local panel</span><strong id="pu-local-summary">Checking…</strong></div>
+                <div><span>Registered nodes</span><strong id="pu-node-count">—</strong></div>
+                <button class="pu-refresh" id="pu-refresh" type="button">
+                    <i class="fas fa-rotate"></i><span>Refresh</span>
+                </button>
+            </div>
+
+            <div class="pu-body">
+                <section class="pu-target pu-local" data-target-kind="local">
+                    <div class="pu-target-main">
+                        <span class="pu-target-icon"><i class="fas fa-server"></i></span>
+                        <div class="pu-target-copy">
+                            <div class="pu-target-title">
+                                <strong>Local panel</strong>
+                                <span class="pu-pill" id="pu-local-state">Checking</span>
+                            </div>
+                            <div class="pu-versions">
+                                <span>Current <b id="pu-local-current">—</b></span>
+                                <i class="fas fa-arrow-right"></i>
+                                <span>Latest <b id="pu-local-latest">—</b></span>
+                            </div>
+                        </div>
+                        <button class="pu-update-btn" id="pu-update-local" type="button" disabled>
+                            <i class="fas fa-download"></i><span>Update local</span>
+                        </button>
+                    </div>
+                    <div class="pu-progress" id="pu-local-progress" hidden>
+                        <div class="pu-progress-top">
+                            <span id="pu-local-stage">Preparing update…</span>
+                            <b id="pu-local-percent">0%</b>
+                        </div>
+                        <div class="pu-track"><i id="pu-local-bar"></i></div>
+                    </div>
+                </section>
+
+                <div class="pu-section-title">
+                    <div>
+                        <strong>Remote nodes</strong>
+                        <span>Each node updates independently and restarts its own agent.</span>
+                    </div>
+                    <button type="button" id="pu-update-all" class="pu-update-all" disabled>
+                        <i class="fas fa-layer-group"></i><span>Update all available</span>
+                    </button>
+                </div>
+
+                <div class="pu-node-list" id="pu-node-list">
+                    <div class="pu-empty"><i class="fas fa-spinner fa-spin"></i> Loading nodes…</div>
+                </div>
+            </div>
+
+            <footer class="pu-foot">
+                <div class="pu-safety">
+                    <i class="fas fa-shield-halved"></i>
+                    <span>Every update creates a code backup, validates Python, installs dependencies, and reports rollback status.</span>
+                </div>
+                <button type="button" class="pu-log-toggle" id="pu-log-toggle">
+                    <i class="fas fa-terminal"></i><span>Update log</span>
+                </button>
+            </footer>
+
+            <div class="pu-log-drawer" id="pu-log-drawer" hidden>
+                <div class="pu-log-head">
+                    <strong><i class="fas fa-terminal"></i> Update activity</strong>
+                    <button type="button" id="pu-log-clear">Clear view</button>
+                </div>
+                <pre id="pu-log-output">No update activity yet.</pre>
+            </div>
+        </section>
+    </div>
+
 
     {% block body_extras %}{% endblock %}
 </body>
