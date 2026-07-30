@@ -1862,3 +1862,206 @@ async function loadAdminLogs() {
     (window.toastSafe || console.log)('Settings ready', 'success');
   });
 })();
+
+(() => {
+  const SELECTOR = '#set-panels select.input, .modal select.input';
+
+  function closeAll(except = null) {
+    document.querySelectorAll('.set-select.is-open').forEach((wrap) => {
+      if (wrap !== except) wrap.classList.remove('is-open');
+    });
+  }
+
+  function enhanceSelect(select) {
+    if (!select || select.dataset.setSelectEnhanced === '1') return;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'set-select';
+    select.parentNode.insertBefore(wrap, select);
+    wrap.appendChild(select);
+
+    select.dataset.setSelectEnhanced = '1';
+    select.classList.add('set-select__native');
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'set-select__button';
+    button.setAttribute('aria-haspopup', 'listbox');
+    button.setAttribute('aria-expanded', 'false');
+
+    const menu = document.createElement('div');
+    menu.className = 'set-select__menu';
+    menu.setAttribute('role', 'listbox');
+
+    wrap.append(button, menu);
+
+    function syncVisibility() {
+      const hidden = select.hidden || select.hasAttribute('hidden');
+      wrap.hidden = hidden;
+      wrap.classList.toggle('is-hidden', hidden);
+    }
+
+    function selectedOption() {
+      return select.options[select.selectedIndex] || select.options[0] || null;
+    }
+
+    function syncButton() {
+      const option = selectedOption();
+      button.textContent = option ? option.textContent.trim() : 'Select';
+      button.disabled = !!select.disabled;
+      button.setAttribute('aria-label', select.getAttribute('aria-label') || button.textContent);
+      menu.querySelectorAll('.set-select__option').forEach((item) => {
+        item.setAttribute('aria-selected', item.dataset.value === String(select.value));
+      });
+      syncVisibility();
+    }
+
+    function rebuild() {
+      menu.innerHTML = '';
+      Array.from(select.options).forEach((option) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'set-select__option';
+        item.dataset.value = String(option.value);
+        item.textContent = option.textContent.trim();
+        item.disabled = !!option.disabled;
+        item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', option.selected ? 'true' : 'false');
+        item.addEventListener('click', () => {
+          if (item.disabled) return;
+          select.value = option.value;
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+          wrap.classList.remove('is-open');
+          button.setAttribute('aria-expanded', 'false');
+          syncButton();
+          button.focus();
+        });
+        menu.appendChild(item);
+      });
+      syncButton();
+    }
+
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      if (button.disabled) return;
+      const opening = !wrap.classList.contains('is-open');
+      closeAll(opening ? wrap : null);
+      wrap.classList.toggle('is-open', opening);
+      button.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      if (opening) {
+        menu.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' });
+      }
+    });
+
+    button.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        wrap.classList.remove('is-open');
+        button.setAttribute('aria-expanded', 'false');
+      }
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        if (!wrap.classList.contains('is-open')) button.click();
+        const items = Array.from(menu.querySelectorAll('.set-select__option:not(:disabled)'));
+        const current = menu.querySelector('.set-select__option:focus');
+        let index = Math.max(0, items.indexOf(current));
+        index = event.key === 'ArrowDown' ? Math.min(items.length - 1, index + 1) : Math.max(0, index - 1);
+        items[index]?.focus();
+      }
+    });
+
+    select.addEventListener('change', syncButton);
+
+    new MutationObserver(() => rebuild()).observe(select, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['disabled', 'hidden', 'selected']
+    });
+
+    rebuild();
+  }
+
+  function enhanceAll(root = document) {
+    root.querySelectorAll?.(SELECTOR).forEach(enhanceSelect);
+  }
+
+  function activeTheme() {
+    return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+  }
+
+  function applyPreviewTheme() {
+    const frame = document.getElementById('tpl-preview-frame');
+    const title = document.getElementById('tpl-preview-title');
+    if (!frame) return;
+
+    const theme = activeTheme();
+    if (title) {
+      let note = title.parentElement?.querySelector('.tpl-preview-theme-note');
+      if (!note) {
+        note = document.createElement('span');
+        note.className = 'tpl-preview-theme-note';
+        title.parentElement?.appendChild(note);
+      }
+      note.innerHTML = `<i class="fa-solid ${theme === 'dark' ? 'fa-moon' : 'fa-sun'}"></i> ${theme === 'dark' ? 'Dark preview' : 'Light preview'}`;
+    }
+
+    try {
+      const doc = frame.contentDocument;
+      if (!doc) return;
+      doc.documentElement.dataset.theme = theme;
+      doc.documentElement.classList.toggle('dark', theme === 'dark');
+      doc.documentElement.classList.toggle('light', theme !== 'dark');
+      doc.documentElement.style.colorScheme = theme;
+      doc.body?.setAttribute('data-theme', theme);
+
+      let style = doc.getElementById('wg-settings-preview-theme');
+      if (!style) {
+        style = doc.createElement('style');
+        style.id = 'wg-settings-preview-theme';
+        doc.head?.appendChild(style);
+      }
+      style.textContent = theme === 'dark' ? `
+        :root { color-scheme: dark !important; }
+        html, body { background: #071015 !important; color: #edf3f6 !important; }
+        body::before { opacity: .45 !important; }
+        .page, .shell, .container, .subscription-page, main { color: #edf3f6 !important; }
+        .card, .panel, .section, .config-card, .stat-card, .download-card {
+          background: #0e1d24 !important;
+          color: #edf3f6 !important;
+          border-color: #29434f !important;
+        }
+        input, button, .btn { color-scheme: dark !important; }
+      ` : '';
+    } catch (_) {
+    }
+  }
+
+  document.addEventListener('click', (event) => {
+    if (!event.target.closest('.set-select')) closeAll();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeAll();
+  });
+
+  document.addEventListener('DOMContentLoaded', () => {
+    enhanceAll();
+    const frame = document.getElementById('tpl-preview-frame');
+    frame?.addEventListener('load', applyPreviewTheme);
+    applyPreviewTheme();
+
+    new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType !== 1) return;
+          if (node.matches?.(SELECTOR)) enhanceSelect(node);
+          enhanceAll(node);
+        });
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+
+    new MutationObserver(applyPreviewTheme).observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'class']
+    });
+  });
+})();
