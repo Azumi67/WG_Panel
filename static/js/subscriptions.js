@@ -15,6 +15,74 @@ function subToast(msg, type='success'){
 const toastOk = m => subToast(m,'success');
 const toastBad = m => subToast(m,'error');
 
+
+function ensureSubActionLoaderStyle(){
+  if(document.getElementById('subx-action-loader-style')) return;
+  const style=document.createElement('style');
+  style.id='subx-action-loader-style';
+  style.textContent=`
+    .subx-action-loader{
+      position:fixed;inset:0;z-index:2147483000;
+      display:grid;place-items:center;padding:24px;
+      background:rgba(4,8,12,.72);backdrop-filter:blur(8px);
+      opacity:0;visibility:hidden;transition:opacity .16s ease,visibility .16s ease;
+    }
+    .subx-action-loader.show{opacity:1;visibility:visible}
+    .subx-action-loader-card{
+      width:min(440px,calc(100vw - 32px));
+      display:grid;grid-template-columns:48px minmax(0,1fr);gap:16px;align-items:center;
+      padding:20px 22px;border-radius:18px;
+      border:1px solid rgba(130,151,168,.26);
+      background:#101820;color:#d9e1e8;
+      box-shadow:0 28px 80px rgba(0,0,0,.52);
+    }
+    .subx-action-loader-spinner{
+      width:42px;height:42px;border-radius:50%;
+      border:3px solid rgba(148,163,184,.20);
+      border-top-color:#3aa783;
+      animation:subxActionSpin .78s linear infinite;
+    }
+    .subx-action-loader-copy{min-width:0}
+    .subx-action-loader-title{font-size:15px;font-weight:800;letter-spacing:.01em;color:#e3e9ee}
+    .subx-action-loader-text{margin-top:5px;font-size:12.5px;line-height:1.5;color:#8f9daa}
+    body.subx-action-running{overflow:hidden!important}
+    @keyframes subxActionSpin{to{transform:rotate(360deg)}}
+    @media (prefers-reduced-motion:reduce){.subx-action-loader-spinner{animation-duration:1.5s}}
+  `;
+  document.head.appendChild(style);
+}
+
+function showSubActionLoader(title, text){
+  ensureSubActionLoaderStyle();
+  document.getElementById('subx-action-loader')?.remove();
+  const overlay=document.createElement('div');
+  overlay.id='subx-action-loader';
+  overlay.className='subx-action-loader';
+  overlay.setAttribute('role','status');
+  overlay.setAttribute('aria-live','polite');
+  overlay.setAttribute('aria-busy','true');
+  overlay.innerHTML=`
+    <div class="subx-action-loader-card">
+      <span class="subx-action-loader-spinner" aria-hidden="true"></span>
+      <div class="subx-action-loader-copy">
+        <div class="subx-action-loader-title">${esc(title)}</div>
+        <div class="subx-action-loader-text">${esc(text)}</div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  document.body.classList.add('subx-action-running');
+  requestAnimationFrame(()=>overlay.classList.add('show'));
+  return overlay;
+}
+
+function hideSubActionLoader(){
+  const overlay=document.getElementById('subx-action-loader');
+  document.body.classList.remove('subx-action-running');
+  if(!overlay) return;
+  overlay.classList.remove('show');
+  setTimeout(()=>overlay.remove(),170);
+}
+
 function matchBlob(x){
   return [
     x.name, x.label, x.address, x.endpoint, x.allowed_ips, x.dns,
@@ -101,6 +169,32 @@ function subDate(value) {
   const d = new Date(value);if (Number.isNaN(d.getTime())) {return String(value);
   }return d.toLocaleString([], {year: 'numeric',month: 'short',day: '2-digit',hour: '2-digit',minute: '2-digit',});}
 function subscriptionTimeLabel(s) {if (s.unlimited) {return s.first_used_at? `Active since ${subDate(s.first_used_at)}`: 'Unlimited · not used yet';}return ttlText(s.ttl_seconds);}
+
+function subscriptionTimePresentation(s){
+  const unlimited = !!s.unlimited || !Number(s.limit_bytes || 0);
+  const locs = Array.isArray(s.locations) ? s.locations : [];
+  const startedAt = s.first_used_at || locs.map(x=>x.first_used_at).filter(Boolean).sort()[0] || null;
+
+  if(unlimited){
+    return {
+      title: 'Active since',
+      value: startedAt
+        ? subDate(startedAt)
+        : (s.enabled === false ? 'Not started' : 'Waiting for first use'),
+      hint: s.enabled === false ? 'Subscription disabled' : 'No expiry limit',
+      top: startedAt ? `Active since ${subDate(startedAt)}` : (s.enabled === false ? 'Not started' : 'Waiting for first use'),
+      percent: 100
+    };
+  }
+
+  return {
+    title: 'Time remaining',
+    value: subxTtlText(s.ttl_seconds),
+    hint: subxTimeHint(s),
+    top: subxTtlText(s.ttl_seconds),
+    percent: subxTimePct(s)
+  };
+}
 if(!window.CSS) window.CSS = {}; if(!CSS.escape) CSS.escape = s => String(s).replace(/[^a-zA-Z0-9_-]/g, '\\$&');
 const ttlText = sec => {
   if (sec == null) return 'No timer';
@@ -118,6 +212,7 @@ const ttlText = sec => {
 let MODE='new', SCOPE='all', STATUS_SCOPE='all', SEARCH='', NEW_ITEMS=[], CURRENT_ITEMS=[], SUBS=[], EDIT_ID=null, SUB_SETTINGS=null;
 let SUBS_LIVE_TIMER=null, SUBS_LOADING=false, SUBS_LAST_JSON='';
 let CURRENT_SELECTED = new Set();
+let OPEN_SUBSCRIPTION_LOGS_SID = null;
 const SUBS_REFRESH_MS = 8000;
 const EXISTING_GROUP_PAGE = 36;
 let EXISTING_GROUP_LIMITS = {};
@@ -1326,6 +1421,95 @@ function statusBadgeClass(status){
   return 'offline';
 }
 
+
+function subscriptionLogEventLabel(value){
+  return String(value || 'event').replace(/[_-]+/g, ' ').replace(/\b\w/g, ch=>ch.toUpperCase());
+}
+
+function renderSubscriptionLogRows(logs){
+  const rows = Array.isArray(logs) ? logs : [];
+  if(!rows.length){
+    return `<div class="subx-peer-log-empty"><i class="fas fa-clock-rotate-left"></i><b>No subscription events yet</b><span>Enable, disable, reset, edit, and inbound events from attached configs will appear here.</span></div>`;
+  }
+  return `<div class="subx-peer-log-list">${rows.map(row=>{
+    const event = row.event || row.level || 'event';
+    const details = row.details || row.text || '';
+    const time = row.time || row.ts || '';
+    const source = row.source_name || 'Attached config';
+    return `<article class="subx-peer-log-row">
+      <span class="subx-peer-log-dot"></span>
+      <div class="subx-peer-log-copy">
+        <div><b>${esc(subscriptionLogEventLabel(event))}</b><span class="subx-log-source">${esc(source)}</span>${time ? `<time>${esc(time)}</time>` : ''}</div>
+        <p>${esc(details || 'No additional details.')}</p>
+      </div>
+    </article>`;
+  }).join('')}</div>`;
+}
+
+function ensureSubscriptionLogsDrawer(){
+  let shell = document.getElementById('subscription-logs-drawer');
+  if(shell) return shell;
+
+  shell = document.createElement('div');
+  shell.id = 'subscription-logs-drawer';
+  shell.className = 'subx-logs-drawer-shell';
+  shell.setAttribute('aria-hidden', 'true');
+  shell.innerHTML = `
+    <button class="subx-logs-drawer-backdrop" type="button" data-close-subscription-logs aria-label="Close subscription logs"></button>
+    <aside class="subx-logs-drawer" role="dialog" aria-modal="true" aria-labelledby="subscription-logs-title">
+      <div id="subscription-logs-content" class="subx-logs-drawer-content"></div>
+    </aside>`;
+  document.body.appendChild(shell);
+  return shell;
+}
+
+function closeSubscriptionLogs(){
+  OPEN_SUBSCRIPTION_LOGS_SID = null;
+  const shell = document.getElementById('subscription-logs-drawer');
+  if(!shell) return;
+  shell.classList.remove('open');
+  shell.setAttribute('aria-hidden','true');
+  document.body.classList.remove('subx-logs-drawer-open');
+}
+
+async function openSubscriptionLogs(subscription, opts={}){
+  if(!subscription) return;
+  const shell = ensureSubscriptionLogsDrawer();
+  const panel = document.getElementById('subscription-logs-content');
+  if(!panel) return;
+
+  OPEN_SUBSCRIPTION_LOGS_SID = String(subscription.id);
+  shell.classList.add('open');
+  shell.setAttribute('aria-hidden','false');
+  document.body.classList.add('subx-logs-drawer-open');
+
+  panel.innerHTML = `<div class="subx-peer-log-head"><div><i class="fas fa-rectangle-list"></i><span><b id="subscription-logs-title">${esc(subscription.name || 'Subscription')} logs</b><small>Loading events from all attached configs…</small></span></div><div class="subx-peer-log-actions"><button class="subx-icon-btn" data-close-subscription-logs title="Close logs"><i class="fas fa-xmark"></i></button></div></div><div class="subx-peer-log-loading"><span class="subx-mini-spinner"></span> Loading subscription logs…</div>`;
+
+  try{
+    const locations = Array.isArray(subscription.locations) ? subscription.locations.filter(x=>x.peer_id) : [];
+    const responses = await Promise.all(locations.map(async loc=>{
+      const r = await fetch(`/api/peer/${encodeURIComponent(loc.peer_id)}/logs`, {credentials:'same-origin', cache:'no-store'});
+      const j = await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(j.detail || j.error || `HTTP ${r.status}`);
+      return (j.logs || []).map(row=>({...row, source_name: loc.name || loc.iface || `Config ${loc.peer_id}`}));
+    }));
+    const logs = responses.flat().sort((a,b)=>{
+      const at = Date.parse(a.time || a.ts || 0) || 0;
+      const bt = Date.parse(b.time || b.ts || 0) || 0;
+      return bt-at;
+    }).slice(0,500);
+    panel.innerHTML = `<div class="subx-peer-log-head">
+      <div><i class="fas fa-rectangle-list"></i><span><b id="subscription-logs-title">${esc(subscription.name || 'Subscription')} logs</b><small>${locations.length} attached config${locations.length===1?'':'s'} · most recent events</small></span></div>
+      <div class="subx-peer-log-actions">
+        <button class="subx-icon-btn" data-refresh-subscription-logs="${esc(subscription.id)}" title="Refresh subscription logs"><i class="fas fa-rotate"></i></button>
+        <button class="subx-icon-btn" data-close-subscription-logs title="Close logs"><i class="fas fa-xmark"></i></button>
+      </div>
+    </div>${renderSubscriptionLogRows(logs)}`;
+  }catch(err){
+    panel.innerHTML = `<div class="subx-peer-log-head"><div><i class="fas fa-triangle-exclamation"></i><span><b id="subscription-logs-title">Could not load subscription logs</b><small>${esc(err.message || 'Request failed')}</small></span></div><button class="subx-icon-btn" data-close-subscription-logs title="Close"><i class="fas fa-xmark"></i></button></div>`;
+  }
+}
+
 function renderDetails(s, opts={}){
   const locs = s.locations || [];
   const groups = groupedInboundLocations(locs);
@@ -1343,7 +1527,7 @@ function renderDetails(s, opts={}){
           <div class="detail-card"><span>Locations</span><b>${groups.length}</b></div>
           <div class="detail-card"><span>Inbounds</span><b>${locs.length}</b></div>
           <div class="detail-card"><span>Used</span><b>${used}</b></div>
-          <div class="detail-card"><span>Timer</span><b>${ttlText(s.ttl_seconds)}</b></div>
+          <div class="detail-card"><span>${subscriptionTimePresentation(s).title}</span><b>${esc(subscriptionTimePresentation(s).value)}</b><small>${esc(subscriptionTimePresentation(s).hint)}</small></div>
         </div>
       </section>
       <section class="detail-panel">
@@ -1365,6 +1549,7 @@ function renderDetails(s, opts={}){
         <h3><i class="fas fa-location-dot"></i> Locations & inbounds</h3>
         <div class="detail-head-actions">
           <span class="detail-count-pill">${groups.length} location${groups.length===1?'':'s'} · ${locs.length} inbound${locs.length===1?'':'s'}</span>
+          <button class="btn secondary detail-log-btn" data-subscription-logs="${s.id}"><i class="fas fa-rectangle-list"></i> Subscription logs</button>
           <button class="btn secondary detail-add-btn" data-add-inbound="${s.id}"><i class="fas fa-plus"></i> Add inbound</button>
         </div>
       </div>
@@ -1417,6 +1602,7 @@ function renderDetails(s, opts={}){
     </section>`;
     const dm = $('#details-modal'); 
   if(dm) dm.dataset.sid = s.id;
+
 
   if(!opts.keepOpen) {
     openDetails();
@@ -1486,14 +1672,86 @@ $('#label-edit-input')?.addEventListener('keydown', e=>{ if(e.key === 'Enter'){ 
 document.addEventListener('click', async e=>{
   const copy=e.target.closest('[data-copy]'); if(copy){ const ok = await copyText(copy.dataset.copy); ok ? toastOk('Copied.') : toastBad('Copy failed. Open HTTPS or copy manually.'); return; }
   const more=e.target.closest('[data-more]'); if(more){ const s=SUBS.find(x=>String(x.id)===String(more.dataset.more)); if(s) renderDetails(s); return; }
+  const subLogs=e.target.closest('[data-subscription-logs]'); if(subLogs){ const s=SUBS.find(x=>String(x.id)===String(subLogs.dataset.subscriptionLogs)); if(s) await openSubscriptionLogs(s); return; }
+  const refreshSubLogs=e.target.closest('[data-refresh-subscription-logs]'); if(refreshSubLogs){ const s=SUBS.find(x=>String(x.id)===String(refreshSubLogs.dataset.refreshSubscriptionLogs)); if(s) await openSubscriptionLogs(s,{preserveScroll:true}); return; }
+  const closeSubLogs=e.target.closest('[data-close-subscription-logs]'); if(closeSubLogs){ closeSubscriptionLogs(); return; }
   const editLabel=e.target.closest('[data-edit-inbound-label]'); if(editLabel){ openLabelEditor(editLabel.dataset.editInboundLabel, editLabel.dataset.currentLabel || ''); return; }
   const inbounds=e.target.closest('[data-inbounds]'); if(inbounds){ const s=SUBS.find(x=>String(x.id)===String(inbounds.dataset.inbounds)); if(s) renderDetails(s); return; }
   const addInbound=e.target.closest('[data-add-inbound]');if(addInbound){await openEdit(addInbound.dataset.addInbound, {manageInbounds:true});return;}
   const edit=e.target.closest('[data-edit]'); if(edit){ await openEdit(edit.dataset.edit); return; }
+  const subEnable=e.target.closest('[data-sub-enable]'); if(subEnable){
+    const id=subEnable.dataset.subEnable;
+    const ok=await subConfirm({
+      title:'Enable and reset subscription?',
+      body:'This enables every attached config and starts a fresh subscription lifecycle. Used data, Active since, first-use state, and the timer will be reset.',
+      yesText:'Enable & reset',
+      noText:'Cancel'
+    });
+    if(!ok) return;
+    subEnable.classList.add('is-busy');
+    subEnable.disabled=true;
+    showSubActionLoader(
+      'Enabling subscription…',
+      'Restoring attached configs, resetting data usage, and resetting the timer. This may take a moment on remote nodes.'
+    );
+    try{
+      const r=await fetch(`/api/subscriptions/${id}/enable`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'});
+      const j=await r.json().catch(()=>({}));
+      if(r.ok){
+        toastOk(j.message||'Subscription enabled. Data usage and timer were reset.');
+        await loadSubs({force:true});
+      }else{
+        toastBad(j.detail||j.error||'Could not enable and reset subscription.');
+      }
+    }catch(error){
+      console.error('Subscription enable failed:',error);
+      toastBad('Could not enable the subscription. Check the panel and node connection.');
+    }finally{
+      hideSubActionLoader();
+      subEnable.classList.remove('is-busy');
+      subEnable.disabled=false;
+    }
+    return;
+  }
+  const subDisable=e.target.closest('[data-sub-disable]'); if(subDisable){
+    const id=subDisable.dataset.subDisable;
+    const ok=await subConfirm({
+      title:'Disable subscription?',
+      body:'This stops all attached configs without deleting them. Current data usage, Active since, and timer values will be preserved until the subscription is enabled again.',
+      yesText:'Disable',
+      noText:'Cancel',
+      danger:true
+    });
+    if(!ok) return;
+    subDisable.classList.add('is-busy');
+    subDisable.disabled=true;
+    showSubActionLoader(
+      'Disabling subscription…',
+      'Stopping all attached configs. Remote node operations can take a few seconds.'
+    );
+    try{
+      const r=await fetch(`/api/subscriptions/${id}/disable`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'});
+      const j=await r.json().catch(()=>({}));
+      if(r.ok){
+        toastOk(j.message||'Subscription and attached configs were disabled.');
+        await loadSubs({force:true});
+      }else{
+        toastBad(j.detail||j.error||'Could not disable subscription.');
+      }
+    }catch(error){
+      console.error('Subscription disable failed:',error);
+      toastBad('Could not disable the subscription. Check the panel and node connection.');
+    }finally{
+      hideSubActionLoader();
+      subDisable.classList.remove('is-busy');
+      subDisable.disabled=false;
+    }
+    return;
+  }
   const del=e.target.closest('[data-del]');if(del){const ok = await subConfirm({title: 'Delete subscription?',body: 'This removes the subscription record. Attached peer/config deletion still depends on your backend delete behavior.',yesText: 'Delete',noText: 'Cancel',danger: true});if(!ok) return;
   const r=await fetch(`/api/subscriptions/${del.dataset.del}`,{method:'DELETE',headers:csrfHeaders(true),credentials:'same-origin'});if(r.ok){toastOk('Deleted.');loadSubs();} else {toastBad('Delete failed.');}return;}
-  const rt=e.target.closest('[data-reset-timer]'); if(rt){ const id=rt.dataset.resetTimer; rt.classList.add('is-busy'); rt.closest('.subx-row')?.classList.add('is-updating'); let r=await fetch(`/api/subscriptions/${id}/reset_timer`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'}); if(r.status===404 || r.status===405){ r=await fetch(`/api/subscriptions/${id}`,{method:'PUT',headers:csrfHeaders(true),credentials:'same-origin',body:JSON.stringify({reset_timer:true})}); } if(r.ok){toastOk('Timer reset and peer runtime refreshed.'); await loadSubs({force:true});} else { const j=await r.json().catch(()=>({})); toastBad(j.detail||j.error||'Reset failed.'); } rt.classList.remove('is-busy'); rt.closest('.subx-row')?.classList.remove('is-updating'); return; }
-  const rd=e.target.closest('[data-reset-data]'); if(rd){ const id=rd.dataset.resetData; rd.classList.add('is-busy'); rd.closest('.subx-row')?.classList.add('is-updating'); const r=await fetch(`/api/subscriptions/${id}/reset_data`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'}); if(r.ok){toastOk('Data reset and peer runtime refreshed.'); await loadSubs({force:true});} else { const j=await r.json().catch(()=>({})); toastBad(j.detail||j.error||'Reset data failed.'); } rd.classList.remove('is-busy'); rd.closest('.subx-row')?.classList.remove('is-updating'); return; }
+  const rt=e.target.closest('[data-reset-timer]'); if(rt){ const id=rt.dataset.resetTimer; rt.classList.add('is-busy'); rt.closest('.subx-row')?.classList.add('is-updating'); let r=await fetch(`/api/subscriptions/${id}/reset_timer`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'}); if(r.status===404 || r.status===405){ r=await fetch(`/api/subscriptions/${id}`,{method:'PUT',headers:csrfHeaders(true),credentials:'same-origin',body:JSON.stringify({reset_timer:true})}); } const j=await r.json().catch(()=>({})); if(r.ok){ if(j.still_blocked_reason==='data_limit') toastBad('Timer reset, but the client is still blocked because its data limit is exhausted. Reset data as well.'); else if((j.failed_peer_ids||[]).length) toastBad('Timer reset, but one or more configs could not be re-enabled.'); else toastOk(j.reactivated ? `Timer reset and ${j.reactivated} blocked config${j.reactivated===1?' was':'s were'} re-enabled.` : 'Timer reset successfully.'); await loadSubs({force:true});} else { toastBad(j.detail||j.error||'Reset failed.'); } rt.classList.remove('is-busy'); rt.closest('.subx-row')?.classList.remove('is-updating'); return; }
+  const rd=e.target.closest('[data-reset-data]'); if(rd){ const id=rd.dataset.resetData; rd.classList.add('is-busy'); rd.closest('.subx-row')?.classList.add('is-updating'); const r=await fetch(`/api/subscriptions/${id}/reset_data`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'}); const j=await r.json().catch(()=>({})); if(r.ok){ if(j.still_blocked_reason==='time_limit') toastBad('Data reset, but the client is still blocked because its timer has expired. Reset the timer as well.'); else if((j.failed_peer_ids||[]).length) toastBad('Data reset, but one or more configs could not be re-enabled.'); else toastOk(j.reactivated ? `Data reset and ${j.reactivated} blocked config${j.reactivated===1?' was':'s were'} re-enabled.` : 'Data reset successfully.'); await loadSubs({force:true});} else { toastBad(j.detail||j.error||'Reset data failed.'); } rd.classList.remove('is-busy'); rd.closest('.subx-row')?.classList.remove('is-updating'); return; }
   const rem=e.target.closest('[data-remove-inbound]');if(rem){const sid=SUBS.find(s=>(s.locations||[]).some(l=>String(l.link_id)===String(rem.dataset.removeInbound)))?.id;if(!sid) return;
   const ok = await subConfirm({title: 'Remove inbound?',body: 'This removes the inbound from this client. The underlying peer/config will not be deleted.',yesText: 'Remove inbound',noText: 'Cancel',danger: true});if(!ok) return;
   const r=await fetch(`/api/subscriptions/${sid}/inbounds/${rem.dataset.removeInbound}`,{method:'DELETE',headers:csrfHeaders(true),credentials:'same-origin'});if(r.ok){toastOk('Inbound removed.');await loadSubs({force:true});} else {const j=await r.json().catch(()=>({}));toastBad(j.detail||j.error||'Remove failed.');}return;}  
@@ -1624,9 +1882,17 @@ function subxTtlText(sec){
 
 function subxSubscriptionState(s){
   const c = subscriptionPeerCounts(s);
-  if(!s.enabled) return {label:'Disabled', cls:'disabled', sub:'Disabled in the panel'};
+  if(!s.enabled) return {label:'Disabled', cls:'disabled', sub:'Subscription disabled'};
   if(c.blocked > 0) return {label:'Blocked', cls:'blocked', sub:'One or more configs are blocked'};
-  if(c.total > 0) return {label:'Ready', cls:'online', sub:'Ready to use'};
+  if(c.offline > 0) {
+    const allDisabled = c.offline === c.total;
+    return {
+      label: allDisabled ? 'Disabled' : 'Partly disabled',
+      cls: 'disabled',
+      sub: allDisabled ? 'All configs are disabled' : `${c.offline} config${c.offline===1?' is':'s are'} disabled`
+    };
+  }
+  if(c.total > 0) return {label:'Ready', cls:'online', sub:'All configs are enabled'};
   return {label:'No configs', cls:'offline', sub:'Add at least one config'};
 }
 
@@ -1763,15 +2029,35 @@ function subxEnsureListTools(){
 }
 
 function subxActionButtons(s){
-  return `<div class="subx-actions" aria-label="Subscription actions">
-    <button class="subx-icon-btn" title="Copy public page link" data-copy="${esc(s.public_url)}"><i class="fas fa-link"></i></button>
-    <button class="subx-icon-btn" title="Copy config bundle link" data-copy="${esc(s.config_url)}"><i class="fas fa-file-lines"></i></button>
-    <button class="subx-icon-btn" title="Reset used data" data-reset-data="${s.id}"><i class="fas fa-gauge-high"></i></button>
-    <button class="subx-icon-btn" title="Reset time limit" data-reset-timer="${s.id}"><i class="fas fa-clock-rotate-left"></i></button>
-    <button class="subx-icon-btn" title="Manage inbounds" data-inbounds="${s.id}"><i class="fas fa-network-wired"></i></button>
-    <button class="subx-icon-btn" title="Edit client" data-edit="${s.id}"><i class="fas fa-pen"></i></button>
-    <button class="subx-icon-btn" title="View details" data-more="${s.id}"><i class="fas fa-circle-info"></i></button>
-    <button class="subx-icon-btn danger" title="Delete subscription" data-del="${s.id}"><i class="fas fa-trash"></i></button>
+  const state = subxSubscriptionState(s);
+  const isBlocked = state.cls === 'blocked';
+  const isDisabled = !s.enabled || state.cls === 'disabled';
+  let toggleButton;
+
+  if(isBlocked){
+    toggleButton = `<button class="subx-icon-btn subscription-power state-blocked" title="Blocked — enable and reset data and timer" aria-label="Blocked subscription. Enable and reset" data-sub-enable="${s.id}"><i class="fas fa-power-off"></i></button>`;
+  }else if(isDisabled){
+    toggleButton = `<button class="subx-icon-btn subscription-power state-disabled" title="Disabled — enable and reset data and timer" aria-label="Disabled subscription. Enable and reset" data-sub-enable="${s.id}"><i class="fas fa-power-off"></i></button>`;
+  }else{
+    toggleButton = `<button class="subx-icon-btn subscription-power state-ready" title="Ready — disable subscription and stop all configs" aria-label="Ready subscription. Disable" data-sub-disable="${s.id}"><i class="fas fa-power-off"></i></button>`;
+  }
+
+  return `<div class="subx-actions subx-actions-icons" aria-label="Subscription actions">
+    <button class="subx-logs-box-btn" type="button" title="Open subscription activity history" data-subscription-logs="${s.id}">
+      <i class="fas fa-clock-rotate-left" aria-hidden="true"></i>
+      <span>Logs</span>
+    </button>
+
+    <div class="subx-action-icon-grid">
+      <button class="subx-icon-btn" title="Copy public page link" aria-label="Copy public page link" data-copy="${esc(s.public_url)}"><i class="fas fa-link"></i></button>
+      ${toggleButton}
+      <button class="subx-icon-btn" title="Reset used data" aria-label="Reset used data" data-reset-data="${s.id}"><i class="fas fa-gauge-high"></i></button>
+      <button class="subx-icon-btn" title="Reset time limit" aria-label="Reset time limit" data-reset-timer="${s.id}"><i class="fas fa-clock-rotate-left"></i></button>
+      <button class="subx-icon-btn" title="Manage inbounds" aria-label="Manage inbounds" data-inbounds="${s.id}"><i class="fas fa-network-wired"></i></button>
+      <button class="subx-icon-btn" title="Edit client" aria-label="Edit client" data-edit="${s.id}"><i class="fas fa-pen"></i></button>
+      <button class="subx-icon-btn" title="View details" aria-label="View details" data-more="${s.id}"><i class="fas fa-circle-info"></i></button>
+      <button class="subx-icon-btn danger" title="Delete subscription" aria-label="Delete subscription" data-del="${s.id}"><i class="fas fa-trash"></i></button>
+    </div>
   </div>`;
 }
 
@@ -1793,32 +2079,12 @@ function rowHtml(s){
     ? 'No data cap'
     : `${used} used · ${fmtBytes(s.limit_bytes)} limit`;
 
-  const startedValue =
-    s.first_used_at ||
-    (
-      Array.isArray(locs)
-        ? locs.map(x => x.first_used_at).filter(Boolean).sort()[0]
-        : null
-    );
-
-  const startedText = startedValue
-    ? `Active since ${subDate(startedValue)}`
-    : (
-        Number(s.used_bytes || 0) > 0
-          ? 'Active · start time pending refresh'
-          : 'Not started yet'
-      );
-
-  const timeHeadline = unlimited
-    ? startedText
-    : subxTtlText(s.ttl_seconds);
-
-  const timeDetail = unlimited
-    ? 'No expiry limit'
-    : subxTimeHint(s);
+  const timeInfo = subscriptionTimePresentation(s);
+  const timeHeadline = timeInfo.value;
+  const timeDetail = timeInfo.hint;
 
   const dataPct = unlimited ? 100 : subxRemainingPct(s);
-  const timePct = unlimited ? 100 : subxTimePct(s);
+  const timePct = timeInfo.percent;
   const note = s.note || 'Multi-location client';
   const scope = subxScopeOf(s);
   const scopeText =
@@ -1838,7 +2104,7 @@ function rowHtml(s){
         <span><i class="fas fa-location-dot"></i> ${locCount} location${locCount === 1 ? '' : 's'} · ${esc(inboundText)}</span>
         <span><i class="fas fa-layer-group"></i> ${esc(scopeText)}</span>
         <span><i class="fas fa-database"></i> ${used} used · ${unlimited ? 'No data cap' : esc(fmtBytes(s.limit_bytes)) + ' limit'}</span>
-        <span><i class="fas fa-play-circle"></i> ${esc(startedText)}</span>
+        <span><i class="fas ${unlimited ? 'fa-play-circle' : 'fa-hourglass-half'}"></i> ${esc(timeInfo.top)}</span>
       </div>
 
       <div class="subx-bars">
@@ -1855,7 +2121,7 @@ function rowHtml(s){
 
         <div class="subx-hbar time" title="${esc(timeHeadline + ' · ' + timeDetail)}">
           <span class="subx-hbar-label">
-            <b>Started</b>
+            <b>${esc(timeInfo.title)}</b>
             <span class="subx-hbar-copy">
               <strong>${esc(timeHeadline)}</strong>
               <em>${esc(timeDetail)}</em>
@@ -1988,3 +2254,6 @@ setTimeout(()=>renderSubscriptions(), 0);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run, {once:true});
   else run();
 })();
+
+
+document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTION_LOGS_SID){ closeSubscriptionLogs(); } });
