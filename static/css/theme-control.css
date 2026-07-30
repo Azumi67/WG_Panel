@@ -1,0 +1,109 @@
+html {
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+}
+
+.theme-control {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  margin: 8px 8px 12px;
+  padding: 4px;
+  border: 1px solid rgba(100, 116, 139, .22);
+  border-radius: 12px;
+  background: rgba(148, 163, 184, .08);
+}
+
+.theme-control__btn {
+  min-width: 0;
+  height: 32px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #52616b;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  transition:
+    background-color .16s ease,
+    border-color .16s ease,
+    color .16s ease,
+    box-shadow .16s ease;
+}
+
+.theme-control__btn:hover {
+  background: rgba(15, 23, 42, .07);
+  color: #17212b;
+}
+
+.theme-control__btn.is-active {
+  background: #ffffff;
+  border-color: rgba(100, 116, 139, .22);
+  color: #17322b;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .08);
+}
+
+.theme-control__btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, .2);
+}
+
+html[data-theme="dark"] .theme-control {
+  border-color: rgba(116, 151, 164, .24);
+  background: rgba(5, 15, 20, .44);
+}
+
+html[data-theme="dark"] .theme-control__btn {
+  color: #8fa5af;
+}
+
+html[data-theme="dark"] .theme-control__btn:hover {
+  background: rgba(92, 130, 143, .14);
+  color: #dce8ec;
+}
+
+html[data-theme="dark"] .theme-control__btn.is-active {
+  background: #15362f;
+  border-color: #2a6657;
+  color: #e7fff7;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .05),
+    0 4px 12px rgba(0, 0, 0, .2);
+}
+
+html[data-theme="dark"] .theme-control__btn:focus-visible {
+  box-shadow: 0 0 0 3px rgba(98, 213, 178, .22);
+}
+
+.sidebar.sb2.is-collapsed .theme-control,
+.sidebar.sb2[data-collapsed="true"] .theme-control {
+  grid-template-columns: 1fr;
+}
+
+.sidebar.sb2.is-collapsed .theme-control__btn span,
+.sidebar.sb2[data-collapsed="true"] .theme-control__btn span {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .theme-control__btn span {
+    display: none;
+  }
+}
+
+html:not([data-theme]) {
+  visibility: hidden;
+}
