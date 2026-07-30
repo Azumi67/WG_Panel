@@ -175,8 +175,15 @@ function pushNet(rx, tx){
 function statusBadge(id, online, textOn='Online', textOff='Offline') {
   const el = document.getElementById(id);
   if (!el) return;
-  el.className = 'badge ' + (online ? 'ok' : 'bad'); 
+
+  el.className = 'badge ' + (online ? 'ok' : 'bad');
   el.textContent = online ? textOn : textOff;
+
+  const row = el.closest('.health-line');
+  if (row) {
+    row.classList.toggle('is-online', !!online);
+    row.classList.toggle('is-offline', !online);
+  }
 }
 
 async function loadAppStat() {
@@ -741,16 +748,418 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('[data-open="dash-logs"]')) closePop();
     });
     document.addEventListener('click', e => {
-      const a = e.target.closest('a');
-      if (!a) return;
-      if (a.dataset.open === 'dash-logs') {
-        e.preventDefault();
-        openPop();
-      }
+      const trigger = e.target.closest('[data-open="dash-logs"]');
+      if (!trigger) return;
+
+      e.preventDefault();
+      openPop();
     });
     setAuto(true);
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initDashLogsPopover);
   else initDashLogsPopover();
+})();
+
+
+(() => {
+  'use strict';
+
+  const $q = (selector, root = document) => root.querySelector(selector);
+
+  function initDashboardNodeLogs() {
+    const pop = $q('#dash-node-logs-pop');
+    const list = $q('#dash-node-logs-list');
+    const empty = $q('#dash-node-logs-empty');
+    const nodeSelect = $q('#dash-node-select');
+    const ifaceSelect = $q('#dash-node-iface-select');
+    const autoButton = $q('#dash-node-logs-auto');
+    const refreshButton = $q('#dash-node-logs-refresh');
+    const closeButton = $q('#dash-node-logs-close');
+
+    if (
+      !pop
+      || !list
+      || !nodeSelect
+      || !ifaceSelect
+    ) {
+      return;
+    }
+
+    const POLL_MS = 5000;
+    const LIMIT = 80;
+    let timer = null;
+    let loading = false;
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(
+        /[&<>"']/g,
+        character => ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#039;',
+        })[character],
+      );
+    }
+
+    function normalizeLogs(payload) {
+      if (Array.isArray(payload)) return payload;
+
+      if (payload && typeof payload === 'object') {
+        if (Array.isArray(payload.logs)) return payload.logs;
+        if (Array.isArray(payload.items)) return payload.items;
+      }
+
+      return [];
+    }
+
+    function normalizeLevel(value, text = '') {
+      const source = `${value || ''} ${text || ''}`.toLowerCase();
+
+      if (
+        source.includes('error')
+        || source.includes('failed')
+        || source.includes('exception')
+      ) {
+        return 'error';
+      }
+
+      if (source.includes('warn')) return 'warn';
+      if (source.includes('debug')) return 'debug';
+      return 'info';
+    }
+
+    function formatTime(raw) {
+      if (!raw) return '';
+
+      const date = new Date(raw);
+
+      if (!Number.isNaN(date.getTime())) {
+        return date.toLocaleString();
+      }
+
+      return String(raw);
+    }
+
+    function renderLogs(items) {
+      list.innerHTML = '';
+
+      if (!items.length) {
+        empty.style.display = 'block';
+        empty.textContent = 'No interface log entries were returned.';
+        return;
+      }
+
+      empty.style.display = 'none';
+
+      for (const item of items.slice(-LIMIT)) {
+        const message = (
+          item.text
+          || item.msg
+          || item.message
+          || item.line
+          || ''
+        );
+
+        const level = normalizeLevel(
+          item.level || item.kind || item.severity,
+          message,
+        );
+
+        const row = document.createElement('div');
+        row.className = 'dlog';
+
+        row.innerHTML = `
+          <div class="when">${escapeHtml(formatTime(item.ts || item.time || ''))}</div>
+          <div class="msg" title="${escapeHtml(message)}">${escapeHtml(message)}</div>
+          <div class="lvl ${level}">${level.toUpperCase()}</div>
+        `;
+
+        list.appendChild(row);
+      }
+    }
+
+    async function apiJson(url) {
+      const response = await fetch(url, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+      });
+
+      let payload = null;
+
+      try {
+        payload = await response.json();
+      } catch (_) {}
+
+      if (!response.ok) {
+        throw new Error(
+          payload?.detail
+          || payload?.message
+          || payload?.error
+          || `HTTP ${response.status}`,
+        );
+      }
+
+      return payload;
+    }
+
+    async function loadNodes() {
+      nodeSelect.disabled = true;
+      nodeSelect.innerHTML = '<option value="">Loading nodes…</option>';
+
+      try {
+        const payload = await apiJson('/api/nodes');
+        const nodes = Array.isArray(payload)
+          ? payload
+          : (
+            payload?.nodes
+            || payload?.items
+            || []
+          );
+
+        nodeSelect.innerHTML = '<option value="">Select node</option>';
+
+        for (const node of nodes) {
+          const id = node.id ?? node.node_id;
+          if (id == null) continue;
+
+          const option = document.createElement('option');
+          option.value = String(id);
+          option.textContent = (
+            node.name
+            || node.label
+            || `Node ${id}`
+          );
+
+          nodeSelect.appendChild(option);
+        }
+
+        nodeSelect.disabled = nodes.length === 0;
+
+        if (!nodes.length) {
+          empty.style.display = 'block';
+          empty.textContent = 'No nodes are registered.';
+        }
+      } catch (error) {
+        nodeSelect.innerHTML = '<option value="">Could not load nodes</option>';
+        empty.style.display = 'block';
+        empty.textContent = error.message;
+      }
+    }
+
+    async function loadInterfaces() {
+      const nodeId = nodeSelect.value;
+
+      ifaceSelect.disabled = true;
+      ifaceSelect.innerHTML = '<option value="">Loading interfaces…</option>';
+      list.innerHTML = '';
+
+      if (!nodeId) {
+        ifaceSelect.innerHTML = '<option value="">Select a node first</option>';
+        empty.style.display = 'block';
+        empty.textContent = 'Select a node and interface to view logs.';
+        return;
+      }
+
+      try {
+        const payload = await apiJson(
+          `/api/nodes/${encodeURIComponent(nodeId)}/interfaces`,
+        );
+
+        const interfaces = Array.isArray(payload)
+          ? payload
+          : (
+            payload?.interfaces
+            || []
+          );
+
+        ifaceSelect.innerHTML = '<option value="">Select interface</option>';
+
+        for (const item of interfaces) {
+          const name = String(
+            item.name
+            || item.iface
+            || '',
+          ).trim();
+
+          if (!name) continue;
+
+          const option = document.createElement('option');
+          option.value = name;
+          option.textContent = name;
+          ifaceSelect.appendChild(option);
+        }
+
+        ifaceSelect.disabled = interfaces.length === 0;
+
+        empty.style.display = 'block';
+        empty.textContent = interfaces.length
+          ? 'Select an interface to view logs.'
+          : 'This node has no WireGuard interfaces.';
+      } catch (error) {
+        ifaceSelect.innerHTML = '<option value="">Could not load interfaces</option>';
+        empty.style.display = 'block';
+        empty.textContent = error.message;
+      }
+    }
+
+    async function loadLogs() {
+      if (loading) return;
+
+      const nodeId = nodeSelect.value;
+      const iface = ifaceSelect.value;
+
+      if (!nodeId || !iface) {
+        empty.style.display = 'block';
+        empty.textContent = 'Select a node and interface to view logs.';
+        return;
+      }
+
+      loading = true;
+      refreshButton?.classList.add('is-loading');
+
+      try {
+        const payload = await apiJson(
+          `/api/nodes/${encodeURIComponent(nodeId)}`
+          + `/iface/${encodeURIComponent(iface)}/logs`,
+        );
+
+        renderLogs(
+          normalizeLogs(payload),
+        );
+      } catch (error) {
+        list.innerHTML = '';
+        empty.style.display = 'block';
+        empty.textContent = error.message;
+      } finally {
+        loading = false;
+        refreshButton?.classList.remove('is-loading');
+      }
+    }
+
+    function stopAuto() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    }
+
+    function autoEnabled() {
+      return autoButton?.classList.contains('on');
+    }
+
+    function startAuto() {
+      stopAuto();
+
+      if (autoEnabled()) {
+        timer = setInterval(loadLogs, POLL_MS);
+      }
+    }
+
+    function setAuto(enabled) {
+      if (!autoButton) return;
+
+      autoButton.classList.toggle('on', !!enabled);
+      autoButton.setAttribute(
+        'aria-checked',
+        enabled ? 'true' : 'false',
+      );
+
+      enabled
+        ? startAuto()
+        : stopAuto();
+    }
+
+    async function openPop() {
+      pop.hidden = false;
+      pop.setAttribute('aria-hidden', 'false');
+
+      if (nodeSelect.options.length <= 1) {
+        await loadNodes();
+      }
+
+      if (
+        nodeSelect.value
+        && ifaceSelect.value
+      ) {
+        loadLogs();
+      }
+
+      startAuto();
+    }
+
+    function closePop() {
+      pop.hidden = true;
+      pop.setAttribute('aria-hidden', 'true');
+      stopAuto();
+    }
+
+    document.addEventListener('click', event => {
+      const trigger = event.target.closest(
+        '[data-open="dash-node-logs"]',
+      );
+
+      if (!trigger) return;
+
+      event.preventDefault();
+      openPop();
+    });
+
+    document.addEventListener('click', event => {
+      if (
+        !pop.hidden
+        && !pop.contains(event.target)
+        && !event.target.closest('[data-open="dash-node-logs"]')
+      ) {
+        closePop();
+      }
+    });
+
+    document.addEventListener('keydown', event => {
+      if (
+        event.key === 'Escape'
+        && !pop.hidden
+      ) {
+        closePop();
+      }
+    });
+
+    nodeSelect.addEventListener(
+      'change',
+      loadInterfaces,
+    );
+
+    ifaceSelect.addEventListener(
+      'change',
+      loadLogs,
+    );
+
+    autoButton?.addEventListener(
+      'click',
+      () => setAuto(!autoEnabled()),
+    );
+
+    refreshButton?.addEventListener(
+      'click',
+      loadLogs,
+    );
+
+    closeButton?.addEventListener(
+      'click',
+      closePop,
+    );
+
+    setAuto(true);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener(
+      'DOMContentLoaded',
+      initDashboardNodeLogs,
+    );
+  } else {
+    initDashboardNodeLogs();
+  }
 })();
