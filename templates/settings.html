@@ -5,7 +5,23 @@
 {% set use_fa_solid = true %}
 {% set use_fa_brands = true %}
 {% endblock %}
-
+{% block head_extras %}
+<style id="settings-critical-theme">
+html[data-theme="dark"],
+html[data-theme="dark"] body,
+html[data-theme="dark"] main,
+html[data-theme="dark"] .content,
+html[data-theme="dark"] #set-panels,
+html[data-theme="dark"] #set-panels > .panel,
+html[data-theme="dark"] #set-panels .subpanel,
+html[data-theme="dark"] #set-panels .cards {
+  background:#071015 !important;
+  color:#edf3f6;
+}
+</style>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}?v=20260730-v55">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/settings-dark.css') }}?v=20260730-v55">
+{% endblock %}
 
 {% block content %}
 
@@ -22,15 +38,7 @@
 
 
 </div>
-<style>
-    html:not([data-tab]) #set-panels>.panel {
-        display: none;
-    }
 
-    html:not([data-tab]) #set-panels>.panel[data-panel="panel"] {
-        display: block;
-    }
-</style>
 <div id="set-panels" class="tab-panels">
 
     <section class="panel active" data-panel="panel" id="panel-tab">
@@ -234,979 +242,116 @@
             </div>
         </div>
     
-<style>
-.subtabs {
-display: inline-flex;
-gap: 6px;
-margin: 4px 0 14px;
-padding: 0;
-border: 0;
-background: transparent;
-}
-    
-.subtab {
-border: 1px solid rgba(148, 163, 184, .4); 
-background: #f9fafb;
-padding: 5px 11px;
-border-radius: 999px;
-font-weight: 500;
-font-size: 0.82rem;
-color: var(--muted, #64748b);
-cursor: pointer;
-display: inline-flex;
-align-items: center;
-gap: 6px;
-}
-    
-.subtab i {
-font-size: 0.82rem;
-opacity: .8;
-}
 
-.subtab:hover {
-background: #eef2ff;               
-border-color: #c7d2fe;
-color: #1e293b;
-}
-
-.subtab.active {
-background: #e5f1ff;              
-border-color: #60a5fa;
-color: #1d4ed8;
-}
-    
-.subpanel[hidden] {
-display: none !important;
-}
-    
-.form-grid-2 {
-display: grid;
-grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-gap: 12px;
-margin: 10px 0;
-}
-    
-.hint-chip {
-border: 0;
-background: transparent;
-padding: 6px 10px;
-border-radius: 10px;
-cursor: pointer;
-}
-    
-.hint-chip:hover {
-background: rgba(0, 0, 0, .05);
-}
-
-.rt-actions{
-display:flex;
-align-items:center;
-justify-content:flex-end;
-gap:8px;
-flex-wrap:wrap;      
-min-width:0;
-}
-
-#rt-restart,
-#rt-hint{
-white-space:nowrap;
-}
-
-@media (max-width: 1200px){
-#rt-hint .hint-text{ display:none; }
-#rt-hint{
-padding:6px 8px;
-width:34px;
-justify-content:center;
-}
-}
-
-.hint-popover {
-display: none;
-position: absolute;
-right: 14px;
-margin-top: 8px;
-z-index: 40;
-background: var(--card, #fff);
-border: 1px solid var(--line, #e5e7eb);
-border-radius: 12px;
-padding: 10px 12px;
-box-shadow: 0 10px 28px rgba(0, 0, 0, .12);
-}
-    
-.cmd-row {
-display: flex;
-align-items: center;
-gap: 8px;
-}
-    
-.cmd-row code {
-padding: 6px 8px;
-border: 1px dashed var(--line, #e5e7eb);
-border-radius: 8px;
-}
-    
-.rt-grid {
-display: grid;
-grid-template-columns: 1fr 1fr;
-gap: 12px;
-}
-
-@media (max-width: 900px) {
-.rt-grid {
-grid-template-columns: 1fr;
-}
-}
-.admin-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.4fr);
-  gap: 20px;
-  align-items: flex-start;
-}
-
-.admin-username-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.admin-username-row .input {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.pw-row {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
-  gap: 8px;
-  align-items: center;
-}
-
-@media (max-width: 1024px) {
-  .admin-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .pw-row {
-    grid-template-columns: 1fr;
-  }
-
-  .pw-row button {
-    width: 90%;
-  }
-}
-
-.log-ts { opacity:.85; margin-right:8px; }
-.log-ts { display:inline-block; }
-.log-row .log-ts { font-variant-numeric: tabular-nums; }
-#admin-logs-modal { z-index: 1300; }
-#admin-logs-modal .modal-content { max-width: 1100px; }
-
-#admin-logs-modal .table {
-  font-size: 12px;
-  line-height: 1.25;
-}
-
-#admin-logs-modal th,
-#admin-logs-modal td {
-  padding: 8px 10px;
-  vertical-align: top;
-}
-
-#admin-logs-modal td.al-admin,
-#admin-logs-modal td.al-action {
-  white-space: nowrap;
-}
-
-#admin-logs-modal td.al-time .al-ts {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-#admin-logs-modal td.al-time .al-ago {
-  margin-top: 2px;
-  font-size: 11px;
-  opacity: 0.75;
-  white-space: nowrap;
-}
-
-#admin-logs-modal td.al-details {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-#admin-logs-modal td.al-copy {
-  white-space: nowrap;
-}
-#admin-logs-modal td.al-copy .btn.sm {
-  padding: 6px 8px;
-}
-
-#tg-logs-modal    { z-index: 1200; }
-.modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; z-index: 100; }
-.modal.open { display: flex; }
-.modal .modal-backdrop { position: absolute; inset: 0; }
-.modal .modal-content { position: relative; z-index: 1; }
-
-.hint-chip{
-  display:inline-flex; align-items:center; gap:6px;
-  background:#eef2ff; color:#111827; border:0; padding:6px 10px;
-  border-radius:10px; cursor:pointer; font-weight:600;
-}
-@media (prefers-color-scheme: dark){
-  .hint-chip{ background:#1f2937; color:#e5e7eb; }
-}
-.hint-chip .hint-text{ font-size:12.5px; }
-
-.hint-popover{
-  position:absolute; right:16px; top:46px; z-index:40;
-  background:var(--card, #fff); color:var(--text, #0f172a);
-  border:1px solid var(--line, #e5e7eb);
-  box-shadow:0 10px 30px rgba(0,0,0,.08); border-radius:12px; padding:12px; width:420px;
-  display:none;
-}
-.hint-title{ font-weight:700; margin-bottom:4px; display:flex; align-items:center; gap:8px; }
-
-.cmd-row{
-  display:flex; align-items:center; gap:8px;
-  background:rgba(15,23,42,.04); border-radius:8px; padding:8px 10px; overflow:auto;
-}
-.cmd-row code{ font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:13px; }
-.btn.sm{ height:28px; padding:0 10px; border-radius:8px; }
-.tab-panels .panel { display: none; }
-html[data-tab="panel"]    .tab-panels .panel[data-panel="panel"],
-html[data-tab="iface"]    .tab-panels .panel[data-panel="iface"],
-html[data-tab="telegram"] .tab-panels .panel[data-panel="telegram"],
-html[data-tab="template"] .tab-panels .panel[data-panel="template"],
-html[data-tab="admin"]    .tab-panels .panel[data-panel="admin"],
-html[data-tab="app"]      .tab-panels .panel[data-panel="app"] { display: block; }
-
-.ui-modal-backdrop{ background: rgba(0,0,0,.5); } 
-.ui-modal{ box-shadow: 0 10px 30px rgba(0,0,0,.25); }
-.ui-modal{background:var(--card,#fff);color:var(--text,#111);border-radius:14px;min-width:320px;max-width:520px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
-.ui-modal header{font-weight:600;margin-bottom:10px}
-.ui-modal footer{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
-.ui-modal pre{background:var(--chip,#f5f7fb);padding:10px;border-radius:10px;max-height:200px;overflow:auto}
-
-button.ui-btn{padding:8px 12px;border-radius:10px;border:1px solid var(--line,#e5e7eb);background:var(--card,#fff);cursor:pointer}
-button.ui-btn.primary{background:var(--accent,#4f46e5);color:#fff;border-color:transparent}
-
-.card-header i { font-size:16px; margin-right:8px; opacity:.85; }
-.card-header .card-value { display:flex; align-items:center; gap:8px; }
-
-.badge { padding:4px 8px; border-radius:999px; font-weight:700; font-size:12px; }
-.badge.red  { background:#fee2e2; color:#991b1b; }
-.badge.green{ background:#dcfce7; color:#166534; }
-.badge.gray { background:#f3f4f6; color:#374151; }
-
-.form-group > label { font-weight:600; color:#0f172a; margin-bottom:6px; display:block; }
-.input { height:38px; border-radius:10px; }
-.input::placeholder { color:#9aa4b2; }
-
-.btn { height:36px; padding:0 12px; border-radius:10px; font-weight:700; }
-.btn i { margin-right:6px; font-size:14px; }
-.btn.sm { height:32px; padding:0 10px; font-weight:600; }
-
-.tab i,
-.card .acc-bar i,
-.card .btn i { font-size:14px; }
-
-.rt-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 12px 16px;
-    align-items: flex-start;
-}
-
-.rt-grid .form-group {
-    margin-bottom: 0;
-}
-
-.rt-empty {
-    visibility: hidden;
-}
-
-@media (max-width:900px) {
-    .rt-grid {
-        grid-template-columns: 1fr;
-    }
-}
-
-.kicker { font-weight:700; font-size:13px; color:#111827; margin:4px 0 8px; }
-
-.pw-row { display:grid; grid-template-columns: 1fr 1fr 1fr auto; gap:8px; }
-@media (max-width: 980px){ .pw-row { grid-template-columns: 1fr; } }
-
-.hr-soft { height:1px; background:var(--line,#e5e7eb); margin:14px 0; opacity:.7; }
-
-.twofa-head {
-  display:flex; align-items:center; justify-content:space-between; gap:10px; margin:2px 0 8px;
-}
-.twofa-actions { display:flex; gap:8px; align-items:center; }
-
-.qr { border-radius:12px; background:#fff; }
-
-.input + .btn i,
-.form-group .btn i { opacity:.9; }
-
-.panel[data-panel="admin"] .card-body { padding-top:14px; }
-
-.savebar{
-  position: sticky;
-  bottom: 8px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  background: var(--card, #fff);
-  border-top: 1px solid var(--line, #e5e7eb);
-  box-shadow: 0 -6px 18px rgba(0,0,0,.05);
-  z-index: 2;
-}
-
-.muted{ opacity:.7; font-size:12px; }
-
-.tpl-preview-dock{
-  margin-top:14px;
-  border:1px solid #e5e7eb;
-  border-radius:14px;
-  background:#fff;
-  box-shadow:0 10px 28px rgba(0,0,0,.06);
-  overflow:hidden;
-}
-.tpl-preview-dock .dock-header{
-  display:flex; align-items:center; justify-content:space-between;
-  padding:10px 12px;
-  border-bottom:1px dashed #e5e7eb;
-  font-weight:700; font-size:13px;
-}
-#tpl-preview-frame { height: 360px; }
-@media (max-width:1100px){ #tpl-preview-frame{ height:320px; } }
-
-.tpl-icon[title]{ pointer-events:auto; }
-.tpl-icon { 
-  position:relative;
-}
-.tpl-icon[title]::after{ display:none; }
-.tpl-preview-dock .dock-body{
-  overflow: hidden;
-  padding: 12px;              
-}
-
-#tpl-scale-wrap{
-  position: relative;
-  width: 100%;
-  height: 280px; 
-}
-
-#tpl-preview-frame{
-  position: absolute; top:0; left:0;
-  border: 0;
-  transform-origin: 0 0;
-  pointer-events: none;
-  background: transparent;
-}
-
-:root .tpl-preview-dock{ background:var(--card,#fff); border-color:var(--line,#e5e7eb); }
-
-.tpl-grid.icons-only {
-  display:grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap:12px;
-}
-
-.tpl-icon {
-  position:relative;
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  gap:8px;
-  padding:16px 12px;
-  border:1px solid #e5e7eb;
-  border-radius:14px;
-  background:#fff;
-  cursor:pointer;
-  user-select:none;
-  transition: border-color .15s, box-shadow .15s, transform .08s;
-}
-.tpl-icon:hover { border-color:#cbd5e1; box-shadow:0 6px 20px rgba(0,0,0,.06); }
-.tpl-icon:active { transform: translateY(1px); }
-.tpl-icon input { position:absolute; inset:0; opacity:0; pointer-events:none; }
-.tpl-icon .ico {
-  width:48px; height:48px; border-radius:14px;
-  display:grid; place-items:center;
-  border:1px dashed #e5e7eb; background:#f9fafb;
-  font-size:20px;
-}
-.tpl-icon .lbl { font-weight:700; font-size:13px; }
-.tpl-icon[aria-checked="true"] {
-  border-color:#a7f3d0; background:#ecfdf5;
-  box-shadow:0 6px 24px rgba(16,185,129,.15);
-}
-.tpl-icon[aria-checked="true"] .ico { border-color:#a7f3d0; background:#f0fdf4; }
-
-:root.light .tpl-icon { background:#fff; }
-:root .tpl-hoverbox { background:var(--card, #fff); border-color: var(--line,#e5e7eb); }
-
-.log-modal { padding: 16px 16px 12px; }
-.log-modal__head {
-  display:flex; align-items:center; gap:12px; margin-bottom:10px;
-}
-.log-modal__head > i { font-size:20px; color:#334155; }
-.log-modal__title { display:flex; flex-direction:column; gap:2px; margin-right:auto; }
-.log-modal__title > div { font-weight:700; font-size:14px; }
-.log-modal__title small { color:#64748b; font-weight:500; }
-.log-modal__tools { display:flex; gap:8px; align-items:center; }
-
-.input.sm { height:32px; padding:6px 10px; font-size:13px; margin-left: 25px; }
-.btn { height:32px; padding:0 12px; border-radius:10px; border:1px solid #e5e7eb; background:#111827; color:#fff; font-weight:600; }
-.btn i { margin-right:6px; }
-.btn.ghost { background:#fff; color:#111827; border-color:#e5e7eb; }
-.btn.ghost:hover { background:#f8fafc; }
-.btn:hover { filter:brightness(1.05); }
-.btn.ghost[aria-pressed="true"] {
-  background:#111827;
-  color:#fff;
-  border-color:#111827;
-}
-
-.log-surface {
-  border:1px solid #e5e7eb; border-radius:14px; background:#f8fafc;
-  box-shadow: inset 0 1px 0 rgba(0,0,0,.02);
-}
-.log-pre {
-  margin:0; padding:14px 14px 18px; max-height:56vh; overflow:auto;
-  font: 13px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color:#0f172a; background:
-    linear-gradient(#fff,#fff) padding-box,
-    radial-gradient( farthest-side at 0 0, rgba(15,23,42,.06), transparent 70% ) border-box;
-  border-radius:14px;
-  white-space:pre;  
-}
-.log-pre.is-wrapped { white-space:pre-wrap; word-break:break-word; }
-.log-pre::-webkit-scrollbar { height:12px; width:12px; }
-.log-pre::-webkit-scrollbar-thumb { background:#d1d5db; border-radius:999px; border:3px solid #f8fafc; }
-.log-pre::-webkit-scrollbar-thumb:hover { background:#c0c6cf; }
-.log-pre .hint     { color:#475569; }
-.log-pre .cmd      { color:#0b6bcb; font-weight:700; }
-.log-pre .step     { color:#16a34a; font-weight:700; }
-.log-pre .ts       { color:#64748b; }
-.log-pre mark      { background:#fde68a; border-radius:4px; padding:0 2px; }
-
-.log-line { white-space: pre-wrap; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-
-.logbox{
-  max-height:56vh; overflow:auto;
-  background:#f8fafc; color:#111827;
-  border:1px solid #e5e7eb; border-radius:10px;
-  padding:10px;
-  font:12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-  white-space:pre-wrap; word-break:break-word;
-}
-
-#iface-logs-modal pre{ background:#f8fafc !important; color:#111827 !important; }
-#iface-logs-modal .log-pre {
-  font-size: 12px;    
-  line-height: 1.4;    
-}
-#iface-logs-modal .log-pre.is-wrapped { white-space: pre-wrap; word-break: break-word; }
-.log-modal__foot {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 10px;
-}
-.section-head{
-  display:flex; align-items:center; justify-content:space-between;
-  gap:12px; padding:8px 0;
-  border-top:1px solid #f1f5f9;   
-  margin-top:8px;
-}
-.tg-chips + .section-head{       
-  margin-top:16px;
-}
-
-.section-head .head-text .h5{ font-weight:700; margin:0; color:#111827; }
-.section-head .head-text .small-text{ margin-top:2px; }
-.section-head.toggle-right .toggle-wrap{ order:2; margin-left:12px; }
-.section-head.toggle-left  .toggle-wrap{ order:-1; margin-right:12px; }
-.section-head.inline .head-text .h5{ display:flex; align-items:center; gap:10px; }
-
-.tabs {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    border-bottom: none;
-}
-
-.tab {
-    background: #fff;
-    color: #111827;
-    font-weight: 600;
-    border: 1px solid #e5e7eb;
-    border-radius: 999px;
-    cursor: pointer;
-    padding: 8px 12px;
-    transition: color .15s, background .15s, border-color .15s;
-}
-
-.tab:hover {
-    border-color: #d1d5db;
-}
-
-.tab.active {
-    background: #111827;
-    color: #fff;
-    border-color: #111827;
-    box-shadow: none;
-}
-
-.tab-panels .panel {
-    display: none;
-}
-
-.tab-panels .panel.active {
-    display: block;
-}
-
-.between {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-}
-
-.label-stack {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}
-
-.label-strong {
-    font-weight: 700;
-}
-
-.switch {
-    position: relative;
-    display: inline-block;
-}
-
-.switch.sm {
-    width: 38px;
-    height: 22px;
-}
-
-.switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
-
-.switch .slider {
-    position: absolute;
-    inset: 0;
-    background: #e5e7eb;
-    border-radius: 999px;
-    transition: background .18s, box-shadow .18s;
-    cursor: pointer;
-}
-
-.switch .slider:before {
-    content: "";
-    position: absolute;
-    height: 18px;
-    width: 18px;
-    left: 2px;
-    top: 2px;
-    border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, .15);
-    transition: transform .18s;
-}
-
-.switch input:checked+.slider {
-    background: #111827;
-}
-
-.switch input:checked+.slider:before {
-    transform: translateX(16px);
-}
-
-.switch input:focus-visible+.slider,
-.tab:focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(17, 24, 39, .15);
-    border-radius: 12px;
-}
-
-.card-body {
-    padding: 16px 20px 20px;
-}
-.card-body > .section-head:first-child{
-  border-top:0; margin-top:0; padding-top:0;
-}
-
-.lvl-badge {
-    display: inline-block;
-    font-size: 12px;
-    line-height: 1;
-    padding: 4px 8px;
-    border-radius: 999px;
-    font-weight: 600;
-    margin-right: 8px;
-}
-
-.lvl-error {
-    background: #6b0f14;
-    color: #ffd7d7;
-}
-
-.lvl-warning {
-    background: #5a3e00;
-    color: #ffe6a1;
-}
-
-.lvl-info {
-    background: #15324a;
-    color: #cfe8ff;
-}
-
-.lvl-heartbeat {
-    background: #2a2a2a;
-    color: #d0d0d0;
-}
-
-.log-row {
-    padding: 6px 8px;
-    border-bottom: 1px solid #151922;
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-
-.log-ts {
-    opacity: .75;
-    margin-right: 8px;
-}
-
-#tg-acc-notify .acc-body {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-}
-
-.toggle-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 12px;
-}
-
-.toggle-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 8px 10px;
-    border: 1px solid #e5e7eb;
-    border-radius: 10px;
-    background: #f8fafc;
-}
-
-@media (max-width:640px) {
-    #tg-acc-notify .acc-body {
-        align-items: flex-start;
-    }
-}
-
-.tg-chips {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-bottom: 8px;
-}
-
-.chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    border-radius: 999px;
-    background: #e5e7eb;
-    color: #111827;
-    font-size: .9rem;
-}
-
-.chip.green {
-    background: #e6f9ed;
-    color: #146c2e;
-}
-
-.chip.blue {
-    background: #e6f0ff;
-    color: #1f3aa5;
-}
-
-.chip.red {
-    background: #ffebe9;
-    color: #a12626;
-}
-
-.chip.gray {
-    background: #f3f4f6;
-    color: #4b5563;
-}
-
-.row {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-    flex-wrap: wrap;
-}
-
-.row .flex {
-    flex: 1 1 320px;
-}
-
-.pill {
-    display: inline-block;
-    padding: 6px 10px;
-    border-radius: 999px;
-    border: 0;
-    cursor: pointer;
-}
-
-.pill.green {
-    background: #e6f9ed;
-    color: #146c2e;
-}
-
-.pill.gray {
-    background: #f3f4f6;
-    color: #4b5563;
-}
-
-.logs-pre {
-    max-height: 50vh;
-    overflow: auto;
-    background: #0b0e14;
-    color: #cfd7e0;
-    padding: 12px;
-    border-radius: 10px;
-}
-
-.fade-wrap {
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  visibility: hidden;            
-  transition: max-height 0.25s ease, opacity 0.25s ease;
-}
-
-.fade-wrap.open {
-  max-height: 800px;            
-  opacity: 1;
-  visibility: visible;           
-}
-
-.fade-wrap:not(.open) {
-  max-height: 0;
-  opacity: 0;
-  margin-top: 0;
-}
-
-.fade-wrap > * {
-  min-height: 0;
-}
-
-.modal .modal-content.lg { max-width: 920px; }
-
-.logsheet {
-  padding: 16px;
-  border-radius: 16px;
-}
-.logsheet__head {
-  display:flex; align-items:center; gap:12px; margin-bottom:12px;
-}
-.logsheet__titlewrap { display:flex; align-items:center; gap:12px; margin-right:auto; }
-.logsheet__title .h { font-weight:800; font-size:18px; line-height:1.1; }
-.logsheet__title small { display:block; margin-top:2px; color:#64748b; }
-.logsheet__head > .fa-solid { font-size:20px; color:#334155; }
-.logsheet__badges { display:flex; gap:8px; align-items:center; }
-
-.pill.gray { background:#f1f5f9; color:#0f172a; border:1px solid #e5e7eb; }
-
-.logsheet__toolbar {
-  display:grid; grid-template-columns: auto auto 1fr; gap:12px; align-items:center;
-  padding:10px 12px; border:1px solid #e5e7eb; border-radius:12px; background:linear-gradient(#fff,#fff);
-  margin-bottom:10px;
-}
-.tool-grid {
-  display:grid; grid-template-columns: 1fr 1fr; gap:8px; align-items:center;
-}
-@media (max-width: 760px){
-  .logsheet__toolbar { grid-template-columns: 1fr; }
-  .tool-grid { grid-template-columns: 1fr; }
-}
-
-.seg.seg--pill { display:inline-flex; gap:6px; padding:4px; border:1px solid #e5e7eb; border-radius:999px; background:#fff; }
-.seg.seg--pill > label {
-  display:inline-flex; align-items:center; gap:6px; padding:6px 12px;
-  border-radius:999px; cursor:pointer; font-weight:700; color:#0f172a;
-}
-.seg.seg--pill > input:checked + label,
-.seg.seg--pill > label[aria-selected="true"] {
-  background:#111827; color:#fff; box-shadow:0 1px 0 rgba(0,0,0,.05);
-}
-.seg.seg--pill i { font-size:14px; }
-
-.logsheet__tools { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
-.tool-search {
-  position:relative; flex:1 1 320px; min-width:240px;
-}
-.tool-search > i { position:absolute; left:10px; top:50%; transform:translateY(-50%); opacity:.6; }
-.tool-search > input { padding-left:40px; width:100%; }
-.tool-search > i { pointer-events: none; }
-.tool-buttons { display:flex; gap:8px; flex-wrap:wrap; }
-.btn .btn-txt { margin-left:6px; }
-.btn.ghost { background:#fff; color:#111827; border-color:#e5e7eb; }
-.btn.ghost:hover { background:#f8fafc; }
-
-.logbox-wrap {
-  border:1px solid #e5e7eb; border-radius:14px; background:#f8fafc;
-  box-shadow: inset 0 1px 0 rgba(0,0,0,.02);
-}
-#iface-logs-modal pre.log-pre {
-  margin:0; padding:14px 14px 18px; max-height:58vh;
-  font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  color:#0f172a; background:
-    linear-gradient(#fff,#fff) padding-box,
-    radial-gradient(farthest-side at 0 0, rgba(15,23,42,.06), transparent 70%) border-box;
-  border-radius:14px; white-space:pre;
-}
-#iface-logs-modal pre.log-pre.is-wrapped { white-space: pre-wrap; word-break: break-word; }
-
-.logsheet__foot {
-  margin-top:12px; display:flex; align-items:center; gap:10px; justify-content:flex-end;
-}
-.logsheet__foot #iflog-last { margin-right:auto; }
-
-#iface-logs-modal .log-pre::-webkit-scrollbar { height:12px; width:12px; }
-#iface-logs-modal .log-pre::-webkit-scrollbar-thumb {
-  background:#d1d5db; border-radius:999px; border:3px solid #f8fafc;
-}
-#iface-logs-modal .log-pre::-webkit-scrollbar-thumb:hover { background:#c0c6cf; }
-</style>
 </section>
 
     <section class="panel" data-panel="iface">
         <div class="cards">
-            <div class="card full" id="card-iface">
-                <div class="card-header">
-                    <i class="fa-solid fa-network-wired"></i><span>WireGuard Interface</span>
-                    <span class="card-value">
+            <div class="card full iface-console" id="card-iface">
+                <div class="card-header iface-console__head">
+                    <div class="iface-console__title">
+                        <span class="iface-console__title-icon"><i class="fa-solid fa-network-wired"></i></span>
+                        <span>
+                            <strong>WireGuard Interface</strong>
+                            <small>Manage local or remote interface settings and runtime state.</small>
+                        </span>
+                    </div>
+                    <span class="card-value iface-console__head-actions">
                         <span id="iface-status" class="badge gray">Unknown</span>
                         <button class="btn secondary" id="open-logs"><i class="fa-solid fa-list"></i> Logs</button>
                     </span>
                 </div>
-    
-                <div class="card-body">
-                    <style>
-                        .iface-row {
-                            display: flex;
-                            align-items: center;
-                            gap: 10px;
-                            margin-bottom: 10px
-                        }
-    
-                        .iface-row .input {
-                            max-width: 280px
-                        }
-    
-                        .iface-row .spacer {
-                            flex: 1
-                        }
-    
-                        .iface-grid {
-                            display: grid;
-                            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-                            gap: 12px 16px;
-                            align-items: start;
-                            margin-top: 6px
-                        }
-    
-                        .iface-actions {
-                            display: flex;
-                            gap: 8px;
-                            justify-content: flex-end;
-                            margin-top: 10px
-                        }
-                    </style>
-    
 
-                    <div class="iface-row" style="margin-top: -2px;">
-                        <div class="seg seg--pill" role="tablist" aria-label="Interface scope">
-                            <input type="radio" id="iface-scope-local" name="iface-scope" value="local" checked hidden>
-                            <label for="iface-scope-local" role="tab"><i class="fa-regular fa-computer"></i> Local</label>
-                    
-                            <input type="radio" id="iface-scope-node" name="iface-scope" value="node" hidden>
-                            <label for="iface-scope-node" role="tab"><i class="fa-solid fa-server"></i> Node</label>
+                <div class="card-body iface-console__body">
+                    <div class="iface-selector-card">
+                        <div class="iface-selector-card__top">
+                            <div>
+                                <div class="iface-eyebrow">Location</div>
+                                <div class="seg seg--pill iface-scope-switch" role="tablist" aria-label="Interface scope">
+                                    <input type="radio" id="iface-scope-local" name="iface-scope" value="local" checked hidden>
+                                    <label for="iface-scope-local" role="tab"><i class="fa-regular fa-computer"></i> Local</label>
+
+                                    <input type="radio" id="iface-scope-node" name="iface-scope" value="node" hidden>
+                                    <label for="iface-scope-node" role="tab"><i class="fa-solid fa-server"></i> Node</label>
+                                </div>
+                            </div>
+                            <span id="iface-scope-chip" class="badge gray iface-scope-status" aria-hidden="true">Unknown</span>
                         </div>
-                    
-                        <select id="iface-node" class="input" aria-label="Select node" style="min-width:240px" hidden></select>
-                        <span class="spacer"></span>
-                    
-                        <span id="iface-scope-chip" class="badge gray" aria-hidden="true">Unknown</span>
-                    </div>
-                    <div class="iface-row">
-                        <label for="iface-select" style="margin:0">Select interface</label>
-                        <select class="input" id="iface-select" aria-label="Select interface"></select>
-                        <span class="spacer"></span>
+
+                        <div class="iface-selector-grid">
+                            <div class="form-group iface-node-field" id="iface-node-field">
+                                <label for="iface-node">Remote node</label>
+                                <select id="iface-node" class="input" aria-label="Select node" hidden></select>
+                                <div class="small-text muted">Choose the node that owns the interface.</div>
+                            </div>
+                            <div class="form-group iface-select-field">
+                                <label for="iface-select">Interface</label>
+                                <select class="input" id="iface-select" aria-label="Select interface"></select>
+                                <div class="small-text muted">Select the WireGuard device you want to inspect or manage.</div>
+                            </div>
+                        </div>
                     </div>
 
-    
                     <div id="iface-view" hidden>
-                        <div class="iface-grid">
-                            <div class="form-group">
-                                <label for="i-name">Name</label>
+                        <div class="iface-section-heading">
+                            <div>
+                                <span class="iface-eyebrow">Interface details</span>
+                                <h3>Identity and network settings</h3>
+                            </div>
+                            <span class="iface-section-note"><i class="fa-solid fa-circle-info"></i> Read-only values are discovered from the active configuration.</span>
+                        </div>
+
+                        <div class="iface-grid iface-field-grid">
+                            <div class="form-group iface-field-card is-readonly">
+                                <div class="iface-field-label"><i class="fa-solid fa-tag"></i><label for="i-name">Name</label></div>
                                 <input class="input" id="i-name" disabled>
                             </div>
-    
-                            <div class="form-group">
-                                <label for="i-path">Path</label>
+
+                            <div class="form-group iface-field-card is-readonly">
+                                <div class="iface-field-label"><i class="fa-solid fa-file-lines"></i><label for="i-path">Config path</label></div>
                                 <input class="input" id="i-path" disabled>
                             </div>
-    
-                            <div class="form-group">
-                                <label for="i-address">Address</label>
+
+                            <div class="form-group iface-field-card is-readonly">
+                                <div class="iface-field-label"><i class="fa-solid fa-location-dot"></i><label for="i-address">Address</label></div>
                                 <input class="input" id="i-address" disabled>
                             </div>
-    
-                            <div class="form-group">
-                                <label for="i-listen">ListenPort</label>
+
+                            <div class="form-group iface-field-card is-editable">
+                                <div class="iface-field-label"><i class="fa-solid fa-plug"></i><label for="i-listen">Listen port</label></div>
                                 <input class="input" id="i-listen" type="number" min="1" max="65535" inputmode="numeric">
+                                <small>UDP port used by this interface.</small>
                             </div>
-    
-                            <div class="form-group">
-                                <label for="i-dns">DNS</label>
-                                <input class="input" id="i-dns">
+
+                            <div class="form-group iface-field-card is-editable">
+                                <div class="iface-field-label"><i class="fa-solid fa-globe"></i><label for="i-dns">DNS</label></div>
+                                <input class="input" id="i-dns" placeholder="Optional DNS server">
+                                <small>Leave empty to keep the current client default.</small>
                             </div>
-    
-                            <div class="form-group">
-                                <label for="i-mtu">MTU</label>
-                                <input class="input" id="i-mtu" type="number" min="576" max="9000" inputmode="numeric">
+
+                            <div class="form-group iface-field-card is-editable">
+                                <div class="iface-field-label"><i class="fa-solid fa-ruler-horizontal"></i><label for="i-mtu">MTU</label></div>
+                                <input class="input" id="i-mtu" type="number" min="576" max="9000" inputmode="numeric" placeholder="Auto">
+                                <small>Leave empty to use automatic MTU selection.</small>
                             </div>
                         </div>
-    
-                        <div class="iface-actions">
-                            <button class="btn" id="iface-save"><i class="fa-solid fa-save"></i> Save Changes</button>
-                            <button class="btn secondary" id="iface-up"><i class="fa-solid fa-play"></i> Bring Up</button>
-                            <button class="btn danger" id="iface-down"><i class="fa-solid fa-stop"></i> Bring Down</button>
+
+                        <div class="iface-actionbar">
+                            <div class="iface-actionbar__copy">
+                                <strong>Apply changes</strong>
+                                <span>Save editable values, or change the current runtime state.</span>
+                            </div>
+                            <div class="iface-actions">
+                                <button class="btn iface-save-btn" id="iface-save"><i class="fa-solid fa-floppy-disk"></i> Save changes</button>
+                                <button class="btn secondary iface-up-btn" id="iface-up"><i class="fa-solid fa-play"></i> Bring up</button>
+                                <button class="btn danger iface-down-btn" id="iface-down"><i class="fa-solid fa-stop"></i> Bring down</button>
+                            </div>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
     </section>
-
 
     <section class="panel" data-panel="telegram">
         <div class="cards">
@@ -1576,7 +721,7 @@ button.ui-btn.primary{background:var(--accent,#4f46e5);color:#fff;border-color:t
     </section>
 
     
-    <script defer src="{{ url_for('static', filename='js/settings.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/settings.js') }}?v=20260730-v55"></script>
     <script defer src="{{ url_for('static', filename='js/qrcode.min.js') }}"></script>
 
 
