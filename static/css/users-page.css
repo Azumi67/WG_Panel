@@ -2443,8 +2443,6 @@ input#peer-search,.peer-search-row input,.peers-filter-row input,.peers-filter-r
   .peer-page-hero,.peer-scope-panel,#iface-bar.iface-bar,.peer-page-actions,.peer-summary-card,.summary-stat,.peer-card,.peer-hero-live span,.iface-dot{animation:none!important;transition:none!important;}
   .peer-page-hero:before,.iface-btn:after,.peer-page-actions .btn:after,.summary-stat:after{display:none!important;}
 }
-
-
 #peer-modal .peerx-form-grid.limits>.peerx-switch:first-of-type,
 #edit-peer-modal .peerx-form-grid.limits>.peerx-switch:first-of-type,
 #bulk-modal .peerx-form-grid.limits>.peerx-switch:first-of-type{grid-column:1/3!important}
