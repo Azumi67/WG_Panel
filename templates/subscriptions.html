@@ -1,8 +1,11 @@
 {% extends 'base.html' %}
+{% block head_extras %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/subscriptions.css') }}?v=20260729-v25">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/subscription-dark.css') }}?v=20260729-v25">
+{% endblock %}
 {% block content %}
 <script defer src="{{ url_for('static', filename='js/csrf.js') }}"></script>
 <script defer src="{{ url_for('static', filename='js/toast.js') }}"></script>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/subscriptions.css') }}">
 
 <style>
 .subx-interface-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:10px;align-items:stretch}
@@ -441,5 +444,6 @@
 </div>
 
 
-<script defer src="{{ url_for('static', filename='js/subscriptions.js') }}"></script>
+
+<script defer src="{{ url_for('static', filename='js/subscriptions.js') }}?v=20260729-v25"></script>
 {% endblock %}
