@@ -39,14 +39,55 @@ from auth import require_api_key, admin_required, require_api_key_or_login
 from sqlalchemy import or_, and_, text, inspect, func
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 from urllib.parse import urlparse, urljoin
-import secrets, hashlib, string, pyotp
+import secrets
+import hashlib
+import string
+import pyotp
+import bcrypt
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # ----------------------------------
 # Panel version / update checker
 # ----------------------------------
-PANEL_VERSION = "1.0.4"
+def _project_version() -> str:
+
+    version_file = Path(BASE_DIR) / "VERSION"
+
+    try:
+        value = (
+            version_file
+            .read_text(encoding="utf-8")
+            .strip()
+            .lstrip("vV")
+        )
+
+        if value and re.fullmatch(
+            r"\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z.-]+)?",
+            value,
+        ):
+            return value
+
+        logging.getLogger(__name__).warning(
+            "Invalid VERSION file value: %r",
+            value,
+        )
+
+    except FileNotFoundError:
+        logging.getLogger(__name__).warning(
+            "VERSION file was not found: %s",
+            version_file,
+        )
+
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Could not read VERSION file"
+        )
+
+    return "0.0.0"
+
+
+PANEL_VERSION = _project_version()
 PANEL_REPO = "Azumi67/WG_Panel"
 PANEL_UPDATE_TTL = 1800
 _PANEL_UPDATE_CACHE = {
@@ -1162,15 +1203,36 @@ def _github_latest_panel_version():
 
 
 @app.get("/api/panel/version")
-@login_required
+@require_api_key_or_login
 def api_panel_version():
     now = int(time.time())
 
+    fresh = (
+        str(
+            request.args.get("fresh")
+            or ""
+        )
+        .strip()
+        .lower()
+        in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    )
+
     if (
-        _PANEL_UPDATE_CACHE.get("data")
-        and now - int(_PANEL_UPDATE_CACHE.get("ts") or 0) < PANEL_UPDATE_TTL
+        not fresh
+        and _PANEL_UPDATE_CACHE.get("data")
+        and now - int(
+            _PANEL_UPDATE_CACHE.get("ts")
+            or 0
+        ) < PANEL_UPDATE_TTL
     ):
-        return jsonify(_PANEL_UPDATE_CACHE["data"])
+        return jsonify(
+            _PANEL_UPDATE_CACHE["data"]
+        )
 
     latest = _github_latest_panel_version()
 
@@ -1184,6 +1246,7 @@ def api_panel_version():
     payload = {
         "ok": True,
         "current": current_version,
+        "version_source": "VERSION",
         "repo": PANEL_REPO,
         "latest": latest_version,
         "latest_url": latest.get("url") if latest else f"https://github.com/{PANEL_REPO}",
@@ -1692,6 +1755,218 @@ def tg_logs_del():
     except Exception:
         pass
     return jsonify(ok=True)
+
+
+# ============================
+# Panel + node update center
+# ============================
+
+UPDATE_HELPER = Path(BASE_DIR) / "scripts" / "panel_update.py"
+UPDATE_STATUS_FILE = Path(app.instance_path) / "update_status.json"
+UPDATE_LOCK_FILE = Path(app.instance_path) / "update.lock"
+
+
+def _read_update_status(path=UPDATE_STATUS_FILE):
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {
+            "status": "idle",
+            "stage": "idle",
+            "percent": 0,
+            "message": "No update is running.",
+            "log": [],
+        }
+
+
+def _update_is_busy(status):
+    return str((status or {}).get("status") or "").lower() in {
+        "queued", "running", "downloading", "installing",
+        "validating", "restarting",
+    }
+
+
+def _queue_safe_update(*, root, service, status_file, scope, target="latest"):
+    helper = Path(root) / "scripts" / "panel_update.py"
+
+    if not helper.is_file():
+        raise RuntimeError(f"Update helper is missing: {helper}")
+
+    current = _read_update_status(status_file)
+    if _update_is_busy(current) or Path(root, "instance", "update.lock").exists():
+        raise RuntimeError("An update is already running for this target.")
+
+    cmd = [
+        sys.executable,
+        str(helper),
+        "--root", str(root),
+        "--repo", PANEL_REPO,
+        "--service", service,
+        "--status", str(status_file),
+        "--scope", scope,
+        "--target", str(target or "latest"),
+    ]
+
+    log_path = Path(root) / "instance" / "update_runner.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    stream = open(log_path, "ab", buffering=0)
+
+    subprocess.Popen(
+        cmd,
+        cwd=str(root),
+        stdin=subprocess.DEVNULL,
+        stdout=stream,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+    return {
+        "status": "queued",
+        "stage": "queued",
+        "percent": 2,
+        "message": "Update was queued.",
+        "log": [],
+    }
+
+
+@app.get("/api/panel/update/status")
+@require_api_key_or_login
+def api_panel_update_status():
+    return jsonify(_read_update_status())
+
+
+@app.post("/api/panel/update")
+@require_api_key_or_login
+def api_panel_update_start():
+    data = request.get_json(silent=True) or {}
+    target = str(data.get("target") or "latest").strip()
+
+    try:
+        status = _queue_safe_update(
+            root=BASE_DIR,
+            service="auto",
+            status_file=UPDATE_STATUS_FILE,
+            scope="panel",
+            target=target,
+        )
+        return jsonify(
+            ok=True,
+            message="Local panel update queued.",
+            status=status,
+        ), 202
+    except RuntimeError as exc:
+        return jsonify(ok=False, error="update_not_started", detail=str(exc)), 409
+    except Exception as exc:
+        current_app.logger.exception("Could not queue local update")
+        return jsonify(ok=False, error="update_queue_failed", detail=str(exc)), 500
+
+
+@app.get("/api/panel/update/targets")
+@require_api_key_or_login
+def api_panel_update_targets():
+    latest = _github_latest_panel_version() or {}
+    latest_version = latest.get("version")
+
+    rows = []
+    for node in Node.query.order_by(Node.id.asc()).all():
+        row = {
+            "id": node.id,
+            "name": node.name,
+            "base_url": node.base_url,
+            "online": False,
+            "version": {
+                "current": None,
+                "latest": latest_version,
+                "update_available": False,
+            },
+            "update": {"status": "idle"},
+        }
+
+        if not node.enabled:
+            row["update"] = {"status": "disabled"}
+            rows.append(row)
+            continue
+
+        try:
+            version = node_get(node, "/api/system/version", timeout=8) or {}
+            status = node_get(node, "/api/system/update/status", timeout=6) or {}
+
+            current = str(version.get("current") or "").strip() or None
+            node_latest = str(version.get("latest") or latest_version or "").strip() or None
+
+            row["online"] = True
+            row["version"] = {
+                "current": current,
+                "latest": node_latest,
+                "update_available": bool(
+                    current and node_latest
+                    and _version_tuple(node_latest) > _version_tuple(current)
+                ),
+            }
+            row["update"] = status if isinstance(status, dict) else {"status": "idle"}
+
+        except Exception as exc:
+            row["update"] = {
+                "status": "offline",
+                "message": str(exc),
+            }
+
+        rows.append(row)
+
+    return jsonify(ok=True, latest=latest_version, nodes=rows)
+
+
+@app.post("/api/nodes/<int:nid>/update")
+@require_api_key_or_login
+def api_node_update_start(nid):
+    node = db.session.get(Node, nid) or abort(404)
+    data = request.get_json(silent=True) or {}
+
+    try:
+        response = node_post(
+            node,
+            "/api/system/update",
+            {"target": str(data.get("target") or "latest")},
+            timeout=12,
+        )
+        return jsonify(response if isinstance(response, dict) else {
+            "ok": True,
+            "message": str(response),
+        }), 202
+    except requests.HTTPError as exc:
+        body = getattr(getattr(exc, "response", None), "text", "") or ""
+        return jsonify(
+            ok=False,
+            error="node_update_rejected",
+            detail=body[:1000] or str(exc),
+        ), 502
+    except Exception as exc:
+        return jsonify(
+            ok=False,
+            error="node_update_failed",
+            detail=str(exc),
+        ), 502
+
+
+@app.get("/api/nodes/<int:nid>/update/status")
+@require_api_key_or_login
+def api_node_update_status(nid):
+    node = db.session.get(Node, nid) or abort(404)
+    try:
+        data = node_get(node, "/api/system/update/status", timeout=8) or {}
+        return jsonify(data if isinstance(data, dict) else {
+            "status": "unknown",
+            "message": str(data),
+        })
+    except Exception as exc:
+        return jsonify(
+            status="offline",
+            message=str(exc),
+            percent=0,
+            log=[],
+        ), 200
 
 #------------------------
 # Backup
@@ -2630,7 +2905,6 @@ def inspect_saved_auto_backup(fname):
         backup_root / safe_name
     ).resolve()
 
-    # Prevent path traversal.
     try:
         backup_path.relative_to(backup_root)
     except ValueError:
@@ -3700,14 +3974,8 @@ def backup_full():
         telegram_ok, telegram_message = (
             _send_zip_telegram(data,fname,chat_id=selected_chat_id or None,))
 
-    if not telegram_ok:
-        current_app.logger.warning(
-            "Backup Telegram send failed: %s",
-            telegram_message,
-        )
-
-        if not ok:
-            current_app.logger.warning("Backup Telegram send failed: %s", msg)
+    if send_tg and telegram_ok is False:
+        current_app.logger.warning("Backup Telegram send failed: %s",telegram_message,)
 
     # -----------------------------
     # Admin log
@@ -4872,8 +5140,44 @@ def _wg_enable(peer):
 def _wg_disable(peer):
     dev = iface_devname(peer.iface)
     host_cidr = _host_peer(peer)
-    subprocess.run(['wg', 'set', dev, 'peer', peer.public_key, 'remove'],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    if not dev:
+        raise RuntimeError(
+            'Peer interface device name is missing.'
+        )
+
+    if not host_cidr:
+        raise RuntimeError(
+            'Peer WireGuard address is missing.'
+        )
+
+    result = subprocess.run(
+        [
+            'wg',
+            'set',
+            dev,
+            'peer',
+            peer.public_key,
+            'remove',
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=12,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        detail = (
+            result.stderr
+            or result.stdout
+            or 'WireGuard peer removal failed.'
+        ).strip()
+
+        raise RuntimeError(
+            f'Could not disable peer on {dev}: {detail}'
+        )
+
     _blackhole(host_cidr)
 
 def _blackhole(host_cidr):
@@ -7584,91 +7888,478 @@ def _wg_transfer_bytes(peer):
     return rx + tx
 
 
-@app.route('/api/nodes/<int:nid>/interfaces', methods=['GET', 'POST'])
+@app.route(
+    '/api/nodes/<int:nid>/interfaces',
+    methods=['GET', 'POST'],
+)
 @require_api_key_or_login
 def node_ifaces(nid):
-    n = Node.query.get_or_404(nid)
+    node = db.session.get(Node, nid)
+
+    if not node:
+        return jsonify(
+            ok=False,
+            error='node_not_found',
+            detail=f'Node {nid} was not found.',
+        ), 404
 
     if request.method == 'POST':
-        payload = request.get_json(silent=True) or {}
+        payload = request.get_json(
+            silent=True,
+        ) or {}
+
+        if not isinstance(payload, dict):
+            return jsonify(
+                ok=False,
+                error='invalid_payload',
+                detail='The request body must be a JSON object.',
+            ), 400
+
+        requested_name = str(
+            payload.get('name')
+            or payload.get('iface')
+            or ''
+        ).strip()
+
+        if not requested_name:
+            return jsonify(
+                ok=False,
+                error='interface_name_required',
+                detail='Interface name is required.',
+            ), 400
 
         try:
-            created = node_post(n, '/api/interfaces/create', payload, timeout=30)
-        except requests.HTTPError as e:
-            body = getattr(e.response, 'text', '') if getattr(e, 'response', None) else ''
-            code = getattr(getattr(e, 'response', None), 'status_code', None)
+            created = node_post(
+                node,
+                '/api/interfaces/create',
+                payload,
+                timeout=30,
+            )
+
+        except requests.HTTPError as exc:
+            response = getattr(
+                exc,
+                'response',
+                None,
+            )
+
+            status_code = getattr(
+                response,
+                'status_code',
+                None,
+            )
+
+            response_text = str(
+                getattr(
+                    response,
+                    'text',
+                    '',
+                )
+                or ''
+            ).strip()
+
+            current_app.logger.exception(
+                (
+                    'Node interface creation failed: '
+                    'node_id=%s interface=%s '
+                    'upstream_status=%s'
+                ),
+                nid,
+                requested_name,
+                status_code,
+            )
+
             return jsonify(
+                ok=False,
                 error='node_interface_create_failed',
-                detail=str(e),
-                status=code,
-                body=body[:800] if body else ''
+                detail=(
+                    response_text[:1200]
+                    or str(exc)
+                ),
+                node_id=nid,
+                node_name=node.name,
+                interface=requested_name,
+                upstream_status=status_code,
             ), 502
-        except Exception as e:
-            return jsonify(error='node_interface_create_failed', detail=str(e)), 502
+
+        except requests.RequestException as exc:
+            current_app.logger.exception(
+                (
+                    'Node interface creation connection failed: '
+                    'node_id=%s interface=%s'
+                ),
+                nid,
+                requested_name,
+            )
+
+            return jsonify(
+                ok=False,
+                error='node_unreachable',
+                detail=str(exc),
+                node_id=nid,
+                node_name=node.name,
+                interface=requested_name,
+            ), 502
+
+        except Exception as exc:
+            current_app.logger.exception(
+                (
+                    'Unexpected node interface creation failure: '
+                    'node_id=%s interface=%s'
+                ),
+                nid,
+                requested_name,
+            )
+
+            return jsonify(
+                ok=False,
+                error='node_interface_create_failed',
+                detail=str(exc),
+                node_id=nid,
+                node_name=node.name,
+                interface=requested_name,
+            ), 500
 
         created_iface = None
+
         if isinstance(created, dict):
-            created_iface = created.get('interface') or created.get('iface') or created
+            candidate = (
+                created.get('interface')
+                or created.get('iface')
+                or created
+            )
 
-        if isinstance(created_iface, dict):
-            iface_name = (created_iface.get('name') or payload.get('name') or '').strip()
-            if iface_name:
-                db_iface_name = f"n{nid}:{iface_name}"
-                iface = InterfaceConfig.query.filter_by(name=db_iface_name).first()
-                if not iface:
-                    iface = InterfaceConfig(
-                        name=db_iface_name,
-                        path=f"/etc/wireguard/{iface_name}.conf",
-                        address=created_iface.get('address') or payload.get('address') or '10.0.0.1/24',
-                        listen_port=int(created_iface.get('listen_port') or payload.get('listen_port') or 51820),
-                        private_key='(remote)',
-                        mtu=created_iface.get('mtu') or payload.get('mtu'),
-                        dns=created_iface.get('dns') or payload.get('dns'),
+            if isinstance(candidate, dict):
+                created_iface = candidate
+
+        if not isinstance(created_iface, dict):
+            created_iface = {}
+
+        iface_name = str(
+            created_iface.get('name')
+            or created_iface.get('iface')
+            or requested_name
+        ).strip()
+
+        if not iface_name:
+            return jsonify(
+                ok=False,
+                error='node_interface_create_invalid_response',
+                detail=(
+                    'The node reported success but did not return '
+                    'an interface name.'
+                ),
+                result=created,
+            ), 502
+
+        address = str(
+            created_iface.get('address')
+            or created_iface.get('server_cidr')
+            or payload.get('address')
+            or payload.get('server_cidr')
+            or '10.0.0.1/24'
+        ).strip()
+
+        try:
+            listen_port = int(
+                created_iface.get('listen_port')
+                or payload.get('listen_port')
+                or 51820
+            )
+        except (TypeError, ValueError):
+            listen_port = 51820
+
+        if not 1 <= listen_port <= 65535:
+            listen_port = 51820
+
+        mtu = (
+            created_iface.get('mtu')
+            if created_iface.get('mtu') not in (None, '')
+            else payload.get('mtu')
+        )
+
+        try:
+            mtu = (
+                int(mtu)
+                if mtu not in (None, '')
+                else None
+            )
+        except (TypeError, ValueError):
+            mtu = None
+
+        dns = str(
+            created_iface.get('dns')
+            or payload.get('dns')
+            or ''
+        ).strip() or None
+
+        db_iface_name = f'n{nid}:{iface_name}'
+
+        try:
+            iface = (
+                InterfaceConfig.query
+                .filter_by(
+                    name=db_iface_name,
+                )
+                .first()
+            )
+
+            if not iface:
+                iface = (
+                    InterfaceConfig.query
+                    .filter_by(
+                        node_id=node.id,
+                        name=iface_name,
                     )
-                    try:
-                        iface.node_id = n.id
-                    except Exception:
-                        pass
-                    db.session.add(iface)
-                    db.session.commit()
+                    .first()
+                )
 
-        return jsonify(created if isinstance(created, dict) else {"ok": True, "result": created}), 201
+            if not iface:
+                iface = InterfaceConfig(
+                    name=db_iface_name,
+                    path=f'/etc/wireguard/{iface_name}.conf',
+                    address=address,
+                    listen_port=listen_port,
+                    private_key='(remote)',
+                    mtu=mtu,
+                    dns=dns,
+                )
 
-    data = node_get(n,'/api/interfaces',timeout=15,) or {}
+                try:
+                    iface.node_id = node.id
+                except Exception:
+                    pass
+
+                db.session.add(iface)
+
+            else:
+                iface.name = db_iface_name
+                iface.path = (
+                    created_iface.get('path')
+                    or f'/etc/wireguard/{iface_name}.conf'
+                )
+                iface.address = address
+                iface.listen_port = listen_port
+                iface.mtu = mtu
+                iface.dns = dns
+
+                if not getattr(
+                    iface,
+                    'private_key',
+                    None,
+                ):
+                    iface.private_key = '(remote)'
+
+                try:
+                    iface.node_id = node.id
+                except Exception:
+                    pass
+
+            db.session.commit()
+
+        except Exception as exc:
+            db.session.rollback()
+
+            current_app.logger.exception(
+                (
+                    'Remote interface was created but local '
+                    'database synchronization failed: '
+                    'node_id=%s interface=%s'
+                ),
+                nid,
+                iface_name,
+            )
+
+            return jsonify(
+                ok=False,
+                error='node_interface_created_db_sync_failed',
+                detail=str(exc),
+                node_id=nid,
+                interface=iface_name,
+                remote_result=created,
+            ), 500
+
+        response_body = (
+            dict(created)
+            if isinstance(created, dict)
+            else {
+                'result': created,
+            }
+        )
+
+        response_body.update({
+            'ok': True,
+            'interface_name': iface_name,
+            'db_interface_name': db_iface_name,
+            'node_id': nid,
+        })
+
+        return jsonify(
+            response_body
+        ), 201
+
+    try:
+        data = node_get(
+            node,
+            '/api/interfaces',
+            timeout=15,
+        ) or {}
+
+    except requests.HTTPError as exc:
+        response = getattr(
+            exc,
+            'response',
+            None,
+        )
+
+        status_code = getattr(
+            response,
+            'status_code',
+            None,
+        )
+
+        response_text = str(
+            getattr(
+                response,
+                'text',
+                '',
+            )
+            or ''
+        ).strip()
+
+        current_app.logger.exception(
+            (
+                'Node interface list failed: '
+                'node_id=%s node=%s upstream_status=%s'
+            ),
+            nid,
+            node.name,
+            status_code,
+        )
+
+        return jsonify(
+            ok=False,
+            error='node_interfaces_failed',
+            detail=(
+                response_text[:1200]
+                or str(exc)
+            ),
+            node_id=nid,
+            node_name=node.name,
+            upstream_status=status_code,
+        ), 502
+
+    except requests.RequestException as exc:
+        current_app.logger.exception(
+            (
+                'Could not connect to node interface API: '
+                'node_id=%s node=%s'
+            ),
+            nid,
+            node.name,
+        )
+
+        return jsonify(
+            ok=False,
+            error='node_unreachable',
+            detail=str(exc),
+            node_id=nid,
+            node_name=node.name,
+        ), 502
+
+    except Exception as exc:
+        current_app.logger.exception(
+            (
+                'Unexpected node interface list failure: '
+                'node_id=%s node=%s'
+            ),
+            nid,
+            node.name,
+        )
+
+        return jsonify(
+            ok=False,
+            error='node_interfaces_failed',
+            detail=str(exc),
+            node_id=nid,
+            node_name=node.name,
+        ), 500
 
     if isinstance(data, dict):
-        base = data.get('interfaces') or []
-        node_scope_networks = (
-           data.get('scope_networks')
-           or []
+        base = (
+            data.get('interfaces')
+            or []
         )
-    else:
-        base = data or []
+
+        node_scope_networks = (
+            data.get('scope_networks')
+            or []
+        )
+
+        remote_public_ipv4 = str(
+            data.get('public_ipv4')
+            or ''
+        ).strip()
+
+    elif isinstance(data, list):
+        base = data
         node_scope_networks = []
+        remote_public_ipv4 = ''
+
+    else:
+        base = []
+        node_scope_networks = []
+        remote_public_ipv4 = ''
 
     if not isinstance(base, list):
+        current_app.logger.warning(
+            (
+                'Node interface API returned an invalid '
+                'interfaces value: node_id=%s type=%s'
+            ),
+            nid,
+            type(base).__name__,
+        )
+
         base = []
 
-    if not isinstance(node_scope_networks, list):
+    if not isinstance(
+        node_scope_networks,
+        list,
+    ):
         node_scope_networks = [
             value.strip()
             for value in str(
-                node_scope_networks or ''
+                node_scope_networks
+                or ''
             ).split(',')
             if value.strip()
         ]
 
-    out = []
+    node_scope_networks = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in node_scope_networks
+            if str(value).strip()
+        )
+    )
+
+    interfaces = []
 
     for raw_item in base:
-        if not isinstance(raw_item, dict):
+        if not isinstance(
+            raw_item,
+            dict,
+        ):
             continue
 
-        it = dict(raw_item)
+        item = dict(
+            raw_item
+        )
 
-        name = (
-            it.get('name')
-            or it.get('iface')
+        name = str(
+            item.get('name')
+            or item.get('iface')
             or ''
         ).strip()
 
@@ -7676,95 +8367,147 @@ def node_ifaces(nid):
             continue
 
         item_scope_networks = (
-            it.get('scope_networks')
+            item.get('scope_networks')
             or node_scope_networks
             or []
         )
 
-        if not isinstance(item_scope_networks, list):
+        if not isinstance(
+            item_scope_networks,
+            list,
+        ):
             item_scope_networks = [
                 value.strip()
                 for value in str(
-                    item_scope_networks or ''
+                    item_scope_networks
+                    or ''
                 ).split(',')
                 if value.strip()
             ]
 
         item_scope_networks = list(
-            dict.fromkeys(item_scope_networks)
+            dict.fromkeys(
+                str(value).strip()
+                for value in item_scope_networks
+                if str(value).strip()
+            )
         )
 
-        interface_address = (
-            it.get('address')
-            or it.get('server_cidr')
-            or it.get('interface_address')
+        interface_address = str(
+            item.get('address')
+            or item.get('server_cidr')
+            or item.get('interface_address')
             or ''
         ).strip()
 
-        it['name'] = name
-        it['address'] = interface_address
-        it['server_cidr'] = interface_address
-        it['scope_networks'] = item_scope_networks
+        item.update({
+            'name': name,
+            'iface': name,
+            'address': interface_address,
+            'server_cidr': interface_address,
+            'scope_networks': item_scope_networks,
+        })
 
         try:
-            j = node_get(
-                n,
-                f'/api/iface/{name}/available_ips',
+            available_result = node_get(
+                node,
+                (
+                    f'/api/iface/'
+                    f'{name}/available_ips'
+                ),
                 timeout=8,
             ) or {}
 
-            it['available_ips'] = (
-                j.get('available_ips', [])
-                if isinstance(j, dict)
+            if isinstance(
+                available_result,
+                dict,
+            ):
+                available_ips = (
+                    available_result.get(
+                        'available_ips',
+                        [],
+                    )
+                    or []
+                )
+            else:
+                available_ips = []
+
+            item['available_ips'] = (
+                available_ips
+                if isinstance(
+                    available_ips,
+                    list,
+                )
                 else []
-            ) or []
+            )
 
-        except Exception:
-            it['available_ips'] = []
+        except Exception as exc:
+            current_app.logger.debug(
+                (
+                    'Could not load available IPs for '
+                    'node_id=%s interface=%s: %s'
+                ),
+                nid,
+                name,
+                exc,
+            )
 
-        out.append(it)
+            item['available_ips'] = []
 
-    pub = ''
-
-    try:
-        parsed_node_url = urlparse(
-            (
-                getattr(n, 'base_url', '')
-                or ''
-            ).strip()
+        interfaces.append(
+            item
         )
 
-        pub = str(
-            parsed_node_url.hostname
-            or ''
-        ).strip()
+    public_ipv4 = remote_public_ipv4
 
-    except Exception:
-        pub = ''
-
-    if not pub:
+    if not public_ipv4:
         try:
-            h = node_get(
-                n,
+            health = node_get(
+                node,
                 '/api/health',
                 timeout=6,
             ) or {}
 
-            if isinstance(h, dict):
-                pub = str(
-                    h.get('public_ipv4')
+            if isinstance(
+                health,
+                dict,
+            ):
+                public_ipv4 = str(
+                    health.get('public_ipv4')
                     or ''
                 ).strip()
 
         except Exception:
-            pub = ''
+            public_ipv4 = ''
+
+    if not public_ipv4:
+        try:
+            parsed_node_url = urlparse(
+                str(
+                    getattr(
+                        node,
+                        'base_url',
+                        '',
+                    )
+                    or ''
+                ).strip()
+            )
+
+            public_ipv4 = str(
+                parsed_node_url.hostname
+                or ''
+            ).strip()
+
+        except Exception:
+            public_ipv4 = ''
 
     return jsonify(
-    interfaces=out,
-    public_ipv4=pub,
-    scope_networks=list(
-        dict.fromkeys(node_scope_networks)
-    ),
+        ok=True,
+        node_id=nid,
+        node_name=node.name,
+        interfaces=interfaces,
+        public_ipv4=public_ipv4,
+        scope_networks=node_scope_networks,
     )
 
 @app.route('/api/nodes/<int:nid>/iface/<name>/available_ips')
@@ -7927,8 +8670,394 @@ def node_iface_delete(nid, name):
 def iface_settings(iid):
     iface = db.session.get(InterfaceConfig, iid) or abort(404)
 
+    if (
+        getattr(iface, 'node_id', None) is not None
+        or ':' in (getattr(iface, 'name', '') or '')
+    ):
+        return jsonify(
+            ok=False,
+            error='remote_interface',
+            detail=(
+                'This interface belongs to a remote node. '
+                'Use the node interface API instead.'
+            ),
+        ), 400
+
+    dev = iface_devname(iface)
+
     if request.method == 'GET':
-        return jsonify({
+        return jsonify(
+            ok=True,
+            id=iface.id,
+            name=iface.name,
+            path=iface.path,
+            address=iface.address,
+            listen_port=iface.listen_port,
+            dns=iface.dns,
+            mtu=iface.mtu,
+            is_up=_iface_up(dev),
+        )
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify(
+            ok=False,
+            error='invalid_payload',
+            detail='The request body must be a JSON object.',
+        ), 400
+
+    def optional_int(value, field, minimum, maximum):
+
+        if value is None:
+            return None
+
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f'{field} must be an integer between '
+                f'{minimum} and {maximum}.'
+            )
+
+        if not minimum <= number <= maximum:
+            raise ValueError(
+                f'{field} must be between {minimum} and {maximum}.'
+            )
+
+        return number
+
+    try:
+        updates = {}
+
+        if 'dns' in data:
+            dns_value = data.get('dns')
+            updates['dns'] = (
+                str(dns_value).strip()
+                if dns_value not in (None, '')
+                else None
+            )
+
+        if 'mtu' in data:
+            updates['mtu'] = optional_int(
+                data.get('mtu'),
+                'MTU',
+                576,
+                9000,
+            )
+
+        if 'listen_port' in data:
+            listen_port = optional_int(
+                data.get('listen_port'),
+                'Listen port',
+                1,
+                65535,
+            )
+
+            if listen_port is None:
+                return jsonify(
+                    ok=False,
+                    error='listen_port_required',
+                    detail='Listen port cannot be empty.',
+                ), 400
+
+            updates['listen_port'] = listen_port
+
+    except ValueError as exc:
+        return jsonify(
+            ok=False,
+            error='invalid_interface_setting',
+            detail=str(exc),
+        ), 400
+
+    if not updates:
+        return jsonify(
+            ok=True,
+            changed=False,
+            message='No interface settings changed.',
+            interface={
+                'id': iface.id,
+                'name': iface.name,
+                'listen_port': iface.listen_port,
+                'dns': iface.dns,
+                'mtu': iface.mtu,
+                'is_up': _iface_up(dev),
+            },
+        )
+
+    is_up = _iface_up(dev)
+
+    if is_up and 'listen_port' in updates:
+        result = subprocess.run(
+            [
+                'wg',
+                'set',
+                dev,
+                'listen-port',
+                str(updates['listen_port']),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=12,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            detail = (
+                result.stderr
+                or result.stdout
+                or 'wg set listen-port failed.'
+            ).strip()
+
+            _iface_log(
+                iid,
+                f'Failed to set ListenPort on {dev}: {detail}',
+            )
+
+            return jsonify(
+                ok=False,
+                error='wg_set_listen_port_failed',
+                detail=detail,
+                interface=dev,
+                is_up=True,
+            ), 409
+
+    if is_up and 'mtu' in updates and updates['mtu'] is not None:
+        result = subprocess.run(
+            [
+                'ip',
+                'link',
+                'set',
+                'dev',
+                dev,
+                'mtu',
+                str(updates['mtu']),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=12,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            detail = (
+                result.stderr
+                or result.stdout
+                or 'ip link set MTU failed.'
+            ).strip()
+
+            _iface_log(
+                iid,
+                f'Failed to set MTU on {dev}: {detail}',
+            )
+
+            return jsonify(
+                ok=False,
+                error='ip_set_mtu_failed',
+                detail=detail,
+                interface=dev,
+                is_up=True,
+            ), 409
+
+    old_values = {
+        key: getattr(iface, key, None)
+        for key in updates
+    }
+
+    try:
+        for key, value in updates.items():
+            setattr(iface, key, value)
+
+        db.session.flush()
+
+        conf_path = Path(iface.path) if iface.path else None
+
+        if conf_path and conf_path.is_file():
+            original = conf_path.read_text(
+                encoding='utf-8',
+                errors='replace',
+            )
+
+            lines = original.splitlines(keepends=True)
+            output = []
+            in_interface = False
+            found_interface = False
+
+            managed_keys = {
+                'dns': 'DNS',
+                'mtu': 'MTU',
+                'listenport': 'ListenPort',
+            }
+
+            for raw in lines:
+                stripped = raw.strip()
+
+                if stripped.startswith('[') and stripped.endswith(']'):
+                    if in_interface:
+                        if 'dns' in updates and updates['dns']:
+                            output.append(f"DNS = {updates['dns']}\n")
+                        if 'mtu' in updates and updates['mtu'] is not None:
+                            output.append(f"MTU = {updates['mtu']}\n")
+                        if 'listen_port' in updates:
+                            output.append(
+                                f"ListenPort = {updates['listen_port']}\n"
+                            )
+
+                    in_interface = (
+                        stripped[1:-1].strip().lower()
+                        == 'interface'
+                    )
+                    found_interface = found_interface or in_interface
+                    output.append(raw)
+                    continue
+
+                if in_interface and '=' in stripped:
+                    key = stripped.split('=', 1)[0].strip().lower()
+
+                    remove = (
+                        (key == 'dns' and 'dns' in updates)
+                        or (key == 'mtu' and 'mtu' in updates)
+                        or (
+                            key == 'listenport'
+                            and 'listen_port' in updates
+                        )
+                    )
+
+                    if remove:
+                        continue
+
+                output.append(raw)
+
+            if in_interface:
+                if 'dns' in updates and updates['dns']:
+                    output.append(f"DNS = {updates['dns']}\n")
+                if 'mtu' in updates and updates['mtu'] is not None:
+                    output.append(f"MTU = {updates['mtu']}\n")
+                if 'listen_port' in updates:
+                    output.append(
+                        f"ListenPort = {updates['listen_port']}\n"
+                    )
+
+            if not found_interface:
+                raise RuntimeError(
+                    f'{conf_path} does not contain an [Interface] section.'
+                )
+
+            new_text = ''.join(output)
+
+            fd, temp_name = tempfile.mkstemp(
+                prefix=f'.{conf_path.name}.',
+                dir=str(conf_path.parent),
+                text=True,
+            )
+
+            try:
+                with os.fdopen(
+                    fd,
+                    'w',
+                    encoding='utf-8',
+                ) as handle:
+                    handle.write(new_text)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+
+                os.chmod(temp_name, 0o600)
+                os.replace(temp_name, conf_path)
+
+            finally:
+                try:
+                    if os.path.exists(temp_name):
+                        os.unlink(temp_name)
+                except OSError:
+                    pass
+
+        db.session.commit()
+
+    except Exception as exc:
+        db.session.rollback()
+
+        try:
+            if is_up and 'listen_port' in old_values:
+                old_port = old_values.get('listen_port')
+                if old_port:
+                    subprocess.run(
+                        [
+                            'wg',
+                            'set',
+                            dev,
+                            'listen-port',
+                            str(old_port),
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=8,
+                        check=False,
+                    )
+
+            if is_up and 'mtu' in old_values:
+                old_mtu = old_values.get('mtu')
+                if old_mtu:
+                    subprocess.run(
+                        [
+                            'ip',
+                            'link',
+                            'set',
+                            'dev',
+                            dev,
+                            'mtu',
+                            str(old_mtu),
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=8,
+                        check=False,
+                    )
+        except Exception:
+            pass
+
+        current_app.logger.exception(
+            'Failed to save interface settings: '
+            'interface_id=%s device=%s',
+            iid,
+            dev,
+        )
+
+        _iface_log(
+            iid,
+            f'Interface settings save failed: {exc}',
+        )
+
+        return jsonify(
+            ok=False,
+            error='interface_save_failed',
+            detail=str(exc),
+            interface=dev,
+            is_up=_iface_up(dev),
+        ), 500
+
+    _iface_log(
+        iid,
+        (
+            'Interface settings saved: '
+            + ', '.join(
+                f'{key}={value!r}'
+                for key, value in updates.items()
+            )
+        ),
+    )
+
+    return jsonify(
+        ok=True,
+        changed=True,
+        message='Interface settings saved.',
+        interface={
             'id': iface.id,
             'name': iface.name,
             'path': iface.path,
@@ -7936,116 +9065,267 @@ def iface_settings(iid):
             'listen_port': iface.listen_port,
             'dns': iface.dns,
             'mtu': iface.mtu,
-            'is_up': _iface_up(iface_devname(iface)),
-        })
+            'is_up': _iface_up(dev),
+        },
+    )
 
-    data = request.get_json(silent=True) or {}
-    to_update = {}
-    if 'dns' in data:        to_update['dns'] = (data['dns'] or '').strip() or None
-    if 'mtu' in data:        to_update['mtu'] = int(data['mtu']) if str(data['mtu']).strip() else None
-    if 'listen_port' in data:
-        try:
-            to_update['listen_port'] = int(data['listen_port'])
-        except Exception:
-            return jsonify(error='invalid_listen_port'), 400
-
-    dev = iface_devname(iface)
-    if 'listen_port' in to_update and _iface_up(dev):
-        try:
-            subprocess.check_call(['wg', 'set', dev, 'listen-port', str(to_update['listen_port'])],
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception as e:
-            return jsonify(error='wg_set_listen_port_failed', detail=str(e)), 500
-
-    if 'mtu' in to_update and to_update['mtu'] and _iface_up(dev):
-        subprocess.run(['ip', 'link', 'set', 'dev', dev, 'mtu', str(to_update['mtu'])],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-
-    for k, v in to_update.items():
-        setattr(iface, k, v)
-    db.session.commit()
-
-    try:
-        if iface.path and os.path.isfile(iface.path):
-            with open(iface.path, 'r') as f:
-                lines = f.readlines()
-            out, in_if = [], False
-            for raw in lines:
-                s = raw.strip()
-                if s.startswith('[') and s.endswith(']'):
-                    in_if = (s[1:-1].lower() == 'interface')
-                    out.append(raw); continue
-                if in_if and '=' in s:
-                    k = s.split('=',1)[0].strip().lower()
-                    if k in ('dns','mtu','listenport'):
-                        continue
-                out.append(raw)
-
-            def _inject_after_interface(out_lines):
-                injected = []
-                i = 0
-                while i < len(out_lines):
-                    injected.append(out_lines[i])
-                    if out_lines[i].strip().lower() == '[interface]':
-
-                        if 'dns' in to_update:
-                            injected.append(f"DNS = {to_update['dns']}\n" if to_update['dns'] else "")
-                        if 'mtu' in to_update and to_update['mtu']:
-                            injected.append(f"MTU = {to_update['mtu']}\n")
-                        if 'listen_port' in to_update and to_update['listen_port']:
-                            injected.append(f"ListenPort = {to_update['listen_port']}\n")
-                    i += 1
-                return [x for x in injected if x != ""]
-            out = _inject_after_interface(out)
-            with open(iface.path, 'w') as f:
-                f.writelines(out)
-    except Exception as e:
-        current_app.logger.warning("Failed to persist iface edits to file: %s", e)
-
-    return jsonify(ok=True)
 
 @app.post('/api/iface/<int:iid>/<action>')
 @login_required
 def iface_updown(iid, action):
-    iface = db.session.get(InterfaceConfig, iid) or abort(404)
-    dev = iface_devname(iface)
+    iface = (
+        db.session.get(
+            InterfaceConfig,
+            iid,
+        )
+        or abort(404)
+    )
 
     if action not in ('up', 'down'):
-        return jsonify(ok=False, error='invalid_action'), 400
+        return jsonify(
+            ok=False,
+            error='invalid_action',
+            detail='Action must be up or down.',
+        ), 400
 
-    cmd = ['wg-quick', action, dev]
+    if (
+        getattr(
+            iface,
+            'node_id',
+            None,
+        )
+        is not None
+        or ':' in (
+            getattr(
+                iface,
+                'name',
+                '',
+            )
+            or ''
+        )
+    ):
+        return jsonify(
+            ok=False,
+            error='remote_interface',
+            detail=(
+                'This interface belongs to a node. '
+                'Use the node interface endpoint.'
+            ),
+        ), 400
+
+    dev = iface_devname(
+        iface
+    )
+
     try:
-        out = subprocess.run(
-            cmd,
+        if action == 'up':
+
+            _check_iface_up(
+                iface
+            )
+
+            is_up = _iface_up(
+                dev
+            )
+
+            if not is_up:
+                raise RuntimeError(
+                    f'Interface {dev} did not become active.'
+                )
+
+            try:
+                subprocess.run(
+                    [
+                        'systemctl',
+                        'enable',
+                        f'wg-quick@{dev}.service',
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                    check=False,
+                )
+            except Exception:
+                current_app.logger.warning(
+                    'Could not enable wg-quick@%s at boot',
+                    dev,
+                    exc_info=True,
+                )
+
+            _iface_log(
+                iid,
+                (
+                    f'Interface {dev} brought up '
+                    'from Settings.'
+                ),
+            )
+
+            return jsonify(
+                ok=True,
+                action='up',
+                name=dev,
+                is_up=True,
+                message=(
+                    f'Interface {dev} is active.'
+                ),
+            )
+
+        if not _iface_up(dev):
+            return jsonify(
+                ok=True,
+                action='down',
+                name=dev,
+                is_up=False,
+                message=(
+                    f'Interface {dev} is already down.'
+                ),
+            )
+
+        proc = subprocess.run(
+            [
+                'wg-quick',
+                'down',
+                dev,
+            ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            timeout=20.0,
-            check=True
+            text=True,
+            timeout=20,
+            check=False,
         )
-        text = out.stdout.decode(errors='ignore')
-        _iface_log(iid, f"$ {' '.join(cmd)}\n{text}")
-        return jsonify(ok=True, is_up=_iface_up(dev))
-    except subprocess.CalledProcessError as e:
-        buf = b''
-        if getattr(e, 'stdout', None): buf += e.stdout
-        if getattr(e, 'stderr', None): buf += e.stderr
-        text = (buf or b'').decode(errors='ignore') or str(e)
-        _iface_log(iid, f"$ {' '.join(cmd)}\n{text}")
-        return jsonify(
-            ok=False,
-            error='wg_quick_failed',
-            detail=text,
-            is_up=_iface_up(dev)
-        ), 500
-    except Exception as e:
-        _iface_log(iid, f"$ {' '.join(cmd)}\n{str(e)}")
-        return jsonify(
-            ok=False,
-            error='exception',
-            detail=str(e),
-            is_up=_iface_up(dev)
-        ), 500
 
+        output = (
+            proc.stdout
+            or ''
+        ).strip()
+
+        _iface_log(
+            iid,
+            (
+                f'$ wg-quick down {dev}\n'
+                f'{output}'
+            ).rstrip(),
+        )
+
+        is_up = _iface_up(
+            dev
+        )
+
+        if (
+            proc.returncode != 0
+            and is_up
+        ):
+            return jsonify(
+                ok=False,
+                error='wg_quick_down_failed',
+                detail=(
+                    output
+                    or f'wg-quick down {dev} failed.'
+                ),
+                is_up=True,
+            ), 409
+
+        try:
+            subprocess.run(
+                [
+                    'systemctl',
+                    'disable',
+                    f'wg-quick@{dev}.service',
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+                check=False,
+            )
+        except Exception:
+            current_app.logger.warning(
+                'Could not disable wg-quick@%s at boot',
+                dev,
+                exc_info=True,
+            )
+
+        return jsonify(
+            ok=True,
+            action='down',
+            name=dev,
+            is_up=False,
+            message=(
+                f'Interface {dev} is down.'
+            ),
+        )
+
+    except subprocess.TimeoutExpired as exc:
+        current_app.logger.exception(
+            'Interface %s timed out: %s',
+            action,
+            dev,
+        )
+
+        _iface_log(
+            iid,
+            (
+                f'Interface {action} timed out: '
+                f'{exc}'
+            ),
+        )
+
+        return jsonify(
+            ok=False,
+            error='interface_command_timeout',
+            detail=str(exc),
+            name=dev,
+            is_up=_iface_up(dev),
+        ), 504
+
+    except RuntimeError as exc:
+        current_app.logger.exception(
+            'Interface %s failed for %s',
+            action,
+            dev,
+        )
+
+        _iface_log(
+            iid,
+            (
+                f'Interface {action} failed: '
+                f'{exc}'
+            ),
+        )
+
+        return jsonify(
+            ok=False,
+            error=f'interface_{action}_failed',
+            detail=str(exc),
+            name=dev,
+            is_up=_iface_up(dev),
+            hint=(
+                'Open Interface Logs for the complete '
+                'wg-quick and manual recovery output.'
+            ),
+        ), 409
+
+    except Exception as exc:
+        current_app.logger.exception(
+            'Unexpected interface %s failure for %s',
+            action,
+            dev,
+        )
+
+        _iface_log(
+            iid,
+            (
+                f'Unexpected interface {action} error: '
+                f'{exc}'
+            ),
+        )
+
+        return jsonify(
+            ok=False,
+            error='interface_action_failed',
+            detail=str(exc),
+            name=dev,
+            is_up=_iface_up(dev),
+        ), 500
 
 @app.route('/api/nodes/<int:nid>/peers', methods=['GET', 'POST'])
 @admin_required
@@ -8577,7 +9857,7 @@ def node_reset_peer_data_only(nid, pub):
     Reset node peer traffic counters only
     """
     n = Node.query.get_or_404(nid)
-    p = _node_peer_db_row(nid, pub) or abort(404)
+    p = _node_peer_by_publickey(nid,pub,)
 
     current = _node_peer_live_total_bytes(n, p)
 
@@ -8602,7 +9882,7 @@ def node_reset_peer_timer_only(nid, pub):
     Reset node peer timer and re-enable
     """
     n = Node.query.get_or_404(nid)
-    p = _node_peer_db_row(nid, pub) or abort(404)
+    p = _node_peer_by_publickey(nid,pub,)
 
     tl_days = getattr(p, 'time_limit_days', None)
     try:
@@ -12576,10 +13856,26 @@ def _block_subscription_runtime(sub, reason='subscription_blocked'):
     return changed
 
 def _subscription_row(sub):
-    used = _sub_used_bytes(sub)
 
+    used = int(
+        _sub_used_bytes(sub)
+        or 0
+    )
+
+    unlimited = bool(
+        getattr(
+            sub,
+            'unlimited',
+            False,
+        )
+    )
+
+    subscription_changed = False
     linked_first_use = []
 
+    # ----------------------------
+    # subscription start time
+    # ----------------------------
     for link in (
         getattr(
             sub,
@@ -12594,42 +13890,68 @@ def _subscription_row(sub):
             None,
         )
 
+        if not peer:
+            continue
+
         peer_first_used = getattr(
             peer,
             'first_used_at',
             None,
-        ) if peer else None
+        )
 
         if peer_first_used:
             linked_first_use.append(
                 peer_first_used
             )
 
+    current_first_used = getattr(
+        sub,
+        'first_used_at',
+        None,
+    )
+
     if (
-        not getattr(
-            sub,
-            'first_used_at',
-            None,
-        )
+        not current_first_used
         and linked_first_use
     ):
         sub.first_used_at = min(
             linked_first_use
         )
 
-    if (
-        not getattr(
-            sub,
-            'first_used_at',
-            None,
+        current_first_used = (
+            sub.first_used_at
         )
+
+        subscription_changed = True
+
+    if (
+        not current_first_used
         and used > 0
     ):
         sub.first_used_at = from_ts(
             now_ts()
         )
 
-        _apply_subscription_timer(sub)
+        current_first_used = (
+            sub.first_used_at
+        )
+
+        subscription_changed = True
+
+    # ---------------------------------------------------------
+    # Timer handling
+    # ---------------------------------------------------------
+    if subscription_changed:
+        if unlimited:
+            try:
+                sub.expires_at = None
+            except Exception:
+                pass
+
+        else:
+            _apply_subscription_timer(
+                sub
+            )
 
         _sync_all_subscription_peers(
             sub,
@@ -12638,43 +13960,267 @@ def _subscription_row(sub):
 
         try:
             db.session.commit()
+
         except Exception:
             db.session.rollback()
-            current_app.logger.exception(
-                "Failed to save subscription first-use date "
-                "for subscription_id=%s",
-                getattr(sub, 'id', '?'),
-            )
-    limit = _sub_limit_bytes(sub)
-    remaining = None if limit is None else max(0, int(limit) - int(used))
-    expired = _subscription_time_expired(sub)
 
-    if limit and used >= limit:
-        _block_subscription_runtime(sub, 'subscription_limit_reached')
+            current_app.logger.exception(
+                (
+                    'Failed to save subscription first-use date '
+                    'for subscription_id=%s'
+                ),
+                getattr(
+                    sub,
+                    'id',
+                    '?',
+                ),
+            )
+
+    # ---------------------------------------------------------
+    # Shared data and timer state
+    # ---------------------------------------------------------
+    limit = _sub_limit_bytes(
+        sub
+    )
+
+    remaining = (
+        None
+        if limit is None
+        else max(
+            0,
+            int(limit) - used,
+        )
+    )
+
+    expired = (
+        False
+        if unlimited
+        else _subscription_time_expired(
+            sub
+        )
+    )
+
+    if (
+        limit
+        and used >= int(limit)
+    ):
+        _block_subscription_runtime(
+            sub,
+            'subscription_limit_reached',
+        )
+
     elif expired:
-        _block_subscription_runtime(sub, 'subscription_expired')
+        _block_subscription_runtime(
+            sub,
+            'subscription_expired',
+        )
+
+    # ---------------------------------------------------------
+    # Attached locations/configs
+    # ---------------------------------------------------------
     locs = []
-    for link in sorted(list(getattr(sub, 'links', []) or []), key=lambda l: (l.sort_order or 0, l.id or 0)):
-        peer = link.peer
+
+    links = sorted(
+        list(
+            getattr(
+                sub,
+                'links',
+                [],
+            )
+            or []
+        ),
+        key=lambda link: (
+            getattr(
+                link,
+                'sort_order',
+                0,
+            )
+            or 0,
+            getattr(
+                link,
+                'id',
+                0,
+            )
+            or 0,
+        ),
+    )
+
+    runtime_counts = {
+        'total': 0,
+        'enabled': 0,
+        'disabled': 0,
+        'blocked': 0,
+    }
+
+    for link in links:
+        peer = getattr(
+            link,
+            'peer',
+            None,
+        )
+
         if not peer:
             continue
-        iface = peer.iface
-        raw_name = iface.name if iface else ''
-        node_id = getattr(iface, 'node_id', None) if iface else None
+
+        iface = getattr(
+            peer,
+            'iface',
+            None,
+        )
+
+        raw_name = (
+            getattr(
+                iface,
+                'name',
+                '',
+            )
+            or ''
+        )
+
+        node_id = (
+            getattr(
+                iface,
+                'node_id',
+                None,
+            )
+            if iface
+            else None
+        )
+
+        is_legacy_node_name = bool(
+            raw_name.startswith('n')
+            and ':' in raw_name
+        )
+
+        scope = (
+            'node'
+            if (
+                node_id is not None
+                or is_legacy_node_name
+            )
+            else 'local'
+        )
+
+        interface_name = (
+            raw_name.split(
+                ':',
+                1,
+            )[1]
+            if is_legacy_node_name
+            else raw_name
+        )
+
+        peer_status = str(
+            getattr(
+                peer,
+                'status',
+                None,
+            )
+            or 'offline'
+        ).lower()
+
+        runtime_counts['total'] += 1
+
+        if peer_status == 'blocked':
+            runtime_counts['blocked'] += 1
+
+        elif peer_status == 'online':
+            runtime_counts['enabled'] += 1
+
+        else:
+            runtime_counts['disabled'] += 1
+
+        peer_first_used = getattr(
+            peer,
+            'first_used_at',
+            None,
+        )
+
+        node = (
+            getattr(
+                iface,
+                'node',
+                None,
+            )
+            if iface
+            else None
+        )
+
         locs.append({
-            'link_id': link.id,
-            'peer_id': peer.id,
-            'scope': 'node' if node_id is not None or raw_name.startswith('n') and ':' in raw_name else 'local',
+            'link_id': getattr(
+                link,
+                'id',
+                None,
+            ),
+
+            'peer_id': getattr(
+                peer,
+                'id',
+                None,
+            ),
+
+            'scope': scope,
             'node_id': node_id,
-            'node_name': (getattr(iface.node, 'name', '') if getattr(iface, 'node', None) else ''),
-            'iface': raw_name.split(':', 1)[1] if raw_name.startswith('n') and ':' in raw_name else raw_name,
-            'name': peer.name,
-            'address': peer.address,
-            'endpoint': peer.endpoint or '',
-            'allowed_ips': peer.allowed_ips or '',
-            'dns': peer.dns or '',
-            'status': peer.status or 'offline',
-                        'used_bytes': int(
+
+            'node_name': (
+                getattr(
+                    node,
+                    'name',
+                    '',
+                )
+                or ''
+            ),
+
+            'iface': interface_name,
+
+            'name': (
+                getattr(
+                    peer,
+                    'name',
+                    '',
+                )
+                or ''
+            ),
+
+            'address': (
+                getattr(
+                    peer,
+                    'address',
+                    '',
+                )
+                or ''
+            ),
+
+            'endpoint': (
+                getattr(
+                    peer,
+                    'endpoint',
+                    '',
+                )
+                or ''
+            ),
+
+            'allowed_ips': (
+                getattr(
+                    peer,
+                    'allowed_ips',
+                    '',
+                )
+                or ''
+            ),
+
+            'dns': (
+                getattr(
+                    peer,
+                    'dns',
+                    '',
+                )
+                or ''
+            ),
+
+            'status': peer_status,
+
+            'used_bytes': int(
                 getattr(
                     peer,
                     'used_bytes_total',
@@ -12684,51 +14230,195 @@ def _subscription_row(sub):
             ),
 
             'first_used_at': isoz(
-                getattr(
-                    peer,
-                    'first_used_at',
-                    None,
-                )
+                peer_first_used
             ),
 
             'first_used_at_ts': to_ts(
-                getattr(
-                    peer,
-                    'first_used_at',
-                    None,
-                )
+                peer_first_used
             ),
 
-            'location_label':
-                link.location_label
-                or '',
-            'country_code': link.country_code or '',
-            'flag': link.flag or '',
+            'location_label': (
+                getattr(
+                    link,
+                    'location_label',
+                    '',
+                )
+                or ''
+            ),
+
+            'country_code': (
+                getattr(
+                    link,
+                    'country_code',
+                    '',
+                )
+                or ''
+            ),
+
+            'flag': (
+                getattr(
+                    link,
+                    'flag',
+                    '',
+                )
+                or ''
+            ),
         })
+
+    # ---------------------------------------------------------
+    # Final API row
+    # ---------------------------------------------------------
+    first_used_at = getattr(
+        sub,
+        'first_used_at',
+        None,
+    )
+
+    created_at = getattr(
+        sub,
+        'created_at',
+        None,
+    )
+
+    expires_at = (
+        None
+        if unlimited
+        else getattr(
+            sub,
+            'expires_at',
+            None,
+        )
+    )
+
+    ttl_seconds = (
+        None
+        if unlimited
+        else _sub_ttl_seconds(
+            sub
+        )
+    )
+
     return {
         'id': sub.id,
         'name': sub.name,
         'token': sub.token,
         'note': sub.note or '',
-        'data_limit_value': int(getattr(sub, 'data_limit_value', 0) or 0),
-        'data_limit_unit': getattr(sub, 'data_limit_unit', None) or 'Gi',
+
+        'data_limit_value': int(
+            getattr(
+                sub,
+                'data_limit_value',
+                0,
+            )
+            or 0
+        ),
+
+        'data_limit_unit': (
+            getattr(
+                sub,
+                'data_limit_unit',
+                None,
+            )
+            or 'Gi'
+        ),
+
         'limit_bytes': limit,
         'used_bytes': used,
         'remaining_bytes': remaining,
-        'usage_pct': (round((used / limit) * 100, 2) if limit else 0),
-        'time_limit_days': _sub_float(getattr(sub, 'time_limit_days', 0)),
-        'ttl_seconds': _sub_ttl_seconds(sub),'start_on_first_use': bool(getattr(sub,'start_on_first_use',False,)),
-        'created_at': isoz(getattr(sub,'created_at',None,)),
-        'created_at_ts': to_ts(getattr(sub,'created_at',None,)),
-        'first_used_at': isoz(getattr(sub,'first_used_at',None,)),
-        'first_used_at_ts': to_ts(getattr(sub,'first_used_at',None,)),
-        'expires_at': isoz(getattr(sub,'expires_at',None,)),
-        'unlimited': bool(getattr(sub, 'unlimited', False)),
-        'phone_number': getattr(sub, 'phone_number', '') or '',
-        'telegram_id': getattr(sub, 'telegram_id', '') or '',
-        'enabled': bool(getattr(sub, 'enabled', True)),
-        'public_url': _sub_public_url(sub),
-        'config_url': _sub_config_url(sub),
+
+        'usage_pct': (
+            round(
+                (
+                    used
+                    / int(limit)
+                )
+                * 100,
+                2,
+            )
+            if limit
+            else 0
+        ),
+
+        'time_limit_days': _sub_float(
+            getattr(
+                sub,
+                'time_limit_days',
+                0,
+            )
+        ),
+
+        'ttl_seconds': ttl_seconds,
+
+        'start_on_first_use': bool(
+            getattr(
+                sub,
+                'start_on_first_use',
+                False,
+            )
+        ),
+
+        'created_at': isoz(
+            created_at
+        ),
+
+        'created_at_ts': to_ts(
+            created_at
+        ),
+
+        'first_used_at': isoz(
+            first_used_at
+        ),
+
+        'first_used_at_ts': to_ts(
+            first_used_at
+        ),
+
+        'expires_at': isoz(
+            expires_at
+        ),
+
+        'expires_at_ts': to_ts(
+            expires_at
+        ),
+
+        'unlimited': unlimited,
+
+        'phone_number': (
+            getattr(
+                sub,
+                'phone_number',
+                '',
+            )
+            or ''
+        ),
+
+        'telegram_id': (
+            getattr(
+                sub,
+                'telegram_id',
+                '',
+            )
+            or ''
+        ),
+
+        'enabled': bool(
+            getattr(
+                sub,
+                'enabled',
+                True,
+            )
+        ),
+
+        'runtime_counts': runtime_counts,
+
+        'public_url': _sub_public_url(
+            sub
+        ),
+
+        'config_url': _sub_config_url(
+            sub
+        ),
+
         'locations': locs,
     }
 
@@ -12939,64 +14629,415 @@ def _update_subscription_payload(sub, data, reset_timer=False):
     _sync_all_subscription_peers(sub, rename=True)
 
 def _reset_subscription_data(sub):
+
+    result = {
+        'reset_peers': 0,
+        'reactivated': 0,
+        'still_blocked': 0,
+        'enable_failed': 0,
+        'errors': [],
+    }
+
+    timer_expired = _subscription_time_expired(sub)
+
     for link in list(getattr(sub, 'links', []) or []):
-        peer = link.peer
+        peer = getattr(link, 'peer', None)
+
         if not peer:
             continue
+
+        result['reset_peers'] += 1
+
         try:
             if getattr(peer.iface, 'node_id', None) is not None:
-                try:
-                    node_post(peer.iface.node, f'/api/peer/{peer.public_key}/reset_data', {})
-                except Exception:
-                    pass
-                peer.bytes_offset = 0
+                node = peer.iface.node
+
+                response = node_post(
+                    node,
+                    f'/api/peer/{peer.public_key}/reset_data',
+                    {},
+                    timeout=12,
+                ) or {}
+
+                if not isinstance(response, dict):
+                    raise RuntimeError(
+                        'Node returned an invalid reset-data response'
+                    )
+
+                if response.get('ok') is False:
+                    raise RuntimeError(
+                        response.get('detail')
+                        or response.get('error')
+                        or 'Node reset-data request failed'
+                    )
+
+                current_total = response.get('total_bytes')
+
+                if current_total is None:
+                    rx_bytes = int(response.get('rx_bytes') or 0)
+                    tx_bytes = int(response.get('tx_bytes') or 0)
+                    current_total = rx_bytes + tx_bytes
+
+                peer.bytes_offset = max(0, int(current_total or 0))
+
             else:
-                peer.bytes_offset = _wg_transfer(peer)
-        except Exception:
-            peer.bytes_offset = 0
-        peer.used_bytes_total = 0
-        if peer.status == 'blocked' and not _subscription_time_expired(sub):
-            _enable_subscription_peer_runtime(peer)
+                peer.bytes_offset = max(
+                    0,
+                    int(_wg_transfer(peer) or 0),
+                )
+
+            peer.used_bytes_total = 0
+
+        except Exception as exc:
+            current_app.logger.exception(
+                'Subscription data reset failed for peer %s',
+                getattr(peer, 'id', '?'),
+            )
+
+            result['errors'].append({
+                'peer_id': getattr(peer, 'id', None),
+                'peer_name': getattr(peer, 'name', '') or '',
+                'detail': str(exc),
+            })
+
+            continue
+
+        if peer.status == 'blocked':
+            if timer_expired:
+                result['still_blocked'] += 1
+            elif _enable_subscription(peer):
+                result['reactivated'] += 1
+            else:
+                result['enable_failed'] += 1
+
         try:
-            log_event(peer, 'subscription_reset_data', 'Shared subscription data reset')
+            log_event(
+                peer,
+                'subscription_reset_data',
+                (
+                    'Shared subscription data reset; '
+                    f'new offset={int(peer.bytes_offset or 0)}'
+                ),
+            )
         except Exception:
             pass
 
+    return result
+
+
 def _reset_subscription_timer(sub):
+
+    result = {
+        'reset_peers': 0,
+        'reactivated': 0,
+        'still_blocked': 0,
+        'enable_failed': 0,
+        'errors': [],
+    }
+
     sub.first_used_at = None
     _apply_subscription_timer(sub)
+
+    data_exhausted = _subscription_data_exhausted(sub)
+
     for link in list(getattr(sub, 'links', []) or []):
-        if link.peer:
-            _sync_peer_subscription(link.peer, sub, rename=False)
-            if link.peer.status == 'blocked' and not _subscription_data_exhausted(sub):
-                _enable_subscription_peer_runtime(link.peer)
-            try:
-                log_event(link.peer, 'subscription_reset_timer', 'Shared subscription timer reset')
-            except Exception:
-                pass
+        peer = getattr(link, 'peer', None)
+
+        if not peer:
+            continue
+
+        result['reset_peers'] += 1
+
+        try:
+            _sync_peer_subscription(
+                peer,
+                sub,
+                rename=False,
+            )
+        except Exception as exc:
+            current_app.logger.exception(
+                'Subscription timer sync failed for peer %s',
+                getattr(peer, 'id', '?'),
+            )
+
+            result['errors'].append({
+                'peer_id': getattr(peer, 'id', None),
+                'peer_name': getattr(peer, 'name', '') or '',
+                'detail': str(exc),
+            })
+
+        if peer.status == 'blocked':
+            if data_exhausted:
+                result['still_blocked'] += 1
+            elif _enable_subscription(peer):
+                result['reactivated'] += 1
+            else:
+                result['enable_failed'] += 1
+
+        try:
+            log_event(
+                peer,
+                'subscription_reset_timer',
+                'Shared subscription timer reset',
+            )
+        except Exception:
+            pass
+
+    return result
+
 
 def _subscription_data_exhausted(sub):
     limit = _sub_limit_bytes(sub)
-    return bool(limit and _sub_used_bytes(sub) >= limit)
+
+    return bool(
+        limit
+        and _sub_used_bytes(sub) >= limit
+    )
+
 
 def _subscription_time_expired(sub):
     ttl = _sub_ttl_seconds(sub)
-    return bool(ttl is not None and ttl <= 0)
+
+    return bool(
+        ttl is not None
+        and ttl <= 0
+    )
 
 
-def _enable_subscription_peer_runtime(peer):
+def _enable_subscription(peer):
+
     try:
-        if getattr(peer.iface, 'node_id', None) is not None:
-            node_post(peer.iface.node, f'/api/peer/{peer.public_key}/enable', {'host_cidr': _host_peer(peer)})
+        iface = getattr(
+            peer,
+            'iface',
+            None,
+        )
+
+        if not iface:
+            raise RuntimeError(
+                'Peer interface is missing.'
+            )
+
+        if getattr(
+            iface,
+            'node_id',
+            None,
+        ) is not None:
+            node = getattr(
+                iface,
+                'node',
+                None,
+            )
+
+            if not node:
+                raise RuntimeError(
+                    'Peer node is missing.'
+                )
+
+            response = node_post(
+                node,
+                (
+                    f'/api/peer/'
+                    f'{peer.public_key}/enable'
+                ),
+                {
+                    'host_cidr': _host_peer(peer),
+                },
+                timeout=15,
+            ) or {}
+
+            if not isinstance(
+                response,
+                dict,
+            ):
+                raise RuntimeError(
+                    'Node returned an invalid enable response.'
+                )
+
+            if response.get('ok') is False:
+                raise RuntimeError(
+                    response.get('detail')
+                    or response.get('error')
+                    or 'Node peer enable failed.'
+                )
+
         else:
+            dev = iface_devname(iface)
+
+            if not _iface_up(dev):
+                _check_iface_up(iface)
+
+            if not _iface_up(dev):
+                raise RuntimeError(
+                    f"WireGuard interface '{dev}' is not running."
+                )
+
             _wg_enable(peer)
             _sync_peer(peer)
+
         peer.status = 'online'
+
         return True
+
     except Exception:
-        current_app.logger.exception('failed enabling subscription peer %s', getattr(peer, 'id', '?'))
+        current_app.logger.exception(
+            'Failed enabling subscription peer %s',
+            getattr(peer, 'id', '?'),
+        )
+
         return False
 
+def _disable_subscription(peer):
+
+    try:
+        iface = getattr(
+            peer,
+            'iface',
+            None,
+        )
+
+        if not iface:
+            raise RuntimeError(
+                'Peer interface is missing.'
+            )
+
+        if getattr(
+            iface,
+            'node_id',
+            None,
+        ) is not None:
+            node = getattr(
+                iface,
+                'node',
+                None,
+            )
+
+            if not node:
+                raise RuntimeError(
+                    'Peer node is missing.'
+                )
+
+            response = node_post(
+                node,
+                (
+                    f'/api/peer/'
+                    f'{peer.public_key}/disable'
+                ),
+                {
+                    'host_cidr': _host_peer(peer),
+                },
+                timeout=15,
+            ) or {}
+
+            if not isinstance(
+                response,
+                dict,
+            ):
+                raise RuntimeError(
+                    'Node returned an invalid disable response.'
+                )
+
+            if response.get('ok') is False:
+                raise RuntimeError(
+                    response.get('detail')
+                    or response.get('error')
+                    or 'Node peer disable failed.'
+                )
+
+        else:
+            _wg_disable(peer)
+
+        peer.status = 'offline'
+
+        return True
+
+    except Exception:
+        current_app.logger.exception(
+            'Failed disabling subscription peer %s',
+            getattr(peer, 'id', '?'),
+        )
+
+        return False
+    
+
+def _subscription_enabled(sub,enabled: bool,):
+    result = {
+        'total': 0,
+        'changed': 0,
+        'failed': 0,
+        'failed_peer_ids': [],
+        'errors': [],
+    }
+
+    enabled = bool(enabled)
+
+    for link in list(
+        getattr(sub, 'links', []) or []
+    ):
+        peer = getattr(
+            link,
+            'peer',
+            None,
+        )
+
+        if not peer:
+            continue
+
+        result['total'] += 1
+
+        if enabled:
+            success = (
+                _enable_subscription(
+                    peer
+                )
+            )
+        else:
+            success = (
+                _disable_subscription(
+                    peer
+                )
+            )
+
+        if success:
+            result['changed'] += 1
+
+            try:
+                log_event(
+                    peer,
+                    (
+                        'subscription_enabled'
+                        if enabled
+                        else 'subscription_disabled'
+                    ),
+                    (
+                        'Subscription enabled'
+                        if enabled
+                        else 'Subscription disabled'
+                    ),
+                )
+            except Exception:
+                pass
+
+        else:
+            result['failed'] += 1
+            result['failed_peer_ids'].append(
+                getattr(peer, 'id', None)
+            )
+
+            result['errors'].append({
+                'peer_id': getattr(
+                    peer,
+                    'id',
+                    None,
+                ),
+                'peer_name': (
+                    getattr(peer, 'name', '')
+                    or ''
+                ),
+            })
+
+    return result
+    
 @app.get('/subscriptions')
 @login_required
 def subscriptions_page():
@@ -13424,31 +15465,372 @@ def api_subscription_delete(sid):
         db.session.rollback()
         return jsonify(error='subscription_delete_failed', detail=str(e)), 500
 
+@app.post('/api/subscriptions/<int:sid>/disable')
+@require_api_key_or_login
+def api_subscription_disable(sid):
+
+    sub = (
+        db.session.get(
+            Subscription,
+            sid,
+        )
+        or abort(404)
+    )
+
+    try:
+        result = (
+            _subscription_enabled(
+                sub,
+                False,
+            )
+        )
+
+        if (
+            result['total'] > 0
+            and result['changed'] == 0
+        ):
+            db.session.rollback()
+
+            return jsonify(
+                ok=False,
+                error='subscription_disable_failed',
+                detail=(
+                    'None of the attached configs '
+                    'could be disabled.'
+                ),
+                result=result,
+            ), 409
+
+        sub.enabled = False
+
+        db.session.commit()
+
+        partial = result['failed'] > 0
+
+        if partial:
+            message = (
+                'Subscription was disabled, but one or more '
+                'attached configs could not be stopped.'
+            )
+        elif result['changed']:
+            message = (
+                'Subscription and all attached configs '
+                'were disabled.'
+            )
+        else:
+            message = (
+                'Subscription was disabled. '
+                'It has no attached configs.'
+            )
+
+        try:
+            logpanel_action(
+                'subscription_disable',
+                (
+                    f'sid={sub.id}; '
+                    f'total={result["total"]}; '
+                    f'disabled={result["changed"]}; '
+                    f'failed={result["failed"]}; '
+                    'data_preserved=1; timer_preserved=1'
+                ),
+            )
+        except Exception:
+            pass
+
+        return jsonify(
+            ok=not partial,
+            partial=partial,
+            enabled=False,
+            data_reset=False,
+            timer_reset=False,
+            message=message,
+            result=result,
+            subscription=_subscription_row(sub),
+        ), 207 if partial else 200
+
+    except Exception as exc:
+        db.session.rollback()
+
+        current_app.logger.exception(
+            'Subscription disable failed: %s',
+            sid,
+        )
+
+        return jsonify(
+            ok=False,
+            error='subscription_disable_failed',
+            detail=str(exc),
+        ), 500
+
+@app.post('/api/subscriptions/<int:sid>/enable')
+@require_api_key_or_login
+def api_subscription_enable(sid):
+
+    sub = (
+        db.session.get(
+            Subscription,
+            sid,
+        )
+        or abort(404)
+    )
+
+    try:
+        runtime_result = (
+            _subscription_enabled(
+                sub,
+                True,
+            )
+        )
+
+        if (
+            runtime_result['total'] > 0
+            and runtime_result['changed'] == 0
+        ):
+            db.session.rollback()
+
+            return jsonify(
+                ok=False,
+                error='subscription_enable_failed',
+                detail=(
+                    'None of the attached configs '
+                    'could be enabled.'
+                ),
+                result={
+                    'runtime': runtime_result,
+                },
+            ), 409
+
+        data_result = (
+            _reset_subscription_data(
+                sub
+            )
+        )
+
+        timer_result = (
+            _reset_subscription_timer(
+                sub
+            )
+        )
+
+        sub.enabled = True
+
+        db.session.commit()
+
+        failure_count = (
+            int(
+                runtime_result.get(
+                    'failed',
+                    0,
+                )
+                or 0
+            )
+            + int(
+                data_result.get(
+                    'enable_failed',
+                    0,
+                )
+                or 0
+            )
+            + int(
+                timer_result.get(
+                    'enable_failed',
+                    0,
+                )
+                or 0
+            )
+            + len(
+                data_result.get(
+                    'errors',
+                    [],
+                )
+                or []
+            )
+            + len(
+                timer_result.get(
+                    'errors',
+                    [],
+                )
+                or []
+            )
+        )
+
+        partial = failure_count > 0
+
+        if partial:
+            message = (
+                'Subscription was enabled and its timer and data '
+                'were reset, but one or more attached configs '
+                'reported an error.'
+            )
+        elif runtime_result['changed']:
+            message = (
+                'Subscription and all attached configs were enabled. '
+                'Data usage and timer were reset.'
+            )
+        else:
+            message = (
+                'Subscription was enabled. '
+                'Data usage and timer were reset.'
+            )
+
+        try:
+            logpanel_action(
+                'subscription_enable',
+                (
+                    f'sid={sub.id}; '
+                    f'total={runtime_result["total"]}; '
+                    f'enabled={runtime_result["changed"]}; '
+                    f'failed={failure_count}; '
+                    'data_reset=1; timer_reset=1'
+                ),
+            )
+        except Exception:
+            pass
+
+        return jsonify(
+            ok=not partial,
+            partial=partial,
+            enabled=True,
+            data_reset=True,
+            timer_reset=True,
+            message=message,
+            result={
+                'runtime': runtime_result,
+                'data': data_result,
+                'timer': timer_result,
+            },
+            subscription=_subscription_row(sub),
+        ), 207 if partial else 200
+
+    except Exception as exc:
+        db.session.rollback()
+
+        current_app.logger.exception(
+            'Subscription enable failed: %s',
+            sid,
+        )
+
+        return jsonify(
+            ok=False,
+            error='subscription_enable_failed',
+            detail=str(exc),
+        ), 500
+        
 @app.post('/api/subscriptions/<int:sid>/reset_data')
 @require_api_key_or_login
 def api_subscription_reset_data(sid):
     sub = db.session.get(Subscription, sid) or abort(404)
+
     try:
-        _reset_subscription_data(sub)
+        result = _reset_subscription_data(sub)
         db.session.commit()
-        return jsonify(ok=True, subscription=_subscription_row(sub))
-    except Exception as e:
+
+        timer_expired = _subscription_time_expired(sub)
+
+        if result['errors']:
+            message = (
+                'Data was reset for some configs, but one or more node '
+                'counters could not be read.'
+            )
+        elif timer_expired and result['still_blocked']:
+            message = (
+                'Data was reset, but the subscription remains blocked '
+                'because its timer is expired. Reset the timer as well.'
+            )
+        elif result['enable_failed']:
+            message = (
+                'Data was reset, but one or more configs could not be '
+                're-enabled.'
+            )
+        elif result['reactivated']:
+            message = 'Data was reset and blocked configs were re-enabled.'
+        else:
+            message = 'Subscription data was reset.'
+
+        return jsonify(
+            ok=not bool(result['errors']),
+            partial=bool(result['errors']),
+            message=message,
+            reason=(
+                'timer_expired'
+                if timer_expired and result['still_blocked']
+                else (
+                    'enable_failed'
+                    if result['enable_failed']
+                    else None
+                )
+            ),
+            result=result,
+            subscription=_subscription_row(sub),
+        ), 207 if result['errors'] else 200
+
+    except Exception as exc:
         db.session.rollback()
-        current_app.logger.exception('subscription reset data failed')
-        return jsonify(error='subscription_reset_data_failed', detail=str(e)), 500
+
+        current_app.logger.exception(
+            'Subscription reset data failed'
+        )
+
+        return jsonify(
+            error='subscription_reset_data_failed',
+            detail=str(exc),
+        ), 500
+
 
 @app.post('/api/subscriptions/<int:sid>/reset_timer')
 @require_api_key_or_login
 def api_subscription_reset_timer(sid):
     sub = db.session.get(Subscription, sid) or abort(404)
+
     try:
-        _reset_subscription_timer(sub)
+        result = _reset_subscription_timer(sub)
         db.session.commit()
-        return jsonify(ok=True, subscription=_subscription_row(sub))
-    except Exception as e:
+
+        data_exhausted = _subscription_data_exhausted(sub)
+
+        if data_exhausted and result['still_blocked']:
+            message = (
+                'Timer was reset, but the subscription remains blocked '
+                'because its data allowance is exhausted. Reset data as well.'
+            )
+        elif result['enable_failed']:
+            message = (
+                'Timer was reset, but one or more configs could not be '
+                're-enabled.'
+            )
+        elif result['reactivated']:
+            message = 'Timer was reset and blocked configs were re-enabled.'
+        else:
+            message = 'Subscription timer was reset.'
+
+        return jsonify(
+            ok=not bool(result['errors']),
+            partial=bool(result['errors']),
+            message=message,
+            reason=(
+                'data_exhausted'
+                if data_exhausted and result['still_blocked']
+                else (
+                    'enable_failed'
+                    if result['enable_failed']
+                    else None
+                )
+            ),
+            result=result,
+            subscription=_subscription_row(sub),
+        ), 207 if result['errors'] else 200
+
+    except Exception as exc:
         db.session.rollback()
-        current_app.logger.exception('subscription reset timer failed')
-        return jsonify(error='subscription_reset_timer_failed', detail=str(e)), 500
+
+        current_app.logger.exception(
+            'Subscription reset timer failed'
+        )
+
+        return jsonify(
+            error='subscription_reset_timer_failed',
+            detail=str(exc),
+        ), 500
 
 @app.get('/api/subscriptions/<int:sid>/shortlink')
 @require_api_key_or_login
