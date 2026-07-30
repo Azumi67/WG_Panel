@@ -1,6 +1,8 @@
 {% extends 'base.html' %}
 {% block head_extras %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/users.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/users.css') }}?v=20260729-v17">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/users-page.css') }}?v=20260729-v17">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-dark.css') }}?v=20260729-v17">
 {% endblock %}
 {% block content %}
 
@@ -43,7 +45,6 @@
         </select>
     </div>
 </section>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/users-page.css') }}?v=separated-1">
 
 <script src="{{ url_for('static', filename='js/users-scope.js') }}?v=separated-1"></script>
 
@@ -470,6 +471,7 @@
 </style>
 
 <style id="peer-limit-switch-row-final">
+/* PEER_LIMIT_SWITCH_ROW_FINAL_V2 */
 #peer-modal .peerx-limit-switch-row,
 #edit-peer-modal .peerx-limit-switch-row,
 #bulk-modal .peerx-limit-switch-row{
@@ -610,5 +612,6 @@
   }
 }
 </style>
+
 
 {% endblock %}
