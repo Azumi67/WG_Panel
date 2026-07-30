@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block head_extras %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/api_docs.css') }}?v=20260726-backup-api-v104">
-<script defer src="{{ url_for('static', filename='js/api_docs.js') }}?v=20260726-backup-api-v104"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/api_docs.css') }}?v=20260730-v55">
+<script defer src="{{ url_for('static', filename='js/api_docs.js') }}?v=20260730-v55"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 {% endblock %}
 {% block content %}
@@ -9,8 +9,8 @@
   <div class="api-orb o1"></div><div class="api-orb o2"></div>
   <header class="api-hero">
     <div class="hero-grid">
-      <div><h1 class="hero-title"><span class="badge-logo"><i class="fa-solid fa-code"></i></span><span>API Docs</span></h1><p class="hero-sub">Panel v1.0.4 and node-agent routes in one place. Backup, restore, retained ZIP management, Telegram delivery, and node migration examples are synchronized with the current backend.</p></div>
-      <div class="stat-stack"><div class="stat-card"><b>147</b><span>Panel API</span></div><div class="stat-card"><b>24</b><span>Panel pages</span></div><div class="stat-card"><b>17</b><span>Node API</span></div></div>
+      <div><h1 class="hero-title"><span class="badge-logo"><i class="fa-solid fa-code"></i></span><span>API Docs</span></h1><p class="hero-sub">Current panel and node-agent API, including VERSION-based updates, backup and restore, Telegram, WireGuard interfaces, peers, subscriptions, and nodes.</p></div>
+      <div class="stat-stack"><div class="stat-card"><b>154</b><span>Panel API</span></div><div class="stat-card"><b>25</b><span>Panel pages</span></div><div class="stat-card"><b>21</b><span>Node API</span></div></div>
     </div>
   </header>
   <div class="api-toolbar"><div class="search-wrap"><i class="fa-solid fa-search"></i><input id="apiSearch" x-model.debounce.120ms="query" x-effect="filter()" placeholder="Search route, method, section, or handler…" autocomplete="off"></div><div class="api-actions"><button class="tool-btn" id="expandExamples" type="button" @click.stop="toggleExamples()"><i class="fa-solid" :class="allOpen ? 'fa-compress' : 'fa-layer-group'"></i><span x-text="allOpen ? 'Close examples' : 'Open examples'">Open examples</span></button><button class="tool-btn light" id="copyBase" type="button" @click.stop="copyBase()"><i class="fa-regular" :class="baseCopied ? 'fa-circle-check' : 'fa-copy'"></i><span x-text="baseCopied ? 'Copied' : 'Copy base command'">Copy base command</span></button></div></div>
@@ -251,7 +251,75 @@
       </div>
     </div>
   </div>
-</article></div>
+</article><article class="route-row" data-text="get /api/panel/version?fresh=1 api_panel_version checks the version file and github immediately, bypassing the normal version cache.">
+  <button class="route-main" type="button" aria-expanded="false">
+    <span class="method m-get">GET</span>
+    <code class="route-path">/api/panel/version?fresh=1</code>
+    <span class="route-desc">Checks the VERSION file and GitHub immediately, bypassing the normal version cache.</span>
+    <span class="auth-pill">Admin session</span>
+    <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
+  </button>
+  <div class="route-detail"><div class="detail-grid">
+    <div class="detail-card"><div class="detail-title">What it does</div><p>Checks the VERSION file and GitHub immediately, bypassing the normal version cache.</p><div class="api-security-note">The optional <code>fresh=1</code> query parameter bypasses the 30-minute GitHub cache. The response includes <code>version_source: VERSION</code>.</div><div class="meta-line"><span>app.py</span><span>handler: <code>api_panel_version</code></span></div></div>
+    <div class="detail-card command-card"><div class="detail-title">Example command</div><pre><code>curl -X GET &quot;https://panel.example.com/api/panel/version?fresh=1&quot; \
+  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot;</code></pre><button class="copy-btn" type="button" data-copy="curl -X GET &quot;https://panel.example.com/api/panel/version?fresh=1&quot; \
+  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot;"><i class="fa-regular fa-copy"></i> Copy</button></div>
+  </div></div>
+</article>
+<article class="route-row" data-text="get /api/panel/update/status api_panel_update_status returns the detached local update job stage, percentage, log, target release, backup path, and detected service.">
+  <button class="route-main" type="button" aria-expanded="false">
+    <span class="method m-get">GET</span>
+    <code class="route-path">/api/panel/update/status</code>
+    <span class="route-desc">Returns the detached local update job stage, percentage, log, target release, backup path, and detected service.</span>
+    <span class="auth-pill">Admin session</span>
+    <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
+  </button>
+  <div class="route-detail"><div class="detail-grid">
+    <div class="detail-card"><div class="detail-title">What it does</div><p>Returns the detached local update job stage, percentage, log, target release, backup path, and detected service.</p><div class="meta-line"><span>app.py</span><span>handler: <code>api_panel_update_status</code></span></div></div>
+    <div class="detail-card command-card"><div class="detail-title">Example command</div><pre><code>curl -X GET &quot;https://panel.example.com/api/panel/update/status&quot; \
+  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot;</code></pre><button class="copy-btn" type="button" data-copy="curl -X GET &quot;https://panel.example.com/api/panel/update/status&quot; \
+  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot;"><i class="fa-regular fa-copy"></i> Copy</button></div>
+  </div></div>
+</article>
+<article class="route-row" data-text="post /api/panel/update api_panel_update_start queues a safe detached local panel update with backup, validation, restart, and rollback.">
+  <button class="route-main" type="button" aria-expanded="false">
+    <span class="method m-post">POST</span>
+    <code class="route-path">/api/panel/update</code>
+    <span class="route-desc">Queues a safe detached local panel update with backup, validation, restart, and rollback.</span>
+    <span class="auth-pill">Admin session</span>
+    <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
+  </button>
+  <div class="route-detail"><div class="detail-grid">
+    <div class="detail-card"><div class="detail-title">What it does</div><p>Queues a safe detached local panel update with backup, validation, restart, and rollback.</p><div class="meta-line"><span>app.py</span><span>handler: <code>api_panel_update_start</code></span></div></div>
+    <div class="detail-card command-card"><div class="detail-title">Example command</div><pre><code>curl -X POST &quot;https://panel.example.com/api/panel/update&quot; \
+  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  --data &#x27;{
+  &quot;target&quot;: &quot;latest&quot;
+}&#x27;</code></pre><button class="copy-btn" type="button" data-copy="curl -X POST &quot;https://panel.example.com/api/panel/update&quot; \
+  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  --data &#x27;{
+  &quot;target&quot;: &quot;latest&quot;
+}&#x27;"><i class="fa-regular fa-copy"></i> Copy</button></div>
+  </div></div>
+</article>
+<article class="route-row" data-text="get /api/panel/update/targets api_panel_update_targets returns local release information and update/version status for every registered node.">
+  <button class="route-main" type="button" aria-expanded="false">
+    <span class="method m-get">GET</span>
+    <code class="route-path">/api/panel/update/targets</code>
+    <span class="route-desc">Returns local release information and update/version status for every registered node.</span>
+    <span class="auth-pill">Admin session</span>
+    <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
+  </button>
+  <div class="route-detail"><div class="detail-grid">
+    <div class="detail-card"><div class="detail-title">What it does</div><p>Returns local release information and update/version status for every registered node.</p><div class="meta-line"><span>app.py</span><span>handler: <code>api_panel_update_targets</code></span></div></div>
+    <div class="detail-card command-card"><div class="detail-title">Example command</div><pre><code>curl -X GET &quot;https://panel.example.com/api/panel/update/targets&quot; \
+  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot;</code></pre><button class="copy-btn" type="button" data-copy="curl -X GET &quot;https://panel.example.com/api/panel/update/targets&quot; \
+  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot;"><i class="fa-regular fa-copy"></i> Copy</button></div>
+  </div></div>
+</article>
+</div>
 </section>
 <section class="doc-section" id="sec-Auth--Admin" data-section="Auth &amp; Admin">
   <div class="section-head"><div><h2>Auth &amp; Admin</h2><p>16 documented methods</p></div><a href="#top" class="top-link">Top</a></div>
@@ -2977,7 +3045,45 @@ https://panel.example.com/ui/nodes"><i class="fa-regular fa-copy"></i> Copy</but
       </div>
     </div>
   </div>
-</article></div>
+</article><article class="route-row" data-text="post /api/nodes/<int:nid>/update api_node_update_start queues an authenticated detached update on one remote node.">
+  <button class="route-main" type="button" aria-expanded="false">
+    <span class="method m-post">POST</span>
+    <code class="route-path">/api/nodes/&lt;int:nid&gt;/update</code>
+    <span class="route-desc">Queues an authenticated detached update on one remote node.</span>
+    <span class="auth-pill">Admin session</span>
+    <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
+  </button>
+  <div class="route-detail"><div class="detail-grid">
+    <div class="detail-card"><div class="detail-title">What it does</div><p>Queues an authenticated detached update on one remote node.</p><div class="meta-line"><span>app.py</span><span>handler: <code>api_node_update_start</code></span></div></div>
+    <div class="detail-card command-card"><div class="detail-title">Example command</div><pre><code>curl -X POST &quot;https://panel.example.com/api/nodes/1/update&quot; \
+  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  --data &#x27;{
+  &quot;target&quot;: &quot;latest&quot;
+}&#x27;</code></pre><button class="copy-btn" type="button" data-copy="curl -X POST &quot;https://panel.example.com/api/nodes/1/update&quot; \
+  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  --data &#x27;{
+  &quot;target&quot;: &quot;latest&quot;
+}&#x27;"><i class="fa-regular fa-copy"></i> Copy</button></div>
+  </div></div>
+</article>
+<article class="route-row" data-text="get /api/nodes/<int:nid>/update/status api_node_update_status returns the selected node update stage, percentage, log, restart, and rollback state.">
+  <button class="route-main" type="button" aria-expanded="false">
+    <span class="method m-get">GET</span>
+    <code class="route-path">/api/nodes/&lt;int:nid&gt;/update/status</code>
+    <span class="route-desc">Returns the selected node update stage, percentage, log, restart, and rollback state.</span>
+    <span class="auth-pill">Admin session</span>
+    <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
+  </button>
+  <div class="route-detail"><div class="detail-grid">
+    <div class="detail-card"><div class="detail-title">What it does</div><p>Returns the selected node update stage, percentage, log, restart, and rollback state.</p><div class="meta-line"><span>app.py</span><span>handler: <code>api_node_update_status</code></span></div></div>
+    <div class="detail-card command-card"><div class="detail-title">Example command</div><pre><code>curl -X GET &quot;https://panel.example.com/api/nodes/1/update/status&quot; \
+  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot;</code></pre><button class="copy-btn" type="button" data-copy="curl -X GET &quot;https://panel.example.com/api/nodes/1/update/status&quot; \
+  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot;"><i class="fa-regular fa-copy"></i> Copy</button></div>
+  </div></div>
+</article>
+</div>
 </section>
 <section class="doc-section" id="sec-Subscriptions" data-section="Subscriptions">
   <div class="section-head"><div><h2>Subscriptions</h2><p>16 documented methods</p></div><a href="#top" class="top-link">Top</a></div>
