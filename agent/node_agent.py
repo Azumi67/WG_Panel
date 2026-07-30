@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-import os, json, subprocess, time, socket, ssl
+import os, json, subprocess, time, socket, ssl, sys
+from pathlib import Path
 from flask import Flask, request, jsonify, abort, send_file
 from io import BytesIO
 import zipfile
@@ -1233,6 +1234,205 @@ def peers():
 
     return jsonify(peers=peers)
 
+def _node_version() -> str:
+
+    version_file = _node_root() / "VERSION"
+
+    try:
+        value = (
+            version_file
+            .read_text(encoding="utf-8")
+            .strip()
+            .lstrip("vV")
+        )
+
+        if value and re.fullmatch(
+            r"\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z.-]+)?",
+            value,
+        ):
+            return value
+
+        app.logger.warning(
+            "Invalid VERSION file value: %r",
+            value,
+        )
+
+    except FileNotFoundError:
+        app.logger.warning(
+            "VERSION file was not found: %s",
+            version_file,
+        )
+
+    except Exception:
+        app.logger.exception(
+            "Could not read node VERSION file"
+        )
+
+    return "0.0.0"
+
+
+NODE_REPO = "Azumi67/WG_Panel"
+
+def _node_root():
+    configured = (os.getenv("WG_PANEL_ROOT") or "").strip()
+    if configured:
+        return Path(configured).resolve()
+
+    here = Path(__file__).resolve().parent
+    return here.parent
+
+NODE_AGENT_VERSION = _node_version()
+
+def _node_update_status_path():
+    root = _node_root()
+    return root / "instance" / "node_update_status.json"
+
+
+def _node_update_status():
+    try:
+        data = json.loads(
+            _node_update_status_path().read_text(encoding="utf-8")
+        )
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {
+            "status": "idle",
+            "stage": "idle",
+            "percent": 0,
+            "message": "No node update is running.",
+            "log": [],
+        }
+
+
+def _node_version_tuple(value):
+    nums = re.findall(r"\d+", str(value or ""))
+    parts = [int(x) for x in nums[:3]]
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+def _node_latest_version():
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "WG-Panel-Node",
+    }
+
+    try:
+        response = requests.get(
+            f"https://api.github.com/repos/{NODE_REPO}/releases/latest",
+            headers=headers,
+            timeout=7,
+        )
+        if response.ok:
+            tag = str((response.json() or {}).get("tag_name") or "").strip()
+            if tag:
+                return tag.lstrip("vV")
+    except Exception:
+        pass
+
+    try:
+        response = requests.get(
+            f"https://api.github.com/repos/{NODE_REPO}/tags",
+            headers=headers,
+            timeout=7,
+        )
+        if response.ok:
+            tags = response.json() or []
+            if tags:
+                return str(tags[0].get("name") or "").strip().lstrip("vV")
+    except Exception:
+        pass
+
+    return None
+
+
+@app.get("/api/system/version")
+@require_api_key
+def node_system_version():
+    latest = _node_latest_version()
+    return jsonify(
+        ok=True,
+        current=NODE_AGENT_VERSION,
+        version_source="VERSION",
+        latest=latest,
+        update_available=bool(
+            latest
+            and _node_version_tuple(latest)
+            > _node_version_tuple(NODE_AGENT_VERSION)
+        ),
+    )
+
+
+@app.get("/api/system/update/status")
+@require_api_key
+def node_system_update_status():
+    return jsonify(_node_update_status())
+
+
+@app.post("/api/system/update")
+@require_api_key
+def node_system_update_start():
+    data = request.get_json(silent=True) or {}
+    target = str(data.get("target") or "latest").strip()
+    root = _node_root()
+    helper = root / "scripts" / "panel_update.py"
+    status_file = _node_update_status_path()
+    lock_file = root / "instance" / "update.lock"
+
+    current = _node_update_status()
+    if str(current.get("status") or "") in {
+        "queued", "running", "downloading", "installing",
+        "validating", "restarting",
+    } or lock_file.exists():
+        return jsonify(
+            ok=False,
+            error="update_already_running",
+            detail="A node update is already running.",
+        ), 409
+
+    if not helper.is_file():
+        return jsonify(
+            ok=False,
+            error="update_helper_missing",
+            detail=f"Update helper is missing: {helper}",
+        ), 500
+
+    status_file.parent.mkdir(parents=True, exist_ok=True)
+    log_file = root / "instance" / "node_update_runner.log"
+    stream = open(log_file, "ab", buffering=0)
+
+    subprocess.Popen(
+        [
+            sys.executable,
+            str(helper),
+            "--root", str(root),
+            "--repo", NODE_REPO,
+            "--service", "auto",
+            "--status", str(status_file),
+            "--scope", "node",
+            "--target", target,
+        ],
+        cwd=str(root),
+        stdin=subprocess.DEVNULL,
+        stdout=stream,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+    return jsonify(
+        ok=True,
+        message="Node update queued.",
+        status={
+            "status": "queued",
+            "stage": "queued",
+            "percent": 2,
+            "message": "Node update queued.",
+            "log": [],
+        },
+    ), 202
+
 
 @app.route('/api/peers/add', methods=['POST'])
 @require_api_key
@@ -1457,56 +1657,293 @@ def _peer_conf(pub):
                 return {'iface': iface, 'allowed': allowed, 'endpoint': endpoint, 'keep': keep}
     return None
 
+def _peerlive_transfer_bytes(pub: str) -> dict:
+
+    try:
+        dump = subprocess.check_output(
+            ['wg', 'show', 'all', 'dump'],
+            stderr=subprocess.PIPE,
+            timeout=6,
+        ).decode('utf-8', 'replace').splitlines()
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError('wg show timed out') from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (
+            exc.stderr.decode('utf-8', 'replace')
+            if isinstance(exc.stderr, bytes)
+            else str(exc.stderr or '')
+        ).strip()
+        raise RuntimeError(detail or 'wg show failed') from exc
+
+    for line in dump:
+        parts = line.split('\t')
+
+        if len(parts) != 9:
+            continue
+
+        iface = parts[0]
+        peer_public_key = parts[1]
+
+        if peer_public_key != pub:
+            continue
+
+        try:
+            rx_bytes = max(0, int(parts[6] or 0))
+        except (TypeError, ValueError):
+            rx_bytes = 0
+
+        try:
+            tx_bytes = max(0, int(parts[7] or 0))
+        except (TypeError, ValueError):
+            tx_bytes = 0
+
+        return {
+            'iface': iface,
+            'public_key': peer_public_key,
+            'rx_bytes': rx_bytes,
+            'tx_bytes': tx_bytes,
+            'total_bytes': rx_bytes + tx_bytes,
+        }
+
+    raise LookupError('peer_not_found')
+
+
+@app.route('/api/peer/<path:pub>/reset_data', methods=['POST'])
+@require_api_key
+def reset_peer_data(pub):
+
+    try:
+        counters = _peerlive_transfer_bytes(pub)
+
+        return jsonify(
+            ok=True,
+            reset_supported=True,
+            **counters,
+        )
+
+    except LookupError:
+        return jsonify(
+            ok=False,
+            error='peer_not_found',
+        ), 404
+
+    except Exception as exc:
+        app.logger.exception(
+            'Could not read transfer counters for peer %s',
+            pub,
+        )
+
+        return jsonify(
+            ok=False,
+            error='peer_transfer_read_failed',
+            detail=str(exc),
+        ), 500
+    
 @app.route('/api/peer/<path:pub>/enable', methods=['POST'])
 @require_api_key
 def enable_peer(pub):
-    info = _peer_conf(pub)
-    if not info:
-        return jsonify(error='peer_not_found'), 404
 
-    j = request.get_json(silent=True) or {}
-    host = j.get('host_cidr') or _orig_host(info.get('allowed'))
+    info = _peer_conf(pub)
+
+    if not info:
+        return jsonify(
+            ok=False,
+            error='peer_not_found',
+        ), 404
+
+    payload = request.get_json(
+        silent=True
+    ) or {}
+
+    host = (
+        payload.get('host_cidr')
+        or _orig_host(
+            info.get('allowed')
+        )
+    )
+
+    interface_name = info.get('iface')
+
+    if not interface_name:
+        return jsonify(
+            ok=False,
+            error='peer_interface_missing',
+        ), 400
 
     try:
-        subprocess.check_call(['wg','show',info['iface']],
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        subprocess.run(['wg-quick','up',info['iface']], check=False,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.check_call(
+            [
+                'wg',
+                'show',
+                interface_name,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
 
-    cmd = ['wg','set',info['iface'],'peer',pub]
-    if info.get('allowed'):  cmd += ['allowed-ips', info['allowed']]
-    if info.get('endpoint'): cmd += ['endpoint', info['endpoint']]
-    if info.get('keep'):     cmd += ['persistent-keepalive', str(info['keep'])]
-    subprocess.check_call(cmd)
+    except Exception:
+        up_result = subprocess.run(
+            [
+                'wg-quick',
+                'up',
+                interface_name,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+
+        if up_result.returncode != 0:
+            return jsonify(
+                ok=False,
+                error='interface_enable_failed',
+                detail=(
+                    up_result.stderr
+                    or up_result.stdout
+                    or (
+                        'Could not bring WireGuard '
+                        'interface up.'
+                    )
+                ).strip(),
+                interface=interface_name,
+            ), 500
+
+    command = [
+        'wg',
+        'set',
+        interface_name,
+        'peer',
+        pub,
+    ]
+
+    if info.get('allowed'):
+        command += [
+            'allowed-ips',
+            info['allowed'],
+        ]
+
+    if info.get('endpoint'):
+        command += [
+            'endpoint',
+            info['endpoint'],
+        ]
+
+    if info.get('keep'):
+        command += [
+            'persistent-keepalive',
+            str(info['keep']),
+        ]
+
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=12,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        return jsonify(
+            ok=False,
+            error='peer_enable_failed',
+            detail=(
+                result.stderr
+                or result.stdout
+                or 'WireGuard peer enable failed.'
+            ).strip(),
+            interface=interface_name,
+        ), 500
 
     if host:
-        _route(['del'], host)
+        _route(
+            ['del'],
+            host,
+        )
 
-    return jsonify(ok=True)
+    return jsonify(
+        ok=True,
+        enabled=True,
+        interface=interface_name,
+        public_key=pub,
+        host_cidr=host,
+    )
 
 @app.route('/api/peer/<path:pub>/disable', methods=['POST'])
 @require_api_key
 def disable_peer(pub):
-    j = request.get_json(silent=True) or {}
-    info = _peer_conf(pub)  
-    host = j.get('host_cidr') or (info and _orig_host(info.get('allowed')))
 
-    try:
-        dump = subprocess.check_output(['wg','show','all','dump']).decode().splitlines()
-        for line in dump:
-            parts = line.split('\t')
-            if len(parts) == 9 and parts[1] == pub:
-                subprocess.run(['wg','set',parts[0],'peer',pub,'remove'],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                break
-    except Exception:
-        pass
+    payload = request.get_json(
+        silent=True
+    ) or {}
+
+    info = _peer_conf(pub)
+
+    if not info:
+        return jsonify(
+            ok=False,
+            error='peer_not_found',
+        ), 404
+
+    host = (
+        payload.get('host_cidr')
+        or _orig_host(
+            info.get('allowed')
+        )
+    )
+
+    interface_name = info.get('iface')
+
+    if not interface_name:
+        return jsonify(
+            ok=False,
+            error='peer_interface_missing',
+        ), 400
+
+    result = subprocess.run(
+        [
+            'wg',
+            'set',
+            interface_name,
+            'peer',
+            pub,
+            'remove',
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=12,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        return jsonify(
+            ok=False,
+            error='peer_disable_failed',
+            detail=(
+                result.stderr
+                or result.stdout
+                or 'WireGuard peer removal failed.'
+            ).strip(),
+            interface=interface_name,
+        ), 500
 
     if host:
-        _route(['add'], host)
+        _route(
+            ['add'],
+            host,
+        )
 
-    return jsonify(ok=True)
+    return jsonify(
+        ok=True,
+        enabled=False,
+        interface=interface_name,
+        public_key=pub,
+        host_cidr=host,
+    )
 
 @app.route('/api/peer/<path:pub>', methods=['DELETE'])
 @require_api_key
