@@ -246,6 +246,11 @@ async function peerCounts(scope) {
 }
 
 async function updateStats () {
+  if (window.WG_PANEL_RESTARTING) {
+    scheduleNext();
+    return;
+  }
+
   try {
     const res = await fetch('/api/stats', { credentials: 'same-origin', cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -369,12 +374,15 @@ async function updateStats () {
     peerCounts(window.CURRENT_PEER_SCOPE || 'local');
 
   } catch (e) {
-    console.error(e);
-    backoff = Math.min(backoff + 1, 4);
-    if (typeof window.toastSafe === 'function' && backoff === 1)
-      window.toastSafe('Dashboard stats temporarily unavailable', 'error');
-    else if (typeof window.toast === 'function' && backoff === 1)
-      window.toast('Dashboard stats temporarily unavailable', 'error');
+    if (!window.WG_PANEL_UPDATING && !window.WG_PANEL_RESTARTING) {
+      console.error(e);
+      backoff = Math.min(backoff + 1, 4);
+
+      if (typeof window.toastSafe === 'function' && backoff === 1)
+        window.toastSafe('Dashboard stats temporarily unavailable', 'error');
+      else if (typeof window.toast === 'function' && backoff === 1)
+        window.toast('Dashboard stats temporarily unavailable', 'error');
+    }
   } finally {
     scheduleNext();
   }
@@ -389,6 +397,14 @@ function scheduleNext () {
 
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) scheduleNext(); else clearTimeout(pollTimer);
+});
+
+document.addEventListener('wg-panel:restart-complete', () => {
+  backoff = 0;
+  clearTimeout(pollTimer);
+  updateStats();
+  loadAppStat().catch(() => {});
+  loadTgStatus().catch(() => {});
 });
 
 function showModal() {
@@ -708,6 +724,8 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
     async function getLogs() {
+      if (window.WG_PANEL_RESTARTING) return;
+
       try {
         const r = await fetch('/api/app_logs?format=json&limit=' + LIMIT, { credentials: 'same-origin', cache: 'no-store' });
         if (r.ok) {
