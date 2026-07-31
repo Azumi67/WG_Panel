@@ -1,102 +1,464 @@
-(function () {
-    const endpoint = '/api/panel/version';
+(() => {
+  'use strict';
 
-    function $(id) { return document.getElementById(id); }
+  const byId = (id) => document.getElementById(id);
 
-    function cleanVersion(v) {
-        if (!v) return '—';
-        const s = String(v).trim();
-        return s.toLowerCase().startsWith('v') ? s : `v${s}`;
+  function cleanVersion(value) {
+    return String(value || '')
+      .trim()
+      .replace(/^v/i, '');
+  }
+
+  function shortRevision(payload, key) {
+    return String(
+      payload?.[`${key}_revision_short`]
+      || payload?.[`${key}_revision`]
+      || ''
+    ).slice(0, 8);
+  }
+
+  function render(payload) {
+    const card = byId('sb2-update-open');
+    const currentElement = byId('sb2-version-current');
+    const directionElement = byId('sb2-version-direction');
+    const latestElement = byId('sb2-version-latest');
+    const stateElement = byId('sb2-version-state');
+    const hintElement = byId('sb2-update-hint');
+
+    const current = cleanVersion(
+      payload?.current
+      || card?.dataset?.currentVersion
+      || ''
+    );
+
+    const available = !!payload?.update_available;
+
+    const currentRevision = shortRevision(
+      payload,
+      'current',
+    );
+
+    const latestRevision = shortRevision(
+      payload,
+      'latest',
+    );
+
+    if (currentElement) {
+      const revisionLabel = (
+        available
+          ? latestRevision
+          : currentRevision
+      );
+
+      currentElement.textContent = (
+        current
+          ? (
+            revisionLabel
+              ? `v${current} · main ${revisionLabel}`
+              : `v${current}`
+          )
+          : '—'
+      );
+
+      currentElement.title = (
+        revisionLabel
+          ? `Installed version ${current || 'unknown'}, main revision ${revisionLabel}`
+          : `Installed version ${current || 'unknown'}`
+      );
     }
 
-    function setState(el, state) {
-        if (!el) return;
-        el.classList.remove('is-current', 'has-update', 'has-error', 'is-checking');
-        el.classList.add(state);
+    if (directionElement) {
+      directionElement.hidden = true;
     }
 
-    function applyVersion(data) {
-        const sidebar = $('sb2-version');
-        const sidebarState = $('sb2-version-state');
-        const dashCard = $('panel-version-card');
-        const dashStatus = $('panel-version-status');
-        const current = $('panel-version-current');
-        const latest = $('panel-version-latest');
-        const note = $('panel-version-note');
-        const release = $('panel-version-release');
-
-        const currentRaw = data.current_version || data.current || sidebar?.dataset.currentVersion || dashCard?.dataset.currentVersion;
-        const latestRaw = data.latest_version || data.latest;
-        const currentVersion = cleanVersion(currentRaw);
-        const latestVersion = cleanVersion(latestRaw);
-        const latestUrl = data.latest_url || data.repo_url || 'https://github.com/Azumi67/WG_Panel/releases';
-
-        if ($('sb2-version-current')) $('sb2-version-current').textContent = currentVersion;
-        if (current) current.textContent = currentVersion;
-        if (latest) latest.textContent = latestVersion;
-        if (release) release.href = latestUrl;
-        if (sidebar) sidebar.href = latestUrl;
-
-        if (data.error) {
-            if (sidebarState) sidebarState.textContent = 'error';
-            if (dashStatus) dashStatus.textContent = 'Error';
-            if (note) note.textContent = `Could not check GitHub: ${data.error}`;
-            setState(sidebar, 'has-error');
-            setState(dashCard, 'has-error');
-            return;
-        }
-
-        if (data.update_available) {
-            if (sidebarState) sidebarState.textContent = 'update';
-            if (dashStatus) dashStatus.textContent = 'Update available';
-            if (note) note.textContent = `A newer version is available on GitHub: ${latestVersion}.`;
-            setState(sidebar, 'has-update');
-            setState(dashCard, 'has-update');
-        } else {
-            if (sidebarState) sidebarState.textContent = 'current';
-            if (dashStatus) dashStatus.textContent = 'Up to date';
-            if (note) note.textContent = latestRaw
-                ? `You are running the latest known version: ${currentVersion}.`
-                : 'Version shown. No release/tag was found on GitHub.';
-            setState(sidebar, 'is-current');
-            setState(dashCard, 'is-current');
-        }
+    if (latestElement) {
+      latestElement.hidden = true;
+      latestElement.textContent = '';
     }
 
-    async function loadVersion(refresh) {
-        const sidebar = $('sb2-version');
-        const dashCard = $('panel-version-card');
-        const sidebarState = $('sb2-version-state');
-        const dashStatus = $('panel-version-status');
-        const note = $('panel-version-note');
-        const btn = $('panel-version-refresh');
+    if (available) {
+      if (stateElement) {
+        stateElement.textContent = 'UPDATE';
+        stateElement.classList.remove(
+          'is-current',
+          'is-error',
+        );
+        stateElement.classList.add(
+          'is-update',
+        );
+      }
 
-        setState(sidebar, 'is-checking');
-        setState(dashCard, 'is-checking');
-        if (sidebarState) sidebarState.textContent = 'checking';
-        if (dashStatus) dashStatus.textContent = 'Checking';
-        if (note) note.textContent = 'Checking GitHub for updates…';
-        if (btn) btn.disabled = true;
+      if (hintElement) {
+        hintElement.textContent = 'New update available';
+      }
 
-        try {
-            const url = refresh ? `${endpoint}?refresh=1` : endpoint;
-            const r = await fetch(url, { credentials: 'same-origin' });
-            const data = await r.json().catch(() => ({}));
-            if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-            applyVersion(data);
-        } catch (err) {
-            applyVersion({
-                current_version: sidebar?.dataset.currentVersion || dashCard?.dataset.currentVersion || '',
-                error: err && err.message ? err.message : 'Unknown error'
-            });
-        } finally {
-            if (btn) btn.disabled = false;
-        }
+      if (card) {
+        card.dataset.updateAvailable = '1';
+        card.dataset.target = 'main';
+        card.dataset.latestRevision = latestRevision;
+        card.setAttribute(
+          'aria-label',
+          latestRevision
+            ? `WG Panel update available, main revision ${latestRevision}`
+            : 'WG Panel update available'
+        );
+      }
+
+      return;
     }
 
-    document.addEventListener('DOMContentLoaded', function () {
-        const btn = $('panel-version-refresh');
-        if (btn) btn.addEventListener('click', function () { loadVersion(true); });
-        if ($('sb2-version') || $('panel-version-card')) loadVersion(false);
-    });
+    if (stateElement) {
+      stateElement.textContent = 'CURRENT';
+      stateElement.classList.remove(
+        'is-update',
+        'is-error',
+      );
+      stateElement.classList.add(
+        'is-current',
+      );
+    }
+
+    if (hintElement) {
+      hintElement.textContent = 'Repository is current';
+    }
+
+    if (card) {
+      card.dataset.updateAvailable = '0';
+      card.dataset.target = 'main';
+      card.dataset.latestRevision = latestRevision;
+      card.setAttribute(
+        'aria-label',
+        'WG Panel is current'
+      );
+    }
+  }
+
+  function renderFailure(error) {
+    const directionElement = byId(
+      'sb2-version-direction'
+    );
+
+    const latestElement = byId(
+      'sb2-version-latest'
+    );
+
+    const stateElement = byId(
+      'sb2-version-state'
+    );
+
+    const hintElement = byId(
+      'sb2-update-hint'
+    );
+
+    if (directionElement) {
+      directionElement.hidden = true;
+    }
+
+    if (latestElement) {
+      latestElement.hidden = true;
+      latestElement.textContent = '';
+    }
+
+    if (stateElement) {
+      stateElement.textContent = 'UNKNOWN';
+      stateElement.classList.remove(
+        'is-current',
+        'is-update',
+      );
+      stateElement.classList.add(
+        'is-error',
+      );
+    }
+
+    if (hintElement) {
+      hintElement.textContent = (
+        'Could not check GitHub main'
+      );
+
+      hintElement.title = String(
+        error?.message
+        || error
+        || 'Version check failed'
+      );
+    }
+  }
+
+  async function fetchJson(
+    url,
+    timeoutMs = 12000,
+  ) {
+    const controller = new AbortController();
+
+    const timer = window.setTimeout(
+      () => controller.abort(),
+      timeoutMs,
+    );
+
+    try {
+      const response = await fetch(
+        url,
+        {
+          method: 'GET',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: {
+            Accept: 'application/json',
+          },
+          signal: controller.signal,
+        },
+      );
+
+      let payload = {};
+
+      try {
+        payload = await response.json();
+      } catch (_) {
+        payload = {};
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          payload?.detail
+          || payload?.message
+          || payload?.error
+          || `HTTP ${response.status}`
+        );
+      }
+
+      return payload;
+
+    } finally {
+      window.clearTimeout(timer);
+    }
+  }
+
+  async function refreshSidebarVersion() {
+    const stateElement = byId(
+      'sb2-version-state'
+    );
+
+    const hintElement = byId(
+      'sb2-update-hint'
+    );
+
+    if (stateElement) {
+      stateElement.textContent = 'CHECKING';
+      stateElement.classList.remove(
+        'is-current',
+        'is-update',
+        'is-error',
+      );
+    }
+
+    if (hintElement) {
+      hintElement.textContent = (
+        'Checking GitHub main…'
+      );
+
+      hintElement.removeAttribute(
+        'title'
+      );
+    }
+
+    try {
+      const payload = await fetchJson(
+        `/api/panel/version?fresh=1&_=${Date.now()}`,
+      );
+
+      render(payload);
+
+    } catch (error) {
+      renderFailure(error);
+    }
+  }
+
+  window.refreshPanelVersionBadge = (
+    refreshSidebarVersion
+  );
+
+  if (document.readyState === 'loading') {
+    document.addEventListener(
+      'DOMContentLoaded',
+      refreshSidebarVersion,
+      {
+        once: true,
+      },
+    );
+  } else {
+    refreshSidebarVersion();
+  }
+
+  window.addEventListener(
+    'wg-panel-update-finished',
+    () => {
+      window.setTimeout(
+        refreshSidebarVersion,
+        800,
+      );
+    },
+  );
+
+  function renderDashboardVersion(payload) {
+    const card = byId('panel-version-card');
+    if (!card) return;
+
+    const currentElement = byId('panel-version-current');
+    const latestElement = byId('panel-version-latest');
+    const statusElement = byId('panel-version-status');
+    const noteElement = byId('panel-version-note');
+    const releaseElement = byId('panel-version-release');
+
+    const current = cleanVersion(
+      payload?.current
+      || card.dataset.currentVersion
+      || ''
+    );
+
+    const available = !!payload?.update_available;
+    const currentRevision = shortRevision(payload, 'current');
+    const latestRevision = shortRevision(payload, 'latest');
+
+    if (currentElement) {
+      currentElement.textContent = current ? `v${current}` : '—';
+    }
+
+    if (latestElement) {
+      latestElement.textContent = latestRevision || '';
+    }
+
+    if (statusElement) {
+      statusElement.classList.remove(
+        'is-current',
+        'is-update',
+        'is-checking',
+        'is-error',
+      );
+
+      statusElement.textContent = available ? 'UPDATE' : 'CURRENT';
+      statusElement.classList.add(
+        available ? 'is-update' : 'is-current',
+      );
+    }
+
+    if (noteElement) {
+      if (available) {
+        noteElement.textContent = latestRevision
+          ? `New main revision · ${latestRevision}`
+          : 'New main revision available';
+      } else {
+        noteElement.textContent = currentRevision
+          ? `Main revision · ${currentRevision}`
+          : 'Repository is current';
+      }
+    }
+
+    if (releaseElement && payload?.latest_url) {
+      releaseElement.href = payload.latest_url;
+    }
+
+    card.dataset.updateAvailable = available ? '1' : '0';
+    card.dataset.target = 'main';
+  }
+
+  function renderDashboardFailure(error) {
+    const card = byId('panel-version-card');
+    if (!card) return;
+
+    const statusElement = byId('panel-version-status');
+    const noteElement = byId('panel-version-note');
+
+    if (statusElement) {
+      statusElement.textContent = 'UNKNOWN';
+      statusElement.classList.remove(
+        'is-current',
+        'is-update',
+        'is-checking',
+      );
+      statusElement.classList.add('is-error');
+    }
+
+    if (noteElement) {
+      noteElement.textContent = 'Could not check GitHub main';
+      noteElement.title = String(
+        error?.message
+        || error
+        || 'Version check failed'
+      );
+    }
+  }
+
+  async function refreshDashboardVersion() {
+    const card = byId('panel-version-card');
+    if (!card) return;
+
+    const statusElement = byId('panel-version-status');
+    const noteElement = byId('panel-version-note');
+    const refreshButton = byId('panel-version-refresh');
+
+    if (statusElement) {
+      statusElement.textContent = 'CHECKING';
+      statusElement.classList.remove(
+        'is-current',
+        'is-update',
+        'is-error',
+      );
+      statusElement.classList.add('is-checking');
+    }
+
+    if (noteElement) {
+      noteElement.textContent = 'Checking GitHub main…';
+      noteElement.removeAttribute('title');
+    }
+
+    if (refreshButton) {
+      refreshButton.disabled = true;
+      refreshButton.classList.add('is-loading');
+    }
+
+    try {
+      const payload = await fetchJson(
+        `/api/panel/version?fresh=1&_=${Date.now()}`,
+      );
+
+      renderDashboardVersion(payload);
+    } catch (error) {
+      renderDashboardFailure(error);
+    } finally {
+      if (refreshButton) {
+        refreshButton.disabled = false;
+        refreshButton.classList.remove('is-loading');
+      }
+    }
+  }
+
+  window.refreshDashboardPanelVersion = refreshDashboardVersion;
+
+  const dashboardRefreshButton = byId('panel-version-refresh');
+  if (dashboardRefreshButton) {
+    dashboardRefreshButton.addEventListener(
+      'click',
+      refreshDashboardVersion,
+    );
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener(
+      'DOMContentLoaded',
+      refreshDashboardVersion,
+      { once: true },
+    );
+  } else {
+    refreshDashboardVersion();
+  }
+
+  window.addEventListener(
+    'wg-panel-update-finished',
+    () => {
+      window.setTimeout(
+        refreshDashboardVersion,
+        900,
+      );
+    },
+  );
+
 })();
