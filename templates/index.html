@@ -1,28 +1,54 @@
 {% extends 'base.html' %}
-{% block head_extras %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}?v=20260730-v48">
-{% endblock %}
 {% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}?v=20260730-dashboard-version-chip">
 
 <div class="dashboard-topbar">
     <h1 class="page-title">
         <i class="fa-solid fa-chart-simple"></i> Dashboard
     </h1>
 
-    <div class="panel-version-chip" id="panel-version-card" data-current-version="{{ PANEL_VERSION }}" title="Panel version">
-        <span class="chip-icon"><i class="fas fa-code-branch"></i></span>
-        <span class="pv-label">Panel</span>
-        <span class="panel-version-number" id="panel-version-current">v{{ PANEL_VERSION }}</span>
-        <span class="panel-version-status" id="panel-version-status">Checking</span>
-        <span class="pv-label">Latest</span>
-        <span class="panel-version-number" id="panel-version-latest">—</span>
-        <button class="pv-mini-btn" type="button" id="panel-version-refresh" aria-label="Check panel version">
-            <i class="fas fa-rotate"></i>
-        </button>
-        <a class="pv-mini-btn" id="panel-version-release" href="{{ PANEL_REPO_URL }}/releases" target="_blank" rel="noopener" aria-label="Open releases">
-            <i class="fa-brands fa-github"></i>
-        </a>
-        <span class="panel-version-note" id="panel-version-note">Checking GitHub for updates…</span>
+    <div class="panel-version-chip"
+         id="panel-version-card"
+         data-current-version="{{ PANEL_VERSION }}"
+         title="Panel update status">
+        <span class="chip-icon" aria-hidden="true">
+            <i class="fas fa-code-branch"></i>
+        </span>
+
+        <span class="pv-copy">
+            <span class="pv-primary">
+                <span class="pv-label">Panel</span>
+                <strong class="panel-version-number"
+                        id="panel-version-current">v{{ PANEL_VERSION }}</strong>
+            </span>
+            <span class="panel-version-note"
+                  id="panel-version-note">Checking GitHub main…</span>
+        </span>
+
+        <span class="panel-version-status"
+              id="panel-version-status">Checking</span>
+
+        <span class="pv-actions">
+            <button class="pv-mini-btn"
+                    type="button"
+                    id="panel-version-refresh"
+                    aria-label="Check panel version"
+                    title="Check GitHub main">
+                <i class="fas fa-rotate"></i>
+            </button>
+
+            <a class="pv-mini-btn"
+               id="panel-version-release"
+               href="{{ PANEL_REPO_URL }}"
+               target="_blank"
+               rel="noopener"
+               aria-label="Open GitHub repository"
+               title="Open GitHub repository">
+                <i class="fa-brands fa-github"></i>
+            </a>
+        </span>
+
+        <span id="panel-version-latest" hidden></span>
     </div>
 </div>
 <div class="nav-sep"></div>
@@ -196,34 +222,12 @@
 
     <section class="card info-pro sys-card compact-sys">
         <div class="title">
-            <span class="chip-icon"><i class="fas fa-microchip"></i></span>
-            <span>System Info</span>
-
-            <span class="sys-head-actions">
-                <button
-                    class="sys-log-btn"
-                    type="button"
-                    data-open="dash-logs"
-                    title="Open recent panel logs">
-                    <i class="fas fa-file-lines"></i>
-                    <span>Panel</span>
+            <span class="chip-icon"><i class="fas fa-microchip"></i></span><span>System Info</span>
+            <span class="more-wrap">
+                <button class="more-pop" type="button" aria-haspopup="dialog" aria-expanded="false">
+                    <i class="fas fa-circle-info"></i> More
                 </button>
-
-                <button
-                    class="sys-log-btn"
-                    type="button"
-                    data-open="dash-node-logs"
-                    title="Open node logs">
-                    <i class="fas fa-server"></i>
-                    <span>Node</span>
-                </button>
-
-                <span class="more-wrap">
-                    <button class="more-pop" type="button" aria-haspopup="dialog" aria-expanded="false">
-                        <i class="fas fa-circle-info"></i>
-                        <span>More</span>
-                    </button>
-                    <div class="popover" role="dialog" aria-label="More system information">
+                <div class="popover" role="dialog" aria-label="More system information">
                     <div class="kv-grid">
                         <div class="kv-row">
                             <div class="kv-k">OS</div>
@@ -238,8 +242,7 @@
                             <div class="kv-v" id="arch">—</div>
                         </div>
                     </div>
-                    </div>
-                </span>
+                </div>
             </span>
         </div>
         <div class="kv-grid">
@@ -263,55 +266,6 @@
     </section>
 </div>
 
-
-<div id="dash-node-logs-pop" class="dash-popover dash-node-popover" hidden aria-hidden="true"
-     role="dialog" aria-label="Node interface logs">
-    <div class="pop-head">
-        <div class="title">
-            <i class="fas fa-server"></i>
-            Node Logs
-        </div>
-
-        <div class="actions">
-            <button id="dash-node-logs-auto" class="toggle t-dark on" type="button"
-                    role="switch" aria-checked="true" title="Auto-refresh">
-                <span class="dot"></span>
-                <span class="lab">Auto-refresh</span>
-            </button>
-
-            <button id="dash-node-logs-refresh" class="icon-btn" type="button" title="Refresh">
-                <i class="fas fa-rotate"></i>
-            </button>
-
-            <button id="dash-node-logs-close" class="icon-btn" type="button" title="Close">
-                <i class="fas fa-times"></i>
-            </button>
-        </div>
-    </div>
-
-    <div class="node-log-toolbar">
-        <label>
-            <span>Node</span>
-            <select id="dash-node-select">
-                <option value="">Loading nodes…</option>
-            </select>
-        </label>
-
-        <label>
-            <span>Interface</span>
-            <select id="dash-node-iface-select" disabled>
-                <option value="">Select a node first</option>
-            </select>
-        </label>
-    </div>
-
-    <div id="dash-node-logs-list" class="pop-body"></div>
-
-    <div id="dash-node-logs-empty" class="muted small dash-log-empty">
-        Select a node and interface to view logs.
-    </div>
-</div>
-
 <div id="dash-logs-pop" class="dash-popover" hidden aria-hidden="true" role="dialog" aria-label="Recent logs">
     <div class="pop-head">
         <div class="title"><i class="far fa-file-alt"></i> Recent Logs</div>
@@ -330,5 +284,5 @@
     <div id="dash-logs-empty" class="muted small" style="display:none;padding:8px 10px;">No recent entries.</div>
 </div>
 
-<script defer src="{{ url_for('static', filename='js/index.js') }}?v=20260730-v48"></script>
+<script defer src="{{ url_for('static', filename='js/index.js') }}?v=20260730-dashboard-version-chip"></script>
 {% endblock %}
