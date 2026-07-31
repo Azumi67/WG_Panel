@@ -1851,19 +1851,593 @@ def panel_version_info(*, fresh: bool = False) -> dict:
     return result
 def panel_update_status() -> dict: return _api_data("GET", "/api/panel/update/status", timeout=10)
 def panel_update_targets() -> dict: return _api_data("GET", "/api/panel/update/targets", timeout=20)
-def start_panel_update(target: str = "latest") -> dict: return _api_data("POST", "/api/panel/update", payload={"target": target or "latest"}, timeout=20)
-def start_node_update(node_id: int, target: str = "latest") -> dict: return _api_data("POST", f"/api/nodes/{int(node_id)}/update", payload={"target": target or "latest"}, timeout=20)
+def start_panel_update(target: str = "main") -> dict: return _api_data("POST", "/api/panel/update", payload={"target": "main"}, timeout=20)
+def start_node_update(node_id: int, target: str = "main") -> dict: return _api_data("POST", f"/api/nodes/{int(node_id)}/update", payload={"target": "main"}, timeout=20)
 def node_update_status(node_id: int) -> dict: return _api_data("GET", f"/api/nodes/{int(node_id)}/update/status", timeout=12)
 
+def _update_state(status: dict) -> str:
+    return str(
+        (status or {}).get("status")
+        or "idle"
+    ).strip().lower()
+
+
+def _update_stage(status: dict) -> str:
+    return str(
+        (status or {}).get("stage")
+        or _update_state(status)
+        or "idle"
+    ).strip().lower()
+
+
 def _update_busy(status: dict) -> bool:
-    return str((status or {}).get("status") or "").lower() in {"queued","running","downloading","installing","validating","restarting"}
+    return _update_state(status) in {
+        "queued",
+        "running",
+        "backup",
+        "downloading",
+        "download",
+        "extract",
+        "install",
+        "installing",
+        "dependencies",
+        "validate",
+        "validating",
+        "restart",
+        "restarting",
+        "rollback",
+        "rolling_back",
+    }
+
+
+def _update_terminal(status: dict) -> bool:
+    return _update_state(status) in {
+        "completed",
+        "complete",
+        "done",
+        "success",
+        "rollback_completed",
+        "failed",
+        "error",
+        "rollback_failed",
+        "cancelled",
+        "canceled",
+    }
+
+
+def _update_percent(status: dict) -> int:
+    try:
+        return max(
+            0,
+            min(
+                100,
+                int(
+                    (status or {}).get("percent")
+                    or 0
+                ),
+            ),
+        )
+    except Exception:
+        return 0
+
+
+def _update_status_icon(status: dict) -> str:
+    state = _update_state(status)
+    stage = _update_stage(status)
+
+    if state in {
+        "completed",
+        "complete",
+        "done",
+        "success",
+    }:
+        return "🟢"
+
+    if state == "rollback_completed":
+        return "🟡"
+
+    if state in {
+        "failed",
+        "error",
+        "rollback_failed",
+        "cancelled",
+        "canceled",
+        "offline",
+    }:
+        return "🔴"
+
+    if state in {
+        "restart",
+        "restarting",
+    } or stage in {
+        "restart",
+        "restarting",
+    }:
+        return "🟠"
+
+    if state in {
+        "rollback",
+        "rolling_back",
+    } or stage in {
+        "rollback",
+        "rolling_back",
+    }:
+        return "🟡"
+
+    if state in {
+        "install",
+        "installing",
+        "dependencies",
+    } or stage in {
+        "install",
+        "installing",
+        "dependencies",
+    }:
+        return "🟣"
+
+    if state in {
+        "validate",
+        "validating",
+    } or stage in {
+        "validate",
+        "validating",
+    }:
+        return "🟠"
+
+    if state in {
+        "queued",
+    }:
+        return "🟡"
+
+    if _update_busy(status):
+        return "🔵"
+
+    return "⚪"
+
+
+def _update_stage_label(status: dict) -> str:
+    state = _update_state(status)
+    stage = _update_stage(status)
+
+    labels = {
+        "idle": "Ready",
+        "queued": "Queued",
+        "running": "Working",
+        "backup": "Creating rollback backup",
+        "download": "Downloading main",
+        "downloading": "Downloading main",
+        "extract": "Preparing files",
+        "install": "Installing",
+        "installing": "Installing",
+        "dependencies": "Installing dependencies",
+        "validate": "Validating",
+        "validating": "Validating",
+        "restart": "Restarting",
+        "restarting": "Restarting",
+        "rollback": "Rolling back",
+        "rolling_back": "Rolling back",
+        "completed": "Completed",
+        "complete": "Completed",
+        "done": "Completed",
+        "success": "Completed",
+        "rollback_completed": "Previous version restored",
+        "rollback_failed": "Rollback failed",
+        "failed": "Failed",
+        "error": "Failed",
+        "cancelled": "Cancelled",
+        "canceled": "Cancelled",
+        "offline": "Offline",
+    }
+
+    return labels.get(
+        stage,
+        labels.get(
+            state,
+            stage.replace("_", " ").title(),
+        ),
+    )
+
 
 def _update_status_line(status: dict) -> str:
-    state=str((status or {}).get("status") or "idle").lower(); stage=str((status or {}).get("stage") or state)
-    try: percent=max(0,min(100,int((status or {}).get("percent") or 0)))
-    except Exception: percent=0
-    icon={"idle":"⚪","queued":"🟡","running":"🔵","downloading":"🔵","installing":"🟣","validating":"🟠","restarting":"🟠","done":"🟢","success":"🟢","failed":"🔴","error":"🔴","offline":"🔴"}.get(state,"⚪")
-    return f"{icon} <b>{html(stage.title())}</b> · <code>{percent}%</code>"
+    return (
+        f"{_update_status_icon(status)} "
+        f"<b>{html(_update_stage_label(status))}</b> · "
+        f"<code>{_update_percent(status)}%</code>"
+    )
+
+
+def _update_progress_bar(percent: int) -> str:
+    percent = max(0, min(100, int(percent or 0)))
+    filled = min(10, percent // 10)
+    return (
+        "▓" * filled
+        + "░" * (10 - filled)
+    )
+
+
+def _update_live_text(
+    status: dict,
+    *,
+    target_name: str,
+    node_name: str | None = None,
+    temporarily_unreachable: bool = False,
+) -> str:
+    state = _update_state(status)
+    percent = _update_percent(status)
+    label = _update_stage_label(status)
+    icon = _update_status_icon(status)
+
+    title = (
+        f"🖥 <b>Updating node · {html(node_name or target_name)}</b>"
+        if node_name
+        else "⬆️ <b>Updating WG Panel</b>"
+    )
+
+    message = str(
+        (status or {}).get("message")
+        or ""
+    ).strip()
+
+    revision = str(
+        (status or {}).get("revision_short")
+        or (status or {}).get("revision")
+        or ""
+    ).strip()[:8]
+
+    lines = [
+        title,
+        "",
+        (
+            f"{icon} <b>{html(label)}</b> · "
+            f"<code>{percent}%</code>"
+        ),
+        (
+            f"<code>{_update_progress_bar(percent)}</code>"
+        ),
+    ]
+
+    if temporarily_unreachable:
+        lines.extend([
+            "",
+            (
+                "🔄 The panel is restarting or temporarily "
+                "unreachable. Telegram is still monitoring it."
+            ),
+        ])
+
+    elif message:
+        lines.extend([
+            "",
+            f"📝 {html(message)}",
+        ])
+
+    if revision:
+        lines.append(
+            f"🌿 Main revision: <code>{html(revision)}</code>"
+        )
+
+    if state in {
+        "completed",
+        "complete",
+        "done",
+        "success",
+    }:
+        lines.extend([
+            "",
+            "✅ <b>Update completed successfully.</b>",
+        ])
+
+    elif state == "rollback_completed":
+        lines.extend([
+            "",
+            (
+                "⚠️ <b>The update failed, but the previous "
+                "version was restored successfully.</b>"
+            ),
+        ])
+
+    elif state in {
+        "failed",
+        "error",
+    }:
+        lines.extend([
+            "",
+            "❌ <b>Update failed.</b>",
+        ])
+
+    elif not _update_terminal(status):
+        lines.extend([
+            "",
+            (
+                "⏳ <i>The update is running. This message "
+                "refreshes automatically.</i>"
+            ),
+        ])
+
+    return "\n".join(lines)
+
+
+def _update_live_keyboard(
+    *,
+    node_id: int | None = None,
+    terminal: bool = False,
+) -> InlineKeyboardMarkup:
+    callback = (
+        f"system:node:{int(node_id)}"
+        if node_id is not None
+        else "home:system"
+    )
+
+    label = (
+        "⬅️ Node update"
+        if node_id is not None
+        else "⬅️ Update Center"
+    )
+
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "🔄 Refresh status",
+                callback_data=callback,
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                label,
+                callback_data=callback,
+            )
+        ],
+    ])
+
+
+async def _safe_edit_update_message(
+    bot,
+    chat_id: int,
+    message_id: int,
+    text_out: str,
+    keyboard,
+) -> bool:
+    try:
+        await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text_out,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+        )
+        return True
+
+    except BadRequest as exc:
+        if "message is not modified" in str(exc).lower():
+            return True
+        logging.debug(
+            "Could not edit Telegram update message: %s",
+            exc,
+        )
+        return False
+
+    except Exception as exc:
+        logging.debug(
+            "Could not edit Telegram update message: %s",
+            exc,
+        )
+        return False
+
+
+async def _monitor_update_message(
+    application,
+    *,
+    chat_id: int,
+    message_id: int,
+    target_name: str = "main",
+    node_id: int | None = None,
+    node_name: str | None = None,
+):
+    """
+    Keep one Telegram message synchronized with updater status.
+
+    The panel may be temporarily unreachable while its service restarts.
+    That is treated as progress, not as immediate failure.
+    """
+    last_render = ""
+    unreachable_polls = 0
+    started_at = time.monotonic()
+    maximum_seconds = 15 * 60
+
+    while (
+        time.monotonic() - started_at
+        < maximum_seconds
+    ):
+        try:
+            if node_id is None:
+                status = await asyncio.to_thread(
+                    panel_update_status,
+                )
+            else:
+                status = await asyncio.to_thread(
+                    node_update_status,
+                    int(node_id),
+                )
+
+            route_failed = bool(
+                not isinstance(status, dict)
+                or status.get("ok") is False
+                or (
+                    status.get("error")
+                    and not status.get("status")
+                )
+            )
+
+            if route_failed:
+                unreachable_polls += 1
+
+                temporary = {
+                    "status": "restarting",
+                    "stage": "restarting",
+                    "percent": 97,
+                    "message": (
+                        "Waiting for the updated service "
+                        "to become available…"
+                    ),
+                }
+
+                rendered = _update_live_text(
+                    temporary,
+                    target_name=target_name,
+                    node_name=node_name,
+                    temporarily_unreachable=True,
+                )
+
+                if rendered != last_render:
+                    await _safe_edit_update_message(
+                        application.bot,
+                        chat_id,
+                        message_id,
+                        rendered,
+                        _update_live_keyboard(
+                            node_id=node_id,
+                            terminal=False,
+                        ),
+                    )
+                    last_render = rendered
+
+                # service restart take a while.
+                if unreachable_polls >= 60:
+                    final = {
+                        "status": "error",
+                        "stage": "offline",
+                        "percent": 97,
+                        "message": (
+                            "The updater status endpoint did not "
+                            "return after the service restart."
+                        ),
+                    }
+
+                    await _safe_edit_update_message(
+                        application.bot,
+                        chat_id,
+                        message_id,
+                        _update_live_text(
+                            final,
+                            target_name=target_name,
+                            node_name=node_name,
+                        ),
+                        _update_live_keyboard(
+                            node_id=node_id,
+                            terminal=True,
+                        ),
+                    )
+                    return
+
+            else:
+                unreachable_polls = 0
+
+                rendered = _update_live_text(
+                    status,
+                    target_name=target_name,
+                    node_name=node_name,
+                )
+
+                if rendered != last_render:
+                    await _safe_edit_update_message(
+                        application.bot,
+                        chat_id,
+                        message_id,
+                        rendered,
+                        _update_live_keyboard(
+                            node_id=node_id,
+                            terminal=_update_terminal(status),
+                        ),
+                    )
+                    last_render = rendered
+
+                if _update_terminal(status):
+                    return
+
+                if (
+                    _update_state(status) == "idle"
+                    and time.monotonic() - started_at > 20
+                ):
+                    return
+
+        except asyncio.CancelledError:
+            raise
+
+        except Exception as exc:
+            logging.debug(
+                "Telegram update monitor poll failed: %s",
+                exc,
+            )
+
+        await asyncio.sleep(3)
+
+    timeout_status = {
+        "status": "error",
+        "stage": "timeout",
+        "percent": 0,
+        "message": (
+            "Telegram stopped monitoring after 15 minutes. "
+            "Open Update Center to check the final status."
+        ),
+    }
+
+    await _safe_edit_update_message(
+        application.bot,
+        chat_id,
+        message_id,
+        _update_live_text(
+            timeout_status,
+            target_name=target_name,
+            node_name=node_name,
+        ),
+        _update_live_keyboard(
+            node_id=node_id,
+            terminal=True,
+        ),
+    )
+
+
+def _start_update_monitor(
+    context,
+    update: Update,
+    *,
+    target_name: str = "main",
+    node_id: int | None = None,
+    node_name: str | None = None,
+):
+    message = (
+        update.callback_query.message
+        if update.callback_query
+        else update.effective_message
+    )
+
+    if not message:
+        return
+
+    task = context.application.create_task(
+        _monitor_update_message(
+            context.application,
+            chat_id=int(message.chat_id),
+            message_id=int(message.message_id),
+            target_name=target_name,
+            node_id=node_id,
+            node_name=node_name,
+        ),
+        name=(
+            f"wg-update-node-{node_id}"
+            if node_id is not None
+            else "wg-update-panel"
+        ),
+    )
+
+    monitors = context.application.bot_data.setdefault(
+        "update_monitors",
+        set(),
+    )
+    monitors.add(task)
+    task.add_done_callback(
+        lambda completed: monitors.discard(completed)
+    )
 
 def render_update_center(*, fresh: bool = False):
     version = panel_version_info(fresh=fresh)
@@ -2920,10 +3494,21 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("system:update:start:"):
-        target = data.split(
-            ":",
-            3,
-        )[-1].strip() or "main"
+        target = "main"
+
+        await edit_send(
+            update,
+            (
+                "⬆️ <b>Updating WG Panel</b>\n\n"
+                "🟡 <b>Starting updater…</b> · <code>2%</code>\n"
+                "<code>░░░░░░░░░░</code>\n\n"
+                "⏳ <i>The request was accepted. Telegram will "
+                "show live progress here.</i>"
+            ),
+            _update_live_keyboard(
+                terminal=False,
+            ),
+        )
 
         result = await asyncio.to_thread(
             start_panel_update,
@@ -2943,18 +3528,41 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         _log_admin(
             "panel_update_start",
-            f"target={target}",
+            "target=main",
         )
 
-        text, keyboard = await asyncio.to_thread(
-            render_update_center,
-            fresh=True,
+        queued_status = (
+            result.get("status")
+            if isinstance(
+                result.get("status"),
+                dict,
+            )
+            else {
+                "status": "queued",
+                "stage": "queued",
+                "percent": 2,
+                "message": (
+                    "Updater accepted the request and "
+                    "is preparing the rollback backup."
+                ),
+            }
         )
 
         await edit_send(
             update,
-            text,
-            keyboard,
+            _update_live_text(
+                queued_status,
+                target_name="main",
+            ),
+            _update_live_keyboard(
+                terminal=False,
+            ),
+        )
+
+        _start_update_monitor(
+            context,
+            update,
+            target_name="main",
         )
         return
     if data == "system:nodes":
@@ -2969,12 +3577,117 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Start node update",callback_data=f"system:nodeupdate:start:{node_id}")],[InlineKeyboardButton("⬅️ Cancel",callback_data=f"system:node:{node_id}")]])
         await edit_send(update,"⚠️ <b>Update this node?</b>\n\nThe node creates a rollback backup, validates node_agent.py, and restarts its automatically detected service.",kb); return
     if data.startswith("system:nodeupdate:start:"):
-        try: node_id=int(data.rsplit(":",1)[-1])
-        except Exception: await q.answer("Invalid node.",show_alert=True); return
-        result=await asyncio.to_thread(start_node_update,node_id,"latest")
+        try:
+            node_id = int(
+                data.rsplit(":", 1)[-1]
+            )
+        except Exception:
+            await q.answer(
+                "Invalid node.",
+                show_alert=True,
+            )
+            return
+
+        targets = await asyncio.to_thread(
+            panel_update_targets,
+        )
+
+        node_row = next(
+            (
+                row
+                for row in (
+                    targets.get("nodes")
+                    if isinstance(targets, dict)
+                    else []
+                ) or []
+                if int(row.get("id") or 0) == node_id
+            ),
+            {},
+        )
+
+        node_name = str(
+            node_row.get("name")
+            or f"Node {node_id}"
+        )
+
+        await edit_send(
+            update,
+            (
+                f"🖥 <b>Updating node · {html(node_name)}</b>\n\n"
+                "🟡 <b>Starting updater…</b> · <code>2%</code>\n"
+                "<code>░░░░░░░░░░</code>\n\n"
+                "⏳ <i>The request was accepted. Telegram will "
+                "show live progress here.</i>"
+            ),
+            _update_live_keyboard(
+                node_id=node_id,
+                terminal=False,
+            ),
+        )
+
+        result = await asyncio.to_thread(
+            start_node_update,
+            node_id,
+            "main",
+        )
+
         if not result.get("ok"):
-            await edit_send(update,f"❌ <b>Could not start node update</b>\n\n<code>{html(result.get('detail') or result.get('error') or result)}</code>",KB.back(f"system:node:{node_id}")); return
-        _log_admin("node_update_start",f"node_id={node_id}; target=latest"); text,keyboard=await asyncio.to_thread(render_node_update,node_id); await edit_send(update,text,keyboard); return
+            await edit_send(
+                update,
+                (
+                    "❌ <b>Could not start node update</b>\n\n"
+                    f"<code>{html(result.get('detail') or result.get('error') or result)}</code>"
+                ),
+                KB.back(
+                    f"system:node:{node_id}"
+                ),
+            )
+            return
+
+        _log_admin(
+            "node_update_start",
+            f"node_id={node_id}; target=main",
+        )
+
+        queued_status = (
+            result.get("status")
+            if isinstance(
+                result.get("status"),
+                dict,
+            )
+            else {
+                "status": "queued",
+                "stage": "queued",
+                "percent": 2,
+                "message": (
+                    "Node updater accepted the request and "
+                    "is preparing the rollback backup."
+                ),
+            }
+        )
+
+        await edit_send(
+            update,
+            _update_live_text(
+                queued_status,
+                target_name="main",
+                node_name=node_name,
+            ),
+            _update_live_keyboard(
+                node_id=node_id,
+                terminal=False,
+            ),
+        )
+
+        _start_update_monitor(
+            context,
+            update,
+            target_name="main",
+            node_id=node_id,
+            node_name=node_name,
+        )
+        return
+
 
     #  __Profiles
     if data == "profiles:menu":
@@ -5551,12 +6264,43 @@ async def _on_startup(application):
     application.bot_data["background_tasks"]=tasks
 
 async def _on_shutdown(application):
-    stop_event=application.bot_data.get("stop_event")
-    if stop_event: stop_event.set()
-    tasks=application.bot_data.get("background_tasks") or []
-    if tasks:
-        done,pending=await asyncio.wait(tasks,timeout=8)
-        for task in pending: task.cancel()
+    stop_event = application.bot_data.get(
+        "stop_event"
+    )
+
+    if stop_event:
+        stop_event.set()
+
+    monitors = list(
+        application.bot_data.get(
+            "update_monitors"
+        )
+        or []
+    )
+
+    for task in monitors:
+        task.cancel()
+
+    tasks = (
+        application.bot_data.get(
+            "background_tasks"
+        )
+        or []
+    )
+
+    all_tasks = [
+        *tasks,
+        *monitors,
+    ]
+
+    if all_tasks:
+        _, pending = await asyncio.wait(
+            all_tasks,
+            timeout=8,
+        )
+
+        for task in pending:
+            task.cancel()
 
 
 def main():
