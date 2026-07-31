@@ -286,8 +286,20 @@ def diagnostics(g):
 
     source = str(
         version.get("source")
-        or ""
+        or "main"
     ).strip()
+
+    current_revision = str(
+        version.get("current_revision_short")
+        or version.get("current_revision")
+        or ""
+    ).strip()[:8]
+
+    latest_revision = str(
+        version.get("latest_revision_short")
+        or version.get("latest_revision")
+        or ""
+    ).strip()[:8]
 
     update_state = str(
         update.get("status")
@@ -332,7 +344,15 @@ def diagnostics(g):
             else "Latest version  <i>Not detected</i>"
         ),
         (
-            f"Update source   {_html(g, source or 'GitHub')}"
+            f"Update source   {_html(g, source or 'main')}"
+        ),
+        (
+            "Installed main  "
+            f"<code>{_html(g, current_revision or 'not tracked')}</code>"
+        ),
+        (
+            "Latest main     "
+            f"<code>{_html(g, latest_revision or 'not detected')}</code>"
         ),
         (
             f"Updater         {_html(g, updater_text)}"
