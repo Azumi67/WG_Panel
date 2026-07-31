@@ -78,7 +78,7 @@
 
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/panel-version.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/panel-version.css') }}?v=20260730-sidebar-two-row" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/sidebar-compact.css') }}?v=20260730-v50" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/panel-update.css') }}?v=20260730-v50" />
@@ -239,7 +239,7 @@
     {% if request.endpoint == 'users' %}
     <script defer src="{{ url_for('static', filename='js/peers.js') }}"></script>
     {% endif %}
-    <script defer src="{{ url_for('static', filename='js/panel-version.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/panel-version.js') }}?v=20260730-dashboard-version-chip"></script>
     <script defer src="{{ url_for('static', filename='js/panel-update.js') }}?v=20260730-v50"></script>
     <script defer src="{{ url_for('static', filename='js/theme.js') }}?v=20260730-v50"></script>
 
