@@ -1,504 +1,1011 @@
-
 (() => {
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const modal = $('panel-update-modal');
-  if (!modal) return;
 
   const state = {
-    local: null,
-    nodes: [],
-    polling: new Map(),
+    opened: false,
+    polling: null,
+    reconnecting: false,
+    reconnectTimer: null,
+    reconnectDelay: 1000,
+    reconnectStartedAt: 0,
+    panelReachableAfterRestart: false,
+    finalStatusPolls: 0,
+    lastStatus: null,
+    lastTerminalNotice: '',
+    localVersion: null,
+    targets: [],
   };
 
-  function apiError(payload, status) {
-    if (payload && typeof payload === 'object') {
-      return payload.detail || payload.message || payload.error || `HTTP ${status}`;
+  const BUSY = new Set([
+    'queued',
+    'running',
+    'backup',
+    'downloading',
+    'download',
+    'extract',
+    'install',
+    'installing',
+    'dependencies',
+    'validate',
+    'validating',
+    'restart',
+    'restarting',
+  ]);
+
+  const TERMINAL_OK = new Set([
+    'completed',
+    'success',
+    'updated',
+    'rollback_completed',
+  ]);
+
+  const TERMINAL_BAD = new Set([
+    'failed',
+    'error',
+    'rollback_failed',
+  ]);
+
+  function toast(message, type = 'info', persist = false) {
+    const fn = window.toastSafe || window.toast;
+    if (typeof fn === 'function') {
+      try {
+        fn(message, type, { persist });
+      } catch (_) {
+        try { fn(message, type); } catch (_) {}
+      }
     }
-    return (typeof payload === 'string' && payload.trim()) || `HTTP ${status}`;
+  }
+
+  function apiHeaders(json = false) {
+    if (typeof window.csrfHeaders === 'function') {
+      return window.csrfHeaders(json);
+    }
+
+    const headers = {};
+    const csrf = (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1];
+
+    if (csrf) {
+      headers['X-CSRFToken'] = decodeURIComponent(csrf);
+    }
+
+    if (json) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    return headers;
   }
 
   async function api(url, options = {}) {
-    const response = await fetch(url, {
-      credentials: 'same-origin',
-      cache: 'no-store',
-      ...options,
-      headers: {
-        ...(options.body ? {'Content-Type': 'application/json'} : {}),
-        ...(window.csrfHeaders ? window.csrfHeaders(!!options.body) : {}),
-        ...(options.headers || {}),
-      },
-    });
-
-    const type = (response.headers.get('content-type') || '').toLowerCase();
-    let payload;
-    try {
-      payload = type.includes('application/json')
-        ? await response.json()
-        : await response.text();
-    } catch (_) {
-      payload = null;
-    }
-
-    if (!response.ok) throw new Error(apiError(payload, response.status));
-    return payload;
-  }
-
-  function log(message, kind = 'info') {
-    const output = $('pu-log-output');
-    if (!output) return;
-    if (output.textContent === 'No update activity yet.') output.textContent = '';
-    const stamp = new Date().toLocaleTimeString();
-    output.textContent += `[${stamp}] ${kind.toUpperCase()}  ${message}\n`;
-    output.scrollTop = output.scrollHeight;
-  }
-
-  function open() {
-    modal.hidden = false;
-    modal.setAttribute('aria-hidden', 'false');
-    document.body.classList.add('modal-open');
-    refreshAll();
-  }
-
-  function close() {
-    modal.hidden = true;
-    modal.setAttribute('aria-hidden', 'true');
-    document.body.classList.remove('modal-open');
-  }
-
-  function setPill(el, text, tone = '') {
-    if (!el) return;
-    el.textContent = text;
-    el.className = `pu-pill ${tone}`.trim();
-  }
-
-  function statusTone(status) {
-    if (['completed','current','ready'].includes(status)) return 'ready';
-    if (['available','update_available'].includes(status)) return 'update';
-    if (['queued','running','downloading','installing','validating','restarting'].includes(status)) return 'busy';
-    if (['failed','rollback_failed'].includes(status)) return 'error';
-    return '';
-  }
-
-  function localBusy() {
-    return !!(state.local && ['queued','running','downloading','installing','validating','restarting'].includes(state.local.update_status));
-  }
-
-  function updateAnnouncementKey(version, kind = 'panel') {
-    return `wg-panel:update-announced:${kind}:${version || 'unknown'}`;
-  }
-
-  function announceUpdateOnce(message, version, kind = 'panel') {
-    const key = updateAnnouncementKey(version, kind);
+    const method = String(options.method || 'GET').toUpperCase();
+    const hasBody = options.body !== undefined;
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      Number(options.timeout || 15000),
+    );
 
     try {
-      if (localStorage.getItem(key) === '1') return;
-      localStorage.setItem(key, '1');
-    } catch (_) {}
-
-    if (typeof window.toastSafe === 'function') {
-      window.toastSafe(
-        message,
-        'warn',
-        {
-          duration: 9000,
+      const response = await fetch(url, {
+        method,
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: {
+          ...apiHeaders(hasBody),
+          ...(options.headers || {}),
         },
-      );
+        body: hasBody
+          ? JSON.stringify(options.body)
+          : undefined,
+        signal: controller.signal,
+      });
+
+      let payload = null;
+
+      try {
+        payload = await response.json();
+      } catch (_) {
+        payload = {};
+      }
+
+      if (!response.ok) {
+        const error = new Error(
+          payload?.detail
+          || payload?.message
+          || payload?.error
+          || `HTTP ${response.status}`,
+        );
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
+      }
+
+      return payload || {};
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
-  function renderSidebarPanelVersion(version) {
-    const card = $('sb2-update-open');
-    const stateElement = $('sb2-version-state');
-    const currentElement = $('sb2-version-current');
-    const latestElement = $('sb2-version-latest');
-    const directionElement = $('sb2-version-direction');
-    const hintElement = $('sb2-update-hint');
-    const icon = card?.querySelector('.sb2-update-icon i');
+  function ensureConfirmDialog() {
+    if ($('pu-confirm-overlay')) return;
 
-    const busy = localBusy();
-    const available = !!version.update_available;
+    const style = document.createElement('style');
+    style.id = 'pu-confirm-style';
+    style.textContent = `
+      .pu-confirm-overlay[hidden]{display:none!important}
+      .pu-confirm-overlay{
+        position:fixed;inset:0;z-index:12050;
+        display:grid;place-items:center;padding:20px;
+        background:rgba(2,8,18,.72);
+        backdrop-filter:blur(7px);
+      }
+      .pu-confirm-card{
+        width:min(400px,calc(100vw - 28px));
+        border:1px solid rgba(148,163,184,.24);
+        border-radius:17px;
+        background:var(--card,#111f2e);
+        color:var(--text,#f8fafc);
+        box-shadow:0 30px 90px rgba(0,0,0,.48);
+        overflow:hidden;
+      }
+      .pu-confirm-main{padding:18px 19px 15px}
+      .pu-confirm-icon{
+        width:40px;height:40px;border-radius:12px;
+        display:grid;place-items:center;
+        margin-bottom:12px;
+        background:rgba(45,212,191,.14);
+        color:#5eead4;font-size:17px;
+      }
+      .pu-confirm-card h3{margin:0 0 6px;font-size:18px;line-height:1.25}
+      .pu-confirm-card p{
+        margin:0;color:#a9b8ca;line-height:1.45;font-size:13px
+      }
+      .pu-confirm-notice{
+        margin-top:12px;padding:10px 11px;border-radius:11px;
+        background:rgba(245,158,11,.08);
+        border:1px solid rgba(245,158,11,.2);
+        color:#f8d59a;font-size:12px;line-height:1.4
+      }
+      .pu-confirm-actions{
+        display:grid;grid-template-columns:1fr 1fr;gap:10px;
+        padding:11px 14px 14px;
+        border-top:1px solid rgba(148,163,184,.16)
+      }
+      .pu-confirm-actions button{
+        min-height:39px;border-radius:10px;
+        border:1px solid rgba(148,163,184,.22);
+        background:rgba(148,163,184,.08);
+        color:inherit;font:inherit;font-weight:700;cursor:pointer
+      }
+      .pu-confirm-actions .primary{
+        border-color:transparent;
+        background:linear-gradient(135deg,#14b8a6,#0ea5a4);
+        color:white
+      }
+      .pu-confirm-actions button:focus-visible{
+        outline:3px solid rgba(45,212,191,.28);outline-offset:2px
+      }
+      .pu-reconnect-note{
+        display:inline-flex;align-items:center;gap:8px;
+        color:#cbd5e1
+      }
+      .pu-reconnect-note i{color:#5eead4}
+    `;
+    document.head.appendChild(style);
 
-    if (currentElement) {
-      currentElement.textContent = `v${version.current || '—'}`;
-    }
-
-    if (latestElement) {
-      latestElement.textContent = version.latest
-        ? `v${version.latest}`
-        : '';
-      latestElement.hidden = !available;
-    }
-
-    if (directionElement) {
-      directionElement.hidden = !available;
-    }
-
-    card?.classList.toggle(
-      'has-update',
-      available && !busy,
-    );
-
-    if (stateElement) {
-      stateElement.textContent = busy
-        ? 'updating'
-        : (
-          available
-            ? 'update'
-            : 'current'
-        );
-
-      stateElement.classList.toggle(
-        'update',
-        available && !busy,
-      );
-
-      stateElement.classList.toggle(
-        'busy',
-        busy,
-      );
-    }
-
-    if (hintElement) {
-      hintElement.textContent = busy
-        ? 'Installation in progress'
-        : (
-          available
-            ? `Update to v${version.latest}`
-            : 'Latest release installed'
-        );
-    }
-
-    if (icon) {
-      icon.className = busy
-        ? 'fas fa-spinner fa-spin'
-        : (
-          available
-            ? 'fas fa-cloud-arrow-down'
-            : 'fas fa-code-branch'
-        );
-    }
-
-    if (available && !busy) {
-      announceUpdateOnce(
-        `WG Panel v${version.latest} is available. Open Update Center to review and install it.`,
-        version.latest,
-        'panel',
-      );
-    }
-  }
-
-  async function loadLocal() {
-    const version = await api('/api/panel/version?fresh=1');
-    let update = {};
-    try { update = await api('/api/panel/update/status'); } catch (_) {}
-
-    state.local = {
-      ...version,
-      update_status: update.status || 'idle',
-      update_detail: update,
-    };
-
-    $('pu-local-current').textContent = `v${version.current || '—'}`;
-    $('pu-local-latest').textContent = version.latest ? `v${version.latest}` : 'Unavailable';
-    $('pu-local-summary').textContent = version.update_available ? 'Update available' : 'Current';
-    setPill(
-      $('pu-local-state'),
-      update.status && update.status !== 'idle'
-        ? update.status.replaceAll('_',' ')
-        : (version.update_available ? 'Update available' : 'Current'),
-      statusTone(update.status !== 'idle' ? update.status : (version.update_available ? 'available' : 'current'))
-    );
-
-    const button = $('pu-update-local');
-    button.disabled = !version.update_available || localBusy();
-    button.querySelector('span').textContent = localBusy() ? 'Updating…' : 'Update local';
-
-    renderSidebarPanelVersion(version);
-
-    if (update.status && update.status !== 'idle') renderProgress('local', update);
-    if (localBusy()) startPoll('local');
-  }
-
-  function nodeRow(node) {
-    const current = node.version?.current || node.agent_version || '—';
-    const latest = node.version?.latest || state.local?.latest || '—';
-    const available = !!node.version?.update_available;
-    const status = node.update?.status || (node.online ? (available ? 'available' : 'current') : 'offline');
-    const disabled = !node.online || !available || ['queued','running','downloading','installing','validating','restarting'].includes(status);
-
-    return `
-      <article class="pu-node-row" data-node-id="${node.id}">
-        <div class="pu-node-main">
-          <span class="pu-node-icon"><i class="fas fa-server"></i></span>
-          <div>
-            <div class="pu-node-name">
-              <span>${escapeHtml(node.name || `Node ${node.id}`)}</span>
-              <span class="pu-pill ${statusTone(status)}" data-node-state>${escapeHtml(status.replaceAll('_',' '))}</span>
-            </div>
-            <div class="pu-node-meta">
-              Current v${escapeHtml(current)} · Latest v${escapeHtml(latest)} · ${escapeHtml(node.base_url || '')}
-            </div>
+    const overlay = document.createElement('div');
+    overlay.id = 'pu-confirm-overlay';
+    overlay.className = 'pu-confirm-overlay';
+    overlay.hidden = true;
+    overlay.innerHTML = `
+      <section class="pu-confirm-card" role="dialog" aria-modal="true"
+               aria-labelledby="pu-confirm-title">
+        <div class="pu-confirm-main">
+          <div class="pu-confirm-icon">
+            <i class="fas fa-cloud-arrow-down"></i>
           </div>
-          <div class="pu-node-actions">
-            <button class="pu-node-btn update" type="button" data-node-update ${disabled ? 'disabled' : ''}>
-              <i class="fas fa-download"></i> ${disabled && status !== 'current' && status !== 'offline' ? 'Updating…' : 'Update'}
-            </button>
+          <h3 id="pu-confirm-title">Update local panel?</h3>
+          <p id="pu-confirm-message">
+            A rollback backup will be created before panel files are replaced.
+          </p>
+          <div class="pu-confirm-notice">
+            The panel will be unavailable briefly while its service restarts.
+            This page will wait and reconnect automatically.
           </div>
         </div>
-        <div class="pu-progress" data-node-progress hidden>
-          <div class="pu-progress-top"><span data-node-stage>Preparing…</span><b data-node-percent>0%</b></div>
-          <div class="pu-track"><i data-node-bar></i></div>
+        <div class="pu-confirm-actions">
+          <button type="button" id="pu-confirm-cancel">Cancel</button>
+          <button type="button" class="primary" id="pu-confirm-accept">
+            Start update
+          </button>
         </div>
-      </article>`;
+      </section>
+    `;
+    document.body.appendChild(overlay);
   }
 
-  function escapeHtml(value) {
-    return String(value ?? '').replace(/[&<>"']/g, ch => ({
-      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'
-    })[ch]);
+  function askConfirmation({
+    title,
+    message,
+    acceptLabel = 'Continue',
+  }) {
+    ensureConfirmDialog();
+
+    const overlay = $('pu-confirm-overlay');
+    const titleEl = $('pu-confirm-title');
+    const messageEl = $('pu-confirm-message');
+    const accept = $('pu-confirm-accept');
+    const cancel = $('pu-confirm-cancel');
+
+    titleEl.textContent = title;
+    messageEl.textContent = message;
+    accept.textContent = acceptLabel;
+    overlay.hidden = false;
+
+    return new Promise((resolve) => {
+      let done = false;
+
+      const finish = (answer) => {
+        if (done) return;
+        done = true;
+        overlay.hidden = true;
+        accept.removeEventListener('click', yes);
+        cancel.removeEventListener('click', no);
+        overlay.removeEventListener('click', backdrop);
+        document.removeEventListener('keydown', keydown);
+        resolve(answer);
+      };
+
+      const yes = () => finish(true);
+      const no = () => finish(false);
+      const backdrop = (event) => {
+        if (event.target === overlay) finish(false);
+      };
+      const keydown = (event) => {
+        if (event.key === 'Escape') finish(false);
+      };
+
+      accept.addEventListener('click', yes);
+      cancel.addEventListener('click', no);
+      overlay.addEventListener('click', backdrop);
+      document.addEventListener('keydown', keydown);
+
+      setTimeout(() => accept.focus(), 0);
+    });
   }
 
-  function resetNodeUpdateBadge() {
-    const badge = $('sb2-node-update-count');
-    const card = $('sb2-update-open');
-
-    if (badge) {
-      badge.classList.remove('is-visible');
-      badge.hidden = true;
-      badge.textContent = '';
-    }
-
-    card?.classList.remove('has-node-updates');
+  function setText(id, value) {
+    const el = $(id);
+    if (el) el.textContent = value;
   }
 
-  async function loadNodes() {
-    resetNodeUpdateBadge();
+  function setDisabled(id, disabled) {
+    const el = $(id);
+    if (el) el.disabled = !!disabled;
+  }
 
-    const payload = await api('/api/panel/update/targets');
-    state.nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
-    $('pu-node-count').textContent = String(state.nodes.length);
+  function statusName(status) {
+    return String(status?.status || status?.stage || 'idle').toLowerCase();
+  }
 
-    const nodeUpdates = state.nodes.filter(
-      node => (
-        node.online
-        && node.version?.update_available
-      )
+  function isBusy(status) {
+    return BUSY.has(statusName(status));
+  }
+
+  function updateProgress(status) {
+    state.lastStatus = status || {};
+
+    const name = statusName(status);
+    const percent = Math.max(
+      0,
+      Math.min(100, Number(status?.percent || 0)),
+    );
+    const message = String(
+      status?.message
+      || (
+        name === 'idle'
+          ? 'Ready'
+          : name.replaceAll('_', ' ')
+      ),
     );
 
-    const updateCount = $('sb2-node-update-count');
-    const updateCard = $('sb2-update-open');
-    const hintElement = $('sb2-update-hint');
+    const progress = $('pu-local-progress');
+    const bar = $('pu-local-bar');
 
-    if (updateCount) {
-      if (nodeUpdates.length > 0) {
-        updateCount.textContent = (
-          `${nodeUpdates.length} node`
-          + (
-            nodeUpdates.length === 1
-              ? ''
-              : 's'
-          )
+    if (progress) {
+      progress.hidden = !isBusy(status)
+        && !TERMINAL_OK.has(name)
+        && !TERMINAL_BAD.has(name);
+    }
+
+    setText('pu-local-stage', message);
+    setText('pu-local-percent', `${percent}%`);
+
+    if (bar) {
+      bar.style.width = `${percent}%`;
+    }
+
+    const localButton = $('pu-update-local');
+
+    if (localButton) {
+      localButton.disabled = isBusy(status) || state.reconnecting;
+    }
+
+    if (
+      (name === 'restarting' || name === 'restart')
+      && !state.panelReachableAfterRestart
+    ) {
+      enterReconnectMode();
+    }
+
+    if (TERMINAL_OK.has(name)) {
+      stopPoll();
+      state.panelReachableAfterRestart = false;
+      state.reconnecting = false;
+      window.WG_PANEL_UPDATING = false;
+      window.WG_PANEL_RESTARTING = false;
+
+      setText('pu-local-stage', status?.message || 'Update completed.');
+      setText('pu-local-percent', '100%');
+
+      if (bar) bar.style.width = '100%';
+
+      const noticeKey = [
+        name,
+        String(status?.updated_at || ''),
+        String(status?.message || ''),
+      ].join('|');
+
+      if (state.lastTerminalNotice !== noticeKey) {
+        state.lastTerminalNotice = noticeKey;
+
+        toast(
+          name === 'rollback_completed'
+            ? 'Update was not installed. Previous code was restored safely.'
+            : 'Panel update completed successfully.',
+          name === 'rollback_completed' ? 'warn' : 'success',
+          false,
         );
+      }
 
-        updateCount.hidden = false;
+      setDisabled('pu-refresh', false);
 
-        requestAnimationFrame(() => {
-          updateCount.classList.add('is-visible');
-        });
-      } else {
-        updateCount.classList.remove('is-visible');
-        updateCount.hidden = true;
-        updateCount.textContent = '';
+      setTimeout(() => {
+        refreshCenter().catch(() => {});
+      }, 900);
+    }
+
+    if (TERMINAL_BAD.has(name)) {
+      stopPoll();
+      state.panelReachableAfterRestart = false;
+      state.reconnecting = false;
+      window.WG_PANEL_UPDATING = false;
+      window.WG_PANEL_RESTARTING = false;
+      const noticeKey = [
+        name,
+        String(status?.updated_at || ''),
+        String(status?.message || ''),
+      ].join('|');
+
+      if (state.lastTerminalNotice !== noticeKey) {
+        state.lastTerminalNotice = noticeKey;
+        toast(
+          status?.message || 'Panel update failed.',
+          'error',
+          false,
+        );
       }
     }
 
-    updateCard?.classList.toggle(
-      'has-node-updates',
-      nodeUpdates.length > 0,
+    renderLog(status);
+  }
+
+  function renderLog(status) {
+    const output = $('pu-log-output');
+    if (!output) return;
+
+    const lines = Array.isArray(status?.log)
+      ? status.log
+      : [];
+
+    const header = [
+      status?.message || '',
+      status?.backup ? `Backup: ${status.backup}` : '',
+      status?.service ? `Service: ${status.service}` : '',
+    ].filter(Boolean);
+
+    output.textContent = [...header, ...lines].join('\n')
+      || 'No update activity yet.';
+  }
+
+  function setReconnectUI(attemptText = '') {
+    const progress = $('pu-local-progress');
+    const bar = $('pu-local-bar');
+
+    if (progress) progress.hidden = false;
+
+    setText(
+      'pu-local-stage',
+      attemptText || 'Panel is restarting. Waiting for it to return…',
+    );
+    setText('pu-local-percent', '99%');
+
+    if (bar) {
+      bar.style.width = '99%';
+    }
+
+    setDisabled('pu-update-local', true);
+    setDisabled('pu-refresh', true);
+  }
+
+  function enterReconnectMode() {
+    if (state.reconnecting) return;
+
+    state.reconnecting = true;
+    state.panelReachableAfterRestart = false;
+    state.finalStatusPolls = 0;
+    state.reconnectDelay = 1000;
+    state.reconnectStartedAt = Date.now();
+    window.WG_PANEL_UPDATING = true;
+    window.WG_PANEL_RESTARTING = true;
+
+    stopPoll();
+    setReconnectUI();
+    scheduleReconnect(600);
+  }
+
+  function scheduleReconnect(delay = state.reconnectDelay) {
+    clearTimeout(state.reconnectTimer);
+    state.reconnectTimer = setTimeout(probePanel, delay);
+  }
+
+  async function probePanel() {
+    if (!state.reconnecting) return;
+
+    const elapsed = Math.floor(
+      (Date.now() - state.reconnectStartedAt) / 1000,
     );
 
-    if (
-      nodeUpdates.length > 0
-      && !state.local?.update_available
-      && hintElement
-    ) {
-      hintElement.textContent = (
-        `${nodeUpdates.length} node update`
-        + (
-          nodeUpdates.length === 1
-            ? ''
-            : 's'
-        )
+    setReconnectUI(
+      `Panel is restarting. Reconnecting… ${elapsed}s`,
+    );
+
+    try {
+      const response = await fetch('/api/healthz', {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal: AbortSignal.timeout
+          ? AbortSignal.timeout(4000)
+          : undefined,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      state.reconnecting = false;
+      state.panelReachableAfterRestart = true;
+      state.finalStatusPolls = 0;
+      clearTimeout(state.reconnectTimer);
+
+      setDisabled('pu-refresh', true);
+      setText(
+        'pu-local-stage',
+        'Panel is online. Finalizing update…',
       );
+      setText('pu-local-percent', '99%');
+
+      window.WG_PANEL_RESTARTING = false;
+      document.dispatchEvent(
+        new CustomEvent('wg-panel:restart-complete'),
+      );
+      await pollFinalStatus();
+      return;
+    } catch (_) {
     }
 
-    if (
-      nodeUpdates.length > 0
-      && !state.local?.update_available
-    ) {
-      const latest = (
-        payload.latest
-        || state.local?.latest
-        || 'latest'
+    if (elapsed >= 120) {
+      state.reconnecting = false;
+      window.WG_PANEL_UPDATING = false;
+      window.WG_PANEL_RESTARTING = false;
+      setDisabled('pu-refresh', false);
+      setText(
+        'pu-local-stage',
+        'The panel has not returned yet. Check the systemd service log.',
       );
-
-      announceUpdateOnce(
-        `${nodeUpdates.length} node${nodeUpdates.length === 1 ? '' : 's'} can be updated to v${latest}.`,
-        `${latest}:${nodeUpdates.length}`,
-        'nodes',
+      toast(
+        'The panel did not reconnect within two minutes.',
+        'error',
+        true,
       );
-    }
-
-    const list = $('pu-node-list');
-    if (!state.nodes.length) {
-      list.innerHTML = '<div class="pu-empty"><i class="fas fa-circle-info"></i> No registered nodes.</div>';
-      $('pu-update-all').disabled = true;
       return;
     }
 
-    list.innerHTML = state.nodes.map(nodeRow).join('');
-    $('pu-update-all').disabled = !state.nodes.some(n => n.online && n.version?.update_available);
-
-    for (const node of state.nodes) {
-      const status = node.update?.status || '';
-      if (status && status !== 'idle') renderProgress(`node:${node.id}`, node.update);
-      if (['queued','running','downloading','installing','validating','restarting'].includes(status)) {
-        startPoll(`node:${node.id}`);
-      }
-    }
+    state.reconnectDelay = Math.min(
+      8000,
+      Math.round(state.reconnectDelay * 1.55),
+    );
+    scheduleReconnect();
   }
 
-  async function refreshAll() {
-    $('pu-refresh')?.classList.add('is-loading');
+  async function pollFinalStatus() {
+    if (!state.panelReachableAfterRestart) return;
+
+    state.finalStatusPolls += 1;
+
     try {
-      await loadLocal();
-      await loadNodes();
-    } catch (error) {
-      log(error.message, 'error');
-      window.toastError?.(error.message);
-    } finally {
-      $('pu-refresh')?.classList.remove('is-loading');
+      const status = await api(
+        '/api/panel/update/status',
+        { timeout: 7000 },
+      );
+
+      const name = statusName(status);
+
+      updateProgress(status);
+
+      if (TERMINAL_OK.has(name) || TERMINAL_BAD.has(name)) {
+        state.panelReachableAfterRestart = false;
+        window.WG_PANEL_UPDATING = false;
+        window.WG_PANEL_RESTARTING = false;
+        setDisabled('pu-refresh', false);
+        window.dispatchEvent(new CustomEvent('wg-panel-update-finished'));
+        if (name !== 'rollback_completed') {
+          setTimeout(() => window.location.reload(), 1200);
+        }
+        return;
+      }
+
+      if (state.finalStatusPolls >= 12) {
+        state.panelReachableAfterRestart = false;
+        window.WG_PANEL_UPDATING = false;
+        window.WG_PANEL_RESTARTING = false;
+        setDisabled('pu-refresh', false);
+
+        setText(
+          'pu-local-stage',
+          'Panel restarted, but the updater did not report a final result.',
+        );
+
+        toast(
+          'Panel is online. The previous updater ended without a final status, so the update controls were restored.',
+          'warn',
+          false,
+        );
+
+        await refreshCenter().catch(() => {});
+
+        const localButton = $('pu-update-local');
+        if (
+          localButton
+          && state.localVersion?.update_available
+        ) {
+          localButton.disabled = false;
+        }
+
+        return;
+      }
+
+      setText(
+        'pu-local-stage',
+        status?.message || 'Finalizing update…',
+      );
+
+      setTimeout(pollFinalStatus, 1200);
+
+    } catch (_) {
+      if (state.finalStatusPolls < 12) {
+        setTimeout(pollFinalStatus, 1500);
+        return;
+      }
+
+      state.panelReachableAfterRestart = false;
+      window.WG_PANEL_UPDATING = false;
+      window.WG_PANEL_RESTARTING = false;
+      setDisabled('pu-refresh', false);
     }
   }
 
-  function renderProgress(key, data) {
-    const isLocal = key === 'local';
-    const root = isLocal
-      ? $('pu-local-progress')
-      : document.querySelector(`[data-node-id="${CSS.escape(key.split(':')[1])}"] [data-node-progress]`);
-    if (!root) return;
 
-    const percent = Math.max(0, Math.min(100, Number(data.percent || 0)));
-    root.hidden = false;
+  async function pollStatus() {
+    if (
+      state.reconnecting
+      || state.panelReachableAfterRestart
+    ) {
+      return;
+    }
 
-    const stage = isLocal ? $('pu-local-stage') : root.querySelector('[data-node-stage]');
-    const pct = isLocal ? $('pu-local-percent') : root.querySelector('[data-node-percent]');
-    const bar = isLocal ? $('pu-local-bar') : root.querySelector('[data-node-bar]');
+    try {
+      const status = await api(
+        '/api/panel/update/status',
+        { timeout: 7000 },
+      );
 
-    if (stage) stage.textContent = data.message || data.stage || data.status || 'Working…';
-    if (pct) pct.textContent = `${percent}%`;
-    if (bar) bar.style.width = `${percent}%`;
+      updateProgress(status);
+    } catch (error) {
+      if (
+        window.WG_PANEL_UPDATING
+        || isBusy(state.lastStatus)
+      ) {
+        enterReconnectMode();
+        return;
+      }
 
-    if (Array.isArray(data.log) && data.log.length) {
-      const last = data.log[data.log.length - 1];
-      if (last && last !== root.dataset.lastLog) {
-        root.dataset.lastLog = last;
-        log(`${key}: ${last}`);
+      toast(
+        `Could not read update status: ${error.message}`,
+        'error',
+      );
+    }
+  }
+
+  function startPoll() {
+    stopPoll();
+    pollStatus();
+    state.polling = setInterval(pollStatus, 1400);
+  }
+
+  function stopPoll() {
+    if (state.polling) {
+      clearInterval(state.polling);
+      state.polling = null;
+    }
+  }
+
+  function renderLocalVersion(version) {
+    state.localVersion = version || {};
+
+    const current = version?.current
+      ? `v${String(version.current).replace(/^v/i, '')}`
+      : '—';
+
+    const latestRevision = String(
+      version?.latest_revision_short
+      || version?.latest_revision
+      || ''
+    ).slice(0, 8);
+
+    const latestVersion = version?.latest
+      ? `v${String(version.latest).replace(/^v/i, '')}`
+      : '';
+
+    const latest = latestRevision
+      ? `main · ${latestRevision}`
+      : (latestVersion || 'main');
+
+    setText('pu-local-current', current);
+    setText('pu-local-latest', latest);
+
+    const available = !!version?.update_available;
+    const stateEl = $('pu-local-state');
+
+    if (stateEl) {
+      stateEl.textContent = available
+        ? 'Update available'
+        : 'Current';
+      stateEl.classList.toggle('is-current', !available);
+    }
+
+    setText(
+      'pu-local-summary',
+      available ? 'Update available' : 'Up to date',
+    );
+
+    const button = $('pu-update-local');
+
+    if (button) {
+      button.disabled = !available || isBusy(state.lastStatus);
+      button.dataset.target = String(
+        version?.target
+        || version?.latest
+        || 'main',
+      );
+    }
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '').replace(
+      /[&<>"']/g,
+      (char) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;',
+      })[char],
+    );
+  }
+
+  function renderNodes(payload) {
+    const list = $('pu-node-list');
+    const nodes = Array.isArray(payload?.nodes)
+      ? payload.nodes
+      : [];
+
+    state.targets = nodes;
+    setText('pu-node-count', String(nodes.length));
+
+    if (!list) return;
+
+    if (!nodes.length) {
+      list.innerHTML = `
+        <div class="pu-empty">
+          No remote nodes are registered.
+        </div>
+      `;
+      return;
+    }
+
+    list.innerHTML = nodes.map((node) => {
+      const online = !!node.online;
+      const version = node.version || {};
+      const current = version.current
+        ? `v${String(version.current).replace(/^v/i, '')}`
+        : '—';
+      const latestRevision = String(
+        version.latest_revision_short
+        || version.latest_revision
+        || ''
+      ).slice(0, 8);
+
+      const latestVersion = version.latest
+        ? `v${String(version.latest).replace(/^v/i, '')}`
+        : '';
+
+      const latest = latestRevision
+        ? `main · ${latestRevision}`
+        : (latestVersion || 'main');
+
+      const available = (
+        online
+        && !!version.update_available
+      );
+      const detail = String(
+        node.error
+        || node.detail
+        || version.detail
+        || '',
+      );
+
+      return `
+        <section class="pu-target pu-node" data-node-id="${escapeHtml(node.id)}">
+          <div class="pu-target-main">
+            <span class="pu-target-icon">
+              <i class="fas fa-server"></i>
+            </span>
+            <div class="pu-target-copy">
+              <div class="pu-target-title">
+                <strong>${escapeHtml(node.name || `Node ${node.id}`)}</strong>
+                <span class="pu-pill">${online ? 'Online' : 'Offline'}</span>
+              </div>
+              <div class="pu-versions">
+                <span>Current <b>${escapeHtml(current)}</b></span>
+                <i class="fas fa-arrow-right"></i>
+                <span>Latest <b>${escapeHtml(latest)}</b></span>
+                ${node.base_url ? `<span>· ${escapeHtml(node.base_url)}</span>` : ''}
+              </div>
+              ${detail ? `<div class="pu-node-error">${escapeHtml(detail)}</div>` : ''}
+            </div>
+            <button class="pu-update-btn pu-node-update"
+                    type="button"
+                    data-node-id="${escapeHtml(node.id)}"
+                    data-target="${escapeHtml(version.target || version.latest || 'latest')}"
+                    ${available ? '' : 'disabled'}>
+              <i class="fas fa-download"></i><span>Update</span>
+            </button>
+          </div>
+          <div class="pu-progress" hidden>
+            <div class="pu-progress-top">
+              <span>Waiting…</span><b>0%</b>
+            </div>
+            <div class="pu-track"><i style="width:0%"></i></div>
+          </div>
+        </section>
+      `;
+    }).join('');
+  }
+
+  async function refreshCenter() {
+    if (state.reconnecting) return;
+
+    setDisabled('pu-refresh', true);
+
+    try {
+      const [version, targets, status] = await Promise.all([
+        api('/api/panel/version?fresh=1'),
+        api('/api/panel/update/targets'),
+        api('/api/panel/update/status'),
+      ]);
+
+      renderLocalVersion(version);
+      renderNodes(targets);
+      updateProgress(status);
+    } catch (error) {
+      toast(
+        `Could not refresh Update Center: ${error.message}`,
+        'error',
+      );
+    } finally {
+      if (!state.reconnecting) {
+        setDisabled('pu-refresh', false);
       }
     }
   }
 
   async function startLocalUpdate() {
-    if (!confirm('Update the local panel now? A code backup will be created before files are replaced.')) return;
+    const button = $('pu-update-local');
+    if (!button || button.disabled) return;
+
+    const accepted = await askConfirmation({
+      title: 'Update local panel?',
+      message:
+        'A rollback backup will be created, the new code will be validated, '
+        + 'and the panel service will restart automatically.',
+      acceptLabel: 'Start update',
+    });
+
+    if (!accepted) return;
+
+    button.disabled = true;
+    state.lastTerminalNotice = '';
+    window.WG_PANEL_UPDATING = true;
+
+    const target = String(
+      button.dataset.target
+      || state.localVersion?.target
+      || state.localVersion?.latest
+      || 'main',
+    );
+
     try {
-      modal.classList.add('is-busy');
-      $('pu-update-local').disabled = true;
-      const result = await api('/api/panel/update', {
-        method: 'POST',
-        body: JSON.stringify({target: 'latest'}),
-      });
-      log(result.message || 'Local update queued.');
-      renderProgress('local', result.status || {status:'queued',percent:2,message:'Update queued'});
-      startPoll('local');
+      const result = await api(
+        '/api/panel/update',
+        {
+          method: 'POST',
+          body: { target },
+          timeout: 16000,
+        },
+      );
+
+      const initial = result?.status || {
+        status: 'queued',
+        stage: 'queued',
+        percent: 2,
+        message: result?.message || 'Update queued.',
+      };
+
+      updateProgress(initial);
+      toast('Panel update started.', 'info');
+      startPoll();
     } catch (error) {
-      modal.classList.remove('is-busy');
-      log(error.message, 'error');
-      window.toastError?.(error.message);
+      window.WG_PANEL_UPDATING = false;
+      button.disabled = false;
+      toast(
+        `Could not start update: ${error.message}`,
+        'error',
+        true,
+      );
     }
   }
 
-  async function startNodeUpdate(id) {
-    if (!confirm(`Update node ${id} now? Its agent will restart when installation completes.`)) return;
+  async function startNodeUpdate(button) {
+    if (!button || button.disabled) return;
+
+    const nodeId = button.dataset.nodeId;
+    const target = button.dataset.target || 'main';
+
+    const accepted = await askConfirmation({
+      title: 'Update remote node?',
+      message:
+        'The selected node will create a rollback backup and restart its own agent.',
+      acceptLabel: 'Update node',
+    });
+
+    if (!accepted) return;
+
+    button.disabled = true;
+
     try {
-      const result = await api(`/api/nodes/${id}/update`, {
-        method: 'POST',
-        body: JSON.stringify({target: 'latest'}),
-      });
-      log(result.message || `Node ${id} update queued.`);
-      renderProgress(`node:${id}`, result.status || {status:'queued',percent:2,message:'Update queued'});
-      startPoll(`node:${id}`);
+      await api(
+        `/api/nodes/${encodeURIComponent(nodeId)}/update`,
+        {
+          method: 'POST',
+          body: { target },
+          timeout: 16000,
+        },
+      );
+
+      toast('Node update queued.', 'info');
+      setTimeout(refreshCenter, 1200);
     } catch (error) {
-      log(`Node ${id}: ${error.message}`, 'error');
-      window.toastError?.(error.message);
+      button.disabled = false;
+      toast(
+        `Could not start node update: ${error.message}`,
+        'error',
+        true,
+      );
     }
   }
 
-  function startPoll(key) {
-    if (state.polling.has(key)) return;
+  function openCenter() {
+    const modal = $('panel-update-modal');
+    if (!modal) return;
 
-    const timer = setInterval(async () => {
-      try {
-        const data = key === 'local'
-          ? await api('/api/panel/update/status')
-          : await api(`/api/nodes/${key.split(':')[1]}/update/status`);
+    modal.hidden = false;
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('modal-open');
+    state.opened = true;
+    refreshCenter();
+  }
 
-        renderProgress(key, data);
+  function closeCenter() {
+    if (state.reconnecting || window.WG_PANEL_UPDATING) {
+      toast(
+        'The update is still running. Keep this page open while the panel restarts.',
+        'warn',
+      );
+      return;
+    }
 
-        if (['completed','failed','rollback_completed','rollback_failed'].includes(data.status)) {
-          clearInterval(timer);
-          state.polling.delete(key);
-          modal.classList.remove('is-busy');
-          log(`${key}: ${data.message || data.status}`, data.status.includes('failed') ? 'error' : 'success');
-          setTimeout(refreshAll, data.status === 'completed' ? 4500 : 800);
-        }
-      } catch (error) {
-        log(`${key}: status check failed: ${error.message}`, 'error');
+    const modal = $('panel-update-modal');
+    if (!modal) return;
+
+    modal.hidden = true;
+    modal.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('modal-open');
+    state.opened = false;
+    stopPoll();
+  }
+
+  function bind() {
+    ensureConfirmDialog();
+
+    $('sb2-update-open')?.addEventListener('click', openCenter);
+    $('pu-refresh')?.addEventListener('click', refreshCenter);
+    $('pu-update-local')?.addEventListener('click', startLocalUpdate);
+
+    document.addEventListener('click', (event) => {
+      const close = event.target.closest('[data-pu-close]');
+      if (close) {
+        event.preventDefault();
+        closeCenter();
+        return;
       }
-    }, 1500);
 
-    state.polling.set(key, timer);
+      const nodeButton = event.target.closest('.pu-node-update');
+      if (nodeButton) {
+        startNodeUpdate(nodeButton);
+      }
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && state.opened) {
+        closeCenter();
+      }
+    });
+
+    $('pu-log-toggle')?.addEventListener('click', () => {
+      const drawer = $('pu-log-drawer');
+      if (drawer) drawer.hidden = !drawer.hidden;
+    });
+
+    $('pu-log-clear')?.addEventListener('click', () => {
+      setText('pu-log-output', 'No update activity yet.');
+    });
+
+    api('/api/panel/update/status', { timeout: 5000 })
+      .then((status) => {
+        if (isBusy(status)) {
+          window.WG_PANEL_UPDATING = true;
+          updateProgress(status);
+          startPoll();
+        }
+      })
+      .catch(() => {});
   }
 
-  $('sb2-update-open')?.addEventListener('click', open);
-  modal.querySelectorAll('[data-pu-close]').forEach(el => el.addEventListener('click', close));
-  $('pu-refresh')?.addEventListener('click', refreshAll);
-  $('pu-update-local')?.addEventListener('click', startLocalUpdate);
-  $('pu-node-list')?.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-node-update]');
-    if (!button) return;
-    const row = button.closest('[data-node-id]');
-    if (row) startNodeUpdate(row.dataset.nodeId);
-  });
-  $('pu-update-all')?.addEventListener('click', async () => {
-    const targets = state.nodes.filter(n => n.online && n.version?.update_available);
-    if (!targets.length) return;
-    if (!confirm(`Queue updates for ${targets.length} node(s)?`)) return;
-    for (const node of targets) await startNodeUpdate(node.id);
-  });
-  $('pu-log-toggle')?.addEventListener('click', () => {
-    const drawer = $('pu-log-drawer');
-    drawer.hidden = !drawer.hidden;
-  });
-  $('pu-log-clear')?.addEventListener('click', () => {
-    $('pu-log-output').textContent = 'No update activity yet.';
-  });
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !modal.hidden) close();
-  });
-
-  document.addEventListener('DOMContentLoaded', () => {
-    loadLocal().catch(() => {});
-  });
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', bind);
+  } else {
+    bind();
+  }
 })();
