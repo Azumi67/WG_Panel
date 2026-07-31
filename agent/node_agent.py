@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, json, subprocess, time, socket, ssl, sys
+import os, json, subprocess, time, socket, ssl, sys, shutil
 from pathlib import Path
 from flask import Flask, request, jsonify, abort, send_file
 from io import BytesIO
@@ -1288,20 +1288,175 @@ def _node_update_status_path():
     return root / "instance" / "node_update_status.json"
 
 
+def _node_write_status(payload):
+    path = _node_update_status_path()
+
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    temporary = path.with_suffix(
+        path.suffix + ".tmp"
+    )
+
+    temporary.write_text(
+        json.dumps(
+            payload,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    os.replace(
+        temporary,
+        path,
+    )
+
+
+def _node_update_lock_active() -> bool:
+    lock_path = (
+        _node_root()
+        / "instance"
+        / "update.lock"
+    )
+
+    if not lock_path.exists():
+        return False
+
+    try:
+        pid = int(
+            lock_path.read_text(
+                encoding="utf-8"
+            ).strip()
+        )
+
+        if pid <= 1:
+            raise ValueError(
+                "Invalid updater PID."
+            )
+
+        os.kill(pid, 0)
+        return True
+
+    except ProcessLookupError:
+        try:
+            lock_path.unlink(
+                missing_ok=True,
+            )
+        except Exception:
+            pass
+
+        return False
+
+    except PermissionError:
+        return True
+
+    except Exception:
+        try:
+            lock_age = (
+                time.time()
+                - lock_path.stat().st_mtime
+            )
+        except Exception:
+            lock_age = 999999
+
+        if lock_age > 300:
+            try:
+                lock_path.unlink(
+                    missing_ok=True,
+                )
+            except Exception:
+                pass
+
+            return False
+
+        return True
+
+
 def _node_update_status():
     try:
         data = json.loads(
-            _node_update_status_path().read_text(encoding="utf-8")
+            _node_update_status_path()
+            .read_text(
+                encoding="utf-8"
+            )
         )
-        return data if isinstance(data, dict) else {}
+
+        status = (
+            data
+            if isinstance(data, dict)
+            else {}
+        )
+
     except Exception:
-        return {
+        status = {
             "status": "idle",
             "stage": "idle",
             "percent": 0,
-            "message": "No node update is running.",
+            "message": (
+                "No node update is running."
+            ),
             "log": [],
         }
+
+    busy = str(
+    status.get("status")
+    or ""
+    ).lower() in {
+    "queued",
+    "running",
+    "backup",
+    "downloading",
+    "download",
+    "extract",
+    "install",
+    "installing",
+    "dependencies",
+    "validate",
+    "validating",
+    "restart",
+    "restarting",
+    "rollback",
+    "rolling_back",
+    "rollback_restart",
+    }
+
+    if (
+        busy
+        and not _node_update_lock_active()
+    ):
+        recovered = {
+            "status": "idle",
+            "stage": "idle",
+            "percent": 0,
+            "message": (
+                "Previous interrupted node "
+                "update state was cleared."
+            ),
+            "previous_status": status.get(
+                "status"
+            ),
+            "previous_message": status.get(
+                "message"
+            ),
+            "recovered": True,
+            "log": list(
+                status.get("log")
+                or []
+            )[-20:],
+        }
+
+        try:
+            _node_write_status(
+                recovered
+            )
+        except Exception:
+            pass
+
+        return recovered
+
+    return status
 
 
 def _node_version_tuple(value):
@@ -1312,57 +1467,254 @@ def _node_version_tuple(value):
     return tuple(parts)
 
 
+def _node_update_source_path() -> Path:
+    return (
+        _node_root()
+        / "instance"
+        / "update_source_node.json"
+    )
+
+
+def _node_update_source() -> dict:
+    try:
+        payload = json.loads(
+            _node_update_source_path()
+            .read_text(
+                encoding="utf-8",
+            )
+        )
+
+        return (
+            payload
+            if isinstance(payload, dict)
+            else {}
+        )
+
+    except Exception:
+        return {}
+
+
 def _node_latest_version():
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "WG-Panel-Node",
+        "Cache-Control": "no-cache",
     }
 
-    try:
-        response = requests.get(
-            f"https://api.github.com/repos/{NODE_REPO}/releases/latest",
-            headers=headers,
-            timeout=7,
-        )
-        if response.ok:
-            tag = str((response.json() or {}).get("tag_name") or "").strip()
-            if tag:
-                return tag.lstrip("vV")
-    except Exception:
-        pass
+    commit_sha = ""
+    commit_url = ""
+    commit_date = ""
+    remote_version = None
 
     try:
         response = requests.get(
-            f"https://api.github.com/repos/{NODE_REPO}/tags",
+            (
+                f"https://api.github.com/repos/"
+                f"{NODE_REPO}/commits/main"
+            ),
             headers=headers,
-            timeout=7,
+            timeout=8,
         )
+
+        response.raise_for_status()
+
+        payload = response.json() or {}
+
+        commit_sha = str(
+            payload.get("sha")
+            or ""
+        ).strip()
+
+        commit_url = str(
+            payload.get("html_url")
+            or f"https://github.com/{NODE_REPO}"
+        ).strip()
+
+        commit = payload.get("commit") or {}
+        author = commit.get("author") or {}
+
+        commit_date = str(
+            author.get("date")
+            or ""
+        ).strip()
+
+    except Exception as exc:
+        app.logger.warning(
+            "Could not read GitHub main commit: %s",
+            exc,
+        )
+
+    try:
+        response = requests.get(
+            (
+                f"https://raw.githubusercontent.com/"
+                f"{NODE_REPO}/main/VERSION"
+            ),
+            headers=headers,
+            timeout=6,
+        )
+
         if response.ok:
-            tags = response.json() or []
-            if tags:
-                return str(tags[0].get("name") or "").strip().lstrip("vV")
+            candidate = (
+                response.text
+                .strip()
+                .lstrip("vV")
+            )
+
+            if re.fullmatch(
+                r"\d+(?:\.\d+){0,3}"
+                r"(?:[-+][0-9A-Za-z.-]+)?",
+                candidate,
+            ):
+                remote_version = candidate
+
     except Exception:
         pass
 
-    return None
+    return {
+        "version": remote_version,
+        "target": "main",
+        "source": "main",
+
+        "revision": commit_sha,
+        "revision_short": (
+            commit_sha[:8]
+        ),
+
+        "url": (
+            commit_url
+            or f"https://github.com/{NODE_REPO}"
+        ),
+
+        "commit_date": commit_date,
+    }
 
 
 @app.get("/api/system/version")
 @require_api_key
 def node_system_version():
-    latest = _node_latest_version()
-    return jsonify(
-        ok=True,
-        current=NODE_AGENT_VERSION,
-        version_source="VERSION",
-        latest=latest,
-        update_available=bool(
-            latest
-            and _node_version_tuple(latest)
-            > _node_version_tuple(NODE_AGENT_VERSION)
-        ),
+    remote = (
+        _node_latest_version()
+        or {}
     )
 
+    installed = (
+        _node_update_source()
+        or {}
+    )
+
+    current_version = str(
+        _node_version()
+        or "0.0.0"
+    ).strip().lstrip("vV")
+
+    latest_version = str(
+        remote.get("version")
+        or current_version
+        or "0.0.0"
+    ).strip().lstrip("vV")
+
+    remote_revision = str(
+        remote.get("revision")
+        or ""
+    ).strip()
+
+    installed_revision = str(
+        installed.get("revision")
+        or ""
+    ).strip()
+
+    version_update_available = (
+        _node_version_tuple(
+            latest_version
+        )
+        > _node_version_tuple(
+            current_version
+        )
+    )
+
+    revision_update_available = bool(
+        remote_revision
+        and installed_revision
+        and remote_revision != installed_revision
+    )
+
+    if (
+        version_update_available
+        and revision_update_available
+    ):
+        update_reason = (
+            "version_and_revision"
+        )
+
+    elif version_update_available:
+        update_reason = "version"
+
+    elif revision_update_available:
+        update_reason = "revision"
+
+    else:
+        update_reason = "current"
+
+    update_available = bool(
+        version_update_available
+        or revision_update_available
+    )
+
+    return jsonify(
+        ok=True,
+
+        current=current_version,
+        version_source="VERSION",
+
+        latest=latest_version,
+
+        repo=NODE_REPO,
+
+        target="main",
+        source="main",
+        update_source="main",
+
+        current_revision=(
+            installed_revision
+        ),
+
+        current_revision_short=(
+            installed_revision[:8]
+        ),
+
+        latest_revision=(
+            remote_revision
+        ),
+
+        latest_revision_short=(
+            remote_revision[:8]
+        ),
+
+        revision_tracked=bool(
+            installed_revision
+        ),
+
+        commit_date=remote.get(
+            "commit_date"
+        ),
+
+        version_update_available=(
+            version_update_available
+        ),
+
+        revision_update_available=(
+            revision_update_available
+        ),
+
+        update_available=(
+            update_available
+        ),
+
+        update_reason=(
+            update_reason
+        ),
+    )
 
 @app.get("/api/system/update/status")
 @require_api_key
@@ -1373,66 +1725,290 @@ def node_system_update_status():
 @app.post("/api/system/update")
 @require_api_key
 def node_system_update_start():
-    data = request.get_json(silent=True) or {}
-    target = str(data.get("target") or "latest").strip()
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    target = "main"
+
     root = _node_root()
-    helper = root / "scripts" / "panel_update.py"
-    status_file = _node_update_status_path()
-    lock_file = root / "instance" / "update.lock"
+
+    helper = (
+        root
+        / "scripts"
+        / "panel_update.py"
+    )
+
+    status_file = (
+        _node_update_status_path()
+    )
 
     current = _node_update_status()
-    if str(current.get("status") or "") in {
-        "queued", "running", "downloading", "installing",
-        "validating", "restarting",
-    } or lock_file.exists():
+
+    if str(
+        current.get("status")
+        or ""
+    ).lower() in {
+        "queued",
+        "running",
+        "backup",
+        "downloading",
+        "download",
+        "extract",
+        "install",
+        "installing",
+        "dependencies",
+        "validate",
+        "validating",
+        "restart",
+        "restarting",
+        "rollback",
+        "rolling_back",
+        "rollback_restart",
+    } or _node_update_lock_active():
         return jsonify(
             ok=False,
             error="update_already_running",
-            detail="A node update is already running.",
+            detail=(
+                "A node update is already running."
+            ),
         ), 409
 
     if not helper.is_file():
         return jsonify(
             ok=False,
             error="update_helper_missing",
-            detail=f"Update helper is missing: {helper}",
+            detail=(
+                f"Update helper is missing: "
+                f"{helper}"
+            ),
         ), 500
 
-    status_file.parent.mkdir(parents=True, exist_ok=True)
-    log_file = root / "instance" / "node_update_runner.log"
-    stream = open(log_file, "ab", buffering=0)
-
-    subprocess.Popen(
-        [
-            sys.executable,
-            str(helper),
-            "--root", str(root),
-            "--repo", NODE_REPO,
-            "--service", "auto",
-            "--status", str(status_file),
-            "--scope", "node",
-            "--target", target,
-        ],
-        cwd=str(root),
-        stdin=subprocess.DEVNULL,
-        stdout=stream,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-        close_fds=True,
+    status_file.parent.mkdir(
+        parents=True,
+        exist_ok=True,
     )
+
+    command = [
+        sys.executable,
+        str(helper),
+        "--root",
+        str(root),
+        "--repo",
+        NODE_REPO,
+        "--service",
+        "auto",
+        "--status",
+        str(status_file),
+        "--scope",
+        "node",
+        "--target",
+        target,
+    ]
+
+    queued = {
+        "status": "queued",
+        "stage": "queued",
+        "percent": 2,
+        "message": "Node update is starting…",
+        "target": target,
+        "launcher": "pending",
+        "unit": None,
+        "pid": None,
+        "log": [],
+    }
+
+    try:
+        _node_write_status(
+            queued
+        )
+    except Exception as exc:
+        return jsonify(
+            ok=False,
+            error="update_status_write_failed",
+            detail=(
+                "Could not initialize the "
+                f"node update status: {exc}"
+            ),
+        ), 500
+
+    systemd_run = shutil.which(
+        "systemd-run"
+    )
+
+    launch_info = {}
+
+    try:
+        if systemd_run:
+            unit_name = (
+                "wg-panel-update-node-"
+                f"{int(time.time())}-"
+                f"{os.getpid()}"
+            )
+
+            result = subprocess.run(
+                [
+                    systemd_run,
+                    "--unit",
+                    unit_name,
+                    "--collect",
+                    "--quiet",
+                    "--property=Type=exec",
+                    "--property=KillMode=process",
+                    "--property=TimeoutStopSec=10min",
+                    f"--working-directory={root}",
+                    "--",
+                    *command,
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+
+            if result.returncode != 0:
+                raise RuntimeError(
+                    result.stdout.strip()
+                    or (
+                        "systemd-run exited with "
+                        f"code {result.returncode}"
+                    )
+                )
+
+            launch_info = {
+                "launcher": "systemd-run",
+                "unit": f"{unit_name}.service",
+                "pid": None,
+            }
+
+        else:
+            log_file = (
+                root
+                / "instance"
+                / "node_update_runner.log"
+            )
+
+            log_file.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            stream = open(
+                log_file,
+                "ab",
+                buffering=0,
+            )
+
+            try:
+                process = subprocess.Popen(
+                    command,
+                    cwd=str(root),
+                    stdin=subprocess.DEVNULL,
+                    stdout=stream,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+
+            except Exception:
+                stream.close()
+                raise
+
+            launch_info = {
+                "launcher": "subprocess",
+                "unit": None,
+                "pid": process.pid,
+            }
+
+    except Exception as exc:
+        failed = dict(queued)
+
+        failed.update({
+            "status": "failed",
+            "stage": "failed",
+            "percent": 100,
+            "message": (
+                "The node updater could not "
+                "be started."
+            ),
+            "detail": str(exc),
+        })
+
+        try:
+            _node_write_status(
+                failed
+            )
+        except Exception:
+            pass
+
+        return jsonify(
+            ok=False,
+            error="update_launcher_failed",
+            detail=str(exc),
+            status=failed,
+        ), 500
+
+    latest_status = _node_update_status()
+
+    latest_state = str(
+        latest_status.get("status")
+        or ""
+    ).strip().lower()
+
+    if latest_state in {
+        "",
+        "idle",
+        "queued",
+    }:
+        latest_status.update({
+            "status": "queued",
+            "stage": "queued",
+            "percent": max(
+                2,
+                int(
+                    latest_status.get("percent")
+                    or 0
+                ),
+            ),
+            "message": (
+                latest_status.get("message")
+                or "Node update is starting…"
+            ),
+            "target": target,
+            "launcher": launch_info.get(
+                "launcher"
+            ),
+            "unit": launch_info.get(
+                "unit"
+            ),
+            "pid": launch_info.get(
+                "pid"
+            ),
+            "log": list(
+                latest_status.get("log")
+                or []
+            ),
+        })
+
+        try:
+            _node_write_status(
+                latest_status
+            )
+        except Exception:
+            pass
+
+        queued = latest_status
+
+    else:
+        queued = latest_status
 
     return jsonify(
         ok=True,
-        message="Node update queued.",
-        status={
-            "status": "queued",
-            "stage": "queued",
-            "percent": 2,
-            "message": "Node update queued.",
-            "log": [],
-        },
+        message="Node update started.",
+        status=queued,
     ), 202
-
 
 @app.route('/api/peers/add', methods=['POST'])
 @require_api_key
