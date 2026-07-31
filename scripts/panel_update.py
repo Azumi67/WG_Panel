@@ -48,198 +48,179 @@ def run(cmd, cwd=None, timeout=1200, check=True):
         raise RuntimeError(f"{' '.join(map(str,cmd))} failed ({p.returncode}):\n{p.stdout[-4000:]}")
     return p
 
-def latest_repo_tag(repo: str) -> str:
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "WG-Panel-Updater",
-    }
+def github_main_metadata(repo: str) -> dict:
+    """Resolve main revision without depending on GitHub REST API quota.
 
-    endpoints = (
-        f"https://api.github.com/repos/{repo}/releases/latest",
-        f"https://api.github.com/repos/{repo}/tags",
-    )
+    `git ls-remote` is the primary source. The REST API is only a best-effort
+    fallback and a 403/rate-limit response must never abort an otherwise valid
+    archive update.
+    """
+    revision = ""
+    commit_date = ""
+    url = f"https://github.com/{repo}/commits/main"
 
-    for index, url in enumerate(endpoints):
+    git = shutil.which("git")
+    if git:
         try:
-            request = Request(url, headers=headers)
+            result = run(
+                [
+                    git,
+                    "ls-remote",
+                    f"https://github.com/{repo}.git",
+                    "refs/heads/main",
+                ],
+                timeout=45,
+                check=False,
+            )
+            if result.returncode == 0:
+                first = (result.stdout or "").strip().splitlines()
+                if first:
+                    candidate = first[0].split()[0].strip()
+                    if len(candidate) >= 40:
+                        revision = candidate
+        except Exception:
+            pass
 
+    if not revision:
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "WG-Panel-Updater",
+            "Cache-Control": "no-cache",
+        }
+        token = (
+            os.getenv("GITHUB_TOKEN")
+            or os.getenv("GH_TOKEN")
+            or ""
+        ).strip()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        try:
+            request = Request(
+                f"https://api.github.com/repos/{repo}/commits/main",
+                headers=headers,
+            )
             with urlopen(request, timeout=30) as response:
                 payload = json.loads(
-                    response.read().decode(
-                        "utf-8",
-                        "replace",
-                    )
+                    response.read().decode("utf-8", "replace")
                 )
-
-            if index == 0 and isinstance(payload, dict):
-                tag = str(
-                    payload.get("tag_name")
-                    or ""
-                ).strip()
-
-                if tag:
-                    return tag
-
-            if (
-                index == 1
-                and isinstance(payload, list)
-                and payload
-            ):
-                tag = str(
-                    payload[0].get("name")
-                    or ""
-                ).strip()
-
-                if tag:
-                    return tag
-
+            revision = str(payload.get("sha") or "").strip()
+            commit = payload.get("commit") or {}
+            author = commit.get("author") or {}
+            commit_date = str(author.get("date") or "").strip()
+            url = str(payload.get("html_url") or url).strip()
         except Exception:
-            continue
+            pass
 
-    raise RuntimeError(
-        "Could not determine the latest GitHub release or tag."
-    )
+    return {
+        "revision": revision,
+        "revision_short": revision[:8],
+        "commit_date": commit_date,
+        "url": url,
+    }
 
 
-def download_repo(repo: str, target: str, dest: Path) -> str:
-    requested = str(
-        target
-        or "latest"
-    ).strip()
-
-    if requested in {
-        "main",
-        "master",
-    }:
-        branch = requested
-        urls = [
-            (
-                f"https://codeload.github.com/{repo}/"
-                f"tar.gz/refs/heads/{branch}"
-            ),
-            (
-                f"https://github.com/{repo}/archive/"
-                f"refs/heads/{branch}.tar.gz"
-            ),
-        ]
-        resolved_label = branch
-
-    else:
-        try:
-            resolved_target = (
-                latest_repo_tag(repo)
-                if requested == "latest"
-                else requested
-            )
-
-            clean_tag = resolved_target.lstrip(
-                "vV"
-            )
-
-            tags = []
-
-            for candidate in (
-                resolved_target,
-                f"v{clean_tag}",
-                clean_tag,
-            ):
-                if (
-                    candidate
-                    and candidate not in tags
-                ):
-                    tags.append(candidate)
-
-            urls = []
-
-            for tag in tags:
-                urls.extend([
-                    (
-                        f"https://codeload.github.com/{repo}/"
-                        f"tar.gz/refs/tags/{tag}"
-                    ),
-                    (
-                        f"https://github.com/{repo}/archive/"
-                        f"refs/tags/{tag}.tar.gz"
-                    ),
-                ])
-
-            resolved_label = clean_tag
-
-        except Exception:
-            if requested != "latest":
-                raise
-
-            urls = [
-                (
-                    f"https://codeload.github.com/{repo}/"
-                    "tar.gz/refs/heads/main"
-                ),
-                (
-                    f"https://github.com/{repo}/archive/"
-                    "refs/heads/main.tar.gz"
-                ),
-            ]
-            resolved_label = "main"
+def download_repo(repo: str, target: str, dest: Path) -> dict:
+    """Download main without making GitHub API availability a prerequisite."""
+    urls = [
+        f"https://codeload.github.com/{repo}/tar.gz/refs/heads/main",
+        f"https://github.com/{repo}/archive/refs/heads/main.tar.gz",
+    ]
 
     errors = []
 
     for url in urls:
-        try:
-            request = Request(
-                url,
-                headers={
-                    "User-Agent": "WG-Panel-Updater",
-                },
-            )
-
-            with (
-                urlopen(
-                    request,
-                    timeout=90,
-                ) as response,
-                open(
-                    dest,
-                    "wb",
-                ) as output,
-            ):
-                shutil.copyfileobj(
-                    response,
-                    output,
+        for attempt in range(1, 4):
+            try:
+                request = Request(
+                    url,
+                    headers={
+                        "User-Agent": "WG-Panel-Updater",
+                        "Accept": "application/octet-stream",
+                        "Cache-Control": "no-cache",
+                    },
                 )
 
-            if dest.stat().st_size < 1024:
-                raise RuntimeError(
-                    "Downloaded archive is unexpectedly small."
-                )
+                with (
+                    urlopen(request, timeout=120) as response,
+                    open(dest, "wb") as output,
+                ):
+                    shutil.copyfileobj(response, output)
 
-            with tarfile.open(
-                dest,
-                "r:gz",
-            ) as archive:
-                members = archive.getmembers()
-
-                if not members:
+                if dest.stat().st_size < 1024:
                     raise RuntimeError(
-                        "Downloaded archive is empty."
+                        "Downloaded archive is unexpectedly small."
                     )
 
-            return resolved_label
+                with tarfile.open(dest, "r:gz") as archive:
+                    if not archive.getmembers():
+                        raise RuntimeError("Downloaded archive is empty.")
 
-        except Exception as exc:
-            errors.append(
-                f"{url}: {exc}"
-            )
+                metadata = github_main_metadata(repo)
+                metadata["archive_url"] = url
+                return metadata
 
-            try:
-                dest.unlink(
-                    missing_ok=True,
-                )
-            except Exception:
-                pass
+            except Exception as exc:
+                errors.append(f"{url} attempt {attempt}: {exc}")
+                try:
+                    dest.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                if attempt < 3:
+                    time.sleep(attempt * 2)
 
     raise RuntimeError(
-        "Could not download the selected GitHub source. "
-        + " | ".join(errors[-4:])
+        "Could not download the WG_Panel main branch. "
+        + " | ".join(errors[-6:])
+    )
+
+
+def write_update_source(
+    root: Path,
+    scope: str,
+    metadata: dict,
+):
+    marker = (
+        root
+        / "instance"
+        / (
+            "update_source_node.json"
+            if scope == "node"
+            else "update_source_panel.json"
+        )
+    )
+
+    version = ""
+
+    try:
+        version = (
+            (root / "VERSION")
+            .read_text(encoding="utf-8")
+            .strip()
+            .lstrip("vV")
+        )
+    except Exception:
+        pass
+
+    payload = {
+        "source": "main",
+        "target": "main",
+        "repo": metadata.get("repo"),
+        "revision": metadata.get("revision"),
+        "revision_short": metadata.get(
+            "revision_short"
+        ),
+        "commit_date": metadata.get(
+            "commit_date"
+        ),
+        "url": metadata.get("url"),
+        "version": version,
+        "installed_at": utc(),
+    }
+
+    atm_json(
+        marker,
+        payload,
     )
 
 def backup_code(root: Path, backup_path: Path):
@@ -415,6 +396,83 @@ def detect_service(root: Path, scope: str) -> str:
     )
 
 
+def schedule_service_restart(
+    service: str,
+    *,
+    scope: str,
+) -> dict:
+    """
+    Schedule the service restart outside the updater process.
+
+    This is used after rollback so the rollback terminal status is written
+    before the panel/agent service is restarted. Even if the old service
+    cgroup terminates a fallback updater process, Telegram and the web UI
+    still receive a final rollback result instead of remaining at 94%.
+    """
+    unit_name = (
+        f"wg-panel-rollback-restart-{scope}-"
+        f"{int(time.time())}-{os.getpid()}"
+    )
+
+    systemd_run = shutil.which(
+        "systemd-run"
+    )
+
+    if systemd_run:
+        result = run(
+            [
+                systemd_run,
+                "--unit",
+                unit_name,
+                "--collect",
+                "--quiet",
+                "--on-active=1s",
+                "--property=Type=oneshot",
+                "--",
+                "systemctl",
+                "restart",
+                service,
+            ],
+            timeout=20,
+            check=False,
+        )
+
+        if result.returncode == 0:
+            return {
+                "launcher": "systemd-run",
+                "unit": f"{unit_name}.service",
+            }
+
+    log_path = Path(
+        "/tmp"
+    ) / f"{unit_name}.log"
+
+    stream = open(
+        log_path,
+        "ab",
+        buffering=0,
+    )
+
+    process = subprocess.Popen(
+        [
+            "systemctl",
+            "restart",
+            service,
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=stream,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+    return {
+        "launcher": "subprocess",
+        "pid": process.pid,
+        "log": str(log_path),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
@@ -456,23 +514,46 @@ def main():
             tmp = Path(tmp)
             archive = tmp / "source.tar.gz"
 
-            status.set(stage="download", percent=27, message="Downloading release…")
-            resolved_target = download_repo(
+            status.set(
+                stage="download",
+                percent=27,
+                message="Downloading the main branch…",
+            )
+
+            source_metadata = download_repo(
                 args.repo,
-                args.target,
+                "main",
                 archive,
             )
 
+            source_metadata["repo"] = args.repo
+
             status.set(
                 percent=38,
-                target=resolved_target,
+                target="main",
+                source="main",
+                revision=source_metadata.get(
+                    "revision"
+                ),
+                revision_short=source_metadata.get(
+                    "revision_short"
+                ),
                 log=(
-                    "Release downloaded: "
-                    f"v{resolved_target}"
+                    "Repository main branch downloaded: "
+                    + str(
+                        source_metadata.get(
+                            "revision_short"
+                        )
+                        or "unknown revision"
+                    )
                 ),
             )
 
-            status.set(stage="extract", percent=45, message="Preparing release files…")
+            status.set(
+                stage="extract",
+                percent=45,
+                message="Preparing repository files…",
+            )
             with tarfile.open(archive, "r:gz") as tar:
                 tar.extractall(tmp / "source")
             roots = [p for p in (tmp / "source").iterdir() if p.is_dir()]
@@ -489,38 +570,140 @@ def main():
 
             status.set(stage="validate", percent=87, message="Validating updated Python…")
             validate(root, args.scope)
-            status.set(percent=93, log="Validation completed.")
+            status.set(
+                percent=93,
+                log="Validation completed.",
+            )
 
-        status.set(status="restarting", stage="restart", percent=97,
-                   message=f"Restarting {service}…")
-        run(["systemctl","restart",service], timeout=45, check=False)
-        time.sleep(2)
-        active = run(["systemctl","is-active",service], timeout=20, check=False)
-        if active.returncode != 0 or "active" not in active.stdout:
-            raise RuntimeError(f"Service did not become active: {active.stdout.strip()}")
+        status.set(
+            status="restarting",
+            stage="restart",
+            percent=97,
+            message=f"Restarting {service}…",
+        )
 
-        status.set(status="completed", stage="completed", percent=100,
-                   message="Update completed successfully.", completed_at=utc(),
-                   log=f"{service} is active.")
+        restart_info = schedule_service_restart(
+            service,
+            scope=args.scope,
+        )
+
+        status.set(
+            restart_launcher=restart_info.get(
+                "launcher"
+            ),
+            restart_unit=restart_info.get(
+                "unit"
+            ),
+            restart_pid=restart_info.get(
+                "pid"
+            ),
+            log=(
+                "Detached service restart scheduled for "
+                f"{service}."
+            ),
+        )
+
+        write_update_source(
+            root,
+            args.scope,
+            source_metadata,
+        )
+
+        status.set(
+            status="completed",
+            stage="completed",
+            percent=100,
+            message="Update installed successfully. Service restart was scheduled.",
+            completed_at=utc(),
+            restart_launcher=restart_info.get("launcher"),
+            restart_unit=restart_info.get("unit"),
+            restart_pid=restart_info.get("pid"),
+            log=(
+                f"Updated revision {source_metadata.get('revision_short') or 'unknown'} installed; "
+                f"detached restart scheduled for {service}."
+            ),
+        )
 
     except Exception as exc:
-        status.set(status="running", stage="rollback", percent=94,
-                   message="Update failed; restoring previous code…", log=str(exc))
+        status.set(
+            status="running",
+            stage="rollback",
+            percent=94,
+            message="Update failed; restoring previous code…",
+            log=str(exc),
+        )
+
         try:
             if backup.exists():
-                restore_backup(root, backup)
-                run(["systemctl","restart",service], timeout=45, check=False)
-                status.set(status="rollback_completed", stage="rollback_completed",
-                           percent=100, message=f"Update failed and rollback completed: {exc}",
-                           completed_at=utc())
+                restore_backup(
+                    root,
+                    backup,
+                )
+
+                try:
+                    lock.unlink(
+                        missing_ok=True,
+                    )
+                except Exception:
+                    pass
+
+                restart_info = schedule_service_restart(
+                    service,
+                    scope=args.scope,
+                )
+
+                status.set(
+                    status="rollback_completed",
+                    stage="rollback_completed",
+                    percent=100,
+                    message=(
+                        "Update was not installed. Previous code was restored and restart was scheduled."
+                    ),
+                    failure_detail=str(exc),
+                    restart_launcher=restart_info.get(
+                        "launcher"
+                    ),
+                    restart_unit=restart_info.get(
+                        "unit"
+                    ),
+                    restart_pid=restart_info.get(
+                        "pid"
+                    ),
+                    completed_at=utc(),
+                    log=(
+                        "Rollback files restored; detached "
+                        f"restart scheduled for {service}."
+                    ),
+                )
+
             else:
-                status.set(status="rollback_failed", stage="rollback_failed",
-                           percent=100, message=f"Update failed and no backup was available: {exc}",
-                           completed_at=utc())
+                status.set(
+                    status="rollback_failed",
+                    stage="rollback_failed",
+                    percent=100,
+                    message=(
+                        "Update failed and no rollback "
+                        "backup was available."
+                    ),
+                    failure_detail=str(exc),
+                    completed_at=utc(),
+                )
+
         except Exception as rollback_exc:
-            status.set(status="rollback_failed", stage="rollback_failed", percent=100,
-                       message=f"Update failed: {exc}; rollback failed: {rollback_exc}",
-                       completed_at=utc())
+            status.set(
+                status="rollback_failed",
+                stage="rollback_failed",
+                percent=100,
+                message=(
+                    "Update failed and rollback could not "
+                    "be completed."
+                ),
+                failure_detail=str(exc),
+                rollback_detail=str(
+                    rollback_exc
+                ),
+                completed_at=utc(),
+            )
     finally:
         try: lock.unlink(missing_ok=True)
         except Exception: pass
