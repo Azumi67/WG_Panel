@@ -1,4 +1,4 @@
-import os, glob, subprocess, time, shlex, logging, ipaddress, psutil, requests, json, tempfile, sys, zipfile, datetime as dt, ipaddress, platform, re, qrcode, multiprocessing, threading
+import os, glob, subprocess, time, shlex, logging, ipaddress, psutil, requests, json, tempfile, sys, zipfile, datetime as dt, ipaddress, platform, re, qrcode, multiprocessing, threading, shutil
 from io import BytesIO
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, timezone
@@ -1153,54 +1153,135 @@ def _version_tuple(v: str):
     return tuple(parts)
 
 
+def _update_source_marker(
+    scope: str = "panel",
+) -> Path:
+    safe_scope = (
+        "node"
+        if str(scope).strip().lower() == "node"
+        else "panel"
+    )
+
+    return (
+        Path(INSTANCE_DIR)
+        / f"update_source_{safe_scope}.json"
+    )
+
+
+def _read_update_source(
+    scope: str = "panel",
+) -> dict:
+    try:
+        payload = json.loads(
+            _update_source_marker(scope)
+            .read_text(
+                encoding="utf-8",
+            )
+        )
+
+        return (
+            payload
+            if isinstance(payload, dict)
+            else {}
+        )
+
+    except Exception:
+        return {}
+
+
 def _github_latest_panel_version():
 
     headers = {
         "Accept": "application/vnd.github+json",
-        "User-Agent": "WG-Panel"
+        "User-Agent": "WG-Panel",
+        "Cache-Control": "no-cache",
     }
 
+    commit_sha = ""
+    commit_url = ""
+    commit_date = ""
+    remote_version = None
+
     try:
-        r = requests.get(
-            f"https://api.github.com/repos/{PANEL_REPO}/releases/latest",
+        response = requests.get(
+            (
+                f"https://api.github.com/repos/"
+                f"{PANEL_REPO}/commits/main"
+            ),
+            headers=headers,
+            timeout=8,
+        )
+
+        response.raise_for_status()
+
+        payload = response.json() or {}
+
+        commit_sha = str(
+            payload.get("sha")
+            or ""
+        ).strip()
+
+        commit_url = str(
+            payload.get("html_url")
+            or f"https://github.com/{PANEL_REPO}"
+        ).strip()
+
+        commit = payload.get("commit") or {}
+        author = commit.get("author") or {}
+
+        commit_date = str(
+            author.get("date")
+            or ""
+        ).strip()
+
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Could not read GitHub main commit: %s",
+            exc,
+        )
+
+    try:
+        response = requests.get(
+            (
+                f"https://raw.githubusercontent.com/"
+                f"{PANEL_REPO}/main/VERSION"
+            ),
             headers=headers,
             timeout=6,
         )
 
-        if r.ok:
-            j = r.json() or {}
-            tag = (j.get("tag_name") or "").strip()
-            if tag:
-                return {
-                    "version": tag.lstrip("vV"),
-                    "url": j.get("html_url") or f"https://github.com/{PANEL_REPO}/releases",
-                    "source": "release",
-                }
+        if response.ok:
+            candidate = (
+                response.text
+                .strip()
+                .lstrip("vV")
+            )
+
+            if re.fullmatch(
+                r"\d+(?:\.\d+){0,3}"
+                r"(?:[-+][0-9A-Za-z.-]+)?",
+                candidate,
+            ):
+                remote_version = candidate
+
     except Exception:
         pass
 
-    try:
-        r = requests.get(
-            f"https://api.github.com/repos/{PANEL_REPO}/tags",
-            headers=headers,
-            timeout=6,
-        )
+    if not commit_sha and not remote_version:
+        return None
 
-        if r.ok:
-            tags = r.json() or []
-            if tags:
-                tag = (tags[0].get("name") or "").strip()
-                if tag:
-                    return {
-                        "version": tag.lstrip("vV"),
-                        "url": f"https://github.com/{PANEL_REPO}/releases",
-                        "source": "tag",
-                    }
-    except Exception:
-        pass
-
-    return None
-
+    return {
+        "version": remote_version,
+        "target": "main",
+        "url": (
+            commit_url
+            or f"https://github.com/{PANEL_REPO}"
+        ),
+        "source": "main",
+        "revision": commit_sha,
+        "revision_short": commit_sha[:8],
+        "commit_date": commit_date,
+    }
 
 @app.get("/api/panel/version")
 @require_api_key_or_login
@@ -1234,25 +1315,135 @@ def api_panel_version():
             _PANEL_UPDATE_CACHE["data"]
         )
 
-    latest = _github_latest_panel_version()
+    remote = (
+        _github_latest_panel_version()
+        or {}
+    )
 
-    current_version = PANEL_VERSION
-    latest_version = latest.get("version") if latest else None
+    installed = _read_update_source(
+        "panel"
+    )
 
-    update_available = False
-    if latest_version:
-        update_available = _version_tuple(latest_version) > _version_tuple(current_version)
+    current_version = str(
+        PANEL_VERSION
+        or "0.0.0"
+    ).strip().lstrip("vV")
+
+    latest_version = str(
+        remote.get("version")
+        or current_version
+        or "0.0.0"
+    ).strip().lstrip("vV")
+
+    remote_revision = str(
+        remote.get("revision")
+        or ""
+    ).strip()
+
+    installed_revision = str(
+        installed.get("revision")
+        or ""
+    ).strip()
+
+    version_update_available = (
+        _version_tuple(latest_version)
+        > _version_tuple(current_version)
+    )
+
+    revision_update_available = bool(
+        remote_revision
+        and installed_revision
+        and remote_revision != installed_revision
+    )
+
+    if (
+        version_update_available
+        and revision_update_available
+    ):
+        update_reason = (
+            "version_and_revision"
+        )
+
+    elif version_update_available:
+        update_reason = "version"
+
+    elif revision_update_available:
+        update_reason = "revision"
+
+    else:
+        update_reason = "current"
+
+    update_available = bool(
+        version_update_available
+        or revision_update_available
+    )
 
     payload = {
         "ok": True,
+
         "current": current_version,
         "version_source": "VERSION",
+
         "repo": PANEL_REPO,
+
         "latest": latest_version,
-        "latest_url": latest.get("url") if latest else f"https://github.com/{PANEL_REPO}",
-        "source": latest.get("source") if latest else None,
-        "update_available": bool(update_available),
-        "checked_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+
+        "latest_url": (
+            remote.get("url")
+            or f"https://github.com/{PANEL_REPO}"
+        ),
+
+        "source": "main",
+        "target": "main",
+        "update_source": "main",
+
+        "current_revision": (
+            installed_revision
+        ),
+
+        "current_revision_short": (
+            installed_revision[:8]
+        ),
+
+        "latest_revision": (
+            remote_revision
+        ),
+
+        "latest_revision_short": (
+            remote_revision[:8]
+        ),
+
+        "commit_date": remote.get(
+            "commit_date"
+        ),
+
+        "revision_tracked": bool(
+            installed_revision
+        ),
+
+        "version_update_available": (
+            version_update_available
+        ),
+
+        "revision_update_available": (
+            revision_update_available
+        ),
+
+        "update_available": (
+            update_available
+        ),
+
+        "update_reason": (
+            update_reason
+        ),
+
+        "checked_at": (
+            datetime.utcnow()
+            .isoformat(
+                timespec="seconds",
+            )
+            + "Z"
+        ),
     }
 
     _PANEL_UPDATE_CACHE["ts"] = now
@@ -1781,38 +1972,230 @@ def _read_update_status(path=UPDATE_STATUS_FILE):
 
 
 def _update_is_busy(status):
-    return str((status or {}).get("status") or "").lower() in {
-        "queued", "running", "downloading", "installing",
-        "validating", "restarting",
+    return str(
+        (status or {}).get("status")
+        or ""
+    ).lower() in {
+        "queued",
+        "running",
+        "backup",
+        "downloading",
+        "download",
+        "extract",
+        "install",
+        "installing",
+        "dependencies",
+        "validate",
+        "validating",
+        "restart",
+        "restarting",
+        "rollback",
+        "rolling_back",
+        "rollback_restart",
     }
 
+def _update_lock_active(root) -> bool:
+    lock_path = (
+        Path(root)
+        / "instance"
+        / "update.lock"
+    )
 
-def _queue_safe_update(*, root, service, status_file, scope, target="latest"):
-    helper = Path(root) / "scripts" / "panel_update.py"
+    if not lock_path.exists():
+        return False
 
-    if not helper.is_file():
-        raise RuntimeError(f"Update helper is missing: {helper}")
+    try:
+        pid_text = lock_path.read_text(
+            encoding="utf-8",
+        ).strip()
 
-    current = _read_update_status(status_file)
-    if _update_is_busy(current) or Path(root, "instance", "update.lock").exists():
-        raise RuntimeError("An update is already running for this target.")
+        pid = int(pid_text)
 
-    cmd = [
-        sys.executable,
-        str(helper),
-        "--root", str(root),
-        "--repo", PANEL_REPO,
-        "--service", service,
-        "--status", str(status_file),
-        "--scope", scope,
-        "--target", str(target or "latest"),
-    ]
+        if pid <= 1:
+            raise ValueError(
+                "Invalid updater PID."
+            )
 
-    log_path = Path(root) / "instance" / "update_runner.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    stream = open(log_path, "ab", buffering=0)
+        os.kill(pid, 0)
+        return True
 
-    subprocess.Popen(
+    except ProcessLookupError:
+        try:
+            lock_path.unlink(
+                missing_ok=True,
+            )
+        except Exception:
+            pass
+
+        return False
+
+    except PermissionError:
+        return True
+
+    except Exception:
+        try:
+            lock_age = (
+                time.time()
+                - lock_path.stat().st_mtime
+            )
+        except Exception:
+            lock_age = 999999
+
+        if lock_age > 300:
+            try:
+                lock_path.unlink(
+                    missing_ok=True,
+                )
+            except Exception:
+                pass
+
+            return False
+
+        return True
+
+
+def _write_update_status(
+    path,
+    payload,
+):
+    target = Path(path)
+
+    target.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    temporary = target.with_suffix(
+        target.suffix + ".tmp"
+    )
+
+    temporary.write_text(
+        json.dumps(
+            payload,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    os.replace(
+        temporary,
+        target,
+    )
+
+
+def _norm_update_status(
+    root,
+    status_file,
+):
+    status = _read_update_status(
+        status_file
+    )
+
+    if (
+        _update_is_busy(status)
+        and not _update_lock_active(root)
+    ):
+        recovered = {
+            "status": "idle",
+            "stage": "idle",
+            "percent": 0,
+            "message": (
+                "Previous interrupted update state "
+                "was cleared."
+            ),
+            "previous_status": status.get(
+                "status"
+            ),
+            "previous_message": status.get(
+                "message"
+            ),
+            "recovered": True,
+            "log": list(
+                status.get("log")
+                or []
+            )[-20:],
+        }
+
+        try:
+            _write_update_status(
+                status_file,
+                recovered,
+            )
+        except Exception:
+            pass
+
+        return recovered
+
+    return status
+
+
+def _launch_update(
+    *,
+    cmd,
+    root,
+    scope,
+    log_path,
+):
+    systemd_run = shutil.which(
+        "systemd-run"
+    )
+
+    if systemd_run:
+        unit_name = (
+            f"wg-panel-update-{scope}-"
+            f"{int(time.time())}-"
+            f"{os.getpid()}"
+        )
+
+        launch_command = [
+            systemd_run,
+            "--unit",
+            unit_name,
+            "--collect",
+            "--quiet",
+            "--property=Type=exec",
+            "--property=KillMode=process",
+            "--property=TimeoutStopSec=10min",
+            f"--working-directory={root}",
+            "--",
+            *cmd,
+        ]
+
+        result = subprocess.run(
+            launch_command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Could not create the independent "
+                "updater service: "
+                + (
+                    result.stdout.strip()
+                    or (
+                        "systemd-run exited with "
+                        f"code {result.returncode}"
+                    )
+                )
+            )
+
+        return {
+            "launcher": "systemd-run",
+            "unit": f"{unit_name}.service",
+        }
+
+    stream = open(
+        log_path,
+        "ab",
+        buffering=0,
+    )
+
+    process = subprocess.Popen(
         cmd,
         cwd=str(root),
         stdin=subprocess.DEVNULL,
@@ -1823,25 +2206,194 @@ def _queue_safe_update(*, root, service, status_file, scope, target="latest"):
     )
 
     return {
+        "launcher": "subprocess",
+        "pid": process.pid,
+    }
+
+def _queue_safe_update(
+    *,
+    root,
+    service,
+    status_file,
+    scope,
+    target="latest",
+):
+    root = Path(root).resolve()
+
+    helper = (
+        root
+        / "scripts"
+        / "panel_update.py"
+    )
+
+    if not helper.is_file():
+        raise RuntimeError(
+            f"Update helper is missing: {helper}"
+        )
+
+    current = _norm_update_status(
+        root,
+        status_file,
+    )
+
+    if (
+        _update_is_busy(current)
+        or _update_lock_active(root)
+    ):
+        raise RuntimeError(
+            "An update is already running "
+            "for this target."
+        )
+
+    cmd = [
+        sys.executable,
+        str(helper),
+        "--root",
+        str(root),
+        "--repo",
+        PANEL_REPO,
+        "--service",
+        service,
+        "--status",
+        str(status_file),
+        "--scope",
+        scope,
+        "--target",
+        str(target or "latest"),
+    ]
+
+    log_path = (
+        root
+        / "instance"
+        / "update_runner.log"
+    )
+
+    log_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+
+    queued = {
         "status": "queued",
         "stage": "queued",
         "percent": 2,
-        "message": "Update was queued.",
+        "message": "Update is starting…",
+        "target": str(target or "latest"),
+        "launcher": "pending",
+        "unit": None,
+        "pid": None,
         "log": [],
     }
+
+    _write_update_status(
+        status_file,
+        queued,
+    )
+
+    try:
+        launch_info = _launch_update(
+            cmd=cmd,
+            root=root,
+            scope=scope,
+            log_path=log_path,
+        )
+
+    except Exception as exc:
+        failed = dict(queued)
+
+        failed.update({
+            "status": "failed",
+            "stage": "failed",
+            "percent": 100,
+            "message": (
+                "The updater could not be started."
+            ),
+            "detail": str(exc),
+        })
+
+        _write_update_status(
+            status_file,
+            failed,
+        )
+
+        raise
+
+    latest_status = _read_update_status(
+        status_file
+    )
+
+    latest_state = str(
+        latest_status.get("status")
+        or ""
+    ).strip().lower()
+
+    if latest_state in {
+        "",
+        "idle",
+        "queued",
+    }:
+        latest_status.update({
+            "status": "queued",
+            "stage": "queued",
+            "percent": max(
+                2,
+                int(
+                    latest_status.get("percent")
+                    or 0
+                ),
+            ),
+            "message": (
+                latest_status.get("message")
+                or "Update is starting…"
+            ),
+            "target": str(
+                target or "latest"
+            ),
+            "launcher": launch_info.get(
+                "launcher"
+            ),
+            "unit": launch_info.get(
+                "unit"
+            ),
+            "pid": launch_info.get(
+                "pid"
+            ),
+            "log": list(
+                latest_status.get("log")
+                or []
+            ),
+        })
+
+        _write_update_status(
+            status_file,
+            latest_status,
+        )
+
+        queued = latest_status
+
+    else:
+        queued = latest_status
+
+    return queued
 
 
 @app.get("/api/panel/update/status")
 @require_api_key_or_login
 def api_panel_update_status():
-    return jsonify(_read_update_status())
+    return jsonify(
+        _norm_update_status(
+            BASE_DIR,
+            UPDATE_STATUS_FILE,
+        )
+    )
 
 
 @app.post("/api/panel/update")
 @require_api_key_or_login
 def api_panel_update_start():
     data = request.get_json(silent=True) or {}
-    target = str(data.get("target") or "latest").strip()
+    target = "main"
 
     try:
         status = _queue_safe_update(
@@ -1866,46 +2418,154 @@ def api_panel_update_start():
 @app.get("/api/panel/update/targets")
 @require_api_key_or_login
 def api_panel_update_targets():
-    latest = _github_latest_panel_version() or {}
-    latest_version = latest.get("version")
+    remote = (
+        _github_latest_panel_version()
+        or {}
+    )
+
+    latest_version = (
+        remote.get("version")
+        or PANEL_VERSION
+    )
+
+    latest_revision = str(
+        remote.get("revision")
+        or ""
+    ).strip()
 
     rows = []
-    for node in Node.query.order_by(Node.id.asc()).all():
+
+    for node in Node.query.order_by(
+        Node.id.asc()
+    ).all():
         row = {
             "id": node.id,
             "name": node.name,
             "base_url": node.base_url,
             "online": False,
+
             "version": {
                 "current": None,
                 "latest": latest_version,
+                "target": "main",
+                "source": "main",
+
+                "latest_revision": (
+                    latest_revision
+                ),
+
+                "latest_revision_short": (
+                    latest_revision[:8]
+                ),
+
                 "update_available": False,
             },
-            "update": {"status": "idle"},
+
+            "update": {
+                "status": "idle",
+            },
         }
 
         if not node.enabled:
-            row["update"] = {"status": "disabled"}
+            row["update"] = {
+                "status": "disabled",
+            }
+
             rows.append(row)
             continue
 
         try:
-            version = node_get(node, "/api/system/version", timeout=8) or {}
-            status = node_get(node, "/api/system/update/status", timeout=6) or {}
+            version = (
+                node_get(
+                    node,
+                    "/api/system/version",
+                    timeout=8,
+                )
+                or {}
+            )
 
-            current = str(version.get("current") or "").strip() or None
-            node_latest = str(version.get("latest") or latest_version or "").strip() or None
+            status = (
+                node_get(
+                    node,
+                    "/api/system/update/status",
+                    timeout=6,
+                )
+                or {}
+            )
 
             row["online"] = True
+
             row["version"] = {
-                "current": current,
-                "latest": node_latest,
+                "current": (
+                    str(
+                        version.get("current")
+                        or ""
+                    ).strip()
+                    or None
+                ),
+
+                "latest": (
+                    str(
+                        version.get("latest")
+                        or latest_version
+                        or ""
+                    ).strip()
+                    or None
+                ),
+
+                "target": "main",
+                "source": "main",
+
+                "current_revision": str(
+                    version.get(
+                        "current_revision"
+                    )
+                    or ""
+                ),
+
+                "current_revision_short": str(
+                    version.get(
+                        "current_revision_short"
+                    )
+                    or ""
+                ),
+
+                "latest_revision": str(
+                    version.get(
+                        "latest_revision"
+                    )
+                    or latest_revision
+                    or ""
+                ),
+
+                "latest_revision_short": str(
+                    version.get(
+                        "latest_revision_short"
+                    )
+                    or latest_revision[:8]
+                    or ""
+                ),
+
+                "revision_tracked": bool(
+                    version.get(
+                        "revision_tracked"
+                    )
+                ),
+
                 "update_available": bool(
-                    current and node_latest
-                    and _version_tuple(node_latest) > _version_tuple(current)
+                    version.get(
+                        "update_available"
+                    )
                 ),
             }
-            row["update"] = status if isinstance(status, dict) else {"status": "idle"}
+
+            row["update"] = (
+                status
+                if isinstance(status, dict)
+                else {
+                    "status": "idle",
+                }
+            )
 
         except Exception as exc:
             row["update"] = {
@@ -1915,8 +2575,19 @@ def api_panel_update_targets():
 
         rows.append(row)
 
-    return jsonify(ok=True, latest=latest_version, nodes=rows)
+    return jsonify(
+        ok=True,
+        latest=latest_version,
+        target="main",
+        update_source="main",
 
+        latest_revision=latest_revision,
+        latest_revision_short=(
+            latest_revision[:8]
+        ),
+
+        nodes=rows,
+    )
 
 @app.post("/api/nodes/<int:nid>/update")
 @require_api_key_or_login
@@ -1926,10 +2597,10 @@ def api_node_update_start(nid):
 
     try:
         response = node_post(
-            node,
-            "/api/system/update",
-            {"target": str(data.get("target") or "latest")},
-            timeout=12,
+           node,
+           "/api/system/update",
+           {"target": "main"},
+           timeout=12,
         )
         return jsonify(response if isinstance(response, dict) else {
             "ok": True,
