@@ -1,11 +1,7 @@
 {
-  "syntax_valid": true,
-  "local_VERSION_fallback": true,
-  "remote_VERSION_check": true,
-  "release_check": true,
-  "tag_check": true,
-  "main_branch_fallback": true,
-  "main_branch_update": true,
-  "unnecessary_diagnostics_removed": true,
-  "updater_path": "scripts/panel_update.py"
+  "panel_update_compile": true,
+  "successful_restart_detached": true,
+  "service_active_verified": true,
+  "completed_status_written_after_restart": true,
+  "rollback_detached_restart_preserved": true
 }
