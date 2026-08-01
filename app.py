@@ -1738,15 +1738,32 @@ def _json_save(path, data):
 
 def _load_tg_settings():
     s = _json_load(TELEGRAM_SETTINGS_FILE, {})
+
+    notify = s.get('notify') or {}
+
     return {
         'enabled': bool(s.get('enabled', False)),
         'notify': {
-            'app_down':      bool(s.get('notify', {}).get('app_down', True)),
-            'iface_down':    bool(s.get('notify', {}).get('iface_down', True)),
-            'login_fail':    bool(s.get('notify', {}).get('login_fail', True)),
-            'suspicious_4xx':bool(s.get('notify', {}).get('suspicious_4xx', True)),
+            'app_down': bool(
+                notify.get('app_down', True)
+            ),
+            'iface_down': bool(
+                notify.get('iface_down', True)
+            ),
+            'login_success': bool(
+                notify.get('login_success', True)
+            ),
+            'login_fail': bool(
+                notify.get('login_fail', True)
+            ),
+            'suspicious_4xx': bool(
+                notify.get('suspicious_4xx', True)
+            ),
         },
-        'bot_token': (s.get('bot_token') or '').strip()
+        'bot_token': (
+            s.get('bot_token')
+            or ''
+        ).strip(),
     }
 
 def _save_tg_settings(partial):
@@ -1774,6 +1791,408 @@ def _load_tg_admins():
 def _save_tg_admins(admins):
     _json_save(TELEGRAM_ADMINS_FILE, admins)
 
+# -------------------------------------------------
+# Telegram security notifications
+# -------------------------------------------------
+
+_SECURITY_NOTIFY_LOCK = threading.Lock()
+_SECURITY_NOTIFY_LAST = {}
+
+
+def _security_html_escape(value) -> str:
+    import html
+
+    return html.escape(
+        str(value or ''),
+        quote=True,
+    )
+
+
+def _request_client_ip() -> tuple[str, str]:
+    """
+    Return:
+      1. Effective client IP
+      2. Full proxy chain for diagnostics
+
+    Proxy headers are useful only when the panel is behind a trusted
+    proxy/CDN. ProxyFix is already enabled near app creation.
+    """
+
+    forwarded = (
+        request.headers.get(
+            'X-Forwarded-For'
+        )
+        or ''
+    ).strip()
+
+    proxy_chain = ', '.join(
+        item.strip()
+        for item in forwarded.split(',')
+        if item.strip()
+    )
+
+    candidates = [
+        request.headers.get(
+            'CF-Connecting-IP'
+        ),
+        request.headers.get(
+            'True-Client-IP'
+        ),
+        request.headers.get(
+            'X-Real-IP'
+        ),
+        (
+            proxy_chain.split(',', 1)[0].strip()
+            if proxy_chain
+            else None
+        ),
+        request.remote_addr,
+    ]
+
+    client_ip = next(
+        (
+            str(value).strip()
+            for value in candidates
+            if str(value or '').strip()
+        ),
+        'unknown',
+    )
+
+    return client_ip, proxy_chain
+
+
+def _request_device_summary() -> tuple[str, str]:
+    """
+    Return:
+      1. Friendly browser/OS summary
+      2. Raw User-Agent
+    """
+
+    user_agent = (
+        request.headers.get('User-Agent')
+        or 'unknown'
+    ).strip()
+
+    lower = user_agent.lower()
+
+    if 'edg/' in lower:
+        browser = 'Microsoft Edge'
+
+    elif 'opr/' in lower or 'opera' in lower:
+        browser = 'Opera'
+
+    elif 'firefox/' in lower:
+        browser = 'Firefox'
+
+    elif 'chrome/' in lower or 'crios/' in lower:
+        browser = 'Chrome'
+
+    elif 'safari/' in lower:
+        browser = 'Safari'
+
+    else:
+        browser = 'Unknown browser'
+
+    if 'windows nt' in lower:
+        operating_system = 'Windows'
+
+    elif 'android' in lower:
+        operating_system = 'Android'
+
+    elif (
+        'iphone' in lower
+        or 'ipad' in lower
+        or 'ios' in lower
+    ):
+        operating_system = 'iOS/iPadOS'
+
+    elif (
+        'mac os x' in lower
+        or 'macintosh' in lower
+    ):
+        operating_system = 'macOS'
+
+    elif 'linux' in lower:
+        operating_system = 'Linux'
+
+    else:
+        operating_system = 'Unknown OS'
+
+    return (
+        f'{browser} · {operating_system}',
+        user_agent[:500],
+    )
+
+
+def _security_notify_enabled(
+    event_type: str,
+) -> bool:
+    settings = _load_tg_settings()
+
+    if not settings.get('enabled'):
+        return False
+
+    notify = settings.get('notify') or {}
+
+    if event_type == 'login_success':
+        return bool(
+            notify.get(
+                'login_success',
+                True,
+            )
+        )
+
+    if event_type in {
+        'login_failed',
+        'twofa_failed',
+    }:
+        return bool(
+            notify.get(
+                'login_fail',
+                True,
+            )
+        )
+
+    return False
+
+
+def _send_security_notification(
+    event_type: str,
+    username: str = '',
+    reason: str = '',
+) -> None:
+
+    if not _security_notify_enabled(
+        event_type
+    ):
+        return
+
+    settings = _load_tg_settings()
+
+    bot_token = (
+        settings.get('bot_token')
+        or ''
+    ).strip()
+
+    recipients = [
+        str(admin.get('id') or '').strip()
+        for admin in (
+            _load_tg_admins()
+            or []
+        )
+        if (
+            str(
+                admin.get('id')
+                or ''
+            ).strip()
+            and not admin.get('muted')
+        )
+    ]
+
+    if not bot_token or not recipients:
+        return
+
+    client_ip, proxy_chain = (
+        _request_client_ip()
+    )
+
+    device_summary, raw_user_agent = (
+        _request_device_summary()
+    )
+
+    timestamp = datetime.now(
+        timezone.utc
+    ).strftime(
+        '%Y-%m-%d %H:%M:%S UTC'
+    )
+
+    panel_host = (
+        request.host
+        or 'unknown'
+    ).strip()
+
+    scheme = (
+        'HTTPS'
+        if _is_https()
+        else 'HTTP'
+    )
+
+    username = (
+        username
+        or 'unknown'
+    ).strip()[:120]
+
+    reason = (
+        reason
+        or ''
+    ).strip()[:300]
+
+    if event_type != 'login_success':
+        deduplication_key = (
+            event_type,
+            client_ip,
+            username,
+            reason,
+        )
+
+        current_time = time.monotonic()
+
+        with _SECURITY_NOTIFY_LOCK:
+            previous_time = float(
+                _SECURITY_NOTIFY_LAST.get(
+                    deduplication_key
+                )
+                or 0
+            )
+
+            if (
+                current_time
+                - previous_time
+                < 10
+            ):
+                return
+
+            _SECURITY_NOTIFY_LAST[
+                deduplication_key
+            ] = current_time
+
+            if len(
+                _SECURITY_NOTIFY_LAST
+            ) > 500:
+                expiry = (
+                    current_time
+                    - 3600
+                )
+
+                for key, value in list(
+                    _SECURITY_NOTIFY_LAST.items()
+                ):
+                    if float(
+                        value or 0
+                    ) < expiry:
+                        _SECURITY_NOTIFY_LAST.pop(
+                            key,
+                            None,
+                        )
+
+    if event_type == 'login_success':
+        title = '● Panel login accepted'
+        status = 'Authenticated'
+
+    elif event_type == 'twofa_failed':
+        title = (
+            '⊘ Two-factor verification rejected'
+        )
+        status = 'Access denied'
+
+    else:
+        title = '⊘ Panel login rejected'
+        status = 'Access denied'
+
+    message_lines = [
+        f'<b>{title}</b>',
+        '',
+        (
+            '◇ <b>Account</b>  '
+            f'<code>{_security_html_escape(username)}</code>'
+        ),
+        (
+            '⌁ <b>Client IP</b>  '
+            f'<code>{_security_html_escape(client_ip)}</code>'
+        ),
+        (
+            '▦ <b>Device</b>  '
+            f'{_security_html_escape(device_summary)}'
+        ),
+        (
+            '◷ <b>Time</b>  '
+            f'<code>{_security_html_escape(timestamp)}</code>'
+        ),
+        (
+            '◆ <b>Status</b>  '
+            f'{_security_html_escape(status)}'
+        ),
+        (
+            '⌂ <b>Panel</b>  '
+            f'<code>{_security_html_escape(panel_host)}</code>'
+            f' · {scheme}'
+        ),
+    ]
+
+    if reason:
+        message_lines.append(
+            '✦ <b>Reason</b>  '
+            f'{_security_html_escape(reason)}'
+        )
+
+    if (
+        proxy_chain
+        and proxy_chain != client_ip
+    ):
+        message_lines.append(
+            '↪ <b>Proxy chain</b>  '
+            f'<code>{_security_html_escape(proxy_chain[:400])}</code>'
+        )
+
+    message_lines.extend([
+        '',
+        (
+            '<code>'
+            f'{_security_html_escape(raw_user_agent)}'
+            '</code>'
+        ),
+    ])
+
+    message = '\n'.join(
+        message_lines
+    )
+
+    flask_app = (
+        current_app
+        ._get_current_object()
+    )
+
+    def notification_worker():
+        with flask_app.app_context():
+            for chat_id in recipients:
+                try:
+                    response = requests.post(
+                        (
+                            'https://api.telegram.org/'
+                            f'bot{bot_token}/sendMessage'
+                        ),
+                        json={
+                            'chat_id': chat_id,
+                            'text': message,
+                            'parse_mode': 'HTML',
+                            'disable_web_page_preview': True,
+                        },
+                        timeout=8,
+                    )
+
+                    if not response.ok:
+                        flask_app.logger.warning(
+                            'Telegram security notification '
+                            'failed: chat_id=%s status=%s '
+                            'response=%s',
+                            chat_id,
+                            response.status_code,
+                            response.text[:300],
+                        )
+
+                except Exception:
+                    flask_app.logger.debug(
+                        'Telegram security notification '
+                        'failed for chat_id=%s',
+                        chat_id,
+                        exc_info=True,
+                    )
+
+    threading.Thread(
+        target=notification_worker,
+        name='telegram-security-alert',
+        daemon=True,
+    ).start()
 
 @app.route('/api/telegram/test', methods=['POST'])
 @login_required
@@ -5536,15 +5955,98 @@ def runtime_post():
 @app.get('/api/telegram/status')
 @login_required
 def tg_status():
-    hb = _json_load(TELEGRAM_HB_FILE, {})
-    last = int(hb.get('ts') or 0)
-    sec = int(current_app.config.get('TG_HEARTBEAT_SEC', 60) or 60)
-    online = (now_ts() - last) <= max(120, sec * 2)
+    hb = _json_load(
+        TELEGRAM_HB_FILE,
+        {},
+    )
+
+    last = int(
+        hb.get('ts')
+        or 0
+    )
+
+    sec = max(
+        15,
+        int(
+            current_app.config.get(
+                'TG_HEARTBEAT_SEC',
+                60,
+            )
+            or 60
+        ),
+    )
+
+    heartbeat_age = (
+        max(
+            0,
+            now_ts() - last,
+        )
+        if last
+        else None
+    )
+
+    heartbeat_fresh = bool(
+        last
+        and heartbeat_age
+        <= max(
+            180,
+            sec * 4,
+        )
+    )
+    process_alive = False
+
+    try:
+        pid = int(
+            hb.get('pid')
+            or 0
+        )
+
+        if pid > 1:
+            os.kill(
+                pid,
+                0,
+            )
+            process_alive = True
+
+    except ProcessLookupError:
+        process_alive = False
+
+    except PermissionError:
+        process_alive = True
+
+    except Exception:
+        process_alive = False
+
+    online = bool(
+        heartbeat_fresh
+        or process_alive
+    )
+
+    if heartbeat_fresh:
+        state = 'online'
+
+    elif process_alive:
+        state = 'running_heartbeat_stale'
+
+    else:
+        state = 'offline'
+
     return jsonify(
-        bot_online=bool(online),
-        last_seen= isoz(from_ts(last)) if last else None,
+        bot_online=online,
+        state=state,
+        heartbeat_fresh=heartbeat_fresh,
+        process_alive=process_alive,
+        heartbeat_age_seconds=heartbeat_age,
+        heartbeat_interval_seconds=sec,
+        last_seen=(
+            isoz(
+                from_ts(last)
+            )
+            if last
+            else None
+        ),
         pid=hb.get('pid'),
-        version=hb.get('version')
+        version=hb.get('version'),
     )
 
 # ________ Heartbeat: API-key protected, CSRF-exempt (bot no login) _________
@@ -5552,13 +6054,51 @@ def tg_status():
 @app.post('/api/telegram/heartbeat')
 @require_api_key
 def tg_heartbeat():
-    data = request.get_json() or {}
-    rec = {'ts': now_ts(), 'pid': data.get('pid'), 'version': data.get('version') or 'unknown'}
-    _json_save(TELEGRAM_HB_FILE, rec)
-    _extend_file(TELEGRAM_LOG_FILE,
-                      f"[{isoz(from_ts(rec['ts']))}] heartbeat pid={rec['pid']} v={rec['version']}",
-                      source='telegram')
-    return jsonify(ok=True)
+    data = (
+        request.get_json(
+            silent=True,
+        )
+        or {}
+    )
+
+    rec = {
+        'ts': now_ts(),
+        'pid': data.get('pid'),
+        'version': (
+            data.get('version')
+            or 'unknown'
+        ),
+        'panel': (
+            data.get('panel')
+            or ''
+        ),
+        'service': (
+            data.get('service')
+            or 'telegram-bot'
+        ),
+    }
+
+    _json_save(
+        TELEGRAM_HB_FILE,
+        rec,
+    )
+
+    _extend_file(
+        TELEGRAM_LOG_FILE,
+        (
+            f"[{isoz(from_ts(rec['ts']))}] "
+            f"heartbeat "
+            f"pid={rec['pid']} "
+            f"v={rec['version']} "
+            f"service={rec['service']}"
+        ),
+        source='telegram',
+    )
+
+    return jsonify(
+        ok=True,
+        server_ts=rec['ts'],
+    )
 
 #______ Current time ________
 def now_ts() -> int:
@@ -6719,11 +7259,39 @@ def user_peer(token):
 @app.route('/api/u/<token>/config')
 def userpeer_config(token):
     p = _peer_from_shortlink_token(token)
+
     cfg = _client_conf_txt(p)
-    return make_response(cfg, 200, {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'Content-Disposition': f'attachment; filename={p.name or "peer"}.conf'
-    })
+
+    safe_name = re.sub(
+        r'[^A-Za-z0-9_.-]+',
+        '_',
+        p.name or f'peer-{p.id}',
+    ).strip('._') or f'peer-{p.id}'
+
+    mem = BytesIO(
+        cfg.encode('utf-8')
+    )
+
+    response = send_file(
+        mem,
+        mimetype='application/octet-stream',
+        as_attachment=True,
+        download_name=f'{safe_name}.conf',
+        max_age=0,
+    )
+
+    response.headers[
+        'X-Content-Type-Options'
+    ] = 'nosniff'
+
+    response.headers[
+        'Cache-Control'
+    ] = (
+        'private, no-store, no-cache, '
+        'must-revalidate, max-age=0'
+    )
+
+    return response
 
 # ----------
 # Login
@@ -7766,33 +8334,79 @@ def _peer_by_public_key_or_404(public_key: str):
 
 
 @app.get("/api/peer/<path:public_key>/config")
-@login_required
+@csrf.exempt
+@require_api_key_or_login
 def api_peer_config_by_public_key(public_key):
     peer = _peer_by_public_key_or_404(public_key)
 
     cfg = _client_conf_txt(peer)
 
-    filename = f"{peer.name or 'peer'}.conf"
+    if not cfg or not cfg.strip():
+        return jsonify(
+            ok=False,
+            error="config_empty",
+            message="The peer configuration is empty.",
+        ), 404
 
-    return make_response(cfg, 200, {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Content-Disposition": f'attachment; filename="{filename}"',
-    })
+    safe_name = re.sub(
+        r"[^A-Za-z0-9_.-]+",
+        "_",
+        peer.name or f"peer-{peer.id}",
+    ).strip("._") or f"peer-{peer.id}"
+
+    response = make_response(cfg.strip() + "\n", 200)
+    response.headers["Content-Type"] = "text/plain; charset=utf-8"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = (
+        "private, no-store, no-cache, must-revalidate, max-age=0"
+    )
+
+    if request.args.get("download") == "1":
+        response.headers["Content-Disposition"] = (
+            f'attachment; filename="{safe_name}.conf"'
+        )
+
+    return response
 
 
 @app.get("/api/peer/<path:public_key>/config_qr")
-@login_required
+@csrf.exempt
+@require_api_key_or_login
 def api_peer_config_qr_by_public_key(public_key):
     peer = _peer_by_public_key_or_404(public_key)
 
     cfg = _client_conf_txt(peer)
+
+    if not cfg or not cfg.strip():
+        return jsonify(
+            ok=False,
+            error="config_empty",
+            message="The peer configuration is empty.",
+        ), 404
+
+    safe_name = re.sub(
+        r"[^A-Za-z0-9_.-]+",
+        "_",
+        peer.name or f"peer-{peer.id}",
+    ).strip("._") or f"peer-{peer.id}"
 
     img = qrcode.make(cfg)
     buf = BytesIO()
     img.save(buf, format="PNG")
     buf.seek(0)
 
-    return send_file(buf, mimetype="image/png")
+    response = send_file(
+        buf,
+        mimetype="image/png",
+        as_attachment=False,
+        download_name=f"{safe_name}.png",
+        max_age=0,
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = (
+        "private, no-store, no-cache, must-revalidate, max-age=0"
+    )
+    return response
 # ------------------------------------------------
 # Template settings (selected template + socials)
 # ________________________________________________
@@ -10653,48 +11267,238 @@ def node_one(nid):
 # -----------
 # Login 2FA
 #____________
-@app.route('/login', methods=['GET', 'POST'])
+@app.route(
+    '/login',
+    methods=['GET', 'POST'],
+)
 def login():
     from models import AdminAccount
+
     if not AdminAccount.query.first():
-        return redirect(url_for('register'))
+        return redirect(
+            url_for('register')
+        )
 
     if request.method == 'POST':
-        u   = (request.form.get('username') or '').strip()
-        pw  = (request.form.get('password') or '').strip()
-        otp = (request.form.get('twofa_code') or request.form.get('otp_or_recovery') or '').strip().replace(' ', '')
+        username = (
+            request.form.get('username')
+            or ''
+        ).strip()
 
-        acc = AdminAccount.query.filter_by(username=u).first()
-        if not acc or not acc.verify_pw(pw):
-            flash('Invalid username or password', 'error')
-            return render_template('login.html')
+        password = (
+            request.form.get('password')
+            or ''
+        ).strip()
 
-        if acc.twofa_enabled:
-            ok = False
-            if acc.totp_secret and otp:
-                totp = pyotp.TOTP(acc.totp_secret)
-                if totp.verify(otp, valid_window=1):
-                    ok = True
+        otp = (
+            request.form.get('twofa_code')
+            or request.form.get(
+                'otp_or_recovery'
+            )
+            or ''
+        ).strip().replace(' ', '')
 
-            if not ok and otp:
-                codes = (acc.recovery_codes or '').splitlines()
-                for i, stored in enumerate(codes):
-                    if verify_recovery(otp, stored):
-                        ok = True
-                        codes.pop(i)
-                        acc.recovery_codes = '\n'.join(codes)
+        account = (
+            AdminAccount.query
+            .filter_by(
+                username=username
+            )
+            .first()
+        )
+
+        if (
+            not account
+            or not account.verify_pw(
+                password
+            )
+        ):
+            _send_security_notification(
+                'login_failed',
+                username=(
+                    username
+                    or 'unknown'
+                ),
+                reason=(
+                    'Invalid username or password'
+                ),
+            )
+
+            try:
+                client_ip, _ = (
+                    _request_client_ip()
+                )
+
+                _norm_adminlog({
+                    'action': 'login_failed',
+                    'admin_username': (
+                        username
+                        or ''
+                    ),
+                    'details': (
+                        f'ip={client_ip}; '
+                        'reason=invalid_credentials'
+                    ),
+                    'result': 'denied',
+                    'channel': 'web',
+                })
+            except Exception:
+                pass
+
+            flash(
+                'Invalid username or password',
+                'error',
+            )
+
+            return render_template(
+                'login.html'
+            )
+
+        if account.twofa_enabled:
+            verified = False
+
+            if (
+                account.totp_secret
+                and otp
+            ):
+                totp = pyotp.TOTP(
+                    account.totp_secret
+                )
+
+                if totp.verify(
+                    otp,
+                    valid_window=1,
+                ):
+                    verified = True
+
+            if not verified and otp:
+                recovery_codes = (
+                    account.recovery_codes
+                    or ''
+                ).splitlines()
+
+                for index, stored in enumerate(
+                    recovery_codes
+                ):
+                    if verify_recovery(
+                        otp,
+                        stored,
+                    ):
+                        verified = True
+
+                        recovery_codes.pop(
+                            index
+                        )
+
+                        account.recovery_codes = (
+                            '\n'.join(
+                                recovery_codes
+                            )
+                        )
+
                         db.session.commit()
                         break
 
-            if not ok:
-                flash('Enter your 6-digit code or a valid recovery code', 'error')
-                return render_template('login.html')
+            if not verified:
+                _send_security_notification(
+                    'twofa_failed',
+                    username=account.username,
+                    reason=(
+                        'Invalid TOTP or recovery code'
+                    ),
+                )
 
-        login_user(Admin(acc.username))
-        nxt = request.form.get('next') or request.args.get('next')
-        return redirect(nxt) if nxt and _safe_url(nxt) else redirect(url_for('index'))
+                try:
+                    client_ip, _ = (
+                        _request_client_ip()
+                    )
 
-    return render_template('login.html')
+                    _norm_adminlog({
+                        'action': 'twofa_failed',
+                        'admin_username': (
+                            account.username
+                        ),
+                        'details': (
+                            f'ip={client_ip}; '
+                            'reason=invalid_twofa'
+                        ),
+                        'result': 'denied',
+                        'channel': 'web',
+                    })
+                except Exception:
+                    pass
+
+                flash(
+                    (
+                        'Enter your 6-digit code '
+                        'or a valid recovery code'
+                    ),
+                    'error',
+                )
+
+                return render_template(
+                    'login.html'
+                )
+
+        login_user(
+            Admin(
+                account.username
+            )
+        )
+
+        _send_security_notification(
+            'login_success',
+            username=account.username,
+            reason=(
+                (
+                    'Password and two-factor '
+                    'checks passed'
+                )
+                if account.twofa_enabled
+                else 'Password accepted'
+            ),
+        )
+
+        try:
+            client_ip, _ = (
+                _request_client_ip()
+            )
+
+            _norm_adminlog({
+                'action': 'login_success',
+                'admin_username': (
+                    account.username
+                ),
+                'details': (
+                    f'ip={client_ip}; '
+                    f'scheme='
+                    f'{"https" if _is_https() else "http"}'
+                ),
+                'result': 'ok',
+                'channel': 'web',
+            })
+        except Exception:
+            pass
+
+        next_url = (
+            request.form.get('next')
+            or request.args.get('next')
+        )
+
+        if (
+            next_url
+            and _safe_url(next_url)
+        ):
+            return redirect(
+                next_url
+            )
+
+        return redirect(
+            url_for('index')
+        )
+
+    return render_template(
+        'login.html'
+    )
 
 # --------------
 # Register 2FA
@@ -11423,40 +12227,245 @@ def api_stats():
 @require_api_key
 def stats_mini():
     try:
-        cpu  = round(psutil.cpu_percent(interval=0.2) or 0.0, 1)
-        mem  = round(psutil.virtual_memory().percent or 0.0, 1)
-        disk = round(psutil.disk_usage('/').percent or 0.0, 1)
-        uptime_secs = max(0, int(time.time() - psutil.boot_time()))
+        cpu = round(
+            psutil.cpu_percent(
+                interval=0.2,
+            )
+            or 0.0,
+            1,
+        )
+
+        mem = round(
+            psutil.virtual_memory().percent
+            or 0.0,
+            1,
+        )
+
+        disk = round(
+            psutil.disk_usage('/').percent
+            or 0.0,
+            1,
+        )
+
+        uptime_secs = max(
+            0,
+            int(
+                time.time()
+                - psutil.boot_time()
+            ),
+        )
+
         if uptime_secs >= 48 * 3600:
-            days  = uptime_secs // 86400
-            hours = (uptime_secs % 86400) // 3600
+            days = (
+                uptime_secs
+                // 86400
+            )
+
+            hours = (
+                uptime_secs
+                % 86400
+            ) // 3600
+
             uptime_value = int(days)
-            uptime_unit  = "d"
-            uptime_str   = f"{days}d" + (f" {hours}h" if hours else "")
+            uptime_unit = 'd'
+
+            uptime_str = (
+                f'{days}d'
+                + (
+                    f' {hours}h'
+                    if hours
+                    else ''
+                )
+            )
+
         else:
-            hours = uptime_secs // 3600
+            hours = (
+                uptime_secs
+                // 3600
+            )
+
             uptime_value = int(hours)
-            uptime_unit  = "h"
-            uptime_str   = f"{hours}h"
+            uptime_unit = 'h'
+            uptime_str = f'{hours}h'
+
+        active_within_seconds = 180
+        now_epoch = int(
+            time.time()
+        )
+
+        handshake_map = {}
+
+        try:
+            process = subprocess.run(
+                [
+                    'wg',
+                    'show',
+                    'all',
+                    'latest-handshakes',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+
+            if process.returncode == 0:
+                for raw_line in (
+                    process.stdout
+                    or ''
+                ).splitlines():
+
+                    parts = (
+                        raw_line.split()
+                    )
+
+                    if len(parts) < 3:
+                        continue
+
+                    iface_name = parts[0]
+                    public_key = parts[1]
+                    raw_timestamp = parts[2]
+
+                    try:
+                        timestamp = int(
+                            raw_timestamp
+                            or 0
+                        )
+
+                    except Exception:
+                        timestamp = 0
+
+                    handshake_map[
+                        (
+                            iface_name,
+                            public_key,
+                        )
+                    ] = timestamp
+
+        except Exception:
+            handshake_map = {}
+
+        activity = {
+            'active': 0,
+            'idle': 0,
+            'blocked': 0,
+            'total': 0,
+        }
+
+        rows = (
+            db.session.query(
+                Peer.status,
+                Peer.public_key,
+                InterfaceConfig.name,
+            )
+            .join(
+                InterfaceConfig,
+                Peer.iface_id
+                == InterfaceConfig.id,
+            )
+            .all()
+        )
+
+        for (
+            stored_status,
+            public_key,
+            iface_name,
+        ) in rows:
+
+            activity['total'] += 1
+
+            stored_status = str(
+                stored_status
+                or ''
+            ).lower()
+
+            iface_name = str(
+                iface_name
+                or ''
+            )
+
+            if stored_status == 'blocked':
+                activity['blocked'] += 1
+                continue
+
+            is_node = bool(
+                re.match(
+                    r'^n\d+:',
+                    iface_name,
+                )
+            )
+
+            if is_node:
+                if stored_status == 'online':
+                    activity['active'] += 1
+
+                else:
+                    activity['idle'] += 1
+
+                continue
+
+            device_name = (
+                iface_name
+                .split(':')[-1]
+            )
+
+            handshake = int(
+                handshake_map.get(
+                    (
+                        device_name,
+                        public_key,
+                    )
+                )
+                or handshake_map.get(
+                    (
+                        iface_name,
+                        public_key,
+                    )
+                )
+                or 0
+            )
+
+            if (
+                handshake
+                and now_epoch - handshake
+                <= active_within_seconds
+            ):
+                activity['active'] += 1
+
+            else:
+                activity['idle'] += 1
 
         counts = {
-            "online":  db.session.query(Peer).filter_by(status='online').count(),
-            "offline": db.session.query(Peer).filter_by(status='offline').count(),
-            "blocked": db.session.query(Peer).filter_by(status='blocked').count(),
+            'active': activity['active'],
+            'idle': activity['idle'],
+            'blocked': activity['blocked'],
+            'total': activity['total'],
+            'activity_window_seconds': (
+                active_within_seconds
+            ),
+
+            'online': activity['active'],
+            'offline': activity['idle'],
         }
 
         return jsonify({
-            "cpu": cpu,
-            "mem": mem,
-            "disk": disk,
-            "uptime_value": uptime_value,
-            "uptime_unit":  uptime_unit,
-            "uptime_str":   uptime_str,
-            "counts": counts,
+            'cpu': cpu,
+            'mem': mem,
+            'disk': disk,
+            'uptime_value': uptime_value,
+            'uptime_unit': uptime_unit,
+            'uptime_str': uptime_str,
+            'counts': counts,
         }), 200
-    except Exception:
-        return jsonify({"error": "stats_unavailable"}), 503
 
+    except Exception:
+        current_app.logger.exception(
+            'Mini stats failed'
+        )
+
+        return jsonify(
+            error='stats_unavailable',
+        ), 503
 
 # --------------
 # Peers list[TG]
@@ -14084,49 +15093,6 @@ def peer_logs(pid):
     return jsonify(logs=[{'time': isoz(e.timestamp), 'event': e.event, 'details': e.details}
                      for e in rows])
 
-# ------------
-# Config & QR
-# ____________
-@app.route('/api/peer/<int:pid>/config')
-@csrf.exempt
-@require_api_key_or_login
-def peer_config(pid):
-    p = db.session.get(Peer, pid) or abort(404)
-    text = _client_conf_txt(p)
-
-    if request.args.get('download'):
-        resp = make_response(text)
-        fname = f"{p.name or 'peer'}-{p.id}.conf".replace(' ', '_')
-        resp.headers['Content-Type'] = 'text/plain; charset=utf-8'
-        resp.headers['Content-Disposition'] = f'attachment; filename="{fname}"'
-        return resp
-
-    return current_app.response_class(
-        text,
-        mimetype='text/plain; charset=utf-8'
-    )
-
-
-@app.route('/api/peer/<int:pid>/config_qr')
-@csrf.exempt
-@require_api_key_or_login
-def peer_config_qr(pid):
-    p = db.session.get(Peer, pid) or abort(404)
-    text = _client_conf_txt(p)
-    if not text:
-        abort(404)
-
-    img = qrcode.make(text)
-    bio = BytesIO()
-    img.save(bio, format='PNG')
-    bio.seek(0)
-
-    return send_file(
-        bio,
-        mimetype='image/png',
-        as_attachment=False,
-        download_name=f"{p.name or 'peer'}-{p.id}.png",
-    )
 
 # Subscriptions: one client policy shared across local/node peers
 # =========================================================
@@ -16913,17 +17879,64 @@ def subscription_public_config(token):
     return send_file(mem, mimetype='application/zip', as_attachment=True, download_name=f'{fname}.zip')
 
 
-@app.get('/s/<token>/inbound/<int:link_id>/config')
-def subscription_public_inbound_config(token, link_id):
-    sub = Subscription.query.filter_by(token=token).first() or abort(404)
-    link = SubscriptionPeer.query.filter_by(id=link_id, subscription_id=sub.id).first() or abort(404)
+@app.get(
+    '/s/<token>/inbound/<int:link_id>/config'
+)
+def subscription_public_inbound_config(
+    token,
+    link_id,
+):
+    sub = (
+        Subscription.query
+        .filter_by(token=token)
+        .first()
+        or abort(404)
+    )
+
+    link = (
+        SubscriptionPeer.query
+        .filter_by(
+            id=link_id,
+            subscription_id=sub.id,
+        )
+        .first()
+        or abort(404)
+    )
+
     peer = link.peer or abort(404)
+
     cfg = _client_config_txt(peer)
-    fname = re.sub(r'[^A-Za-z0-9_.-]+', '_', peer.name or 'peer').strip('_') or 'peer'
-    return make_response(cfg, 200, {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'Content-Disposition': f'attachment; filename={fname}.conf'
-    })
+
+    safe_name = re.sub(
+        r'[^A-Za-z0-9_.-]+',
+        '_',
+        peer.name or f'peer-{peer.id}',
+    ).strip('._') or f'peer-{peer.id}'
+
+    mem = BytesIO(
+        cfg.encode('utf-8')
+    )
+
+    response = send_file(
+        mem,
+        mimetype='application/octet-stream',
+        as_attachment=True,
+        download_name=f'{safe_name}.conf',
+        max_age=0,
+    )
+
+    response.headers[
+        'X-Content-Type-Options'
+    ] = 'nosniff'
+
+    response.headers[
+        'Cache-Control'
+    ] = (
+        'private, no-store, no-cache, '
+        'must-revalidate, max-age=0'
+    )
+
+    return response
 
 
 @app.get('/s/<token>/inbound/<int:link_id>/qr')
