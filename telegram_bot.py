@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import time, threading
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timezone
 import os, io, json, logging, math, re, asyncio
 from functools import wraps
 from pathlib import Path
@@ -22,6 +22,7 @@ from telegram.ext import (
 from telegram.error import BadRequest
 import telegram_admin as admin_azumi
 import html as py_html
+import qrcode
 try:
     from telegram.helpers import escape as tg_escape   
 except Exception:
@@ -340,12 +341,46 @@ def _put_soft(url, **kw):
         except Exception as ee:
             raise ee
 
-def get_shortlink(pid: int) -> str:
+def get_shortlink(pid: int, peer: Optional[Dict[str, Any]] = None) -> str:
+    peer = peer or {}
+
+    for key in ("shortlink", "short_link", "shortlink_url", "public_url", "url"):
+        value = str(peer.get(key) or "").strip()
+        if value:
+            return value
+
     try:
-        j = _get(f"{PANEL}/api/peer/{pid}/shortlink").json()
-        return j.get("url") or ""
+        response = _get(
+            f"{PANEL}/api/peer/{int(pid)}/shortlink",
+            session="api",
+            timeout=20,
+        )
+        data = response.json()
+        if isinstance(data, dict):
+            for key in ("url", "shortlink", "short_link", "public_url"):
+                value = str(data.get(key) or "").strip()
+                if value:
+                    return value
+
+            token = str(data.get("token") or "").strip()
+            if token:
+                return f"{PANEL.rstrip('/')}/u/{token}"
     except Exception:
-        return ""
+        logging.getLogger(__name__).exception(
+            "Could not obtain short link for peer %s", pid
+        )
+
+    try:
+        refreshed = peer_by_id(int(pid)) if "peer_by_id" in globals() else None
+        if isinstance(refreshed, dict):
+            for key in ("shortlink", "short_link", "shortlink_url", "public_url", "url"):
+                value = str(refreshed.get(key) or "").strip()
+                if value:
+                    return value
+    except Exception:
+        pass
+
+    return ""
 
 def _peer_lines(p: Dict[str, Any]) -> str:
     ttl = human_ttl(p.get("ttl_seconds"))
@@ -360,12 +395,12 @@ def _peer_lines(p: Dict[str, Any]) -> str:
     iface = p.get("iface") or "—"
     status = p.get("status") or "—"
     return "\n".join([
-        f"🖧 <b>Interface</b>: {iface}   •   <b>Status</b>: {status}",
-        f"📌 <b>Address</b>: {addr}",
-        f"🌐 <b>Endpoint</b>: {endpoint}",
-        f"📦 <b>Used</b>: {used_mib:.2f} MiB   •   <b>TTL</b>: {ttl}",
-        f"🎚 <b>Limit</b>: {limit_val} {limit_unit}   •   <b>Unlimited</b>: {unlimited}",
-        f"⬇️ <b>RX</b>: {rx} MiB   •   ⬆️ <b>TX</b>: {tx} MiB",
+        f"⌘ <b>Interface</b>: {iface}   •   <b>Status</b>: {status}",
+        f"◎ <b>Address</b>: {addr}",
+        f"⌁ <b>Endpoint</b>: {endpoint}",
+        f"▦ <b>Used</b>: {used_mib:.2f} MiB   •   <b>TTL</b>: {ttl}",
+        f"◫ <b>Limit</b>: {limit_val} {limit_unit}   •   <b>Unlimited</b>: {unlimited}",
+        f"↓ <b>RX</b>: {rx} MiB   •   ↑ <b>TX</b>: {tx} MiB",
     ])
 
 def _peer_more_info(p: Dict[str, Any]) -> str:
@@ -374,34 +409,34 @@ def _peer_more_info(p: Dict[str, Any]) -> str:
         return "—" if v in (None, "", []) else str(v)
 
     lines = [
-        f"👤 <b>{html(g('name'))}</b> (id {html(str(p.get('id')))} )",
-        f"🖧 <b>Interface</b>: {html(g('iface','interface'))} • <b>Status</b>: {html(str(p.get('status') or '—'))}",
-        f"📌 <b>Address</b>: {html(g('address', 'ip'))} • <b>MTU</b>: {html(g('mtu'))}",
-        f"🌐 <b>Endpoint</b>: {html(g('endpoint'))}",
-        f"🧷 <b>Public key</b>: <code>{html(g('public_key'))}</code>",
-        f"📅 <b>Created</b>: {html(g('created_at'))} • <b>First used</b>: {html(g('first_used'))}",
-        f"⏳ <b>Expires</b>: {html(g('expires_at'))} • <b>TTL</b>: {html(human_ttl(p.get('ttl_seconds')))}",
-        f"🎚 <b>Limit</b>: {html(str(p.get('data_limit_value') or p.get('data_limit') or 0))} {html(g('data_limit_unit','limit_unit'))} • <b>Unlimited</b>: { 'Yes' if p.get('unlimited') else 'No' }",
-        f"⬇️ RX: {html(str(p.get('rx') or 0))} MiB • ⬆️ TX: {html(str(p.get('tx') or 0))} MiB",
-        f"☎️ <b>Phone</b>: {html(g('phone_number'))} • <b>Telegram</b>: {html(g('telegram_id'))}",
-        f"🔧 <b>DNS</b>: {html(', '.join(p.get('dns')) if isinstance(p.get('dns'), list) else str(p.get('dns') or '—'))}",
+        f"◇ <b>{html(g('name'))}</b> (id {html(str(p.get('id')))} )",
+        f"⌘ <b>Interface</b>: {html(g('iface','interface'))} • <b>Status</b>: {html(str(p.get('status') or '—'))}",
+        f"◎ <b>Address</b>: {html(g('address', 'ip'))} • <b>MTU</b>: {html(g('mtu'))}",
+        f"⌁ <b>Endpoint</b>: {html(g('endpoint'))}",
+        f"◇ <b>Public key</b>: <code>{html(g('public_key'))}</code>",
+        f"◷ <b>Created</b>: {html(g('created_at'))} • <b>First used</b>: {html(g('first_used'))}",
+        f"◷ <b>Expires</b>: {html(g('expires_at'))} • <b>TTL</b>: {html(human_ttl(p.get('ttl_seconds')))}",
+        f"◫ <b>Limit</b>: {html(str(p.get('data_limit_value') or p.get('data_limit') or 0))} {html(g('data_limit_unit','limit_unit'))} • <b>Unlimited</b>: { 'Yes' if p.get('unlimited') else 'No' }",
+        f"↓ RX: {html(str(p.get('rx') or 0))} MiB • ↑ TX: {html(str(p.get('tx') or 0))} MiB",
+        f"☎ <b>Phone</b>: {html(g('phone_number'))} • <b>Telegram</b>: {html(g('telegram_id'))}",
+        f"◉ <b>DNS</b>: {html(', '.join(p.get('dns')) if isinstance(p.get('dns'), list) else str(p.get('dns') or '—'))}",
     ]
     return "\n".join(lines)
 
 def scope_keyboard(prefix: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🖥 Local", callback_data=f"{prefix}:scope:local"),
-         InlineKeyboardButton("🌐 Node",  callback_data=f"{prefix}:scope:node")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="home")]
+        [InlineKeyboardButton("⌘ Local", callback_data=f"{prefix}:scope:local"),
+         InlineKeyboardButton("⌁ Node",  callback_data=f"{prefix}:scope:node")],
+        [InlineKeyboardButton("← Back", callback_data="home")]
     ])
 
 def _bundle_kb(p: Dict[str, Any]) -> InlineKeyboardMarkup:
     """Keyboard for the bundle card: no enable/disable here."""
     pid = int(p.get("id"))
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔁 Refresh", callback_data=f"peer:bundle:{pid}"),
-         InlineKeyboardButton("✏️ Edit",    callback_data=f"peer:edit:{pid}")],
-        [InlineKeyboardButton("⬅️ Back",     callback_data="peers:menu")]
+        [InlineKeyboardButton("↻ Refresh", callback_data=f"peer:bundle:{pid}"),
+         InlineKeyboardButton("◇ Edit",    callback_data=f"peer:edit:{pid}")],
+        [InlineKeyboardButton("← Back",     callback_data="peers:menu")]
     ])
 
 
@@ -422,13 +457,13 @@ def _caption(p: Dict[str, Any], short_url: Optional[str], cfg: str) -> str:
     shortlnk = short_url or "—"
 
     return (
-        f"📦 <b>{html(name)}</b> (id {html(str(p.get('id')))} )\n"
-        f"🖧 <b>Interface</b>: {html(str(iface))}   •   <b>Status</b>: {html(status)}\n"
-        f"📌 <b>Address</b>: {html(str(address))}\n"
-        f"🌐 <b>Endpoint</b>: {html(str(endpoint))}\n"
-        f"🔗 <b>Link</b>: {html(shortlnk)}\n"
-        f"📦 <b>Used</b>: {used_mib:.2f} MiB   •   <b>TTL</b>: {html(str(ttl))}\n"
-        f"⬇️ <b>RX</b>: {html(str(rx_mib))} MiB   •   ⬆️ <b>TX</b>: {html(str(tx_mib))} MiB"
+        f"▦ <b>{html(name)}</b> (id {html(str(p.get('id')))} )\n"
+        f"⌘ <b>Interface</b>: {html(str(iface))}   •   <b>Status</b>: {html(status)}\n"
+        f"◎ <b>Address</b>: {html(str(address))}\n"
+        f"⌁ <b>Endpoint</b>: {html(str(endpoint))}\n"
+        f"⌁ <b>Link</b>: {html(shortlnk)}\n"
+        f"▦ <b>Used</b>: {used_mib:.2f} MiB   •   <b>TTL</b>: {html(str(ttl))}\n"
+        f"↓ <b>RX</b>: {html(str(rx_mib))} MiB   •   ↑ <b>TX</b>: {html(str(tx_mib))} MiB"
     )
 
 
@@ -436,56 +471,106 @@ MAX_CAPTION = 1024
 
 def _cap_render(cfg_text: str, short: str | None) -> str:
 
-    shortline = f"🔗 Link: {tg_escape(short) if short else '—'}"
+    shortline = f"⌁ Link: {tg_escape(short) if short else '—'}"
     body = f"<pre><code>{tg_escape(cfg_text)}</code></pre>\n{shortline}"
     return body if len(body) <= MAX_CAPTION else ""
 
 async def send_peers(update: Update, pid: int):
+    """Send the peer config and QR as two self-contained Telegram cards."""
     p = peer_by_id(pid) if 'peer_by_id' in globals() else get_peer(pid)
     if not p:
         await edit_send(update, "Peer not found.", KB.peers_index())
         return
 
-    name  = p.get("name") or f"peer-{pid}"
-    cfg   = _peer_config(pid) or ""                       
-    short = get_shortlink(pid) if 'get_shortlink' in globals() else None
-    png   = _peer_qr(pid)                               
+    raw_name = str(p.get("name") or f"peer-{pid}").strip()
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_name).strip("._") or f"peer-{pid}"
 
-    cfg_bytes = cfg.encode("utf-8")
-    if not cfg_bytes:
-        await edit_send(update, "⚠️ Config is empty.", KB.back(f"peer:open:{pid}"))
+    try:
+        short = get_shortlink(pid, p) if "get_shortlink" in globals() else ""
+    except Exception:
+        short = ""
+
+    try:
+        cfg = _peer_config(pid, short) or ""
+    except Exception as exc:
+        logging.getLogger(__name__).exception("Could not fetch peer config %s", pid)
+        await edit_send(
+            update,
+            (
+                "⊘ <b>The peer exists, but its configuration could not be exported.</b>\n\n"
+                f"<code>{html(str(exc))}</code>"
+            ),
+            KB.back(f"peer:open:{pid}"),
+        )
         return
-    if not png:
-        await edit_send(update, "⚠️ QR image not available.", KB.back(f"peer:open:{pid}"))
-        return
 
-    conf_caption = _cap_render(cfg, short)
-
-    if conf_caption:
-        doc_msg = await update.effective_message.reply_document(
-            document=InputFile(io.BytesIO(cfg_bytes), filename=f"{name}.conf"),
-            caption=conf_caption,
-            parse_mode=ParseMode.HTML
-        )
-    else:
-        doc_msg = await update.effective_message.reply_document(
-            document=InputFile(io.BytesIO(cfg_bytes), filename=f"{name}.conf"),
-            caption=f"📄 <b>{tg_escape(name)}</b>.conf",
-            parse_mode=ParseMode.HTML
-        )
-        await doc_msg.reply_text(
-            f"<pre><code>{tg_escape(cfg)}</code></pre>\n🔗 Link: {tg_escape(short) if short else '—'}",
-            parse_mode=ParseMode.HTML
+    short_text = tg_escape(short) if short else "Unavailable"
+    cfg_block = f"<pre><code>{tg_escape(cfg)}</code></pre>"
+    full_caption = (
+        f"◇ <b>{tg_escape(raw_name)} · Configuration</b>\n<i>WireGuard client profile</i>\n\n"
+        f"{cfg_block}\n"
+        f"⌁ <b>Short link</b>\n{short_text}"
+    )
+    if len(full_caption) > 1024:
+        room = max(120, 820 - len(short_text) - len(raw_name))
+        preview = cfg[:room].rstrip() + "\n…"
+        full_caption = (
+            f"◇ <b>{tg_escape(raw_name)} · Configuration</b>\n<i>WireGuard client profile</i>\n\n"
+            f"<pre><code>{tg_escape(preview)}</code></pre>\n"
+            f"⌁ <b>Short link</b>\n{short_text}"
         )
 
-    caption = _caption(p, short, cfg)  
-    qr_msg = await doc_msg.reply_photo(
-        photo=InputFile(io.BytesIO(png), filename=f"{name}.png"),
-        caption=caption,
-        parse_mode=ParseMode.HTML
+    message = update.effective_message
+    await message.reply_document(
+        document=InputFile(io.BytesIO(cfg.encode("utf-8")), filename=f"{safe_name}.conf"),
+        caption=full_caption,
+        parse_mode=ParseMode.HTML,
     )
 
-    await qr_msg.reply_text("Controls:", reply_markup=_bundle_kb(p), parse_mode=ParseMode.HTML)
+    try:
+        png = _peer_qr(pid, cfg)
+    except Exception:
+        png = b""
+        logging.getLogger(__name__).exception("Could not fetch peer QR %s", pid)
+
+    if png:
+        qr_caption = (
+            f"▦ <b>{tg_escape(raw_name)} · QR code</b>\n<i>Scan with a WireGuard client</i>\n\n"
+            f"{cfg_block}\n"
+            f"⌁ <b>Short link</b>\n{short_text}"
+        )
+        if len(qr_caption) > 1024:
+            room = max(120, 820 - len(short_text) - len(raw_name))
+            preview = cfg[:room].rstrip() + "\n…"
+            qr_caption = (
+                f"▦ <b>{tg_escape(raw_name)} · QR code</b>\n<i>Scan with a WireGuard client</i>\n\n"
+                f"<pre><code>{tg_escape(preview)}</code></pre>\n"
+                f"⌁ <b>Short link</b>\n{short_text}"
+            )
+        try:
+            await message.reply_photo(
+                photo=InputFile(io.BytesIO(png), filename=f"{safe_name}.png"),
+                caption=qr_caption,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_bundle_kb(p),
+            )
+        except BadRequest as exc:
+            logging.getLogger(__name__).warning(
+                "Telegram photo processing failed for peer %s; sending QR as document: %s",
+                pid, exc,
+            )
+            await message.reply_document(
+                document=InputFile(io.BytesIO(png), filename=f"{safe_name}-QR.png"),
+                caption=qr_caption,
+                parse_mode=ParseMode.HTML,
+                reply_markup=_bundle_kb(p),
+            )
+    else:
+        await message.reply_text(
+            "⊘ <b>QR code unavailable</b>\n\nThe configuration file and short link above are valid.",
+            reply_markup=_bundle_kb(p),
+            parse_mode=ParseMode.HTML,
+        )
 
 def _nonempty(val) -> bool:
     return val is not None and str(val) != ""
@@ -508,42 +593,113 @@ def _for_skip(key: str, val, *, profile_mode: bool) -> bool:
 def _nonempty_bytes(b: bytes) -> bool:
     return isinstance(b, (bytes, bytearray)) and len(b) > 0
 
+def _looks_like_html_doc(text: str) -> bool:
+    sample = str(text or '').lstrip().lower()
+    return sample.startswith('<!doctype html') or sample.startswith('<html')
+
 def admin_only(func):
     @wraps(func)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        chat = getattr(update, "effective_chat", None)
-        if chat and getattr(chat, "type", None) != "private":
+    async def wrapper(
+        update: Update,
+        context: ContextTypes.DEFAULT_TYPE,
+    ):
+        chat = getattr(
+            update,
+            "effective_chat",
+            None,
+        )
+
+        if (
+            chat
+            and getattr(chat, "type", None) != "private"
+        ):
             try:
                 await context.bot.send_message(
                     chat_id=chat.id,
-                    text="⛔️ For security, this bot only works in private chat. Please message me directly."
+                    parse_mode=ParseMode.HTML,
+                    text=(
+                        "⊘ <b>Private access only</b>\n\n"
+                        "◇ <b>Status</b>  Group access blocked\n"
+                        "⌁ <b>Reason</b>  This bot only accepts commands "
+                        "inside a private conversation.\n\n"
+                        "Open the bot directly and send your command again."
+                    ),
+                    disable_web_page_preview=True,
                 )
+
             except Exception:
-                pass
+                logging.debug(
+                    "Could not send private-chat warning",
+                    exc_info=True,
+                )
+
             return
 
-        uid = str(getattr(getattr(update, "effective_user", None), "id", "") or "")
+        user = getattr(
+            update,
+            "effective_user",
+            None,
+        )
+
+        uid = str(
+            getattr(user, "id", "")
+            or ""
+        )
+
         ids = current_admin_ids()
-        if not uid or uid not in ids:
-            try:
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    parse_mode="HTML",
-                    text=("⛔️ You are not authorized.\n"
-                          f"Your numeric ID is <code>{uid or 'unknown'}</code>.\n"
-                          "Ask an admin to add this ID in Panel → Settings → Telegram.")
-                )
-            except Exception:
-                pass
-            return
-        return await func(update, context)
-    return wrapper
 
+        if (
+            not uid
+            or uid not in ids
+        ):
+            try:
+                effective_chat = getattr(
+                    update,
+                    "effective_chat",
+                    None,
+                )
+
+                if not effective_chat:
+                    return
+
+                await context.bot.send_message(
+                    chat_id=effective_chat.id,
+                    parse_mode=ParseMode.HTML,
+                    text=(
+                        "⊘ <b>Access denied</b>\n"
+                        "<i>This Telegram account is not registered "
+                        "as a panel administrator.</i>\n\n"
+                        "◇ <b>Your Telegram ID</b>\n"
+                        f"<code>{html(uid or 'unknown')}</code>\n\n"
+                        "⌁ <b>Authorization required</b>\n"
+                        "Ask an existing administrator to add this ID from:\n"
+                        "<code>Panel → Settings → Telegram → Administrators</code>\n\n"
+                        "◆ <b>Status</b>  Unauthorized"
+                    ),
+                    disable_web_page_preview=True,
+                )
+
+            except Exception:
+                logging.debug(
+                    "Could not send unauthorized-access warning "
+                    "to Telegram user %s",
+                    uid or "unknown",
+                    exc_info=True,
+                )
+
+            return
+
+        return await func(
+            update,
+            context,
+        )
+
+    return wrapper
 
 
 @admin_only
 async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_html(f"🆔 Your Telegram ID: <b>{update.effective_user.id}</b>")
+    await update.message.reply_html(f"◇ Your Telegram ID: <b>{update.effective_user.id}</b>")
 
 @admin_only
 async def cmd_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -554,7 +710,7 @@ async def cmd_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines = ["<b>Admins</b>"]
     for a in rows:
         u = f"@{a['username']}" if a.get("username") else ""
-        mute = "🔇" if a.get("muted") else "🔔"
+        mute = "○" if a.get("muted") else "●"
         note = f" — {a.get('note','')}" if a.get("note") else ""
         lines.append(f"• <code>{a['id']}</code> {u} {mute}{note}")
     await update.message.reply_html("\n".join(lines))
@@ -583,7 +739,7 @@ async def cmd_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def cmd_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text_out, keyboard = await asyncio.to_thread(admin_azumi.render_list, globals(), 1, "")
+    text_out, keyboard = render_clients()
     await send_text(update, text_out, kb=keyboard)
 
 
@@ -644,49 +800,54 @@ def _fmt_uptime_from_stats(st: dict) -> str:
 
 def render_home(update) -> str:
     uid, uline = _who(update)
-
     try:
         st = peer_stats() or {}
     except Exception:
         st = {}
 
-    cpu  = _fmt_pct(st.get("cpu", "—"))
-    mem  = _fmt_pct(st.get("mem", "—"))
+    cpu = _fmt_pct(st.get("cpu", "—"))
+    mem = _fmt_pct(st.get("mem", "—"))
     disk = _fmt_pct(st.get("disk", "—"))
-    upt  = _fmt_uptime_from_stats(st)
-
-    counts  = st.get("counts") or {}
-    online  = _fmt_int(counts.get("online", 0), 0)
-    offline = _fmt_int(counts.get("offline", 0), 0)
+    upt = _fmt_uptime_from_stats(st)
+    counts = st.get("counts") or {}
+    active = _fmt_int(
+        counts.get("active", counts.get("online", 0)),
+        0,
+    )
+    idle = _fmt_int(
+        counts.get("idle", counts.get("offline", 0)),
+        0,
+    )
     blocked = _fmt_int(counts.get("blocked", 0), 0)
-    total   = online + offline + blocked
+    total = _fmt_int(
+        counts.get("total", active + idle + blocked),
+        active + idle + blocked,
+    )
+    activity_window = _fmt_int(
+        counts.get("activity_window_seconds", 180),
+        180,
+    )
+    activity_minutes = max(1, int(math.ceil(activity_window / 60)))
 
     panel_url = str(PANEL or "").strip()
-    panel_line = f'<a href="{html(panel_url)}">{html(panel_url)}</a>' if panel_url else "—"
+    panel_line = f'<a href="{html(panel_url)}">Open panel</a>' if panel_url else "Unavailable"
 
-    kpis = [
-        "📈 <b>System</b>",
-        f"• <b>CPU</b> <code>{html(cpu)}</code>   <b>MEM</b> <code>{html(mem)}</code>",
-        f"• <b>DISK</b> <code>{html(disk)}</code>   <b>UP</b> <code>{html(upt)}</code>",
+    return "\n".join([
+        "◇ <b>Dashboard</b>",
+        f"♙ <b>{html(uline)}</b>  <code>{html(uid)}</code>",
+        f"⌁ {panel_line}",
         "",
-        "👥 <b>Peers</b>",
-        f"• 🟢 <b>Online</b> <code>{online}</code>   ⚪ <b>Offline</b> <code>{offline}</code>",
-        f"• ⛔ <b>Blocked</b> <code>{blocked}</code>   📌 <b>Total</b> <code>{total}</code>",
-    ]
-
-    lines = [
-        "🏠 <b>Dashboard</b>",
-        f"👤 <b>{html(uline)}</b>  <code>{html(uid)}</code>",
-        f"🌐 <b>Panel</b> {panel_line}",
+        "▦ <b>System</b>",
+        f"<pre>CPU     {html(cpu):>7}   Memory  {html(mem):>7}\nDisk    {html(disk):>7}   Uptime  {html(upt):>7}</pre>",
+        "⌘ <b>Peer activity</b>",
+        (
+            f"● Active ≤{activity_minutes}m <code>{active}</code>   "
+            f"○ No recent handshake <code>{idle}</code>"
+        ),
+        f"⊘ Blocked <code>{blocked}</code>   ◇ Total <code>{total}</code>",
         "",
-        "━━━━━━━━━━━━━━━━━━━━",
-        *kpis,
-        "━━━━━━━━━━━━━━━━━━━━",
-        f"🤖 <b>Bot</b> <code>{html(BOT_VERSION)}</code>",
-    ]
-    return "\n".join(lines)
-
-
+        f"✦ <b>Bot</b> <code>{html(BOT_VERSION)}</code>",
+    ])
 def file_zip(b: bytes) -> bool:
     return isinstance(b, (bytes, bytearray)) and b[:4] == b'PK\x03\x04'
 
@@ -728,10 +889,10 @@ def _node_peer(p: dict) -> bool:
 
 def _peer_location(p: dict) -> str:
     if not _node_peer(p):
-        return "🖥 Local"
+        return "⌘ Local"
     nid  = p.get("node_id")
     nlab = p.get("node_name") or p.get("node") or (f"Node {nid}" if nid is not None else "Node")
-    return f"🌐 {nlab}"
+    return f"⌁ {nlab}"
 
 
 FIELD_MAP = {
@@ -748,7 +909,7 @@ def _payload_api(d: Dict[str, Any]) -> Dict[str, Any]:
                 out[key] = int(v)
             except Exception:
                 continue
-        elif key in ("start_on_first_use", "unlimited"):
+        elif key in ("start_on_first_use", "unlimited", "include_internal_network"):
             out[key] = bool(int(v)) if str(v).isdigit() else (str(v).lower() in ("true","yes","on","y"))
         else:
             out[key] = v
@@ -815,12 +976,32 @@ def _current_value(peer: Dict[str, Any] | None, key: str) -> str:
         v = PANEL_DEFAULTS.get(key, "")
     return "" if v is None else str(v)
 
+def _raise_if_login_html(response, requested_url: str) -> None:
+    """Turn silent Flask login redirects into an actionable API-auth error."""
+    final_url = str(getattr(response, "url", "") or "")
+    history = list(getattr(response, "history", []) or [])
+    redirected_to_login = any(
+        "/login" in str(getattr(item, "headers", {}).get("Location", ""))
+        for item in history
+    ) or "/login" in final_url
+
+    ctype = str(getattr(response, "headers", {}).get("content-type", "") or "").lower()
+    body = str(getattr(response, "text", "") or "")
+    if redirected_to_login or ("text/html" in ctype and _looks_like_html_doc(body)):
+        raise RuntimeError(
+            "Panel returned the login HTML instead of API data for "
+            f"{requested_url}. Check the route decorator/order in app.py and ensure "
+            "the Telegram API key matches the panel API_KEY."
+        )
+
+
 def _get(url: str, session="auto", **kw):
     timeout = kw.pop("timeout", 12)
 
     if session == "api":
         r = api.get(url, timeout=timeout, **kw)
         r.raise_for_status()
+        _raise_if_login_html(r, url)
         return r
 
     if session == "sess":
@@ -832,6 +1013,7 @@ def _get(url: str, session="auto", **kw):
         try:
             r = api.get(url, timeout=timeout, **kw)
             r.raise_for_status()
+            _raise_if_login_html(r, url)
             return r
         except HTTPError as e:
             sc = getattr(getattr(e, "response", None), "status_code", None)
@@ -842,6 +1024,7 @@ def _get(url: str, session="auto", **kw):
 
     r = sess.get(url, timeout=timeout, **kw)
     r.raise_for_status()
+    _raise_if_login_html(r, url)
     return r
 
 def _post(url: str, session="auto", **kw):
@@ -927,13 +1110,6 @@ def _epoch_iso_z(iso: str | None) -> int:
     except Exception:
         return 0
 
-def _bot_tz_schedule(sched: dict) -> ZoneInfo:
-    tzname = (sched.get("timezone") or "UTC").strip() or "UTC"
-    try:
-        return ZoneInfo(tzname)
-    except Exception:
-        return ZoneInfo("UTC")
-    
 def _set_backup_schedule(payload: dict) -> dict:
     try:
         r = _post(f"{PANEL}/api/backup/schedule", session="auto", json=payload, timeout=12)
@@ -943,19 +1119,15 @@ def _set_backup_schedule(payload: dict) -> dict:
 
     
 def kb_backup_schedule(s: dict) -> InlineKeyboardMarkup:
-    enabled = bool(s.get("enabled", False))
-    freq = str(s.get("freq") or "daily")
-    hhmm = str(s.get("time") or "03:00")
-    tz = str(s.get("timezone") or "UTC")
-    next_run = str(s.get("next_run") or "—")
-
+    enabled = bool(s.get("enabled"))
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Disable" if enabled else "✅ Enable", callback_data="backup:schedule:toggle")],
-        [InlineKeyboardButton("▶️ Run now (store)", callback_data="backup:schedule:run_now")],
-        [InlineKeyboardButton("🧪 Test in 2 minutes", callback_data="backup:schedule:test_2m")],
-        [InlineKeyboardButton("🔄 Refresh", callback_data="backup:schedule")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="backup:menu")],
+        [InlineKeyboardButton("○ Disable schedule" if enabled else "● Enable schedule", callback_data="backup:schedule:toggle")],
+        [InlineKeyboardButton("▣ Run and store now", callback_data="backup:schedule:run_now")],
+        [InlineKeyboardButton("◇ Test in 2 minutes", callback_data="backup:schedule:test_2m")],
+        [InlineKeyboardButton("↻ Refresh", callback_data="backup:schedule")],
+        [InlineKeyboardButton("← Backup", callback_data="backup:menu")],
     ])
+
 
 def _delete(url: str, session="auto", **kw):
     timeout = kw.pop("timeout", 12)
@@ -1124,13 +1296,76 @@ def update_peer(pid: int, payload: Dict[str, Any]) -> Dict[str, Any]:
 def delete_peer(pid: int) -> None:
     _delete(f"{PANEL}/api/peer/{pid}", session="api", timeout=30)
 
-def _peer_config(pid: int) -> str:
-    return _get(f"{PANEL}/api/peer/{pid}/config").text
+def _peer_public_token(short_url: str) -> str:
+    match = re.search(r"/u/([^/?#]+)", str(short_url or ""))
+    return match.group(1) if match else ""
 
-def _peer_qr(pid: int) -> bytes:
-    r = _get(f"{PANEL}/api/peer/{pid}/config_qr")
-    if r.status_code == 501:
-        r = _get(f"{PANEL}/api/peer/{pid}/config_qr?install=1", timeout=60)
+def _peer_config(pid: int, short_url: str = "") -> str:
+    attempts = [
+        (f"{PANEL}/api/peer/{int(pid)}/config?download=1", "api"),
+        (f"{PANEL}/api/peer/{int(pid)}/config", "api"),
+    ]
+
+    token = _peer_public_token(short_url)
+    if token:
+        attempts.append((f"{PANEL}/api/u/{token}/config", "api"))
+
+    errors = []
+    for url, session_name in attempts:
+        try:
+            r = _get(url, session=session_name, timeout=30)
+            body = r.text or ""
+            ctype = str(r.headers.get("content-type") or "").lower()
+
+            if "application/json" in ctype:
+                try:
+                    payload = r.json()
+                except Exception:
+                    payload = {}
+                detail = payload.get("message") or payload.get("detail") or payload.get("error")
+                errors.append(f"{url}: {detail or 'JSON returned instead of config'}")
+                continue
+
+            if "text/html" in ctype or _looks_like_html_doc(body):
+                errors.append(f"login/HTML response from {url}")
+                continue
+
+            if "[Interface]" in body and "PrivateKey" in body:
+                return body.strip() + "\n"
+
+            if body.strip():
+                errors.append(f"invalid WireGuard config returned by {url}")
+            else:
+                errors.append(f"empty response from {url}")
+        except Exception as exc:
+            errors.append(f"{url}: {exc}")
+
+    raise RuntimeError("Peer configuration is unavailable: " + "; ".join(errors[-3:]))
+
+def _peer_qr(pid: int, cfg_text: str = "") -> bytes:
+    if cfg_text.strip():
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=7,
+            border=4,
+        )
+        qr.add_data(cfg_text)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format="PNG", optimize=False)
+        out.seek(0)
+        return out.read()
+
+    r = _get(
+        f"{PANEL}/api/peer/{pid}/config_qr",
+        session="api",
+        timeout=60,
+    )
+    ctype = str(r.headers.get("content-type") or "").lower()
+    if "text/html" in ctype:
+        raise RuntimeError("Panel returned HTML instead of the peer QR image.")
     return r.content
 
 
@@ -1205,7 +1440,10 @@ PANEL_DEFAULTS: Dict[str, Any] = {
     "start_on_first_use": False,  
     "time_limit_days": 0,
     "time_limit_hours": 0,
-    "unlimited": False,           
+    "time_limit_minutes": 0,
+    "unlimited": False,
+    "include_internal_network": False,
+    "note": "",
     "phone_number": "",
     "telegram_id": "",
     "dns": "",
@@ -1335,7 +1573,9 @@ def default_profile(scope: str) -> Optional[str]:
     def _ok(name: str) -> bool:
         p = profs.get(name) or {}
         use = str(p.get("use_for", "both")).lower()
-        return use in ("both", scope)
+        if scope in ("single", "bulk"):
+            return use in ("peer", "single", "bulk", "both", "all")
+        return use in (scope, "all")
 
     if dname and dname in profs and _ok(dname):
         return dname
@@ -1354,7 +1594,11 @@ def profiles_list_for(scope: str) -> list[str]:
     out = []
     for n, vals in (base.get("profiles") or {}).items():
         use = str((vals or {}).get("use_for", "both")).lower()
-        if use in ("both", scope):
+        if scope in ("single", "bulk"):
+            ok = use in ("peer", "single", "bulk", "both", "all")
+        else:
+            ok = use in (scope, "all")
+        if ok:
             out.append(n)
     return out
 
@@ -1367,9 +1611,11 @@ def profile_set(name: str, values: Dict[str, Any]) -> None:
 
     prof = {k: v for k, v in (values or {}).items() if k in PROFILE_KEYS}
 
-    scope = str(prof.get("use_for") or "both").lower()
-    if scope not in ("single", "bulk", "both"):
-        scope = "both"
+    scope = str(prof.get("use_for") or "peer").lower()
+    if scope in ("single", "bulk", "both", "all"):
+        scope = "peer"
+    if scope not in ("peer", "subscription"):
+        scope = "peer"
     prof["use_for"] = scope
 
     base.setdefault("profiles", {})[name] = prof
@@ -1403,13 +1649,13 @@ def profile_scope(scope: str) -> tuple[Optional[str], Dict[str, Any]]:
     vals = {k: v for k, v in PANEL_DEFAULTS.items() if k in PROFILE_KEYS}
     return None, vals
 
-BOOL_KEYS = {"start_on_first_use", "unlimited"}
+BOOL_KEYS = {"start_on_first_use", "unlimited", "include_internal_network"}
 UNIT_KEYS = {"data_limit_unit"}  
 
 def menu_kb(flow: str, key: str, allow_skip: bool = True) -> InlineKeyboardMarkup:
     rows = []
 
-    if key in ("start_on_first_use", "unlimited"):
+    if key in ("start_on_first_use", "unlimited", "include_internal_network"):
         rows.append([
             InlineKeyboardButton("1 (Yes)", callback_data=f"wiz:{flow}:set:{key}:1"),
             InlineKeyboardButton("0 (No)",  callback_data=f"wiz:{flow}:set:{key}:0"),
@@ -1423,10 +1669,10 @@ def menu_kb(flow: str, key: str, allow_skip: bool = True) -> InlineKeyboardMarku
     ctrl = []
     if allow_skip:
         ctrl.append(InlineKeyboardButton("⏭ Skip (use default)", callback_data=f"wiz:{flow}:skip"))
-    ctrl.append(InlineKeyboardButton("✋ Cancel", callback_data=f"wiz:{flow}:cancel"))
+    ctrl.append(InlineKeyboardButton("⊘ Cancel", callback_data=f"wiz:{flow}:cancel"))
     rows.append(ctrl)
 
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="peers:menu")])
+    rows.append([InlineKeyboardButton("← Back", callback_data="peers:menu")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1465,7 +1711,7 @@ def kb_profile(pname: str):
         [InlineKeyboardButton("Toggle: Start on first use", callback_data=f"profiles:toggle:{pname}:start_on_first_use")],
         [InlineKeyboardButton("Toggle: Unlimited",          callback_data=f"profiles:toggle:{pname}:unlimited")],
 
-        [InlineKeyboardButton("⬅️ Back", callback_data=f"profiles:open:{pname}")],
+        [InlineKeyboardButton("← Back", callback_data=f"profiles:open:{pname}")],
     ])
 
 
@@ -1931,10 +2177,10 @@ def _update_status_icon(status: dict) -> str:
         "done",
         "success",
     }:
-        return "🟢"
+        return "●"
 
     if state == "rollback_completed":
-        return "🟡"
+        return "○"
 
     if state in {
         "failed",
@@ -1944,7 +2190,7 @@ def _update_status_icon(status: dict) -> str:
         "canceled",
         "offline",
     }:
-        return "🔴"
+        return "⊘"
 
     if state in {
         "restart",
@@ -1953,7 +2199,7 @@ def _update_status_icon(status: dict) -> str:
         "restart",
         "restarting",
     }:
-        return "🟠"
+        return "◐"
 
     if state in {
         "rollback",
@@ -1962,7 +2208,7 @@ def _update_status_icon(status: dict) -> str:
         "rollback",
         "rolling_back",
     }:
-        return "🟡"
+        return "○"
 
     if state in {
         "install",
@@ -1973,7 +2219,7 @@ def _update_status_icon(status: dict) -> str:
         "installing",
         "dependencies",
     }:
-        return "🟣"
+        return "◆"
 
     if state in {
         "validate",
@@ -1982,17 +2228,17 @@ def _update_status_icon(status: dict) -> str:
         "validate",
         "validating",
     }:
-        return "🟠"
+        return "◐"
 
     if state in {
         "queued",
     }:
-        return "🟡"
+        return "○"
 
     if _update_busy(status):
-        return "🔵"
+        return "◉"
 
-    return "⚪"
+    return "○"
 
 
 def _update_stage_label(status: dict) -> str:
@@ -2068,9 +2314,9 @@ def _update_live_text(
     icon = _update_status_icon(status)
 
     title = (
-        f"🖥 <b>Updating node · {html(node_name or target_name)}</b>"
+        f"⌘ <b>Updating node · {html(node_name or target_name)}</b>"
         if node_name
-        else "⬆️ <b>Updating WG Panel</b>"
+        else "↑ <b>Updating WG Panel</b>"
     )
 
     message = str(
@@ -2100,7 +2346,7 @@ def _update_live_text(
         lines.extend([
             "",
             (
-                "🔄 The panel is restarting or temporarily "
+                "↻ The panel is restarting or temporarily "
                 "unreachable. Telegram is still monitoring it."
             ),
         ])
@@ -2108,12 +2354,12 @@ def _update_live_text(
     elif message:
         lines.extend([
             "",
-            f"📝 {html(message)}",
+            f"✦ {html(message)}",
         ])
 
     if revision:
         lines.append(
-            f"🌿 Main revision: <code>{html(revision)}</code>"
+            f"✦ Main revision: <code>{html(revision)}</code>"
         )
 
     if state in {
@@ -2124,14 +2370,14 @@ def _update_live_text(
     }:
         lines.extend([
             "",
-            "✅ <b>Update completed successfully.</b>",
+            "● <b>Update completed successfully.</b>",
         ])
 
     elif state == "rollback_completed":
         lines.extend([
             "",
             (
-                "⚠️ <b>The update failed, but the previous "
+                "⊘ <b>The update failed, but the previous "
                 "version was restored successfully.</b>"
             ),
         ])
@@ -2142,14 +2388,14 @@ def _update_live_text(
     }:
         lines.extend([
             "",
-            "❌ <b>Update failed.</b>",
+            "⊘ <b>Update failed.</b>",
         ])
 
     elif not _update_terminal(status):
         lines.extend([
             "",
             (
-                "⏳ <i>The update is running. This message "
+                "◷ <i>The update is running. This message "
                 "refreshes automatically.</i>"
             ),
         ])
@@ -2169,15 +2415,15 @@ def _update_live_keyboard(
     )
 
     label = (
-        "⬅️ Node update"
+        "← Node update"
         if node_id is not None
-        else "⬅️ Update Center"
+        else "← Update Center"
     )
 
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
-                "🔄 Refresh status",
+                "↻ Refresh status",
                 callback_data=callback,
             )
         ],
@@ -2301,7 +2547,6 @@ async def _monitor_update_message(
                     )
                     last_render = rendered
 
-                # service restart take a while.
                 if unreachable_polls >= 60:
                     final = {
                         "status": "error",
@@ -2439,118 +2684,67 @@ def _start_update_monitor(
         lambda completed: monitors.discard(completed)
     )
 
-def render_update_center(*, fresh: bool = False):
-    version = panel_version_info(fresh=fresh)
-    status = panel_update_status()
+def render_node_updates():
     targets = panel_update_targets()
-
-    current = str(
-        version.get("current")
-        or PROJECT_VERSION
-        or "unknown"
-    )
-
-    latest_raw = version.get("latest")
-    latest = str(latest_raw or "")
-    check_ok = bool(latest_raw)
-    available = bool(
-        check_ok
-        and version.get("update_available")
-    )
-
-    nodes = (
-        targets.get("nodes")
-        if isinstance(targets, dict)
-        else []
-    ) or []
-
-    online = [
-        node for node in nodes
-        if node.get("online")
-    ]
-
-    updates = [
-        node for node in online
-        if (node.get("version") or {}).get("update_available")
-    ]
-
-    if not check_ok:
-        release_line = "⚠️ <b>Release check unavailable</b>"
-        latest_line = "🌐 <b>Latest</b>: <i>not available</i>"
-    elif available:
-        release_line = "🟠 <b>A panel update is available</b>"
-        latest_line = f"🌐 <b>Latest</b>: <code>v{html(latest)}</code>"
-    else:
-        release_line = "🟢 <b>Panel is up to date</b>"
-        latest_line = f"🌐 <b>Latest</b>: <code>v{html(latest)}</code>"
-
+    nodes = (targets.get("nodes") if isinstance(targets, dict) else []) or []
+    rows = []
+    online = sum(1 for n in nodes if n.get("online"))
+    pending = sum(1 for n in nodes if n.get("online") and (n.get("version") or {}).get("update_available"))
     lines = [
-        "⬆️ <b>Update Center</b>",
+        "⌘ <b>Node updates</b>",
+        "<i>Inspect and update remote agents</i>",
         "",
-        f"📦 <b>Installed</b>: <code>v{html(current)}</code>",
-        latest_line,
-        release_line,
-        "",
-        f"⚙️ <b>Local updater</b>: {_update_status_line(status)}",
+        f"● Online      <code>{online}/{len(nodes)}</code>",
+        f"↥ Pending     <code>{pending}</code>",
     ]
-
-    if nodes:
-        lines.extend([
-            "",
-            f"🖥 <b>Nodes online</b>: <code>{len(online)}/{len(nodes)}</code>",
-            f"⬆️ <b>Node updates</b>: <code>{len(updates)}</code>",
-        ])
+    if not nodes:
+        lines.extend(["", "No nodes are configured."])
     else:
-        lines.extend([
-            "",
-            "🖥 <b>Nodes</b>: <i>none configured</i>",
-        ])
-
-    detail = str(status.get("message") or "").strip()
-    if detail and detail.lower() not in {
-        "no update is running.",
-        "no node update is running.",
-    }:
-        lines.extend(["", f"📝 {html(detail)}"])
-
-    rows = [[
-        InlineKeyboardButton("🔄 Check again", callback_data="system:refresh"),
-        InlineKeyboardButton("🖥 Nodes", callback_data="system:nodes"),
-    ]]
-
-    if available and not _update_busy(status):
-        rows.append([
-            InlineKeyboardButton(
-                f"⬆️ Install v{latest}",
-                callback_data="system:update:confirm",
-            )
-        ])
-
-    rows.append([
-        InlineKeyboardButton("⬅️ Home", callback_data="home:main")
-    ])
-
+        lines.extend(["", "<b>Nodes</b>"])
+    for node in nodes:
+        nid=int(node.get("id") or 0)
+        name=str(node.get("name") or f"Node {nid}")
+        online_state=bool(node.get("online"))
+        v=node.get("version") or {}
+        cur=str(v.get("current") or "—")
+        avail=bool(v.get("update_available"))
+        icon="↥" if online_state and avail else ("●" if online_state else "○")
+        state="update available" if online_state and avail else ("online" if online_state else "offline")
+        lines.append(f"{icon} <b>{html(name)}</b> · <code>v{html(cur)}</code> · {state}")
+        rows.append([InlineKeyboardButton(f"{icon} {name}", callback_data=f"system:node:{nid}")])
+    rows.append([InlineKeyboardButton("↻ Refresh",callback_data="system:nodes"),InlineKeyboardButton("← Update center",callback_data="home:system")])
     return "\n".join(lines), InlineKeyboardMarkup(rows)
 
-def render_node_updates():
-    targets=panel_update_targets(); nodes=(targets.get("nodes") if isinstance(targets,dict) else []) or []; rows=[]; lines=["🖥 <b>Node Updates</b>",""]
-    if not nodes: lines.append("No nodes were returned by the panel.")
-    for node in nodes:
-        nid=int(node.get("id") or 0); name=str(node.get("name") or f"Node {nid}"); online=bool(node.get("online")); v=node.get("version") or {}; cur=str(v.get("current") or "—"); latest=str(v.get("latest") or "—"); avail=bool(v.get("update_available")); icon="🟠" if online and avail else ("🟢" if online else "🔴")
-        lines.append(f"{icon} <b>{html(name)}</b> <code>v{html(cur)}</code> → <code>v{html(latest)}</code>"); rows.append([InlineKeyboardButton(f"{icon} {name}",callback_data=f"system:node:{nid}")])
-    rows.append([InlineKeyboardButton("🔄 Refresh",callback_data="system:nodes"),InlineKeyboardButton("⬅️ Update Center",callback_data="home:system")])
-    return "\n".join(lines),InlineKeyboardMarkup(rows)
 
 def render_node_update(node_id:int):
-    targets=panel_update_targets(); nodes=(targets.get("nodes") if isinstance(targets,dict) else []) or []; node=next((n for n in nodes if int(n.get("id") or 0)==int(node_id)),None)
-    if not node: return "Node not found.", KB.back("system:nodes")
-    name=str(node.get("name") or f"Node {node_id}"); online=bool(node.get("online")); v=node.get("version") or {}; cur=str(v.get("current") or "—"); latest=str(v.get("latest") or "—"); avail=bool(v.get("update_available")); status=node.get("update") or node_update_status(node_id) or {}
-    lines=[f"🖥 <b>{html(name)}</b>","",f"🌐 <b>Connectivity</b>: {'Online' if online else 'Offline'}",f"📦 <b>Installed</b>: <code>v{html(cur)}</code>",f"⬆️ <b>Latest</b>: <code>v{html(latest)}</code>",f"⚙️ <b>Status</b>: {_update_status_line(status)}"]
+    targets=panel_update_targets()
+    nodes=(targets.get("nodes") if isinstance(targets,dict) else []) or []
+    node=next((n for n in nodes if int(n.get("id") or 0)==int(node_id)),None)
+    if not node:
+        return "Node not found.", KB.back("system:nodes")
+    name=str(node.get("name") or f"Node {node_id}")
+    online=bool(node.get("online"))
+    v=node.get("version") or {}
+    cur=str(v.get("current") or "—")
+    latest=str(v.get("latest") or "—")
+    avail=bool(v.get("update_available"))
+    status=node.get("update") or node_update_status(node_id) or {}
+    lines=[
+        f"⌘ <b>{html(name)}</b>",
+        "<i>Remote node update status</i>",
+        "",
+        f"{'●' if online else '○'} Connectivity   {'Online' if online else 'Offline'}",
+        f"◇ Installed      <code>v{html(cur)}</code>",
+        f"↥ Available      <code>v{html(latest)}</code>",
+        f"◷ Updater        {_update_status_line(status)}",
+    ]
     msg=str(status.get("message") or "").strip()
-    if msg: lines += ["",f"📝 {html(msg)}"]
-    rows=[[InlineKeyboardButton("🔄 Refresh",callback_data=f"system:node:{node_id}")]]
-    if online and avail and not _update_busy(status): rows.append([InlineKeyboardButton(f"⬆️ Update {name}",callback_data=f"system:nodeupdate:confirm:{node_id}")])
-    rows.append([InlineKeyboardButton("⬅️ Nodes",callback_data="system:nodes")])
+    if msg:
+        lines += ["",f"✦ {html(msg[:320])}"]
+    rows=[[InlineKeyboardButton("↻ Refresh",callback_data=f"system:node:{node_id}")]]
+    if online and avail and not _update_busy(status):
+        rows.append([InlineKeyboardButton(f"↥ Update {name}",callback_data=f"system:nodeupdate:confirm:{node_id}")])
+    rows.append([InlineKeyboardButton("← Nodes",callback_data="system:nodes")])
     return "\n".join(lines),InlineKeyboardMarkup(rows)
 
 
@@ -2625,11 +2819,11 @@ def render_subscriptions(page: int = 1):
     )
 
     lines = [
-        "🔗 <b>Subscriptions</b>",
+        "⌁ <b>Subscriptions</b>",
         "",
-        f"📊 <b>Total</b>: <code>{len(subscriptions)}</code>",
-        f"🟢 <b>Enabled</b>: <code>{enabled}</code>",
-        f"🔴 <b>Blocked</b>: <code>{blocked}</code>",
+        f"◇ <b>Total</b>: <code>{len(subscriptions)}</code>",
+        f"● <b>Enabled</b>: <code>{enabled}</code>",
+        f"⊘ <b>Blocked</b>: <code>{blocked}</code>",
     ]
 
     rows = []
@@ -2643,7 +2837,7 @@ def render_subscriptions(page: int = 1):
         name = str(row.get("name") or f"Subscription {sid}")
         counts = row.get("runtime_counts") or {}
         is_blocked = int(counts.get("blocked") or 0) > 0
-        icon = "🔴" if is_blocked else ("🟢" if row.get("enabled") else "🟡")
+        icon = "⊘" if is_blocked else ("●" if row.get("enabled") else "○")
         rows.append([
             InlineKeyboardButton(
                 f"{icon} {name}",
@@ -2660,8 +2854,8 @@ def render_subscriptions(page: int = 1):
         rows.append(nav)
 
     rows.extend([
-        [InlineKeyboardButton("🔄 Refresh", callback_data=f"subs:list:{page}")],
-        [InlineKeyboardButton("⬅️ Home", callback_data="home:main")],
+        [InlineKeyboardButton("↻ Refresh", callback_data=f"subs:list:{page}")],
+        [InlineKeyboardButton("← Home", callback_data="home:main")],
     ])
     return "\n".join(lines), InlineKeyboardMarkup(rows)
 
@@ -2690,7 +2884,7 @@ def render_subscription(subscription_id: int):
     remaining = row.get("remaining_bytes")
     limit = row.get("limit_bytes")
 
-    state = "🔴 Blocked" if int(counts.get("blocked") or 0) else ("🟢 Enabled" if enabled else "🟡 Disabled")
+    state = "⊘ Blocked" if int(counts.get("blocked") or 0) else ("● Enabled" if enabled else "○ Disabled")
     data_line = (
         f"{_human_bytes(used)} used · Unlimited"
         if row.get("unlimited") or limit is None
@@ -2698,13 +2892,13 @@ def render_subscription(subscription_id: int):
     )
 
     lines = [
-        f"🔗 <b>{html(name)}</b>",
-        f"🆔 <code>{sid}</code> · {state}",
+        f"⌁ <b>{html(name)}</b>",
+        f"◇ <code>{sid}</code> · {state}",
         "",
-        f"📦 <b>Data</b>: {html(data_line)}",
-        f"⏳ <b>Time</b>: {html(_subscription_time(row))}",
-        f"🗺 <b>Configs</b>: <code>{int(counts.get('total') or len(locations))}</code>",
-        f"🟢 Active: <code>{int(counts.get('enabled') or 0)}</code>  🟡 Off: <code>{int(counts.get('disabled') or 0)}</code>  🔴 Blocked: <code>{int(counts.get('blocked') or 0)}</code>",
+        f"▦ <b>Data</b>: {html(data_line)}",
+        f"◷ <b>Time</b>: {html(_subscription_time(row))}",
+        f"◎ <b>Configs</b>: <code>{int(counts.get('total') or len(locations))}</code>",
+        f"● Active: <code>{int(counts.get('enabled') or 0)}</code>  ○ Off: <code>{int(counts.get('disabled') or 0)}</code>  ⊘ Blocked: <code>{int(counts.get('blocked') or 0)}</code>",
     ]
 
     phone = str(row.get("phone_number") or "").strip()
@@ -2712,18 +2906,18 @@ def render_subscription(subscription_id: int):
     if phone or tg_id:
         lines.extend([
             "",
-            f"☎️ {html(phone or '—')}  ·  Telegram {html(tg_id or '—')}",
+            f"☎ {html(phone or '—')}  ·  Telegram {html(tg_id or '—')}",
         ])
 
     rows = []
     if enabled:
-        rows.append([InlineKeyboardButton("⏸ Disable", callback_data=f"subs:disable:confirm:{sid}")])
+        rows.append([InlineKeyboardButton("○ Disable", callback_data=f"subs:disable:confirm:{sid}")])
     else:
-        rows.append([InlineKeyboardButton("▶️ Enable + reset", callback_data=f"subs:enable:confirm:{sid}")])
+        rows.append([InlineKeyboardButton("▷ Enable + reset", callback_data=f"subs:enable:confirm:{sid}")])
 
     rows.append([
-        InlineKeyboardButton("♻️ Reset data", callback_data=f"subs:reset_data:confirm:{sid}"),
-        InlineKeyboardButton("⏱ Reset timer", callback_data=f"subs:reset_timer:confirm:{sid}"),
+        InlineKeyboardButton("↺ Reset data", callback_data=f"subs:reset_data:confirm:{sid}"),
+        InlineKeyboardButton("◷ Reset timer", callback_data=f"subs:reset_timer:confirm:{sid}"),
     ])
 
     links = subscription_links(sid)
@@ -2731,33 +2925,33 @@ def render_subscription(subscription_id: int):
     config_url = str(links.get("config_url") or "").strip()
     link_row = []
     if public_url.startswith(("http://", "https://")):
-        link_row.append(InlineKeyboardButton("🌐 Client portal", url=public_url))
+        link_row.append(InlineKeyboardButton("⌁ Client portal", url=public_url))
     if config_url.startswith(("http://", "https://")):
-        link_row.append(InlineKeyboardButton("📥 Config", url=config_url))
+        link_row.append(InlineKeyboardButton("↓ Config", url=config_url))
     if link_row:
         rows.append(link_row)
 
     rows.extend([
-        [InlineKeyboardButton("🔄 Refresh", callback_data=f"subs:open:{sid}")],
-        [InlineKeyboardButton("⬅️ Subscriptions", callback_data="subs:list:1")],
+        [InlineKeyboardButton("↻ Refresh", callback_data=f"subs:open:{sid}")],
+        [InlineKeyboardButton("← Subscriptions", callback_data="subs:list:1")],
     ])
     return "\n".join(lines), InlineKeyboardMarkup(rows)
 
 
 def render_clients():
     text = "\n".join([
-        "📱 <b>WireGuard Clients</b>",
+        "▣ <b>WireGuard Clients</b>",
         "",
         "Install the official WireGuard application, then open a subscription portal or import a <code>.conf</code> file.",
         "",
         "For customer-specific QR codes and configs, open <b>Subscriptions</b> and select the customer.",
     ])
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🪟 Windows", url="https://www.wireguard.com/install/"), InlineKeyboardButton("🍎 macOS", url="https://apps.apple.com/app/wireguard/id1451685025")],
-        [InlineKeyboardButton("🤖 Android", url="https://play.google.com/store/apps/details?id=com.wireguard.android"), InlineKeyboardButton("📱 iPhone/iPad", url="https://apps.apple.com/app/wireguard/id1441195209")],
-        [InlineKeyboardButton("🐧 Linux", url="https://www.wireguard.com/install/")],
-        [InlineKeyboardButton("🔗 Subscriptions", callback_data="subs:list:1")],
-        [InlineKeyboardButton("⬅️ Home", callback_data="home:main")],
+        [InlineKeyboardButton("◇ Windows", url="https://www.wireguard.com/install/"), InlineKeyboardButton("◇ macOS", url="https://apps.apple.com/app/wireguard/id1451685025")],
+        [InlineKeyboardButton("◇ Android", url="https://play.google.com/store/apps/details?id=com.wireguard.android"), InlineKeyboardButton("▣ iPhone/iPad", url="https://apps.apple.com/app/wireguard/id1441195209")],
+        [InlineKeyboardButton("◇ Linux", url="https://www.wireguard.com/install/")],
+        [InlineKeyboardButton("⌁ Subscriptions", callback_data="subs:list:1")],
+        [InlineKeyboardButton("← Home", callback_data="home:main")],
     ])
     return text, keyboard
 
@@ -2785,21 +2979,22 @@ def render_bot_settings():
     portal = subscription_portal_settings()
 
     def mark(key: str) -> str:
-        return "✅" if bool(notify.get(key)) else "❌"
+        return "●" if bool(notify.get(key)) else "⊘"
 
     lines = [
-        "⚙️ <b>Bot Settings</b>",
+        "⚙ <b>Bot Settings</b>",
         "",
-        f"🤖 <b>Telegram integration</b>: {'Enabled' if tg.get('enabled') else 'Disabled'}",
-        f"🔐 <b>Bot token</b>: {'Configured' if tg.get('has_token') else 'Missing'}",
+        f"◇ <b>Telegram integration</b>: {'Enabled' if tg.get('enabled') else 'Disabled'}",
+        f"◇ <b>Bot token</b>: {'Configured' if tg.get('has_token') else 'Missing'}",
         "",
-        "🔔 <b>Notifications</b>",
+        "● <b>Notifications</b>",
         f"{mark('app_down')} Panel availability",
         f"{mark('iface_down')} Interface failures",
-        f"{mark('login_fail')} Failed logins",
+        f"{mark('login_success')} Successful logins",
+        f"{mark('login_fail')} Failed logins / 2FA",
         f"{mark('suspicious_4xx')} Suspicious requests",
         "",
-        "🌐 <b>Subscription portal</b>",
+        "⌁ <b>Subscription portal</b>",
         f"Layout: <code>{html(portal.get('layout') or 'aurora')}</code>",
         f"Stats: <code>{html(portal.get('display_mode') or 'hybrid')}</code>",
         f"Motion: <code>{html(portal.get('animation') or 'rich')}</code>",
@@ -2809,250 +3004,95 @@ def render_bot_settings():
 
     rows = [
         [InlineKeyboardButton(f"{mark('app_down')} Panel alert", callback_data="settings:notify:app_down"), InlineKeyboardButton(f"{mark('iface_down')} Interface alert", callback_data="settings:notify:iface_down")],
-        [InlineKeyboardButton(f"{mark('login_fail')} Login alert", callback_data="settings:notify:login_fail"), InlineKeyboardButton(f"{mark('suspicious_4xx')} Security alert", callback_data="settings:notify:suspicious_4xx")],
-        [InlineKeyboardButton("🔄 Refresh", callback_data="home:settings")],
-        [InlineKeyboardButton("⬅️ Home", callback_data="home:main")],
+        [InlineKeyboardButton(f"{mark('login_success')} Login success", callback_data="settings:notify:login_success"), InlineKeyboardButton(f"{mark('login_fail')} Login rejected", callback_data="settings:notify:login_fail")],
+        [InlineKeyboardButton(f"{mark('suspicious_4xx')} Security requests", callback_data="settings:notify:suspicious_4xx")],
+        [InlineKeyboardButton("↻ Refresh", callback_data="home:settings")],
+        [InlineKeyboardButton("← Home", callback_data="home:main")],
     ]
     return "\n".join(lines), InlineKeyboardMarkup(rows)
 
 def render_update_center(*, fresh: bool = False):
-    version = panel_version_info(
-        fresh=fresh,
-    )
+    version = panel_version_info(fresh=fresh)
     status = panel_update_status()
     targets = panel_update_targets()
 
-    current = str(
-        version.get("current")
-        or PROJECT_VERSION
-        or "unknown"
-    )
+    current = str(version.get("current") or PROJECT_VERSION or "unknown")
+    latest = str(version.get("latest") or "")
+    source = str(version.get("source") or "main").strip()
+    target = str(version.get("target") or "").strip()
+    main_available = bool(version.get("main_available"))
+    available = bool(latest and version.get("update_available"))
 
-    latest = str(
-        version.get("latest")
-        or ""
-    )
+    state = str(status.get("status") or "idle").lower()
+    if status.get("ok") is False:
+        updater = "⊘ Unavailable"
+    elif state == "idle":
+        updater = "● Ready"
+    elif _update_busy(status):
+        updater = f"◷ {_update_status_line(status)}"
+    else:
+        updater = f"◇ {_update_status_line(status)}"
 
-    source = str(
-        version.get("source")
-        or ""
-    ).strip()
-
-    target = str(
-        version.get("target")
-        or ""
-    ).strip()
-
-    main_available = bool(
-        version.get("main_available")
-    )
-
-    available = bool(
-        latest
-        and version.get("update_available")
-    )
-
-    lines = [
-        "⬆️ <b>Update Center</b>",
-        "",
-        f"📦 <b>Installed</b>: <code>v{html(current)}</code>",
-    ]
+    nodes = (targets.get("nodes") if isinstance(targets, dict) else []) or []
+    online = [n for n in nodes if n.get("online")]
+    node_updates = [n for n in online if (n.get("version") or {}).get("update_available")]
 
     if latest:
-        lines.append(
-            f"🌐 <b>Latest</b>: <code>v{html(latest)}</code>"
-        )
-
-        if source:
-            lines.append(
-                f"🔎 <b>Source</b>: {html(source)}"
-            )
-
-        lines.append(
-            "🟠 <b>Update available</b>"
-            if available
-            else "🟢 <b>Panel is current</b>"
-        )
-
+        release = "↥ Update available" if available else "● Current"
+        remote = f"v{html(latest)}"
     elif main_available:
-        lines.extend([
-            "🌿 <b>Source</b>: GitHub main branch",
-            (
-                "ℹ️ No remote <code>VERSION</code>, release, "
-                "or semantic tag was found."
-            ),
-            (
-                "The main branch can still be installed, but "
-                "its version cannot be compared automatically."
-            ),
-        ])
-
+        release = "◇ Main branch available"
+        remote = "main"
     else:
-        detail = str(
-            version.get("detail")
-            or "The repository could not be reached."
-        ).strip()
+        release = "⊘ Check unavailable"
+        remote = "not detected"
 
-        lines.extend([
-            "🔴 <b>Repository check failed</b>",
-            f"<code>{html(detail[:300])}</code>",
-        ])
-
-    state = str(
-        status.get("status")
-        or "idle"
-    ).lower()
-
-    if status.get("ok") is False:
-        updater_line = "🔴 Updater route unavailable"
-    elif state == "idle":
-        updater_line = "🟢 Ready"
-    else:
-        updater_line = _update_status_line(status)
-
-    lines.extend([
+    lines = [
+        "↥ <b>Update center</b>",
+        "<i>Panel and node release management</i>",
         "",
-        f"⚙️ <b>Updater</b>: {updater_line}",
-    ])
-
-    message = str(
-        status.get("message")
-        or ""
-    ).strip()
-
-    if (
-        message
-        and message.lower()
-        not in {
-            "no update is running.",
-            "no node update is running.",
-        }
-    ):
-        lines.append(
-            f"📝 {html(message)}"
-        )
-
-    nodes = (
-        targets.get("nodes")
-        if isinstance(targets, dict)
-        else []
-    ) or []
-
-    if (
-        isinstance(targets, dict)
-        and targets.get("ok") is False
-    ):
-        lines.extend([
-            "",
-            (
-                "🖥 <b>Nodes</b>: "
-                f"<code>{html(str(targets.get('detail') or targets.get('error'))[:180])}</code>"
-            ),
-        ])
-
-    elif nodes:
-        online = [
-            node
-            for node in nodes
-            if node.get("online")
-        ]
-
-        updates = [
-            node
-            for node in online
-            if (
-                node.get("version")
-                or {}
-            ).get("update_available")
-        ]
-
-        lines.extend([
-            "",
-            (
-                "🖥 <b>Nodes online</b>: "
-                f"<code>{len(online)}/{len(nodes)}</code>"
-            ),
-            (
-                "⬆️ <b>Node updates</b>: "
-                f"<code>{len(updates)}</code>"
-            ),
-        ])
-
-    else:
-        lines.extend([
-            "",
-            "🖥 <b>Nodes</b>: <i>none configured</i>",
-        ])
-
-    rows = [
-        [
-            InlineKeyboardButton(
-                "🔄 Check again",
-                callback_data="system:refresh",
-            ),
-            InlineKeyboardButton(
-                "🖥 Nodes",
-                callback_data="system:nodes",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "🐙 Repository",
-                url="https://github.com/Azumi67/WG_Panel",
-            ),
-            InlineKeyboardButton(
-                "🏷 Releases",
-                url="https://github.com/Azumi67/WG_Panel/releases",
-            ),
-        ],
+        "<b>Panel release</b>",
+        f"◇ Installed   <code>v{html(current)}</code>",
+        f"↥ Available   <code>{remote}</code>",
+        f"⌁ Source      <code>{html(source or 'main')}</code>",
+        f"◆ State       {release}",
+        "",
+        "<b>Updater</b>",
+        f"◷ Local       {updater}",
+        f"⌘ Nodes       <code>{len(online)}/{len(nodes)}</code> online",
+        f"↥ Pending     <code>{len(node_updates)}</code> node update(s)",
     ]
 
+    message = str(status.get("message") or "").strip()
+    if message and message.lower() not in {"no update is running.", "no node update is running."}:
+        lines.extend(["", f"✦ {html(message[:360])}"])
+
+    rows = [
+        [InlineKeyboardButton("↻ Check releases", callback_data="system:refresh"), InlineKeyboardButton("⌘ Manage nodes", callback_data="system:nodes")],
+        [InlineKeyboardButton("◇ Repository", url="https://github.com/Azumi67/WG_Panel"), InlineKeyboardButton("✦ Releases", url="https://github.com/Azumi67/WG_Panel/releases")],
+    ]
     if not _update_busy(status):
         if available:
-            rows.append([
-                InlineKeyboardButton(
-                    f"⬆️ Install v{latest}",
-                    callback_data=(
-                        "system:update:confirm:"
-                        f"{target or latest}"
-                    ),
-                )
-            ])
-
-        elif main_available:
-            rows.append([
-                InlineKeyboardButton(
-                    "🌿 Update from main",
-                    callback_data="system:update:confirm:main",
-                )
-            ])
-
-    rows.append([
-        InlineKeyboardButton(
-            "⬅️ Home",
-            callback_data="home:main",
-        )
-    ])
-
-    return (
-        "\n".join(lines),
-        InlineKeyboardMarkup(rows),
-    )
+            rows.append([InlineKeyboardButton(f"↥ Install v{latest}", callback_data=f"system:update:confirm:{target or latest}")])
+        elif main_available and not latest:
+            rows.append([InlineKeyboardButton("↥ Update from main", callback_data="system:update:confirm:main")])
+    rows.append([InlineKeyboardButton("← Dashboard", callback_data="home:main")])
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
 
 
 class KB:
     @staticmethod
     def home():
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("👥 Peers", callback_data="peers:menu"), InlineKeyboardButton("👤 Clients", callback_data="client:list:1")],
-            [InlineKeyboardButton("🎯 Profiles", callback_data="profiles:menu"), InlineKeyboardButton("🗄️ Backup", callback_data="backup:menu")],
-            [InlineKeyboardButton("⬆️ Updates", callback_data="home:system"), InlineKeyboardButton("⚙️ Bot admin", callback_data="home:settings")],
-            [InlineKeyboardButton("🧑‍💼 Admins", callback_data="home:admins"), InlineKeyboardButton("🔄 Dashboard", callback_data="home:refresh")],
+            [InlineKeyboardButton("◇ Peers", callback_data="peers:menu"), InlineKeyboardButton("⌘ Subscriptions", callback_data="client:list:1")],
+            [InlineKeyboardButton("✦ Profiles", callback_data="profiles:menu"), InlineKeyboardButton("▣ Backups", callback_data="backup:menu")],
+            [InlineKeyboardButton("↥ Update center", callback_data="home:system"), InlineKeyboardButton("⚙ Settings", callback_data="home:settings")],
+            [InlineKeyboardButton("♙ Administrators", callback_data="home:admins"), InlineKeyboardButton("↻ Refresh", callback_data="home:refresh")],
         ])
 
 
     @staticmethod
-    def back(to: str, label: str = "⬅️ Back"):
+    def back(to: str, label: str = "← Back"):
         return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=to)]])
     
     @staticmethod
@@ -3062,20 +3102,18 @@ class KB:
         if allow_skip:
             rows.append([InlineKeyboardButton("⏭ Skip", callback_data=f"wiz:{flow}:skip")])
         rows.append([
-            InlineKeyboardButton("✋ Cancel", callback_data=f"wiz:{flow}:cancel"),
-            InlineKeyboardButton("⬅️ Back",  callback_data="profiles:menu"),
+            InlineKeyboardButton("⊘ Cancel", callback_data=f"wiz:{flow}:cancel"),
+            InlineKeyboardButton("← Back",  callback_data="profiles:menu"),
         ])
         return InlineKeyboardMarkup(rows)
 
     @staticmethod
     def peers_index():
         return InlineKeyboardMarkup([
-           [InlineKeyboardButton("➕ Create", callback_data="peers:create"),
-            InlineKeyboardButton("📦 Bulk",   callback_data="peers:bulk")],
-
-           [InlineKeyboardButton("🔎 Peer status", callback_data="peers:status")],
-
-           [InlineKeyboardButton("⬅️ Home", callback_data="home:main")]
+           [InlineKeyboardButton("＋ Create peer", callback_data="peers:create"),
+            InlineKeyboardButton("▦ Bulk create", callback_data="peers:bulk")],
+           [InlineKeyboardButton("⌕ Find / peer status", callback_data="peers:status")],
+           [InlineKeyboardButton("⌂ Main menu", callback_data="home:main")]
         ])
 
 
@@ -3084,15 +3122,15 @@ class KB:
         names = profiles_list()
         rows = []
         if not names:
-            rows.append([InlineKeyboardButton("➕ New profile", callback_data="profiles:new")])
-            rows.append([InlineKeyboardButton("♻️ Restore default profile", callback_data="profiles:restore")])
+            rows.append([InlineKeyboardButton("＋ New profile", callback_data="profiles:new")])
+            rows.append([InlineKeyboardButton("↺ Restore default profile", callback_data="profiles:restore")])
         else:
             d = profile_default()
             for n in names:
-                star = "⭐ " if d == n else ""
+                star = "☆ " if d == n else ""
                 rows.append([InlineKeyboardButton(f"{star}{n}", callback_data=f"profiles:open:{n}")])
-            rows.append([InlineKeyboardButton("➕ New profile", callback_data="profiles:new")])
-        rows.append([InlineKeyboardButton("⬅️ Back to Home", callback_data="home:main")])
+            rows.append([InlineKeyboardButton("＋ New profile", callback_data="profiles:new")])
+        rows.append([InlineKeyboardButton("← Back to Home", callback_data="home:main")])
         return InlineKeyboardMarkup(rows)
 
     @staticmethod
@@ -3128,32 +3166,26 @@ class KB:
             right.append(InlineKeyboardButton(f"» {pages}", callback_data="noop"))
 
         rows.append(left + mid + right)
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data=back_cb)])
+        rows.append([InlineKeyboardButton("← Back", callback_data=back_cb)])
         return InlineKeyboardMarkup(rows)
 
 
 def kb_backup_menu(prefs: dict | None = None) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton("💾 DB only (.zip)",       callback_data="backup:run:db"),
-         InlineKeyboardButton("🧩 Settings only (.zip)", callback_data="backup:run:settings")],
-
-        [InlineKeyboardButton("📦 Full backup (.zip)",   callback_data="backup:run:full")],
-        [InlineKeyboardButton("♻️ Restore (.zip)", callback_data="backup:restore")],
-        [InlineKeyboardButton("⏱ Scheduled backups", callback_data="backup:schedule")],
-
-        [InlineKeyboardButton("⚙️ Preferences",          callback_data="backup:prefs")],
-        [InlineKeyboardButton("⬅️ Back",                 callback_data="home:main")],
-    ]
-    return InlineKeyboardMarkup(rows)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("◇ Database", callback_data="backup:run:db"), InlineKeyboardButton("✦ Settings", callback_data="backup:run:settings")],
+        [InlineKeyboardButton("▣ Full backup", callback_data="backup:run:full"), InlineKeyboardButton("↺ Restore", callback_data="backup:restore")],
+        [InlineKeyboardButton("◷ Schedule", callback_data="backup:schedule"), InlineKeyboardButton("⚙ Preferences", callback_data="backup:prefs")],
+        [InlineKeyboardButton("← Dashboard", callback_data="home:main")],
+    ])
 
 
 def kb_backup_prefs(prefs: dict) -> InlineKeyboardMarkup:
-    inc = "✅ ON" if prefs.get("include_wg") else "❌ OFF"
-    tg  = "✅ ON" if prefs.get("send_to_telegram") else "❌ OFF"
+    inc = "● ON" if prefs.get("include_wg") else "○ OFF"
+    tg  = "● ON" if prefs.get("send_to_telegram") else "○ OFF"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"Include WG *.conf: {inc}", callback_data="backup:prefs:toggle:wg")],
-        [InlineKeyboardButton(f"Send to Telegram: {tg}",   callback_data="backup:prefs:toggle:tg")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="backup:menu")],
+        [InlineKeyboardButton(f"⌘ Include WireGuard configs · {inc}", callback_data="backup:prefs:toggle:wg")],
+        [InlineKeyboardButton(f"↗ Send copy to Telegram · {tg}", callback_data="backup:prefs:toggle:tg")],
+        [InlineKeyboardButton("← Backup", callback_data="backup:menu")],
     ])
 
 async def _send_zipfile(update, content: bytes, filename: str):
@@ -3300,22 +3332,32 @@ STATE["EDIT_ONE"] = "wizard:edit_one"
 STATE["P_EDIT_ONE"] = "wizard:profile_edit_one"
 STATE["BACKUP_RESTORE_WAIT"] = "backup_restore_wait"
 
-CREATE_FIELDS = [
+BASIC_CREATE_FIELDS = [
+    ("name", "Friendly name", ""),
+    ("data_limit_value", "Data limit value (0 = no cap)", str(PANEL_DEFAULTS["data_limit_value"])),
+    ("data_limit_unit", "Data limit unit", PANEL_DEFAULTS["data_limit_unit"]),
+    ("time_limit_days", "Active days (0 = no timer)", str(PANEL_DEFAULTS["time_limit_days"])),
+    ("unlimited", "Unlimited mode", str(PANEL_DEFAULTS["unlimited"])),
+]
+
+ADVANCED_CREATE_FIELDS = [
     ("name", "Friendly name", ""),
     ("allowed_ips", "Allowed IPs", PANEL_DEFAULTS["allowed_ips"]),
-    ("endpoint", "Endpoint (host:port)", PANEL_DEFAULTS["endpoint"]),
+    ("endpoint", "Endpoint override (leave automatic when empty)", PANEL_DEFAULTS["endpoint"]),
     ("keepalive", "Persistent keepalive (seconds)", str(PANEL_DEFAULTS["persistent_keepalive"])),
-    ("data_limit_value", "Data limit value (0=off)", str(PANEL_DEFAULTS["data_limit_value"])),
-    ("data_limit_unit", "Data limit unit (Mi/Gi)", PANEL_DEFAULTS["data_limit_unit"]),
-    ("start_on_first_use", "Start timer on first usage? (1/0)", str(PANEL_DEFAULTS["start_on_first_use"])),
-    ("time_limit_days", "Time limit – days (0=off)", str(PANEL_DEFAULTS["time_limit_days"])),
-    ("time_limit_hours", "Time limit – hours (0=off)", str(PANEL_DEFAULTS["time_limit_hours"])),
-    ("unlimited", "Unlimited mode? (1/0)", str(PANEL_DEFAULTS["unlimited"])),
+    ("data_limit_value", "Data limit value (0 = no cap)", str(PANEL_DEFAULTS["data_limit_value"])),
+    ("data_limit_unit", "Data limit unit", PANEL_DEFAULTS["data_limit_unit"]),
+    ("start_on_first_use", "Start timer on first usage", str(PANEL_DEFAULTS["start_on_first_use"])),
+    ("time_limit_days", "Active days (0 = no timer)", str(PANEL_DEFAULTS["time_limit_days"])),
+    ("time_limit_hours", "Additional active hours", str(PANEL_DEFAULTS["time_limit_hours"])),
+    ("unlimited", "Unlimited mode", str(PANEL_DEFAULTS["unlimited"])),
     ("phone_number", "Phone number (optional)", PANEL_DEFAULTS["phone_number"]),
     ("telegram_id", "Telegram ID/username (optional)", PANEL_DEFAULTS["telegram_id"]),
-    ("dns", "DNS (comma-separated, optional)", PANEL_DEFAULTS["dns"]),
-    ("mtu", "MTU (optional, e.g., 1280)", PANEL_DEFAULTS["mtu"]),
+    ("dns", "DNS servers", PANEL_DEFAULTS["dns"]),
+    ("mtu", "MTU", PANEL_DEFAULTS["mtu"]),
 ]
+
+CREATE_FIELDS = ADVANCED_CREATE_FIELDS
 
 BULK_FIELDS = [
     ("count", "How many peers to create?", "5"),
@@ -3390,10 +3432,10 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if data.startswith(prefix):
             sid = int(data.rsplit(":", 1)[-1])
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Confirm", callback_data=f"subs:{action}:run:{sid}")],
-                [InlineKeyboardButton("⬅️ Cancel", callback_data=f"subs:open:{sid}")],
+                [InlineKeyboardButton("● Confirm", callback_data=f"subs:{action}:run:{sid}")],
+                [InlineKeyboardButton("← Cancel", callback_data=f"subs:open:{sid}")],
             ])
-            await edit_send(update, f"⚠️ <b>{title}?</b>\n\n{warning}", kb)
+            await edit_send(update, f"⊘ <b>{title}?</b>\n\n{warning}", kb)
             return
 
         run_prefix = f"subs:{action}:run:"
@@ -3403,7 +3445,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not result.get("ok") and not result.get("partial"):
                 await edit_send(
                     update,
-                    "❌ <b>Subscription action failed</b>\n\n"
+                    "⊘ <b>Subscription action failed</b>\n\n"
                     f"<code>{html(result.get('detail') or result.get('error') or result)}</code>",
                     KB.back(f"subs:open:{sid}"),
                 )
@@ -3411,7 +3453,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _log_admin(f"subscription_{action}", f"sid={sid}")
             text_out, keyboard = await asyncio.to_thread(render_subscription, sid)
             message = str(result.get("message") or "Action completed.")
-            await edit_send(update, f"✅ {html(message)}\n\n{text_out}", keyboard)
+            await edit_send(update, f"● {html(message)}\n\n{text_out}", keyboard)
             return
 
     # Client applications
@@ -3428,7 +3470,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("settings:notify:"):
         key = data.rsplit(":", 1)[-1]
-        allowed = {"app_down", "iface_down", "login_fail", "suspicious_4xx"}
+        allowed = {"app_down", "iface_down", "login_success", "login_fail", "suspicious_4xx"}
         if key not in allowed:
             await q.answer("Unsupported setting.", show_alert=True)
             return
@@ -3458,9 +3500,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )[-1].strip() or "main"
 
         label = (
-            "✅ Install main branch"
+            "● Install main branch"
             if target == "main"
-            else f"✅ Install {target}"
+            else f"● Install {target}"
         )
 
         kb = InlineKeyboardMarkup([
@@ -3475,7 +3517,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
             [
                 InlineKeyboardButton(
-                    "⬅️ Cancel",
+                    "← Cancel",
                     callback_data="home:system",
                 )
             ],
@@ -3484,7 +3526,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_send(
             update,
             (
-                "⚠️ <b>Update local panel?</b>\n\n"
+                "⊘ <b>Update local panel?</b>\n\n"
                 "A rollback backup is created before files are replaced. "
                 "The selected GitHub source is downloaded, Python is "
                 "validated, and the detected panel service is restarted."
@@ -3499,10 +3541,10 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_send(
             update,
             (
-                "⬆️ <b>Updating WG Panel</b>\n\n"
-                "🟡 <b>Starting updater…</b> · <code>2%</code>\n"
+                "↑ <b>Updating WG Panel</b>\n\n"
+                "○ <b>Starting updater…</b> · <code>2%</code>\n"
                 "<code>░░░░░░░░░░</code>\n\n"
-                "⏳ <i>The request was accepted. Telegram will "
+                "◷ <i>The request was accepted. Telegram will "
                 "show live progress here.</i>"
             ),
             _update_live_keyboard(
@@ -3519,7 +3561,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await edit_send(
                 update,
                 (
-                    "❌ <b>Could not start panel update</b>\n\n"
+                    "⊘ <b>Could not start panel update</b>\n\n"
                     f"<code>{html(result.get('detail') or result.get('error') or result)}</code>"
                 ),
                 KB.back("home:system"),
@@ -3574,8 +3616,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("system:nodeupdate:confirm:"):
         try: node_id=int(data.rsplit(":",1)[-1])
         except Exception: await q.answer("Invalid node.",show_alert=True); return
-        kb=InlineKeyboardMarkup([[InlineKeyboardButton("✅ Start node update",callback_data=f"system:nodeupdate:start:{node_id}")],[InlineKeyboardButton("⬅️ Cancel",callback_data=f"system:node:{node_id}")]])
-        await edit_send(update,"⚠️ <b>Update this node?</b>\n\nThe node creates a rollback backup, validates node_agent.py, and restarts its automatically detected service.",kb); return
+        kb=InlineKeyboardMarkup([[InlineKeyboardButton("● Start node update",callback_data=f"system:nodeupdate:start:{node_id}")],[InlineKeyboardButton("← Cancel",callback_data=f"system:node:{node_id}")]])
+        await edit_send(update,"⊘ <b>Update this node?</b>\n\nThe node creates a rollback backup, validates node_agent.py, and restarts its automatically detected service.",kb); return
     if data.startswith("system:nodeupdate:start:"):
         try:
             node_id = int(
@@ -3613,10 +3655,10 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_send(
             update,
             (
-                f"🖥 <b>Updating node · {html(node_name)}</b>\n\n"
-                "🟡 <b>Starting updater…</b> · <code>2%</code>\n"
+                f"⌘ <b>Updating node · {html(node_name)}</b>\n\n"
+                "○ <b>Starting updater…</b> · <code>2%</code>\n"
                 "<code>░░░░░░░░░░</code>\n\n"
-                "⏳ <i>The request was accepted. Telegram will "
+                "◷ <i>The request was accepted. Telegram will "
                 "show live progress here.</i>"
             ),
             _update_live_keyboard(
@@ -3635,7 +3677,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await edit_send(
                 update,
                 (
-                    "❌ <b>Could not start node update</b>\n\n"
+                    "⊘ <b>Could not start node update</b>\n\n"
                     f"<code>{html(result.get('detail') or result.get('error') or result)}</code>"
                 ),
                 KB.back(
@@ -3693,7 +3735,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "profiles:menu":
         await edit_send(
             update,
-            "🎯 <b>Profiles</b>\nUse this section to save and edit presets. Apply them later from Create/Bulk.",
+            "✦ <b>Profiles</b>\nSave reusable peer or subscription defaults. Peer profiles work for both single and bulk peer creation.",
             KB.profiles_menu()
         ); return
 
@@ -3702,20 +3744,20 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         seed_base["use_for"] = "single"
         _profiles_save({"default_single": "default", "profiles": {"default": seed_base}})
         _log_admin("profiles_restore", "restored default profile")
-        await edit_send(update, "♻️ Restored the default profile.", KB.profiles_menu()); return
+        await edit_send(update, "↺ Restored the default profile.", KB.profiles_menu()); return
 
     if data == "profiles:new":
         context.user_data[STATE["P_NEW"]] = {"name": None, "stage": "await_name"}
         await edit_send(
            update,
-           "🆕 <b>New profile</b>\nSend a name for this profile (e.g. <code>work</code>, <code>family</code>).",
+           "＋ <b>New profile</b>\nSend a name for this profile (e.g. <code>work</code>, <code>family</code>).",
            KB.wizard(flow="pnew", allow_skip=False)
         ); return
     
-    if data.startswith("profiles:new:scope:"):
-        scope = data.split(":", 3)[-1]  
-        if scope not in ("single", "bulk"):
-            scope = "single"
+    if data.startswith("profiles:new:type:"):
+        profile_type = data.rsplit(":", 1)[-1]
+        if profile_type not in ("peer", "subscription"):
+            profile_type = "peer"
 
         st = context.user_data.get(STATE["P_NEW"]) or {}
         pname = st.get("name")
@@ -3726,39 +3768,31 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         base = _profiles_load()
         base.setdefault("profiles", {})
         base["profiles"][pname] = {
-    "use_for": scope,
-    "name": "",
-    "allowed_ips": "",
-    "endpoint": "",
-    "persistent_keepalive": "",
-    "mtu": "",
-    "dns": "",
-
-    "data_limit_value": "",
-    "data_limit_unit": "Mi",
-
-    "time_limit_days": "",
-    "time_limit_hours": "",
-    "start_on_first_use": "",
-    "unlimited": "",
-
-    "phone_number": "",
-    "telegram_id": "",
-}
-
+            "use_for": profile_type,
+            "name": "",
+            "allowed_ips": "0.0.0.0/0, ::/0",
+            "endpoint": "",
+            "persistent_keepalive": 25,
+            "mtu": 1280,
+            "dns": "1.1.1.1, 1.0.0.1",
+            "data_limit_value": 0,
+            "data_limit_unit": "Gi",
+            "time_limit_days": 0,
+            "time_limit_hours": 0,
+            "start_on_first_use": True,
+            "unlimited": False,
+            "phone_number": "",
+            "telegram_id": "",
+        }
         _profiles_save(base)
 
-        context.user_data[STATE["P_NEW"]] = None
-        await edit_send(
-            update,
-            profile_summary(pname),
-            kb_profile_editor(pname)
-        )
+        context.user_data.pop(STATE["P_NEW"], None)
+        await edit_send(update, profile_summary(pname), kb_profile_editor(pname))
         return
-    
+
     if data == "wiz:pnew:cancel":
        context.user_data.pop(STATE.get("P_NEW"), None) 
-       await edit_send(update, "❌ Cancelled.", KB.back("profiles:menu"))
+       await edit_send(update, "⊘ Cancelled.", KB.back("profiles:menu"))
        return
 
 
@@ -3772,52 +3806,44 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("profiles:del:"):
         name = data.split(":", 2)[-1]
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Yes, delete", callback_data=f"profiles:delconfirm:{name}")],
-            [InlineKeyboardButton("⬅️ Back", callback_data=f"profiles:open:{name}")]
+            [InlineKeyboardButton("● Yes, delete", callback_data=f"profiles:delconfirm:{name}")],
+            [InlineKeyboardButton("← Back", callback_data=f"profiles:open:{name}")]
         ])
-        await edit_send(update, f"🗑 Delete profile <b>{html(name)}</b>?", kb); return
+        await edit_send(update, f"⌫ Delete profile <b>{html(name)}</b>?", kb); return
 
 
     if data.startswith("profiles:delconfirm:"):
         name = data.split(":", 2)[-1]
         profile_delete(name)
         _log_admin("profile_delete", f"name={name}")
-        await edit_send(update, "🗑 Deleted.", KB.profiles_menu()); return
+        await edit_send(update, "⌫ Deleted.", KB.profiles_menu()); return
 
     if data.startswith("profiles:setdef:"):
         name = data.split(":", 2)[-1]
         try:
             profile_set_default(name)
             _log_admin("profile_set_default", f"name={name}")
-            await edit_send(update, f"⭐ Default profile set to <b>{html(name)}</b>.", KB.profiles_menu()); return
+            await edit_send(update, f"☆ Default profile set to <b>{html(name)}</b>.", KB.profiles_menu()); return
         except KeyError:
             await edit_send(update, "Profile not found.", KB.profiles_menu()); return
 
     if data.startswith("profiles:scope:"):
         pname = data.split(":", 2)[-1]
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👤 Single", callback_data=f"profiles:setscope:{pname}:single"),
-             InlineKeyboardButton("📦 Bulk",   callback_data=f"profiles:setscope:{pname}:bulk")],
-            [InlineKeyboardButton("⬅️ Back",   callback_data=f"profiles:open:{pname}")],
+            [InlineKeyboardButton("◇ Peer profile", callback_data=f"profiles:settype:{pname}:peer")],
+            [InlineKeyboardButton("⌘ Subscription profile", callback_data=f"profiles:settype:{pname}:subscription")],
+            [InlineKeyboardButton("← Back", callback_data=f"profiles:open:{pname}")],
         ])
-        await edit_send(update, f"Use profile <b>{html(pname)}</b> for:", kb); return
+        await edit_send(update, f"Choose the type for <b>{html(pname)}</b>:", kb); return
 
-    if data.startswith("profiles:setscope:"):
-        _, _, pname, scope = data.split(":", 3)
-        scope = scope if scope in ("single", "bulk") else "single"
+    if data.startswith("profiles:settype:"):
+        _, _, pname, profile_type = data.split(":", 3)
+        if profile_type not in ("peer", "subscription"):
+            profile_type = "peer"
         p = profile_get(pname) or {}
-        p["use_for"] = scope
-        if scope == "single":
-            if not str(p.get("phone_number") or "").strip():
-                arr = p.get("phone_numbers")
-                if isinstance(arr, list) and arr:
-                    p["phone_number"] = str(arr[0]).strip()
-            if not str(p.get("telegram_id") or "").strip():
-                arr = p.get("telegram_ids")
-                if isinstance(arr, list) and arr:
-                    p["telegram_id"] = str(arr[0]).strip()
+        p["use_for"] = profile_type
         profile_set(pname, p)
-        _log_admin("profile_set_scope", f"name={pname}; scope={scope}")
+        _log_admin("profile_set_type", f"name={pname}; type={profile_type}")
         await edit_send(update, profile_summary(pname), kb_profile_editor(pname)); return
 
     if data.startswith("profiles:editkey:"):
@@ -3843,10 +3869,10 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if scope in ("bulk", "both") else "\n\nSingle: one Telegram username/ID (optional).")
 
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✖ Cancel", callback_data=f"profiles:editcancel:{pname}")],
-            [InlineKeyboardButton("⬅️ Back",  callback_data=f"profiles:open:{pname}")]
+            [InlineKeyboardButton("⊘ Cancel", callback_data=f"profiles:editcancel:{pname}")],
+            [InlineKeyboardButton("← Back",  callback_data=f"profiles:open:{pname}")]
         ])
-        await edit_send(update, f"✏️ <b>{html(pname)}</b> → <b>{html(key)}</b>{note}\n\nSend the new value.", kb)
+        await edit_send(update, f"◇ <b>{html(pname)}</b> → <b>{html(key)}</b>{note}\n\nSend the new value.", kb)
         return
 
     if data.startswith("profiles:editcancel:"):
@@ -3859,8 +3885,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("MiB", callback_data=f"profiles:setunit:{pname}:Mi"),
              InlineKeyboardButton("GiB", callback_data=f"profiles:setunit:{pname}:Gi")],
-            [InlineKeyboardButton("⬅️ Back", callback_data=f"profiles:open:{pname}")],
-            [InlineKeyboardButton("🏠 Home", callback_data="home:main")]
+            [InlineKeyboardButton("← Back", callback_data=f"profiles:open:{pname}")],
+            [InlineKeyboardButton("⌂ Home", callback_data="home:main")]
 
         ])
         await edit_send(update, f"Select unit for <b>{html(pname)}</b>:", kb); return
@@ -3871,31 +3897,40 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         p["data_limit_unit"] = "Gi" if unit == "Gi" else "Mi"
         profile_set(pname, {k: v for k, v in p.items() if k in PROFILE_KEYS})
         _log_admin("profile_set_unit", f"name={pname}; unit={unit}")
-        await edit_send(update, f"✅ Unit set to <b>{unit}</b>.", kb_profile_editor(pname)); return
+        await edit_send(update, f"● Unit set to <b>{unit}</b>.", kb_profile_editor(pname)); return
 
     if data.startswith("profiles:toggle:"):
         _, _, pname, key = data.split(":", 3)
-        if key not in ("start_on_first_use", "unlimited"):
+        if key not in ("start_on_first_use", "unlimited", "include_internal_network"):
             await edit_send(update, "Unsupported toggle.", kb_profile_editor(pname)); return
         p = profile_get(pname) or {}
         p[key] = not bool(p.get(key, False))
         profile_set(pname, {k: v for k, v in p.items() if k in PROFILE_KEYS})
         _log_admin("profile_toggle", f"name={pname}; key={key}; value={p[key]}")
         state = "ON" if p[key] else "OFF"
-        await edit_send(update, f"✅ <b>{key}</b> is now <b>{state}</b>.", kb_profile_editor(pname)); return
+        await edit_send(update, f"● <b>{key}</b> is now <b>{state}</b>.", kb_profile_editor(pname)); return
 
     # ___ Peers index
     if data == "peers:menu":
-        await edit_send(update, "👥 <b>Peers</b>", KB.peers_index()); return
+        await edit_send(update, "◇ <b>Peers</b>", KB.peers_index()); return
 
     # ___ (Local / Node)
     if data == "peers:create":
+        for state_key in (
+            STATE.get("CREATE"),
+            STATE.get("BULK"),
+            "STATUS_SEARCH",
+            "status_search_term",
+        ):
+            if state_key:
+                context.user_data.pop(state_key, None)
+
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🖥 Local", callback_data="create:scope:local"),
-             InlineKeyboardButton("🌐 Node",  callback_data="create:scope:node")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="peers:menu")]
+            [InlineKeyboardButton("⌘ Local", callback_data="create:scope:local"),
+             InlineKeyboardButton("⌁ Node",  callback_data="create:scope:node")],
+            [InlineKeyboardButton("← Back", callback_data="peers:menu")]
         ])
-        await edit_send(update, "➕ <b>Create peer</b>\nChoose target:", kb); return
+        await edit_send(update, "＋ <b>Create peer</b>\nChoose target:", kb); return
 
     if data.startswith("create:scope:"):
         scope = data.split(":")[-1]
@@ -3903,15 +3938,15 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ifaces = peer_ifaces()
             rows = [[InlineKeyboardButton(f"{i['name']} (id {i['id']})",
                                           callback_data=f"create:iface:{i['id']}")] for i in ifaces]
-            rows.append([InlineKeyboardButton("⬅️ Back", callback_data="peers:create")])
-            await edit_send(update, "➕ <b>Create peer (local)</b>\nChoose interface:", InlineKeyboardMarkup(rows))
+            rows.append([InlineKeyboardButton("← Back", callback_data="peers:create")])
+            await edit_send(update, "＋ <b>Create peer (local)</b>\nChoose interface:", InlineKeyboardMarkup(rows))
         else:
             nodes = list_nodes()
             if not nodes:
                 await edit_send(update, "No nodes found or offline.", KB.back("peers:create")); return
             rows = [[InlineKeyboardButton(f"{n.get('name','node')} (id {n.get('id')})",
                                           callback_data=f"create:node:{n['id']}")] for n in nodes]
-            rows.append([InlineKeyboardButton("⬅️ Back", callback_data="peers:create")])
+            rows.append([InlineKeyboardButton("← Back", callback_data="peers:create")])
             await edit_send(update, "Select node:", InlineKeyboardMarkup(rows))
         return
 
@@ -3919,24 +3954,29 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         nid = int(data.split(":")[-1])
         ifs = list_node_ifaces(nid)
         rows = [[InlineKeyboardButton(i["name"], callback_data=f"create:node:{nid}:iface:{i['name']}")] for i in ifs]
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data="peers:create")])
+        rows.append([InlineKeyboardButton("← Back", callback_data="peers:create")])
         await edit_send(update, "Select interface:", InlineKeyboardMarkup(rows)); return
 
     if data.startswith("create:node:") and ":iface:" in data:
         parts = data.split(":")
         nid   = int(parts[2])
         iname = parts[-1]
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⭐ Use default",     callback_data=f"create:node:useprofdef:{nid}:{iname}")],
-            [InlineKeyboardButton("🎯 Choose profile", callback_data=f"create:node:pickprof:{nid}:{iname}")],
-            [InlineKeyboardButton("✏️ Manual input",  callback_data=f"create:node:manual:{nid}:{iname}")],
-            [InlineKeyboardButton("⬅️ Back",           callback_data=f"create:node:{nid}")]
-        ])
-        await edit_send(update, f"➕ <b>Create on node</b>\nInterface: <b>{html(iname)}</b>\nHow do you want to fill values?", kb)
+        rows = [
+            [InlineKeyboardButton("◇ Enter peer details", callback_data=f"create:node:manual:{nid}:{iname}")],
+            [InlineKeyboardButton("✦ Choose saved profile", callback_data=f"create:node:pickprof:{nid}:{iname}")],
+            [InlineKeyboardButton("＋ Create a profile", callback_data="profiles:new")],
+        ]
+        dname = default_profile("single")
+        if dname:
+            rows.insert(1, [InlineKeyboardButton(f"☆ Use default: {dname}", callback_data=f"create:node:useprofdef:{nid}:{iname}")])
+        rows.append([InlineKeyboardButton("← Back", callback_data=f"create:node:{nid}")])
+        kb = InlineKeyboardMarkup(rows)
+        await edit_send(update, f"＋ <b>Create on node</b>\nInterface: <b>{html(iname)}</b>\nChoose manual input or a saved profile. A default button appears only when a default profile exists.", kb)
         return
 
     if data.startswith("create:node:manual:"):
-        _, _, _, nid_s, iname = data.split(":", 4)
+        _, _, mode, nid_s, iname = data.split(":", 4)
+        fields = ADVANCED_CREATE_FIELDS
         st = {
             "scope": "node",
             "node_id": int(nid_s),
@@ -3946,6 +3986,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "defaults": PANEL_DEFAULTS.copy(),
             "selected_profile": None,
             "skip_filled": False,
+            "ask_missing_profile": False,
+            "fields": fields,
         }
         context.user_data[STATE["CREATE"]] = st
         await create_step(update, context)
@@ -3996,9 +4038,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         names = profiles_list_for("single")
         if not names:
             await edit_send(update, "No compatible profiles (Single/Both) found.", KB.back(f"create:node:{nid}")); return
-        rows = [[InlineKeyboardButton(f"🎯 {n}", callback_data=f"create:node:useprof:{nid}:{iname}:{n}")] for n in names]
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"create:node:{nid}:iface:{iname}")])
-        await edit_send(update, "🎯 <b>Select a profile</b>:", InlineKeyboardMarkup(rows)); return
+        rows = [[InlineKeyboardButton(f"✦ {n}", callback_data=f"create:node:useprof:{nid}:{iname}:{n}")] for n in names]
+        rows.append([InlineKeyboardButton("← Back", callback_data=f"create:node:{nid}:iface:{iname}")])
+        await edit_send(update, "✦ <b>Select a profile</b>:", InlineKeyboardMarkup(rows)); return
 
     if data.startswith("create:node:useprof:"):
         _, _, _, nid_s, iname, name = data.split(":", 5)
@@ -4034,13 +4076,17 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "selected_profile": None, "skip_filled": False,
             "ask_missing_profile": True, 
         }
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⭐ Use default",     callback_data=f"create:useprofdef:{iface_id}")],
-            [InlineKeyboardButton("🎯 Choose profile", callback_data=f"create:pickprof:{iface_id}")],
-            [InlineKeyboardButton("✏️ Manual input",  callback_data="create:mode:manual")],
-            [InlineKeyboardButton("⬅️ Back",           callback_data="create:scope:local")],
-        ])
-        await edit_send(update, "➕ <b>Create (local)</b>\nHow do you want to fill values?", kb); return
+        rows = [
+            [InlineKeyboardButton("◇ Enter peer details", callback_data="create:mode:manual")],
+            [InlineKeyboardButton("✦ Use peer profile", callback_data=f"create:pickprof:{iface_id}")],
+            [InlineKeyboardButton("＋ Create a profile", callback_data="profiles:new")],
+        ]
+        dname = default_profile("single")
+        if dname:
+            rows.insert(1, [InlineKeyboardButton(f"☆ Use default: {dname}", callback_data=f"create:useprofdef:{iface_id}")])
+        rows.append([InlineKeyboardButton("← Back", callback_data="create:scope:local")])
+        kb = InlineKeyboardMarkup(rows)
+        await edit_send(update, "＋ <b>Create (local)</b>\nChoose manual input or a saved profile. A default button appears only when a default profile exists.", kb); return
 
     if data.startswith("create:useprofdef:"):
         iface_id = int(data.split(":")[-1])
@@ -4076,9 +4122,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         names = profiles_list_for("single")
         if not names:
             await edit_send(update, "No compatible profiles (Single/Both) found.", KB.back(f"create:iface:{iface_id}")); return
-        rows = [[InlineKeyboardButton(f"🎯 {n}", callback_data=f"create:useprof:{iface_id}:{n}")] for n in names]
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"create:iface:{iface_id}")])
-        await edit_send(update, "🎯 <b>Select a profile</b>:", InlineKeyboardMarkup(rows)); return
+        rows = [[InlineKeyboardButton(f"✦ {n}", callback_data=f"create:useprof:{iface_id}:{n}")] for n in names]
+        rows.append([InlineKeyboardButton("← Back", callback_data=f"create:iface:{iface_id}")])
+        await edit_send(update, "✦ <b>Select a profile</b>:", InlineKeyboardMarkup(rows)); return
 
     if data.startswith("create:useprof:"):
         _, _, iface_id, name = data.split(":", 3)
@@ -4102,16 +4148,16 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-    if data == "create:mode:manual":
+    if data in {"create:mode:quick", "create:mode:advanced", "create:mode:manual"}:
         st = context.user_data.get(STATE["CREATE"], {})
         st.pop("selected_profile", None)
         st["skip_filled"] = False
-        st["ask_missing_profile"] = True
-
-        st["defaults"] = {}
-
+        st["ask_missing_profile"] = False
+        st["defaults"] = PANEL_DEFAULTS.copy()
+        st["fields"] = ADVANCED_CREATE_FIELDS
         st["step"] = 0
         st["data"] = {}
+        st.pop("submitting", None)
         context.user_data[STATE["CREATE"]] = st
         await create_step(update, context)
         return
@@ -4126,24 +4172,44 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             r = _get(f"{PANEL}/api/telegram/admins", session="api")
             j = _json_txt(r) or {}
-            admins = j.get("admins", [])
+            admins = j.get("admins", []) or []
         except Exception:
             admins = []
-        if not admins:
-            await edit_send(update, "No admins configured in panel.", KB.back("home:main"))
-            return
-        lines = ["🧑‍💼 <b>Admins</b>"]
-        for a in admins:
-            u = f"@{a.get('username')}" if a.get("username") else ""
-            mute = "🔇" if a.get("muted") else "🔔"
-            note = f" — {a.get('note','')}" if a.get("note") else ""
-            lines.append(f"• <code>{a.get('id')}</code> {u} {mute}{note}")
-        await edit_send(update, "\n".join(lines), KB.back("home:main"))
+
+        active = sum(1 for a in admins if not a.get("muted"))
+        muted = len(admins) - active
+        lines = [
+            "♙ <b>Administrators</b>",
+            "<i>Telegram access and notification recipients</i>",
+            "",
+            f"● Active      <code>{active}</code>",
+            f"○ Muted       <code>{muted}</code>",
+            f"◇ Total       <code>{len(admins)}</code>",
+        ]
+        rows = []
+        if admins:
+            lines.extend(["", "<b>Access list</b>"])
+            for a in admins:
+                aid = str(a.get("id") or "—")
+                username = str(a.get("username") or "").lstrip("@")
+                note = str(a.get("note") or "").strip()
+                icon = "○" if a.get("muted") else "●"
+                display = f"@{username}" if username else f"ID {aid}"
+                suffix = f" · {html(note)}" if note else ""
+                lines.append(f"{icon} <b>{html(display)}</b> · <code>{html(aid)}</code>{suffix}")
+        else:
+            lines.extend(["", "No administrators are configured in the panel."])
+
+        rows.extend([
+            [InlineKeyboardButton("⚙ Open admin settings", url=f"{PANEL.rstrip('/')}/settings")],
+            [InlineKeyboardButton("↻ Refresh", callback_data="home:admins"), InlineKeyboardButton("← Dashboard", callback_data="home:main")],
+        ])
+        await edit_send(update, "\n".join(lines), InlineKeyboardMarkup(rows))
         return
     
     if data == "home:help":
         txt = (
-        "❓ <b>Help & Overview</b>\n\n"
+        "◇ <b>Help & Overview</b>\n\n"
 
         "<b>Core Features</b>\n"
         "• <b>Peers</b> — Create, bulk-create, view status, and manage WireGuard peers.\n"
@@ -4169,11 +4235,11 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ___ Bulk 
     if data == "peers:bulk":
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🖥 Local", callback_data="bulk:scope:local"),
-             InlineKeyboardButton("🌐 Node",  callback_data="bulk:scope:node")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="peers:menu")]
+            [InlineKeyboardButton("⌘ Local", callback_data="bulk:scope:local"),
+             InlineKeyboardButton("⌁ Node",  callback_data="bulk:scope:node")],
+            [InlineKeyboardButton("← Back", callback_data="peers:menu")]
         ])
-        await edit_send(update, "📦 <b>Bulk create</b>\nChoose target:", kb); return
+        await edit_send(update, "▦ <b>Bulk create</b>\nChoose target:", kb); return
 
     if data.startswith("bulk:scope:"):
         scope = data.split(":")[-1]
@@ -4181,15 +4247,15 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ifaces = peer_ifaces()
             rows = [[InlineKeyboardButton(f"{i['name']} (id {i['id']})",
                                           callback_data=f"bulk:iface:{i['id']}")] for i in ifaces]
-            rows.append([InlineKeyboardButton("⬅️ Back", callback_data="peers:bulk")])
-            await edit_send(update, "📦 <b>Bulk create (local)</b>\nChoose interface:", InlineKeyboardMarkup(rows))
+            rows.append([InlineKeyboardButton("← Back", callback_data="peers:bulk")])
+            await edit_send(update, "▦ <b>Bulk create (local)</b>\nChoose interface:", InlineKeyboardMarkup(rows))
         else:
             nodes = list_nodes()
             if not nodes:
                 await edit_send(update, "No nodes found or offline.", KB.back("peers:bulk")); return
             rows = [[InlineKeyboardButton(f"{n.get('name','node')} (id {n.get('id')})",
                                           callback_data=f"bulk:node:{n['id']}")] for n in nodes]
-            rows.append([InlineKeyboardButton("⬅️ Back", callback_data="peers:bulk")])
+            rows.append([InlineKeyboardButton("← Back", callback_data="peers:bulk")])
             await edit_send(update, "Select node for bulk:", InlineKeyboardMarkup(rows))
         return
 
@@ -4197,19 +4263,19 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         nid = int(data.split(":")[-1])
         ifs = list_node_ifaces(nid)
         rows = [[InlineKeyboardButton(i["name"], callback_data=f"bulk:node:{nid}:iface:{i['name']}")] for i in ifs]
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data="peers:bulk")])
+        rows.append([InlineKeyboardButton("← Back", callback_data="peers:bulk")])
         await edit_send(update, "Select interface:", InlineKeyboardMarkup(rows)); return
 
     if data.startswith("bulk:node:") and ":iface:" in data:
         parts = data.split(":")
         nid   = int(parts[2]); iname = parts[-1]
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⭐ Use default",     callback_data=f"bulk:node:useprofdef:{nid}:{iname}")],
-            [InlineKeyboardButton("🎯 Choose profile", callback_data=f"bulk:node:pickprof:{nid}:{iname}")],
-            [InlineKeyboardButton("✏️ Manual input", callback_data=f"bulk:node:manual:{nid}:{iname}")],
-            [InlineKeyboardButton("⬅️ Back",           callback_data=f"bulk:node:{nid}")],
+            [InlineKeyboardButton("☆ Use default",     callback_data=f"bulk:node:useprofdef:{nid}:{iname}")],
+            [InlineKeyboardButton("✦ Choose profile", callback_data=f"bulk:node:pickprof:{nid}:{iname}")],
+            [InlineKeyboardButton("◇ Manual input", callback_data=f"bulk:node:manual:{nid}:{iname}")],
+            [InlineKeyboardButton("← Back",           callback_data=f"bulk:node:{nid}")],
         ])
-        await edit_send(update, f"📦 <b>Bulk on node</b>\nInterface: <b>{html(iname)}</b>\nHow do you want to fill values?", kb)
+        await edit_send(update, f"▦ <b>Bulk on node</b>\nInterface: <b>{html(iname)}</b>\nChoose manual input or a saved profile. A default button appears only when a default profile exists.", kb)
         return
     
     if data.startswith("bulk:node:manual:"):
@@ -4249,12 +4315,12 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         rows = [
-            [InlineKeyboardButton(f"🎯 {n}", callback_data=f"bulk:node:useprof:{nid}:{iname}:{n}")]
+            [InlineKeyboardButton(f"✦ {n}", callback_data=f"bulk:node:useprof:{nid}:{iname}:{n}")]
             for n in names
         ]
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"bulk:node:{nid}:iface:{iname}")])
+        rows.append([InlineKeyboardButton("← Back", callback_data=f"bulk:node:{nid}:iface:{iname}")])
         
-        await edit_send(update, "🎯 <b>Select a profile</b>:", InlineKeyboardMarkup(rows))
+        await edit_send(update, "✦ <b>Select a profile</b>:", InlineKeyboardMarkup(rows))
         return
 
     if data.startswith("bulk:node:useprofdef:"):
@@ -4323,12 +4389,12 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "ask_missing_profile": True,
         }
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⭐ Use default",     callback_data=f"bulk:useprofdef:{iface_id}")],
-            [InlineKeyboardButton("🎯 Choose profile", callback_data=f"bulk:pickprof:{iface_id}")],
-            [InlineKeyboardButton("✏️ Manual input",  callback_data="bulk:mode:manual")],
-            [InlineKeyboardButton("⬅️ Back",           callback_data="bulk:scope:local")],
+            [InlineKeyboardButton("☆ Use default",     callback_data=f"bulk:useprofdef:{iface_id}")],
+            [InlineKeyboardButton("✦ Choose profile", callback_data=f"bulk:pickprof:{iface_id}")],
+            [InlineKeyboardButton("◇ Manual input",  callback_data="bulk:mode:manual")],
+            [InlineKeyboardButton("← Back",           callback_data="bulk:scope:local")],
         ])
-        await edit_send(update, "📦 <b>Bulk (local)</b>\nHow do you want to fill values?", kb); return
+        await edit_send(update, "▦ <b>Bulk (local)</b>\nChoose manual input or a saved profile. A default button appears only when a default profile exists.", kb); return
 
     if data.startswith("bulk:useprofdef:"):
         iface_id = int(data.split(":")[-1])
@@ -4361,9 +4427,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         names = profiles_list_for("bulk")
         if not names:
             await edit_send(update, "No compatible profiles (Bulk/Both) found.", KB.back(f"bulk:iface:{iface_id}")); return
-        rows = [[InlineKeyboardButton(f"🎯 {n}", callback_data=f"bulk:useprof:{iface_id}:{n}")] for n in names]
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"bulk:iface:{iface_id}")])
-        await edit_send(update, "🎯 <b>Select a profile</b>:", InlineKeyboardMarkup(rows)); return
+        rows = [[InlineKeyboardButton(f"✦ {n}", callback_data=f"bulk:useprof:{iface_id}:{n}")] for n in names]
+        rows.append([InlineKeyboardButton("← Back", callback_data=f"bulk:iface:{iface_id}")])
+        await edit_send(update, "✦ <b>Select a profile</b>:", InlineKeyboardMarkup(rows)); return
 
     if data.startswith("bulk:useprof:"):
         _, _, iface_id, name = data.split(":", 3)
@@ -4409,11 +4475,11 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("status_node_name", None)
         context.user_data.pop("status_search_term", None)
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🖥 Local", callback_data="status:scope:local"),
-             InlineKeyboardButton("🌐 Node",  callback_data="status:scope:node")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="peers:menu")]
+            [InlineKeyboardButton("⌘ Local", callback_data="status:scope:local"),
+             InlineKeyboardButton("⌁ Node",  callback_data="status:scope:node")],
+            [InlineKeyboardButton("← Back", callback_data="peers:menu")]
         ])
-        await edit_send(update, "🔎 <b>Peer status</b>\nChoose where to browse:", kb); return
+        await edit_send(update, "⌕ <b>Peer status</b>\nChoose where to browse:", kb); return
 
     if data == "status:scope:local":
         context.user_data["status_scope"] = "local"
@@ -4421,8 +4487,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = [[InlineKeyboardButton("All interfaces", callback_data="status:iface:all")]]
         rows += [[InlineKeyboardButton(f"{i['name']} (id {i['id']})",
                                     callback_data=f"status:iface:{i['id']}")] for i in ifaces]
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data="peers:status")])
-        await edit_send(update, "🖥 <b>Local</b>\nPick interface:", InlineKeyboardMarkup(rows)); return
+        rows.append([InlineKeyboardButton("← Back", callback_data="peers:status")])
+        await edit_send(update, "⌘ <b>Local</b>\nPick interface:", InlineKeyboardMarkup(rows)); return
 
     if data == "status:scope:node":
         nodes = list_nodes()
@@ -4431,8 +4497,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = [[InlineKeyboardButton("All nodes", callback_data="status:node:all")]]
         rows += [[InlineKeyboardButton(f"{n.get('name','node')} (id {n.get('id')})",
                                     callback_data=f"status:node:{n['id']}")] for n in nodes]
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data="peers:status")])
-        await edit_send(update, "🌐 <b>Node</b>\nPick scope:", InlineKeyboardMarkup(rows)); return
+        rows.append([InlineKeyboardButton("← Back", callback_data="peers:status")])
+        await edit_send(update, "⌁ <b>Node</b>\nPick scope:", InlineKeyboardMarkup(rows)); return
 
     if data.startswith("status:node:"):
         _, _, v = data.split(":", 2)
@@ -4453,8 +4519,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ifs = list_node_ifaces(nid)
         rows = [[InlineKeyboardButton("All interfaces (node)", callback_data="status:iface:all")]]
         rows += [[InlineKeyboardButton(i["name"], callback_data=f"status:iface:{i['name']}")] for i in ifs]
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data="status:scope:node")])
-        await edit_send(update, f"🌐 <b>{html(context.user_data['status_node_name'])}</b>\nPick interface:",
+        rows.append([InlineKeyboardButton("← Back", callback_data="status:scope:node")])
+        await edit_send(update, f"⌁ <b>{html(context.user_data['status_node_name'])}</b>\nPick interface:",
                         InlineKeyboardMarkup(rows)); return
 
     if data.startswith("status:iface:"):
@@ -4468,7 +4534,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "status:search":
         context.user_data["STATUS_SEARCH"] = True
-        await edit_send(update, "🔍 Send a search term (name/address/endpoint). Send '-' to clear.", KB.back("peers:status")); return
+        await edit_send(update, "⌕ Send a search term (name/address/endpoint). Send '-' to clear.", KB.back("peers:status")); return
     if data == "status:clearsearch":
         context.user_data.pop("status_search_term", None)
         context.user_data.pop("STATUS_SEARCH", None)
@@ -4498,7 +4564,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 peer_disable(pid)
                 action = "peer_disable"
         except Exception as e:
-            await edit_send(update, f"⚠️ {html(str(e))}", KB.back(f"peer:open:{pid}")); return
+            await edit_send(update, f"⊘ {html(str(e))}", KB.back(f"peer:open:{pid}")); return
 
         _log_admin(action, f"pid={pid}; scope=local")
         await _peer_detail_view(update, context, pid)
@@ -4509,9 +4575,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             peer_reset_usage(pid)
             _log_admin("peer_reset_data", f"pid={pid}; scope=local")
-            await edit_send(update, "✅ Data usage reset.", KB.back(f"peer:open:{pid}"))
+            await edit_send(update, "● Data usage reset.", KB.back(f"peer:open:{pid}"))
         except Exception as e:
-            await edit_send(update, f"⚠️ Reset data failed: <code>{html(str(e))}</code>", KB.back(f"peer:open:{pid}"))
+            await edit_send(update, f"⊘ Reset data failed: <code>{html(str(e))}</code>", KB.back(f"peer:open:{pid}"))
         return
 
     if data.startswith("peer:resettimer:"):
@@ -4519,9 +4585,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             peer_reset_timer(pid)
             _log_admin("peer_reset_timer", f"pid={pid}; scope=local")
-            await edit_send(update, "✅ Timer reset.", KB.back(f"peer:open:{pid}"))
+            await edit_send(update, "● Timer reset.", KB.back(f"peer:open:{pid}"))
         except Exception as e:
-            await edit_send(update, f"⚠️ Reset timer failed: <code>{html(str(e))}</code>", KB.back(f"peer:open:{pid}"))
+            await edit_send(update, f"⊘ Reset timer failed: <code>{html(str(e))}</code>", KB.back(f"peer:open:{pid}"))
         return
 
     if data.startswith("peer:more:"):
@@ -4539,16 +4605,16 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("peer:delete:"):
         pid = int(data.split(":")[-1])
         k = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Yes, delete", callback_data=f"peer:delete:confirm:{pid}")],
-            [InlineKeyboardButton("⬅️ Back", callback_data=f"peer:open:{pid}")]
+            [InlineKeyboardButton("● Yes, delete", callback_data=f"peer:delete:confirm:{pid}")],
+            [InlineKeyboardButton("← Back", callback_data=f"peer:open:{pid}")]
         ])
-        await edit_send(update, "🗑 Confirm delete this peer?", k); return
+        await edit_send(update, "⌫ Confirm delete this peer?", k); return
 
     if data.startswith("peer:delete:confirm:"):
         pid = int(data.split(":")[-1])
         delete_peer(pid)
         _log_admin("peer_delete", f"pid={pid}; scope=local")
-        await edit_send(update, "🗑 Deleted.", KB.peers_index()); return
+        await edit_send(update, "⌫ Deleted.", KB.peers_index()); return
 
     if data.startswith("peer:edit:"):
         pid = int(data.split(":")[-1])
@@ -4565,12 +4631,12 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data[STATE["EDIT_ONE"]] = {"pid": pid, "key": key}
         hint = f"\n(current: <code>{html(cur)}</code>)" if cur != "" else ""
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✋ Cancel", callback_data=f"edit:cancel:{pid}")],
-            [InlineKeyboardButton("⬅️ Back",   callback_data=f"peer:open:{pid}")]
+            [InlineKeyboardButton("⊘ Cancel", callback_data=f"edit:cancel:{pid}")],
+            [InlineKeyboardButton("← Back",   callback_data=f"peer:open:{pid}")]
             ])
         await edit_send(
             update,
-            f"✏️ <b>Edit</b> — {html(_edit_label(key))}{hint}\n\nSend the new value.",
+            f"◇ <b>Edit</b> — {html(_edit_label(key))}{hint}\n\nSend the new value.",
             kb
         ); return
     
@@ -4585,7 +4651,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         st = context.user_data.get(STATE[flow])
         if st:
             step = int(st.get("step", 0))
-            seq = CREATE_FIELDS if flow == "CREATE" else BULK_FIELDS
+            seq = (st.get("fields") or ADVANCED_CREATE_FIELDS) if flow == "CREATE" else BULK_FIELDS
             if 0 <= step < len(seq):
                 st["step"] = step + 1
                 context.user_data[STATE[flow]] = st
@@ -4594,26 +4660,28 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if data == "backup:menu":
         try:
-           prefs = _get(f"{PANEL}/api/backup/prefs", session="api").json()
+            prefs = _get(f"{PANEL}/api/backup/prefs", session="api").json()
         except Exception:
-           prefs = {}
+            prefs = {}
         last_ts = _last_backup()
-        last_line = f"🕒 <b>Recent backup:</b> {html(_fmt_when(last_ts))}"
-
-        sched = _backup_schedule() 
-        tz = (sched.get("timezone") or "UTC")
-        enabled = "ON" if sched.get("enabled") else "OFF"
-        when = (sched.get("time") or "03:00")
-        freq = (sched.get("freq") or "daily")
-        next_run = sched.get("next_run") or "—"
-
-        sched_line = (
-            f"⏰ <b>Scheduled:</b> {enabled} • {freq} • {when} ({html(tz)})\n"
-            f"➡️ <b>Next (UTC):</b> {html(next_run)}"
-        )
-
-        header = "🗄️ <b>Backup</b>\n" + last_line + "\n" + sched_line + "\n\nChoose what to back up:"
-
+        sched = _backup_schedule()
+        enabled = bool(sched.get("enabled"))
+        when = str(sched.get("time") or "03:00")
+        freq = str(sched.get("freq") or "daily")
+        tz = str(sched.get("timezone") or "UTC")
+        next_run = str(sched.get("next_run") or "—")
+        header = "\n".join([
+            "▣ <b>Backup center</b>",
+            "<i>Create, restore, and schedule protected archives</i>",
+            "",
+            "<b>Overview</b>",
+            f"◇ Last backup   {html(_fmt_when(last_ts))}",
+            f"{'●' if enabled else '○'} Schedule      {'Enabled' if enabled else 'Disabled'}",
+            f"◷ Frequency     <code>{html(freq)}</code> · <code>{html(when)}</code> {html(tz)}",
+            f"↥ Next run      <code>{html(next_run)}</code>",
+            "",
+            "Choose an operation below.",
+        ])
         await edit_send(update, header, kb_backup_menu(prefs))
         return
     
@@ -4621,7 +4689,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         s = _backup_schedule()
         enabled = "ON" if s.get("enabled") else "OFF"
         msg = (
-        "⏱ <b>Scheduled backups</b>\n"
+        "◷ <b>Scheduled backups</b>\n"
         "Schedule is stored in the panel and executed by this bot.\n\n"
         f"• Status: <b>{enabled}</b>\n"
         f"• Frequency: <b>{html(str(s.get('freq') or 'daily'))}</b>\n"
@@ -4638,7 +4706,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payload["enabled"] = not bool(s.get("enabled", False))
         _set_backup_schedule(payload)
         s2 = _backup_schedule()
-        await edit_send(update, "✅ Saved.", kb_backup_schedule(s2))
+        await edit_send(update, "● Saved.", kb_backup_schedule(s2))
         return
     
     if data == "backup:schedule:test_2m":
@@ -4650,11 +4718,11 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await edit_send(
             update,
-            f"🧪 Test armed.\n"
+            f"◇ Test armed.\n"
             f"The bot will store an auto-backup in ~2 minutes.\n"
             f"• Fire at (epoch): <code>{fire_at}</code>\n\n"
-            f"Tip: keep this chat open and use 🔄 Refresh after 2 minutes.",
-            InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="backup:schedule")]])
+            f"Tip: keep this chat open and use ↻ Refresh after 2 minutes.",
+            InlineKeyboardMarkup([[InlineKeyboardButton("← Back", callback_data="backup:schedule")]])
             )
         return
 
@@ -4664,8 +4732,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wg = "1" if s.get("include_wg") else "0"
         tg = "1" if s.get("send_to_telegram") else "0"
         try:
-            await edit_send(update, "⏳ Running backup and storing to disk…",
-                            InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="backup:schedule")]])
+            await edit_send(update, "◷ Running backup and storing to disk…",
+                            InlineKeyboardMarkup([[InlineKeyboardButton("← Back", callback_data="backup:schedule")]])
                             )
             chat_id = str(s.get("telegram_chat_id") or "").strip()
             url = (
@@ -4676,39 +4744,43 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ok, info = await asyncio.to_thread(_store_backuppanel, url, dest, "api", 900)
             if ok:
                 _p_autobackups("full", s.get("keep", 7))
-                await edit_send(update, f"✅ Stored: <code>{html(dest.name)}</code>",
-                                InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="backup:schedule")]])
+                await edit_send(update, f"● Stored: <code>{html(dest.name)}</code>",
+                                InlineKeyboardMarkup([[InlineKeyboardButton("← Back", callback_data="backup:schedule")]])
                 )
             else:
-                await edit_send(update, f"⚠️ Failed: <code>{html(info)}</code>",
-                                InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="backup:schedule")]])
+                await edit_send(update, f"⊘ Failed: <code>{html(info)}</code>",
+                                InlineKeyboardMarkup([[InlineKeyboardButton("← Back", callback_data="backup:schedule")]])
                 )
         
         except Exception as e:
-            await edit_send(update, f"⚠️ Failed: <code>{html(str(e))}</code>",
-                        InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="backup:schedule")]]))
+            await edit_send(update, f"⊘ Failed: <code>{html(str(e))}</code>",
+                        InlineKeyboardMarkup([[InlineKeyboardButton("← Back", callback_data="backup:schedule")]]))
         return
 
     if data == "backup:restore":
         context.user_data[STATE["BACKUP_RESTORE_WAIT"]] = {"kind": "auto"}
 
         msg = (
-        "♻️ <b>Restore backup</b>\n\n"
+        "↺ <b>Restore backup</b>\n\n"
         "Please send the <b>.zip</b> backup file here.\n"
         "• Recommended: <b>Auto-detect</b> mode\n"
         "• The bot will restore DB / Settings based on the ZIP layout.\n\n"
         "<i>Tip:</i> Use backups created by this panel (DB, Settings, or Full)."
         )
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✋ Cancel", callback_data="backup:restore:cancel")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="backup:menu")],
+            [InlineKeyboardButton("⊘ Cancel", callback_data="backup:restore:cancel")],
+            [InlineKeyboardButton("← Back", callback_data="backup:menu")],
         ])
         await edit_send(update, msg, kb)
         return
 
     if data == "backup:restore:cancel":
         context.user_data.pop(STATE["BACKUP_RESTORE_WAIT"], None)
-        await kb_backup_menu(update)  
+        await edit_send(
+            update,
+            "▣ <b>Backup center</b>\n<i>Restore operation cancelled.</i>",
+            kb_backup_menu(),
+        )
         return
 
     
@@ -4718,7 +4790,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             prefs = r.json()
         except Exception:
             prefs = {"include_wg": True, "send_to_telegram": False}
-        msg = ("⚙️ <b>Backup preferences</b>\n"
+        msg = ("⚙ <b>Backup preferences</b>\n"
                f"• Include WG *.conf: <b>{'ON' if prefs.get('include_wg') else 'OFF'}</b>\n"
                f"• Send to Telegram: <b>{'ON' if prefs.get('send_to_telegram') else 'OFF'}</b>")
         await edit_send(update, msg, kb_backup_prefs(prefs))
@@ -4741,7 +4813,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         await edit_send(
             update,
-            ("✅ Saved.\n\n"
+            ("● Saved.\n\n"
              f"• Include WG *.conf: <b>{'ON' if cur.get('include_wg') else 'OFF'}</b>\n"
              f"• Send to Telegram: <b>{'ON' if cur.get('send_to_telegram') else 'OFF'}</b>"),
             kb_backup_prefs(cur)
@@ -4764,7 +4836,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _log_admin("backup_db", f"file={fname} size={len(content)}B")
 
         except Exception as e:
-            await edit_send(update, f"⚠️ DB backup failed: <code>{html(str(e))}</code>", KB.back("backup:menu"))
+            await edit_send(update, f"⊘ DB backup failed: <code>{html(str(e))}</code>", KB.back("backup:menu"))
         return
     
     if data == "backup:run:settings":
@@ -4776,7 +4848,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fname = _headers_filename(r)
             _log_admin("backup_settings", f"file={fname} size={len(content)}B")
         except Exception as e:
-            await edit_send(update, f"⚠️ Settings backup failed: <code>{html(str(e))}</code>", KB.back("backup:menu"))
+            await edit_send(update, f"⊘ Settings backup failed: <code>{html(str(e))}</code>", KB.back("backup:menu"))
         return
     
     if data == "backup:run:full":
@@ -4794,7 +4866,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _get(f"{PANEL}/api/backup/full?wg={wg}&tg=1", session="api")
                 await edit_send(
                     update,
-                    "📨 <b>Full backup initiated</b>\n"
+                    "↗ <b>Full backup initiated</b>\n"
                     "The panel is sending the backup to Telegram admins (based on Preferences).",
                     KB.back("backup:menu"),
                 )
@@ -4807,7 +4879,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _log_admin("backup_full", f"file={fname} size={len(content)}B wg={int(wg=='1')} tg=0")
 
         except Exception as e:
-            await edit_send(update, f"⚠️ Full backup failed: <code>{html(str(e))}</code>", KB.back("backup:menu"))
+            await edit_send(update, f"⊘ Full backup failed: <code>{html(str(e))}</code>", KB.back("backup:menu"))
         return
 
     
@@ -4815,7 +4887,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data in ("wiz:create:cancel", "wiz:bulk:cancel"):
         for k in list(STATE.values()):
             context.user_data.pop(k, None)
-        await edit_send(update, "✋ Cancelled.", KB.home()); return
+        await edit_send(update, "⊘ Cancelled.", KB.home()); return
 
     if data.startswith("wiz:create:set:") or data.startswith("wiz:bulk:set:"):
         _, flow, _set, key, val = data.split(":", 4)
@@ -4823,12 +4895,21 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         st = context.user_data.get(STATE[flowkey])
         if st:
             step = int(st.get("step", 0))
-            seq = CREATE_FIELDS if flowkey == "CREATE" else BULK_FIELDS
+            seq = (st.get("fields") or ADVANCED_CREATE_FIELDS) if flowkey == "CREATE" else BULK_FIELDS
             if 0 <= step < len(seq) and seq[step][0] == key:
                 st.setdefault("data", {})[key] = val
                 st["step"] = step + 1
                 context.user_data[STATE[flowkey]] = st
                 await (create_step if flowkey == "CREATE" else bulk_step)(update, context)
+        return
+
+    if data == "wiz:create:submit":
+        st = context.user_data.get(STATE["CREATE"])
+        if st:
+            st["submitting"] = False
+            st["step"] = len(st.get("fields") or ADVANCED_CREATE_FIELDS)
+            context.user_data[STATE["CREATE"]] = st
+            await create_step(update, context)
         return
 
     if data == "noop":
@@ -4852,18 +4933,18 @@ async def _peer_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page: i
 
     def _status_dot(p):
         s = str(p.get("status") or "").lower()
-        if "online" in s or s in {"1","true"}: return "🟢"
-        if "blocked" in s:                     return "⛔"
-        return "⚪"
+        if "online" in s or s in {"1","true"}: return "●"
+        if "blocked" in s:                     return "⊘"
+        return "○"
 
     def _loc_label(p):
         nid   = p.get("node_id")
         nname = p.get("node_name") or p.get("node") or ""
         iname = p.get("iface") or p.get("interface") or ""
         if nid is not None:
-            base = f"🌐 {nname or ('node ' + str(nid))}"
+            base = f"⌁ {nname or ('node ' + str(nid))}"
             return f"{base} — {iname}" if iname else base
-        return f"🖥 local — {iname}" if iname else "🖥 local"
+        return f"⌘ local — {iname}" if iname else "⌘ local"
 
     def _haystack(p):
         return " ".join([
@@ -4916,7 +4997,7 @@ async def _peer_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page: i
                 iid = None
             peers = list_peers(iid) or []
             iface_label = _iface_id().get(iid, str(iface_sel))
-        scope_label = "🖥 Local"
+        scope_label = "⌘ Local"
     else:
         if node_sel is None:
             nodes = list_nodes()
@@ -4924,13 +5005,13 @@ async def _peer_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page: i
                 await edit_send(update, "No nodes found or offline.", KB.back("peers:menu")); return
             rows = [[InlineKeyboardButton(f"{n.get('name','node')} (id {n.get('id')})",
                                           callback_data=f"status:nodepick:{n['id']}")] for n in nodes]
-            rows.append([InlineKeyboardButton("⬅️ Back", callback_data="peers:menu")])
-            await edit_send(update, "🌐 <b>Select a node</b>:", InlineKeyboardMarkup(rows)); return
+            rows.append([InlineKeyboardButton("← Back", callback_data="peers:menu")])
+            await edit_send(update, "⌁ <b>Select a node</b>:", InlineKeyboardMarkup(rows)); return
 
         iname = None if iface_sel == "all" else str(iface_sel)
         peers = list_node_peers(int(node_sel), iname) or []
         node_name = context.user_data.get("status_node_name") or ""
-        scope_label = f"🌐 {node_name or ('node ' + str(node_sel))}"
+        scope_label = f"⌁ {node_name or ('node ' + str(node_sel))}"
         iface_label = "all interfaces" if iface_sel == "all" else str(iface_sel)
 
     if search_q:
@@ -4954,7 +5035,7 @@ async def _peer_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page: i
     else:
         peer_rows.append([InlineKeyboardButton("No peers found", callback_data="noop")])
 
-    search_label = "❌ Clear manual search" if search_q else "🔎 Search manually"
+    search_label = "⊘ Clear manual search" if search_q else "⌕ Search manually"
     search_row   = [InlineKeyboardButton(
         search_label,
         callback_data=("status:clearsearch" if search_q else "status:search")
@@ -4974,7 +5055,7 @@ async def _peer_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page: i
     sub = f"Showing {min(total, end) if total else 0} of {total} • Page {page}/{pages}"
     if search_q:
         sub += f" • Filter: “{html(search_q)}”"
-    header = f"🔎 <b>Peer status</b> — {html(scope_chip)}\n"
+    header = f"⌕ <b>Peer status</b> — {html(scope_chip)}\n"
 
     await edit_send(update, header + sub, kb)
 
@@ -4983,22 +5064,22 @@ def kb_peer_detail(p: dict, back_cb: str) -> InlineKeyboardMarkup:
     status = (p.get("status") or "").lower()
     is_online = "online" in status
 
-    toggle_label = "⛔ Disable" if is_online else "✅ Enable"
+    toggle_label = "⊘ Disable" if is_online else "● Enable"
 
     rows = [
         [
-            InlineKeyboardButton("📄 CFG/QR", callback_data=f"peer:bundle:{pid}"),
+            InlineKeyboardButton("◇ CFG/QR", callback_data=f"peer:bundle:{pid}"),
         ],
         [
             InlineKeyboardButton(toggle_label, callback_data=f"peer:toggle:{pid}"),
-            InlineKeyboardButton("♻ Data",    callback_data=f"peer:resetdata:{pid}"),
-            InlineKeyboardButton("⏱ Timer",   callback_data=f"peer:resettimer:{pid}"),
+            InlineKeyboardButton("↺ Data",    callback_data=f"peer:resetdata:{pid}"),
+            InlineKeyboardButton("◷ Timer",   callback_data=f"peer:resettimer:{pid}"),
         ],
         [
-            InlineKeyboardButton("✏ Edit",   callback_data=f"peer:edit:{pid}"),
-            InlineKeyboardButton("🗑 Delete", callback_data=f"peer:delete:{pid}"),
+            InlineKeyboardButton("◇ Edit",   callback_data=f"peer:edit:{pid}"),
+            InlineKeyboardButton("⌫ Delete", callback_data=f"peer:delete:{pid}"),
         ],
-        [InlineKeyboardButton("⬅️ Back", callback_data=back_cb)],
+        [InlineKeyboardButton("← Back", callback_data=back_cb)],
     ]
     return InlineKeyboardMarkup(rows)
 
@@ -5030,14 +5111,14 @@ async def _edit_menu(update: Update, pid: int):
         display = (cur[:28] + "…") if len(cur) > 30 else (cur if cur != "" else "—")
         rows.append([
             InlineKeyboardButton(
-                f"✏️ { _edit_label(key) }  →  {display}",
+                f"◇ { _edit_label(key) }  →  {display}",
                 callback_data=f"edit:field:{pid}:{key}"
             )
         ])
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"peer:open:{pid}")])
+    rows.append([InlineKeyboardButton("← Back", callback_data=f"peer:open:{pid}")])
     await edit_send(
         update,
-        f"✏️ <b>Edit peer</b> — {html(p.get('name') or f'peer-{pid}')}\nChoose a field to edit:",
+        f"◇ <b>Edit peer</b> — {html(p.get('name') or f'peer-{pid}')}\nChoose a field to edit:",
         InlineKeyboardMarkup(rows)
     )
 
@@ -5080,7 +5161,11 @@ def _profile_defaults(profvals: dict) -> dict:
 async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     st = context.user_data.get(STATE["CREATE"])
     if not st:
-        await send_text(update, "⚠️ Creation session expired. Start again from Peers → ➕ Create.", KB.peers_index())
+        await send_text(update, "⊘ Creation session expired. Start again from Peers → ＋ Create.", KB.peers_index())
+        return
+
+    if st.get("submitting"):
+        await send_text(update, "◷ A peer is already being created. Please wait a moment.", KB.peers_index())
         return
 
     step     = int(st.get("step", 0))
@@ -5118,8 +5203,10 @@ async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         v = defaults.get(key, def_base)
         return "" if v is None else str(v)
 
-    while step < len(CREATE_FIELDS):
-        key, _, def_base = CREATE_FIELDS[step]
+    fields = st.get("fields") or ADVANCED_CREATE_FIELDS
+
+    while step < len(fields):
+        key, _, def_base = fields[step]
         prefill = _prefill_for(key, def_base)
 
         if st.get("skip_filled") and _for_skip(key, prefill, profile_mode=ask_missing_profile):
@@ -5129,11 +5216,11 @@ async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
         break
 
-    if step >= len(CREATE_FIELDS):
+    if step >= len(fields):
         nm = (answers.get("name") or defaults.get("name") or "").strip()
         if not nm:
             try:
-                name_idx = next(i for i, (k, _, _) in enumerate(CREATE_FIELDS) if k == "name")
+                name_idx = next(i for i, (k, _, _) in enumerate(fields) if k == "name")
             except StopIteration:
                 name_idx = 0
             st["step"] = name_idx
@@ -5167,7 +5254,7 @@ async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if scope == "node":
             if not node_id or not iname:
-                await send_text(update, "❌ Create failed: node target missing. Choose a node/interface again.", KB.peers_index())
+                await send_text(update, "⊘ Create failed: node target missing. Choose a node/interface again.", KB.peers_index())
                 return
             body = {
                 **payload,
@@ -5178,22 +5265,57 @@ async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
         else:
             if not iface_id:
-                await send_text(update, "❌ Create failed: iface_id missing. Choose an interface first.", KB.peers_index())
+                await send_text(update, "⊘ Create failed: iface_id missing. Choose an interface first.", KB.peers_index())
                 return
             body = {**payload, "iface_id": int(iface_id)}
+
+        st["submitting"] = True
+        context.user_data[STATE["CREATE"]] = st
 
         r = _post_soft(f"{PANEL}/api/peers", session="api", json=body)
         j = _json_txt(r)
         if not (200 <= r.status_code < 300 and isinstance(j, dict)):
-            await send_text(update, f"❌ Create failed ({r.status_code}): {html(str(j))}", KB.peers_index())
+            st["submitting"] = False
+            context.user_data[STATE["CREATE"]] = st
+            await send_text(
+                update,
+                f"⊘ Create failed ({r.status_code}): {html(str(j))}",
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("↻ Retry submission", callback_data="wiz:create:submit")],
+                    [InlineKeyboardButton("◇ Cancel", callback_data="wiz:create:cancel")],
+                ]),
+            )
             return
 
         pid = j.get("id") or ((j.get("peer") or {}).get("id"))
         if not pid:
-            await send_text(update, f"❌ Create failed: {html(str(j))}", KB.peers_index())
+            st["submitting"] = False
+            context.user_data[STATE["CREATE"]] = st
+            await send_text(update, f"⊘ Create failed: {html(str(j))}", KB.peers_index())
             return
 
-        await send_peers(update, int(pid))
+        context.user_data.pop(STATE["CREATE"], None)
+
+        try:
+            await send_peers(update, int(pid))
+        except Exception as exc:
+            logging.getLogger(__name__).exception(
+                "Peer %s was created but bundle delivery failed",
+                pid,
+            )
+            short = get_shortlink(int(pid))
+            await send_text(
+                update,
+                (
+                    f"● <b>Peer created.</b>\n"
+                    f"ID: <code>{int(pid)}</code>\n"
+                    f"⌁ <b>Short link</b>: "
+                    f"{html(short) if short else 'Unavailable'}\n\n"
+                    f"⊘ Telegram could not send the complete bundle: "
+                    f"<code>{html(str(exc))}</code>"
+                ),
+                KB.back(f"peer:open:{int(pid)}"),
+            )
 
         uid   = str(update.effective_user.id)
         uname = (update.effective_user.username or "") if update.effective_user else ""
@@ -5213,17 +5335,17 @@ async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        context.user_data.pop(STATE["CREATE"], None)
         return
 
-    key, prompt, def_base = CREATE_FIELDS[step]
+    key, prompt, def_base = fields[step]
 
     default = _default_prompt(key, def_base)
 
     show_profile = bool(selected_profile)
-    tag = f"\n🎯 Using profile: <b>{html(selected_profile)}</b>" if show_profile else "\n✏️ Manual input"
+    tag = f"\n✦ Using profile: <b>{html(selected_profile)}</b>" if show_profile else "\n◇ Manual input"
 
-    breadcrumb = f"➕ Create ({step+1}/{len(CREATE_FIELDS)})"
+    mode_label = "Quick" if fields == BASIC_CREATE_FIELDS else "Advanced"
+    breadcrumb = f"⊕ Create · {mode_label} ({step+1}/{len(fields)})"
     hint = f"\n(default: <code>{html(default)}</code>)" if default != "" else ""
     kb = menu_kb("create", key, allow_skip=True)
 
@@ -5233,7 +5355,7 @@ async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def bulk_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     st = context.user_data.get(STATE["BULK"])
     if not st:
-        await send_text(update, "⚠️ Bulk session expired. Start again from Peers → 📦 Bulk.", KB.peers_index())
+        await send_text(update, "⊘ Bulk session expired. Start again from Peers → ▦ Bulk.", KB.peers_index())
         return
 
     # Session + mode (local vs node)
@@ -5269,7 +5391,7 @@ async def bulk_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not node_id or not iface_name:
                 await send_text(
                     update,
-                    "❌ Bulk failed: node target missing. Choose node + interface again.",
+                    "⊘ Bulk failed: node target missing. Choose node + interface again.",
                     KB.peers_index(),
                 )
                 return
@@ -5277,7 +5399,7 @@ async def bulk_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not iface_id:
                 await send_text(
                     update,
-                    "❌ Bulk failed: iface_id missing. Choose an interface first.",
+                    "⊘ Bulk failed: iface_id missing. Choose an interface first.",
                     KB.peers_index(),
                 )
                 return
@@ -5290,7 +5412,7 @@ async def bulk_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             count = 0
         if count <= 0:
-            await send_text(update, "❌ Invalid count.", KB.peers_index())
+            await send_text(update, "⊘ Invalid count.", KB.peers_index())
             return
 
         for k, _prompt, def_base in BULK_FIELDS:
@@ -5355,7 +5477,7 @@ async def bulk_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not isinstance(res, dict) or res.get("error"):
                 err = (res.get("error") if isinstance(res, dict) else "bad_response")
                 await edit_send(update,
-                                f"❌ Bulk failed.\n\n🧾 Error: <code>{html(str(err))}</code>",
+                                f"⊘ Bulk failed.\n\n◇ Error: <code>{html(str(err))}</code>",
                                 KB.home()
                 )
                 return
@@ -5371,19 +5493,19 @@ async def bulk_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 iface_label = str(iface_id)
 
-        summary = f"📦 Bulk create on <b>{html(iface_label)}</b>: <b>{created}</b> of <b>{count}</b> peers"
+        summary = f"▦ Bulk create on <b>{html(iface_label)}</b>: <b>{created}</b> of <b>{count}</b> peers"
         if selected:
-            summary += f"\n🎯 Using profile: <b>{html(selected)}</b>"
+            summary += f"\n✦ Using profile: <b>{html(selected)}</b>"
         if base:
-            summary += f"\n👤 Names: <code>{html(base)}1 … {html(base)}{count}</code>"
+            summary += f"\n◇ Names: <code>{html(base)}1 … {html(base)}{count}</code>"
         if phones:
-            summary += f"\n☎️ Phone numbers mapped in order: <b>{len(phones)}</b>"
+            summary += f"\n☎ Phone numbers mapped in order: <b>{len(phones)}</b>"
         if tgs:
-            summary += f"\n💬 Telegram IDs mapped in order: <b>{len(tgs)}</b>"
+            summary += f"\n✧ Telegram IDs mapped in order: <b>{len(tgs)}</b>"
         if errors:
-            summary += f"\n⚠️ Errors: <b>{errors}</b> (see panel logs for details)"
+            summary += f"\n⊘ Errors: <b>{errors}</b> (see panel logs for details)"
         if not ok and created <= 0:
-            summary += "\n❌ Bulk operation may have failed (check panel logs)."
+            summary += "\n⊘ Bulk operation may have failed (check panel logs)."
 
         try:
             uid   = str(update.effective_user.id)
@@ -5410,22 +5532,22 @@ async def bulk_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     default = "" if base_val is None else str(base_val)
 
     show_profile = bool(selected)
-    tag = f"\n🎯 Using profile: <b>{html(selected)}</b>" if show_profile else "\n✏️ Manual input"
+    tag = f"\n✦ Using profile: <b>{html(selected)}</b>" if show_profile else "\n◇ Manual input"
 
     extra = ""
     if not selected and key in {"name", "base_name"}:
         default = ""
 
     if key == "phone_number":
-        extra = "\n📇 Tip: For bulk, use commas or new lines to assign per-peer phones in order (e.g. <code>0912..., 0935..., 0901...</code>)."
+        extra = "\n⌕ Tip: For bulk, use commas or new lines to assign per-peer phones in order (e.g. <code>0912..., 0935..., 0901...</code>)."
         if not selected:
             default = ""
     elif key == "telegram_id":
-        extra = "\n📨 Tip: For bulk, use commas or new lines; leading <code>@</code> is optional (e.g. <code>@azumi, josh, @jackie</code>)."
+        extra = "\n↗ Tip: For bulk, use commas or new lines; leading <code>@</code> is optional (e.g. <code>@azumi, josh, @jackie</code>)."
         if not selected:
             default = ""
 
-    breadcrumb = f"📦 Bulk ({step+1}/{len(BULK_FIELDS)})"
+    breadcrumb = f"▦ Bulk ({step+1}/{len(BULK_FIELDS)})"
     hint = f"\n(default: <code>{html(default)}</code>)" if default != "" else ""
     kb = menu_kb("bulk", key, allow_skip=(key != "count"))
     await edit_send(update, f"{breadcrumb}{tag}\n{prompt}{hint}{extra}", kb)
@@ -5441,12 +5563,12 @@ async def edit_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if payload:
             update_peer(pid, payload)                   
         context.user_data.pop(STATE["EDIT"], None)
-        await send_text(update, "✅ Saved.", KB.peers_index())
+        await send_text(update, "● Saved.", KB.peers_index())
         return
 
     key, prompt, def_base = EDIT_FIELDS[step]
     default = "" if def_base is None else str(def_base)
-    breadcrumb = f"✏️ Edit ({step+1}/{len(EDIT_FIELDS)})"
+    breadcrumb = f"◇ Edit ({step+1}/{len(EDIT_FIELDS)})"
     hint = f"\n(current: <code>{html(default)}</code>)" if default != "" else ""
     await edit_send(
         update,
@@ -5485,7 +5607,7 @@ def profile_summary(pname: str) -> str:
     p = profile_get(pname) or {}
     is_def = (profile_default() == pname)
     scope = (p.get("use_for") or "both").lower()
-    scope_txt = "Both" if scope == "both" else ("Single" if scope == "single" else "Bulk")
+    scope_txt = "Subscription profile" if scope == "subscription" else "Peer profile"
 
     def _phone_display():
         v = str(p.get("phone_number") or "").strip()
@@ -5523,10 +5645,10 @@ def profile_summary(pname: str) -> str:
         ("telegram_id",          tg_label,                      _tg_display),
     ]
 
-    lines = [f"🎯 <b>Profile:</b> {html(pname)}"]
+    lines = [f"✦ <b>Profile:</b> {html(pname)}"]
     if is_def:
-        lines.append("⭐ default")
-    lines.append(f"🧭 <b>Scope:</b> {scope_txt}")
+        lines.append("☆ default")
+    lines.append(f"◆ <b>Scope:</b> {scope_txt}")
 
     for _key, label, getv in labels:
         val = getv()
@@ -5547,32 +5669,27 @@ def kb_profile_editor(pname: str) -> InlineKeyboardMarkup:
         return InlineKeyboardButton(label, callback_data=cb)
 
     rows = [
-        [B("Friendly name", f"profiles:editkey:{pname}:name"),
-         B("Allowed IPs",   f"profiles:editkey:{pname}:allowed_ips")],
-
-        [B("Endpoint",      f"profiles:editkey:{pname}:endpoint"),
-         B("Keepalive (s)", f"profiles:editkey:{pname}:persistent_keepalive")],
-
-        [B("MTU", f"profiles:editkey:{pname}:mtu"),
-         B("DNS", f"profiles:editkey:{pname}:dns")],
-
-        [B("Traffic limit", f"profiles:editkey:{pname}:data_limit_value"),
-         B("Unit (Mi/Gi)",  f"profiles:unit:{pname}")],
-
-        [B("Active days",  f"profiles:editkey:{pname}:time_limit_days"),
-         B("Active hours", f"profiles:editkey:{pname}:time_limit_hours")],
-
-        [B("Start on first use", f"profiles:toggle:{pname}:start_on_first_use"),
-         B("Unlimited",          f"profiles:toggle:{pname}:unlimited")],
-
-        [B(phone_btn, f"profiles:editkey:{pname}:phone_number"),
-         B(tg_btn,    f"profiles:editkey:{pname}:telegram_id")],
-
-        [B("⭐ Set as default",     f"profiles:setdef:{pname}"),
-         B("🧭 Scope (Single/Bulk)", f"profiles:scope:{pname}")],
-
-        [B("🗑 Delete",            f"profiles:del:{pname}"),
-         B("⬅️ Back to Profiles",  "profiles:menu")],
+        [B("◇ Name", f"profiles:editkey:{pname}:name"),
+         B("✦ Note", f"profiles:editkey:{pname}:note")],
+        [B("◎ Allowed IPs", f"profiles:editkey:{pname}:allowed_ips"),
+         B("⌁ Endpoint", f"profiles:editkey:{pname}:endpoint")],
+        [B("⋄ Keepalive", f"profiles:editkey:{pname}:persistent_keepalive"),
+         B("↔ MTU", f"profiles:editkey:{pname}:mtu")],
+        [B("◉ DNS", f"profiles:editkey:{pname}:dns"),
+         B("⌘ Internal networks", f"profiles:toggle:{pname}:include_internal_network")],
+        [B("◫ Data limit", f"profiles:editkey:{pname}:data_limit_value"),
+         B("◈ Unit", f"profiles:unit:{pname}")],
+        [B("◷ Days", f"profiles:editkey:{pname}:time_limit_days"),
+         B("◴ Hours", f"profiles:editkey:{pname}:time_limit_hours")],
+        [B("◶ Minutes", f"profiles:editkey:{pname}:time_limit_minutes"),
+         B("▷ First use", f"profiles:toggle:{pname}:start_on_first_use")],
+        [B("∞ Unlimited", f"profiles:toggle:{pname}:unlimited"),
+         B(phone_btn, f"profiles:editkey:{pname}:phone_number")],
+        [B(tg_btn, f"profiles:editkey:{pname}:telegram_id"),
+         B("⌘ Profile type", f"profiles:scope:{pname}")],
+        [B("☆ Set default", f"profiles:setdef:{pname}"),
+         B("⌫ Delete", f"profiles:del:{pname}")],
+        [B("← Profiles", "profiles:menu")],
     ]
 
     return InlineKeyboardMarkup(rows)
@@ -5581,17 +5698,17 @@ def kb_profile_editor(pname: str) -> InlineKeyboardMarkup:
 async def profile_new_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     st = context.user_data.get(STATE["P_NEW"])
     if st["name"] is None:
-        await edit_send(update, "🆕 Send a name for this profile.", KB.back("profiles:menu")); return
+        await edit_send(update, "＋ Send a name for this profile.", KB.back("profiles:menu")); return
 
     step = st["step"]
     if step >= len(PROFILE_FIELDS):
         profile_set(st["name"], st["data"]) 
-        await send_text(update, f"💾 Saved profile <b>{html(st['name'])}</b>.", KB.profiles_menu())
+        await send_text(update, f"● Saved profile <b>{html(st['name'])}</b>.", KB.profiles_menu())
         context.user_data.pop(STATE["P_NEW"], None)
         return
 
     key, prompt, default = PROFILE_FIELDS[step]
-    breadcrumb = f"🆕 New profile ({step+1}/{len(PROFILE_FIELDS)})"
+    breadcrumb = f"＋ New profile ({step+1}/{len(PROFILE_FIELDS)})"
     hint = f"\n(default: <code>{html(str(default))}</code>)" if default != "" else ""
 
     await edit_send(
@@ -5608,13 +5725,13 @@ async def profile_edit_process(update: Update, context: ContextTypes.DEFAULT_TYP
         current = st.get("defaults", {})
         newvals = {k: v for k,v in st["data"].items() if v != ""}
         profile_set(st["name"], {**current, **newvals})
-        await send_text(update, f"✅ Updated profile <b>{html(st['name'])}</b>.", KB.profiles_menu())
+        await send_text(update, f"● Updated profile <b>{html(st['name'])}</b>.", KB.profiles_menu())
         context.user_data.pop(STATE["P_EDIT"], None)
         return
 
     key, prompt, def_base = PROFILE_FIELDS[step]
     default = str(st.get("defaults", {}).get(key, def_base) or "")
-    breadcrumb = f"✏️ Edit profile <b>{html(st['name'])}</b> ({step+1}/{len(PROFILE_FIELDS)})"
+    breadcrumb = f"◇ Edit profile <b>{html(st['name'])}</b> ({step+1}/{len(PROFILE_FIELDS)})"
     hint = f"\n(current: <code>{html(str(default))}</code>)" if default != "" else ""
     await edit_send(update, f"{breadcrumb}\n{prompt}{hint}\n\nSend '-' to cancel.", KB.back(f"profiles:open:{st['name']}"))
 
@@ -5624,7 +5741,7 @@ async def wizard_choose_node(update: Update):
         return await edit_send(update, "No nodes found or offline.", KB.peers_index())
     rows = [[InlineKeyboardButton(f"{n.get('name','node')} (id {n.get('id')})",
                                   callback_data=f"create:node:{n['id']}")] for n in nodes]
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="peers:create")])
+    rows.append([InlineKeyboardButton("← Back", callback_data="peers:create")])
     await edit_send(update, "Select node:", InlineKeyboardMarkup(rows))
 
 async def wizard_bulk_node(update: Update):
@@ -5633,7 +5750,7 @@ async def wizard_bulk_node(update: Update):
         return await edit_send(update, "No nodes found or offline.", KB.peers_index())
     rows = [[InlineKeyboardButton(f"{n.get('name','node')} (id {n.get('id')})",
                                   callback_data=f"bulk:node:{n['id']}")] for n in nodes]
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="peers:bulk")])
+    rows.append([InlineKeyboardButton("← Back", callback_data="peers:bulk")])
     await edit_send(update, "Select node for bulk:", InlineKeyboardMarkup(rows))
 
 
@@ -5665,7 +5782,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 v = text.strip().capitalize()
                 val = "Gi" if v.startswith("Gi") else "Mi"
         except Exception:
-            await edit_send(update, "⚠️ Invalid value type.", kb_profile_editor(pname))
+            await edit_send(update, "⊘ Invalid value type.", kb_profile_editor(pname))
             return
 
         p = profile_get(pname) or {}
@@ -5688,9 +5805,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payload = _payload_api({key: text})
         try:
             update_peer(pid, payload)  
-            await send_text(update, "✅ Saved.")
+            await send_text(update, "● Saved.")
         except Exception as e:
-            await send_text(update, f"⚠️ {html(str(e))}")
+            await send_text(update, f"⊘ {html(str(e))}")
         context.user_data.pop(STATE["EDIT_ONE"], None)
         await _edit_menu(update, pid)
         return
@@ -5699,14 +5816,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text == "-":
         for k in list(STATE.values()):
             context.user_data.pop(k, None)
-        await send_text(update, "✋ Cancelled.", KB.home())
+        await send_text(update, "⊘ Cancelled.", KB.home())
         return
 
     stc = context.user_data.get(STATE.get("CREATE"))
     if stc:
         step = int(stc.get("step", 0))
-        if 0 <= step < len(CREATE_FIELDS):
-            key, _prompt, _def = CREATE_FIELDS[step]
+        fields = stc.get("fields") or ADVANCED_CREATE_FIELDS
+        if 0 <= step < len(fields):
+            key, _prompt, _def = fields[step]
             stc["data"][key] = text  
             stc["step"] = step + 1
             context.user_data[STATE["CREATE"]] = stc
@@ -5731,7 +5849,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send_text(update, "Please send a non-empty name or '-' to cancel.", KB.back("profiles:menu"))
             return
         if profile_get(name):
-            await send_text(update, "❗ A profile with that name already exists. Send another name or '-' to cancel.",
+            await send_text(update, "⊘ A profile with that name already exists. Send another name or '-' to cancel.",
                             KB.back("profiles:menu"))
             return
 
@@ -5739,13 +5857,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data[STATE["P_NEW"]] = stpnew
 
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Single", callback_data="profiles:new:scope:single"),
-             InlineKeyboardButton("📦 Bulk",   callback_data="profiles:new:scope:bulk")],
-            [InlineKeyboardButton("🔁 Both",   callback_data="profiles:new:scope:both")],
-            [InlineKeyboardButton("✋ Cancel", callback_data="profiles:new:cancel"),
-             InlineKeyboardButton("⬅️ Back",  callback_data="profiles:menu")]
+            [InlineKeyboardButton("◇ Peer profile", callback_data="profiles:new:type:peer")],
+            [InlineKeyboardButton("⌘ Subscription profile", callback_data="profiles:new:type:subscription")],
+            [InlineKeyboardButton("⊘ Cancel", callback_data="wiz:pnew:cancel"),
+             InlineKeyboardButton("← Back", callback_data="profiles:menu")]
         ])
-        await edit_send(update, f"🆕 <b>{html(name)}</b>\nChoose where you'll use this profile:", kb)
+        await edit_send(update, f"＋ <b>{html(name)}</b>\nChoose the profile type:", kb)
         return
 
     stp = context.user_data.get(STATE.get("P_EDIT"))
@@ -5779,15 +5896,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 label = f"{name or 'peer-'+str(pid)} (id {pid})"
                 matches.append([
                     InlineKeyboardButton(label, callback_data=f"peer:open:{pid}"),
-                    InlineKeyboardButton("🗑",  callback_data=f"peer:delete:{pid}")
+                    InlineKeyboardButton("⌫",  callback_data=f"peer:delete:{pid}")
                 ])
         if not matches:
             matches = [[InlineKeyboardButton("No matches", callback_data="noop")]]
-        matches.append([InlineKeyboardButton("⬅️ Back", callback_data="peers:menu")])
-        await edit_send(update, f"🔍 Results for <b>{html(text)}</b>:", InlineKeyboardMarkup(matches))
+        matches.append([InlineKeyboardButton("← Back", callback_data="peers:menu")])
+        await edit_send(update, f"⌕ Results for <b>{html(text)}</b>:", InlineKeyboardMarkup(matches))
         return
 
-    await send_text(update, "🤔 I didn't catch that. Use the buttons below.", KB.home())
+    await send_text(update, "◇ I didn't catch that. Use the buttons below.", KB.home())
 
 async def on_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     st = context.user_data.get(STATE.get("BACKUP_RESTORE_WAIT"))
@@ -5800,7 +5917,7 @@ async def on_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     filename = (doc.file_name or "").strip()
     if not filename.lower().endswith(".zip"):
-        await update.message.reply_html("⚠️ Please send a <b>.zip</b> file.")
+        await update.message.reply_html("⊘ Please send a <b>.zip</b> file.")
         return
 
     try:
@@ -5809,7 +5926,7 @@ async def on_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data_bytes = bytes(data_bytes)
     except Exception as e:
         _log_admin_update(update, "restore_download_failed", f"{type(e).__name__}: {e}")
-        await update.message.reply_html("⚠️ Failed to download the file from Telegram.")
+        await update.message.reply_html("⊘ Failed to download the file from Telegram.")
         return
 
     restore_wg = "0"
@@ -5837,28 +5954,28 @@ async def on_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if (not r.ok) or (not isinstance(j, dict)) or (not j.get("ok")):
             await update.message.reply_html(
-                "❌ <b>Restore failed</b>\n"
+                "⊘ <b>Restore failed</b>\n"
                 f"<code>{html(str(j)[:800])}</code>"
             )
         else:
             restored = j.get("restored") or {}
             warnings = j.get("warnings") or []
             msg = (
-                "✅ <b>Restore completed</b>\n"
+                "● <b>Restore completed</b>\n"
                 f"• Kind: <code>{html(str(j.get('kind','?')))}</code>\n"
                 f"• DB: <b>{'YES' if restored.get('db') else 'NO'}</b>\n"
                 f"• Settings: <b>{'YES' if restored.get('settings') else 'NO'}</b>\n"
                 f"• WG conf: <b>{'YES' if restored.get('wg') else 'NO'}</b>\n"
             )
             if warnings:
-                msg += "\n⚠️ <b>Warnings</b>\n" + "\n".join(f"• <code>{html(str(w))}</code>" for w in warnings)
+                msg += "\n⊘ <b>Warnings</b>\n" + "\n".join(f"• <code>{html(str(w))}</code>" for w in warnings)
 
             msg += "\n\n<i>If services do not reflect changes, restart the panel and Wireguard services.</i>"
             await update.message.reply_html(msg)
 
     except Exception as e:
         _log_admin_update(update, "restore_api_error", f"{type(e).__name__}: {e}")
-        await update.message.reply_html("⚠️ Restore request failed. Check panel logs.")
+        await update.message.reply_html("⊘ Restore request failed. Check panel logs.")
     finally:
         context.user_data.pop(STATE["BACKUP_RESTORE_WAIT"], None)
 
@@ -5866,16 +5983,16 @@ async def on_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_create_with_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, name: str):
     ifaces = peer_ifaces()
     rows = [[InlineKeyboardButton(f"{i['name']} (id {i['id']})", callback_data=f"create:iface:{i['id']}")] for i in ifaces]
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="profiles:menu")])
+    rows.append([InlineKeyboardButton("← Back", callback_data="profiles:menu")])
     context.user_data["_pending_profile_create"] = name
-    await edit_send(update, f"➕ <b>Create</b> using profile <b>{html(name)}</b>\nChoose interface:", InlineKeyboardMarkup(rows))
+    await edit_send(update, f"＋ <b>Create</b> using profile <b>{html(name)}</b>\nChoose interface:", InlineKeyboardMarkup(rows))
 
 async def start_bulk_with_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, name: str):
     ifaces = peer_ifaces()
     rows = [[InlineKeyboardButton(f"{i['name']} (id {i['id']})", callback_data=f"bulk:iface:{i['id']}")] for i in ifaces]
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="profiles:menu")])
+    rows.append([InlineKeyboardButton("← Back", callback_data="profiles:menu")])
     context.user_data["_pending_profile_bulk"] = name
-    await edit_send(update, f"📦 <b>Bulk</b> using profile <b>{html(name)}</b>\nChoose interface:", InlineKeyboardMarkup(rows))
+    await edit_send(update, f"▦ <b>Bulk</b> using profile <b>{html(name)}</b>\nChoose interface:", InlineKeyboardMarkup(rows))
 
 def _state_get_int(st: dict, key: str, default: int = 0) -> int:
     try:
@@ -5906,93 +6023,417 @@ def _admin_unmuted() -> list[str]:
             out.append(tg_id)
     return out
 
-async def _panel_watchdog(stop_event: asyncio.Event, bot):
+async def _panel_watchdog(
+    stop_event: asyncio.Event,
+    bot,
+):
     interval_sec = 20
-    fail_threshold = 3  
+    fail_threshold = 3
 
     fails = 0
     was_down = False
+    down_since = None
+    last_error = ""
+
+    def utc_now_text() -> str:
+        return datetime.now(
+            timezone.utc
+        ).strftime(
+            "%Y-%m-%d %H:%M:%S UTC"
+        )
+
+    def duration_text(
+        seconds: float,
+    ) -> str:
+        seconds = max(
+            0,
+            int(seconds or 0),
+        )
+
+        days, remainder = divmod(
+            seconds,
+            86400,
+        )
+
+        hours, remainder = divmod(
+            remainder,
+            3600,
+        )
+
+        minutes, secs = divmod(
+            remainder,
+            60,
+        )
+
+        parts = []
+
+        if days:
+            parts.append(
+                f"{days}d"
+            )
+
+        if hours or days:
+            parts.append(
+                f"{hours}h"
+            )
+
+        if minutes or hours or days:
+            parts.append(
+                f"{minutes}m"
+            )
+
+        parts.append(
+            f"{secs}s"
+        )
+
+        return " ".join(parts)
+
+    async def broadcast(
+        text: str,
+    ) -> int:
+        chat_ids = list(
+            _admin_unmuted()
+            or []
+        )
+
+        if not chat_ids:
+            logging.error(
+                "Panel watchdog has no unmuted Telegram "
+                "administrators. INSTANCE_DIR=%s",
+                INSTANCE_DIR,
+            )
+            return 0
+
+        delivered = 0
+
+        for chat_id in chat_ids:
+            try:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=text,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+
+                delivered += 1
+
+                logging.info(
+                    "Panel watchdog alert delivered "
+                    "to chat_id=%s",
+                    chat_id,
+                )
+
+            except Exception:
+                logging.exception(
+                    "Could not deliver panel watchdog "
+                    "alert to chat_id=%s",
+                    chat_id,
+                )
+
+        if delivered == 0:
+            logging.error(
+                "Panel watchdog alert was not delivered "
+                "to any configured administrator."
+            )
+
+        return delivered
+
+    logging.info(
+        "Panel watchdog started: panel=%s "
+        "interval=%ss threshold=%s",
+        PANEL,
+        interval_sec,
+        fail_threshold,
+    )
 
     while not stop_event.is_set():
         ok = False
+        error_text = ""
+        status_code = None
+
         try:
-            response = await asyncio.to_thread(_get, f"{PANEL}/api/healthz", session="api" if API_KEY else "auto", timeout=6)
-            ok = response.status_code == 200
-        except Exception:
+            response = await asyncio.to_thread(
+                _get,
+                f"{PANEL}/api/healthz",
+                session=(
+                    "api"
+                    if API_KEY
+                    else "auto"
+                ),
+                timeout=6,
+            )
+
+            status_code = int(
+                response.status_code
+            )
+
+            ok = (
+                status_code == 200
+            )
+
+            if not ok:
+                error_text = (
+                    f"HTTP {status_code}"
+                )
+
+        except Exception as exc:
+            error_text = (
+                f"{type(exc).__name__}: {exc}"
+            )
+
             ok = False
 
         if ok:
+            if fails:
+                logging.info(
+                    "Panel watchdog health check recovered "
+                    "after %s failed check(s).",
+                    fails,
+                )
+
             fails = 0
+            last_error = ""
+
             if was_down:
-                was_down = False
+                outage = (
+                    time.monotonic()
+                    - down_since
+                    if down_since is not None
+                    else 0
+                )
+
+                logging.info(
+                    "Panel recovered: panel=%s outage=%s",
+                    PANEL,
+                    duration_text(outage),
+                )
+
                 if _notify_app():
-                    for chat_id in _admin_unmuted():
-                        try:
-                            await bot.send_message(chat_id=chat_id, text="✅ Panel is back online.")
-                        except Exception:
-                            pass
+                    await broadcast(
+                        "● <b>Panel is back online</b>\n\n"
+                        "◇ <b>Status</b>  Healthy\n"
+                        f"⌁ <b>Panel</b>  "
+                        f"<code>{html(PANEL)}</code>\n"
+                        f"◷ <b>Recovered</b>  "
+                        f"<code>{utc_now_text()}</code>\n"
+                        f"↥ <b>Outage</b>  "
+                        f"<code>{duration_text(outage)}</code>\n\n"
+                        "The authenticated health check is "
+                        "responding normally again."
+                    )
+
+                else:
+                    logging.warning(
+                        "Panel recovery detected, but app_down "
+                        "notifications are disabled."
+                    )
+
+                was_down = False
+                down_since = None
+
         else:
             fails += 1
-            if (not was_down) and fails >= fail_threshold:
+
+            last_error = (
+                error_text
+                or last_error
+                or "Health check failed"
+            )
+
+            logging.warning(
+                "Panel watchdog check failed %s/%s: "
+                "panel=%s status=%s error=%s",
+                fails,
+                fail_threshold,
+                PANEL,
+                status_code,
+                last_error,
+            )
+
+            if (
+                not was_down
+                and fails >= fail_threshold
+            ):
                 was_down = True
+                down_since = time.monotonic()
+
+                logging.error(
+                    "Panel declared unavailable after "
+                    "%s failed checks: panel=%s error=%s",
+                    fails,
+                    PANEL,
+                    last_error,
+                )
+
                 if _notify_app():
-                    for chat_id in _admin_unmuted():
-                        try:
-                            await bot.send_message(chat_id=chat_id, text="🚨 Panel is DOWN (health check failing).")
-                        except Exception:
-                            pass
+                    await broadcast(
+                        "⊘ <b>Panel availability alert</b>\n\n"
+                        "◇ <b>Status</b>  Unreachable\n"
+                        f"⌁ <b>Panel</b>  "
+                        f"<code>{html(PANEL)}</code>\n"
+                        f"◷ <b>Detected</b>  "
+                        f"<code>{utc_now_text()}</code>\n"
+                        f"↻ <b>Checks failed</b>  "
+                        f"<code>{fails}</code>\n"
+                        f"✦ <b>Last error</b>  "
+                        f"<code>{html(last_error[:500])}</code>\n\n"
+                        f"The bot will retry every "
+                        f"{interval_sec} seconds and report "
+                        "recovery automatically."
+                    )
+
+                else:
+                    logging.warning(
+                        "Panel outage detected, but app_down "
+                        "notifications are disabled."
+                    )
 
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=interval_sec)
+            await asyncio.wait_for(
+                stop_event.wait(),
+                timeout=interval_sec,
+            )
+
         except asyncio.TimeoutError:
             pass
 
-HB_SEC = int(os.getenv("TG_HEARTBEAT_SEC", "60") or "60")
+        except asyncio.CancelledError:
+            logging.info(
+                "Panel watchdog task cancelled."
+            )
+            raise
+
+        except Exception:
+            logging.exception(
+                "Unexpected error while waiting in "
+                "panel watchdog loop."
+            )
+
+    logging.info(
+        "Panel watchdog stopped."
+    )
+
+HB_SEC = max(15, int(os.getenv("TG_HEARTBEAT_SEC", "60") or "60"))
 
 async def _heartbeat_loop(stop_event: asyncio.Event):
+    """Publish an immediate heartbeat, then continue at the configured interval."""
 
-    if HB_SEC <= 0:
+    if not API_KEY and not USE_PANEL_SESSION:
+        logging.warning(
+            "Heartbeat disabled: set PANEL_API_KEY/API_KEY or enable "
+            "USE_PANEL_SESSION=1."
+        )
         return
 
-    hb_session = "api" if API_KEY else ("sess" if USE_PANEL_SESSION else None)
-    if not hb_session:
-        logging.warning("Heartbeat disabled: set PANEL_API_KEY (recommended) or enable USE_PANEL_SESSION=1.")
-        return
+    consecutive_failures = 0
 
     while not stop_event.is_set():
         try:
-            if hb_session == "sess":
-                try:
-                    _login_session()
-                except Exception as e:
-                    logging.debug("Heartbeat session login failed: %s", e)
+            if API_KEY:
+                response = await asyncio.to_thread(
+                    api.post,
+                    f"{PANEL}/api/telegram/heartbeat",
+                    json={
+                        "pid": os.getpid(),
+                        "version": BOT_VERSION,
+                        "panel": PANEL,
+                        "service": "wg-panel-telegram",
+                    },
+                    timeout=12,
+                )
+            else:
+                await asyncio.to_thread(_login_session)
+                response = await asyncio.to_thread(
+                    sess.post,
+                    f"{PANEL}/api/telegram/heartbeat",
+                    json={
+                        "pid": os.getpid(),
+                        "version": BOT_VERSION,
+                        "panel": PANEL,
+                        "service": "wg-panel-telegram",
+                    },
+                    headers=csrf_headers(),
+                    timeout=12,
+                )
 
-            _post(
-                f"{PANEL}/api/telegram/heartbeat",
-                session=hb_session,
-                json={"pid": os.getpid(), "version": BOT_VERSION},
+            response.raise_for_status()
+            consecutive_failures = 0
+
+        except Exception as exc:
+            consecutive_failures += 1
+            detail = ""
+            response_obj = getattr(exc, "response", None)
+            if response_obj is not None:
+                try:
+                    detail = (
+                        f" HTTP {response_obj.status_code}: "
+                        f"{(response_obj.text or '')[:300]}"
+                    )
+                except Exception:
+                    detail = ""
+
+            log_fn = logging.warning if consecutive_failures <= 3 else logging.error
+            log_fn(
+                "Telegram heartbeat failed (%s consecutive): %s%s",
+                consecutive_failures,
+                exc,
+                detail,
             )
-        except Exception as e:
-            logging.debug("Heartbeat failed: %s", e)
 
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=HB_SEC)
+            await asyncio.wait_for(
+                stop_event.wait(),
+                timeout=HB_SEC,
+            )
         except asyncio.TimeoutError:
             pass
+
 
 async def on_error(update, context):
     logging.exception("Unhandled bot error: %s", getattr(context, "error", None))
 
 def _spawn(name: str, coro):
-    t = asyncio.create_task(coro)
-    def _done(fut: asyncio.Task):
-        try:
-            fut.result()
-        except Exception:
-            logging.exception("%s crashed", name)
-    t.add_done_callback(_done)
-    return t
+    task = asyncio.create_task(
+        coro,
+        name=name,
+    )
 
+    def _task_finished(done_task: asyncio.Task):
+        try:
+            exception = done_task.exception()
+
+        except asyncio.CancelledError:
+            return
+
+        except Exception:
+            logging.exception(
+                "Could not inspect background task %s",
+                name,
+            )
+            return
+
+        if exception is not None:
+            logging.error(
+                "Background task %s stopped unexpectedly",
+                name,
+                exc_info=(
+                    type(exception),
+                    exception,
+                    exception.__traceback__,
+                ),
+            )
+
+        else:
+            logging.warning(
+                "Background task %s exited unexpectedly without an exception",
+                name,
+            )
+
+    task.add_done_callback(
+        _task_finished
+    )
+
+    return task
 
 TG_BACKUP_TICK_SEC = 30
 TG_BACKUP_SCHEDULER_ENABLED = os.getenv("TG_BACKUP_SCHEDULER_ENABLED", "0") == "1"  
@@ -6302,46 +6743,302 @@ async def _on_shutdown(application):
         for task in pending:
             task.cancel()
 
+@admin_only
+async def cmd_peers(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    await send_text(
+        update,
+        (
+            "◇ <b>Peers</b>\n"
+            "<i>Create, search, inspect, and manage WireGuard peers.</i>"
+        ),
+        kb=KB.peers_index(),
+    )
+
+
+@admin_only
+async def cmd_profiles(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    await send_text(
+        update,
+        (
+            "✦ <b>Peer profiles</b>\n"
+            "<i>Manage reusable settings for peer creation.</i>"
+        ),
+        kb=KB.profiles_menu(),
+    )
+
+
+@admin_only
+async def cmd_backups(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    update.callback_query = None
+
+    await send_text(
+        update,
+        (
+            "▣ <b>Backups</b>\n"
+            "<i>Open backup management from the button below.</i>"
+        ),
+        kb=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "▣ Open backups",
+                    callback_data="backup:menu",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⌂ Main menu",
+                    callback_data="home:main",
+                )
+            ],
+        ]),
+    )
+
+
+@admin_only
+async def cmd_admin_panel(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    await send_text(
+        update,
+        (
+            "♙ <b>Administrators</b>\n"
+            "<i>View and manage authorized Telegram administrators.</i>"
+        ),
+        kb=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "♙ Open administrators",
+                    callback_data="home:admins",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "⌂ Main menu",
+                    callback_data="home:main",
+                )
+            ],
+        ]),
+    )
 
 def main():
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(message)s",
+    )
 
     token = load_bot_token()
-    if not token: raise SystemExit("Missing bot token. Save it in Panel → Settings → Telegram.")
-    if not API_KEY and not USE_PANEL_SESSION: raise SystemExit("Missing PANEL_API_KEY/API_KEY. The bot requires the panel API key.")
-    logging.info("Starting WG Panel Telegram bot %s",BOT_VERSION)
-    logging.info("Panel API target: %s",PANEL)
 
-    app = (
+    if not token:
+        raise SystemExit(
+            "Missing bot token. "
+            "Save it in Panel → Settings → Telegram."
+        )
+
+    if not API_KEY and not USE_PANEL_SESSION:
+        raise SystemExit(
+            "Missing PANEL_API_KEY/API_KEY. "
+            "The bot requires the panel API key."
+        )
+
+    logging.info(
+        "Starting WG Panel Telegram bot %s",
+        BOT_VERSION,
+    )
+
+    logging.info(
+        "Panel API target: %s",
+        PANEL,
+    )
+
+    application = (
         Application.builder()
         .token(token)
-        .post_init(_on_startup)      
-        .post_shutdown(_on_shutdown) 
+        .post_init(_on_startup)
+        .post_shutdown(_on_shutdown)
         .build()
     )
 
-    app.add_error_handler(on_error)
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("menu", start))
-    app.add_handler(CommandHandler("home", start))
-    app.add_handler(CommandHandler("help", start))
-    app.add_handler(CommandHandler("id", cmd_id))
-    app.add_handler(CommandHandler("admins", cmd_admins))
-    app.add_handler(CommandHandler("reload_admins", cmd_reload_admins))
-    app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CommandHandler("updates", cmd_updates))
-    app.add_handler(CommandHandler("subscriptions", cmd_subscriptions))
-    app.add_handler(CommandHandler("clients", cmd_clients))
-    app.add_handler(CommandHandler("settings", cmd_settings))
-    app.add_handler(CallbackQueryHandler(on_cb))
-    app.add_handler(MessageHandler(filters.Document.ALL, on_doc))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    application.add_error_handler(
+        on_error
+    )
 
-    root_logger=logging.getLogger()
-    if not any(isinstance(handler,PanelLogHandler) for handler in root_logger.handlers):
-        panel_handler=PanelLogHandler(admin_id="bot",admin_username="bot"); panel_handler.setFormatter(logging.Formatter("%(name)s - %(message)s")); root_logger.addHandler(panel_handler)
-    app.run_polling(allowed_updates=Update.ALL_TYPES,drop_pending_updates=False,close_loop=True)
+    application.add_handler(
+        CommandHandler(
+            [
+                "start",
+                "menu",
+                "home",
+                "help",
+            ],
+            start,
+        )
+    )
 
+    application.add_handler(
+        CommandHandler(
+            [
+                "peers",
+                "peer",
+            ],
+            cmd_peers,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            [
+                "profiles",
+                "profile",
+            ],
+            cmd_profiles,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            [
+                "subscriptions",
+                "subscription",
+                "subs",
+            ],
+            cmd_subscriptions,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            [
+                "clients",
+                "client",
+            ],
+            cmd_clients,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            [
+                "backup",
+                "backups",
+            ],
+            cmd_backups,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            [
+                "status",
+                "dashboard",
+            ],
+            cmd_status,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            [
+                "updates",
+                "update",
+            ],
+            cmd_updates,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            [
+                "settings",
+                "setting",
+            ],
+            cmd_settings,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "id",
+            cmd_id,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            [
+                "admins",
+                "administrators",
+            ],
+            cmd_admins,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "reload_admins",
+            cmd_reload_admins,
+        )
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(
+            on_cb
+        )
+    )
+
+    application.add_handler(
+        MessageHandler(
+            filters.Document.ALL,
+            on_doc,
+        )
+    )
+
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT
+            & ~filters.COMMAND,
+            on_text,
+        )
+    )
+
+    root_logger = logging.getLogger()
+
+    if not any(
+        isinstance(
+            handler,
+            PanelLogHandler,
+        )
+        for handler in root_logger.handlers
+    ):
+        panel_handler = PanelLogHandler(
+            admin_id="bot",
+            admin_username="bot",
+        )
+
+        panel_handler.setFormatter(
+            logging.Formatter(
+                "%(name)s - %(message)s"
+            )
+        )
+
+        root_logger.addHandler(
+            panel_handler
+        )
+
+    application.run_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=False,
+        close_loop=True,
+    )
 
 if __name__ == "__main__":
     main()
