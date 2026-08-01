@@ -99,6 +99,36 @@ function showToast(t='Copied'){const el=document.getElementById('toast');el.text
 async function copyText(txt){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(txt);showToast();return}}catch(e){}const ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.left='-9999px';document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();showToast()}
 function configUrl(id){return `/s/${encodeURIComponent(TOKEN)}/inbound/${id}/config`}
 function qrUrl(id){return `/s/${encodeURIComponent(TOKEN)}/inbound/${id}/qr`}
+function safeConfName(value){
+  const clean=String(value||'wireguard').trim().replace(/[^A-Za-z0-9_.-]+/g,'_').replace(/^[._]+|[._]+$/g,'');
+  return `${clean||'wireguard'}.conf`;
+}
+async function downloadConfigFile(url, filename){
+  try{
+    const r=await fetch(url,{cache:'no-store',credentials:'same-origin',headers:{Accept:'application/octet-stream,text/plain;q=0.9,*/*;q=0.8'}});
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    const raw=await r.blob();
+    const blob=new Blob([raw],{type:'application/octet-stream'});
+    const objectUrl=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=objectUrl;
+    a.download=safeConfName(filename);
+    a.style.display='none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(()=>URL.revokeObjectURL(objectUrl),1500);
+    showToast('Config downloaded');
+  }catch(err){
+    console.error(err);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=safeConfName(filename);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+}
 function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function isCountryCode(cc){return /^[A-Z]{2}$/.test(String(cc||'').trim().toUpperCase())}
 function flagImgUrl(cc){cc=String(cc||'').trim().toLowerCase();return /^[a-z]{2}$/.test(cc)?`https://flagcdn.com/w40/${cc}.png`:''}
@@ -203,7 +233,7 @@ function renderLocations(){
         <span class="status ${(l.status||'').toLowerCase()}">${escapeHtml(l.status||'offline')}</span>
       </div>
       <div class="loc-actions">
-        <a class="btn small" href="${configUrl(l.link_id)}" download><i class="fas fa-download"></i> Download</a>
+        <a class="btn small" href="${configUrl(l.link_id)}" data-download-config="${l.link_id}" data-filename="${escapeHtml(l.name||'wireguard')}" download="${escapeHtml(l.name||'wireguard')}.conf"><i class="fas fa-download"></i> Download</a>
         <button class="btn small secondary" data-qr="${l.link_id}"><i class="fas fa-qrcode"></i> QR</button>
         <button class="btn small secondary" data-copy="${location.origin}${configUrl(l.link_id)}"><i class="fas fa-copy"></i> Link</button>
       </div>
@@ -300,6 +330,17 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden) refreshDa
 document.getElementById('copy-sub').onclick = () => copyText(CONFIG_URL);
 
 document.addEventListener('click', e => {
+  const dl = e.target.closest('[data-download-config]');
+  if (dl) {
+    e.preventDefault();
+    e.stopPropagation();
+    downloadConfigFile(
+      dl.getAttribute('href'),
+      dl.dataset.filename || 'wireguard'
+    );
+    return;
+  }
+
   const q = e.target.closest('[data-qr]');
   if (q) {
     e.preventDefault();
@@ -329,31 +370,128 @@ document.addEventListener('click', e => {
   }
 });
 
-(function theme(){const root=document.documentElement,btn=document.getElementById('theme-toggle');const saved=localStorage.getItem('sub-theme')||'dark';root.dataset.theme=saved;btn.innerHTML=saved==='dark'?'<i class="fas fa-moon"></i>':'<i class="fas fa-sun"></i>';btn.onclick=()=>{const next=root.dataset.theme==='dark'?'light':'dark';root.dataset.theme=next;localStorage.setItem('sub-theme',next);btn.innerHTML=next==='dark'?'<i class="fas fa-moon"></i>':'<i class="fas fa-sun"></i>'}})();
-(function particles(){const c=document.getElementById('particles'),ctx=c.getContext('2d');let w,h,pts=[];function resize(){w=c.width=innerWidth*devicePixelRatio;h=c.height=innerHeight*devicePixelRatio;pts=Array.from({length:Math.min(90,Math.floor(innerWidth/18))},()=>({x:Math.random()*w,y:Math.random()*h,vx:(Math.random()-.5)*.24*devicePixelRatio,vy:(Math.random()-.5)*.24*devicePixelRatio,r:(Math.random()*1.7+0.7)*devicePixelRatio}))}addEventListener('resize',resize);resize();function tick(){ctx.clearRect(0,0,w,h);const light=document.documentElement.dataset.theme==='light';ctx.fillStyle=light?'rgba(37,99,235,.32)':'rgba(210,230,255,.55)';ctx.strokeStyle=light?'rgba(37,99,235,.10)':'rgba(150,190,255,.11)';for(const p of pts){p.x+=p.vx;p.y+=p.vy;if(p.x<0||p.x>w)p.vx*=-1;if(p.y<0||p.y>h)p.vy*=-1;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill()}for(let i=0;i<pts.length;i++)for(let j=i+1;j<pts.length;j++){const a=pts[i],b=pts[j],dx=a.x-b.x,dy=a.y-b.y,d=Math.hypot(dx,dy),max=125*devicePixelRatio;if(d<max){ctx.globalAlpha=1-d/max;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();ctx.globalAlpha=1}}requestAnimationFrame(tick)}tick()})();
+(function theme(){
+  const root=document.documentElement;
+  const btn=document.getElementById('theme-toggle');
+  if(!btn) return;
+
+  const valid=v=>v==='dark'||v==='light';
+  const preferred=()=>matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';
+  const current=()=>valid(root.dataset.theme)?root.dataset.theme:preferred();
+
+  function apply(theme, persist=false){
+    root.dataset.theme=theme;
+    root.style.colorScheme=theme;
+    const meta=document.getElementById('browser-theme-color');
+    if(meta) meta.setAttribute('content', theme==='light' ? '#e5f2ff' : '#06101e');
+    if(persist){
+      try{localStorage.setItem('sub-theme',theme)}catch(_){}
+    }
+    const toLight=theme==='dark';
+    btn.innerHTML=`<i class="fas fa-${toLight?'sun':'moon'}"></i>`;
+    btn.title=toLight?'Switch to light mode':'Switch to dark mode';
+    btn.setAttribute('aria-label',btn.title);
+    btn.setAttribute('aria-pressed',String(theme==='light'));
+  }
+
+  apply(current());
+  btn.addEventListener('click',()=>apply(current()==='dark'?'light':'dark',true));
+})();
+(function particles(){
+  const c=document.getElementById('particles');
+  if(!c) return;
+  const ctx=c.getContext('2d',{alpha:true});
+  if(!ctx) return;
+  const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let cssW=0,cssH=0,dpr=1,pts=[],raf=0,last=0;
+  function resize(){
+    cssW=Math.max(1,innerWidth); cssH=Math.max(1,innerHeight);
+    dpr=Math.min(2,devicePixelRatio||1);
+    c.width=Math.round(cssW*dpr); c.height=Math.round(cssH*dpr);
+    c.style.width=cssW+'px'; c.style.height=cssH+'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    const area=cssW*cssH;
+    const count=reduced?22:Math.max(34,Math.min(90,Math.round(area/14500)));
+    pts=Array.from({length:count},()=>({
+      x:Math.random()*cssW,y:Math.random()*cssH,
+      vx:(Math.random()-.5)*(reduced?.035:.12),
+      vy:(Math.random()-.5)*(reduced?.035:.12),
+      r:.75+Math.random()*1.45
+    }));
+  }
+  function frame(now){
+    if(document.hidden){raf=requestAnimationFrame(frame);return;}
+    if(now-last<33){raf=requestAnimationFrame(frame);return;}
+    last=now; ctx.clearRect(0,0,cssW,cssH);
+    const light=document.documentElement.dataset.theme==='light';
+    const lightDots=['20,102,230','0,166,166','109,65,210'];
+    const darkDots=['190,220,255','116,232,203','168,145,255'];
+    const palette=light?lightDots:darkDots;
+    for(let i=0;i<pts.length;i++){
+      const p=pts[i];
+      p.x+=p.vx; p.y+=p.vy;
+      if(p.x<-8)p.x=cssW+8; else if(p.x>cssW+8)p.x=-8;
+      if(p.y<-8)p.y=cssH+8; else if(p.y>cssH+8)p.y=-8;
+      const rgb=palette[i%palette.length];
+      ctx.fillStyle=`rgba(${rgb},${light?.58:.82})`;
+      ctx.beginPath();ctx.arc(p.x,p.y,p.r*(light?1.05:1),0,Math.PI*2);ctx.fill();
+    }
+    const max=cssW<560?118:138;
+    ctx.lineWidth=light?.78:.68;
+    for(let i=0;i<pts.length;i++) for(let j=i+1;j<pts.length;j++){
+      const a=pts[i],b=pts[j],d=Math.hypot(a.x-b.x,a.y-b.y);
+      if(d<max){
+        const rgb=palette[(i+j)%palette.length];
+        ctx.strokeStyle=`rgba(${rgb},${(1-d/max)*(light?.23:.30)})`;
+        ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();
+      }
+    }
+    raf=requestAnimationFrame(frame);
+  }
+  addEventListener('resize',resize,{passive:true});
+  resize(); raf=requestAnimationFrame(frame);
+})();
 
 function setRing(id,p,label,color){const el=document.getElementById(id);if(!el)return;p=Math.max(0,Math.min(100,Math.round(Number(p||0))));el.style.setProperty('--p',p);if(color)el.style.setProperty('--c',color);const s=el.querySelector('span');if(s)s.textContent=label||`${p}%`;}
 function renderStats(){
   const used=Number(DATA.used_bytes||0), lim=DATA.limit_bytes==null?null:Number(DATA.limit_bytes||0), remaining=lim==null?null:Math.max(0,lim-used);
   const usedPct=lim?pct(used,lim):0, remPct=lim?Math.max(0,100-usedPct):100;
   const set=(id,t)=>{const el=document.getElementById(id); if(el) el.textContent=t;};
+  const dataCard=document.querySelector('.data-stat');
+  const timeCard=document.querySelector('.time-stat');
+  if(dataCard) dataCard.classList.toggle('is-unlimited',lim==null);
+  if(timeCard) timeCard.classList.toggle('is-unlimited',DATA.ttl_seconds==null);
+
   set('data-human', lim?fmtBytes(remaining):'Unlimited');
   set('data-sub', lim?`${fmtBytes(used)} used from ${fmtBytes(lim)}`:`${fmtBytes(used)} used · no data cap`);
   const dataMeter=document.getElementById('data-meter'); if(dataMeter)dataMeter.style.width=Math.max(3,remPct)+'%';
-  const dataWrap=document.getElementById('data-meter-wrap'); if(dataWrap)dataWrap.classList.toggle('warn',!!(lim&&remPct<=20));
-  set('data-pct-label', lim?`${remPct}% left`:'Unlimited'); setRing('data-ring',remPct,lim?`${remPct}%`:'∞','#62e6b0');
-  set('time-human', humanTTL(DATA.ttl_seconds)); set('time-sub', timeSubText()); set('timer-mode', timeModeText());
-  const timePct=DATA.ttl_seconds==null?100:(Number(DATA.ttl_seconds)<=0?0:100); const tm=document.getElementById('time-meter'); if(tm)tm.style.width=Math.max(3,timePct)+'%'; setRing('time-ring',timePct,DATA.ttl_seconds==null?'∞':`${timePct}%`,'#60a5fa');
-  const n=(DATA.locations||[]).length; set('cfg-count',`${n} config${n===1?'':'s'}`); set('hero-state',clientStateText()); set('hero-time',humanTTL(DATA.ttl_seconds)); set('hero-data',lim?`${fmtBytes(remaining)} left`:'Unlimited data'); set('hero-configs',`${n} config${n===1?'':'s'}`);
+  const dataWrap=document.getElementById('data-meter-wrap'); if(dataWrap){dataWrap.classList.toggle('warn',!!(lim&&remPct<=20));dataWrap.hidden=lim==null;}
+  set('data-pct-label', lim?`${remPct}% left`:'No cap'); setRing('data-ring',remPct,lim?`${remPct}%`:'∞','#62e6b0');
+
+  const unlimitedTime=DATA.ttl_seconds==null;
+  set('time-human', unlimitedTime ? (DATA.first_used_at?'Active':'No timer') : humanTTL(DATA.ttl_seconds));
+  set('time-sub', timeSubText()); set('timer-mode', timeModeText());
+  const timePct=unlimitedTime?100:(Number(DATA.ttl_seconds)<=0?0:100);
+  const tm=document.getElementById('time-meter'); if(tm){tm.style.width=Math.max(3,timePct)+'%';tm.parentElement.hidden=unlimitedTime;}
+  setRing('time-ring',timePct,unlimitedTime?'∞':`${timePct}%`,'#60a5fa');
+
+  const n=(DATA.locations||[]).length;
+  set('cfg-count',`${n} config${n===1?'':'s'}`);
+  set('hero-state',clientStateText());
+  set('hero-time',unlimitedTime?(DATA.first_used_at?'Active':'No timer'):humanTTL(DATA.ttl_seconds));
+  set('hero-data',lim?`${fmtBytes(remaining)} left`:'Unlimited');
+  set('hero-configs',`${n} config${n===1?'':'s'}`);
 }
 function renderLocations(){
   const grid=document.getElementById('loc-grid'); const locs=DATA.locations||[]; if(!grid)return;
   if(!locs.length){grid.innerHTML='<div class="empty">No configs are available.</div>';return}
   grid.innerHTML=locs.map(l=>{const initialLoc=cleanLocation(l), initialFlag=l.flag||'🌐', initialFlagHtml=flagMarkup(l.country_code,initialFlag), host=publicAddress(l), needsGeo=!!host;return `<article class="loc" data-link="${l.link_id}" data-host="${escapeHtml(host)}" data-geo="${needsGeo?'1':'0'}">
     <div class="loc-top"><div class="loc-main"><div class="loc-name"><span class="loc-flag">${initialFlagHtml}</span><span class="loc-title">${escapeHtml(l.name||'Config')}</span></div><span class="loc-country">${needsGeo?'Detecting location...':escapeHtml(initialLoc)}</span></div><span class="status ${(l.status||'').toLowerCase()}">${escapeHtml(l.status||'offline')}</span></div>
-    <div class="loc-actions"><a class="loc-btn" href="${configUrl(l.link_id)}" download title="Download config" aria-label="Download config"><i class="fas fa-download"></i></a><button class="loc-btn" data-qr="${l.link_id}" title="Show QR" aria-label="Show QR"><i class="fas fa-qrcode"></i></button><button class="loc-btn" data-copy="${location.origin}${configUrl(l.link_id)}" title="Copy config link" aria-label="Copy config link"><i class="fas fa-copy"></i></button></div>
+    <div class="loc-actions"><a class="loc-btn loc-download" href="${configUrl(l.link_id)}" data-download-config="${l.link_id}" data-filename="${escapeHtml(l.name||'wireguard')}" download="${escapeHtml(l.name||'wireguard')}.conf" title="Download config" aria-label="Download config"><i class="fas fa-download"></i><span>Download</span></a><button class="loc-btn" data-qr="${l.link_id}" title="Show QR" aria-label="Show QR"><i class="fas fa-qrcode"></i></button><button class="loc-btn" data-copy="${location.origin}${configUrl(l.link_id)}" title="Copy config link" aria-label="Copy config link"><i class="fas fa-copy"></i></button></div>
     <div class="qrbox"><img alt="QR code" data-src="${qrUrl(l.link_id)}"><div class="qr-caption">Scan in WireGuard.</div></div>
   </article>`}).join(''); detectVisibleGeo();
 }
+
+
 try{document.documentElement.dataset.statStyle=(PUBLIC_SETTINGS&&PUBLIC_SETTINGS.display_mode)||document.documentElement.dataset.statStyle||'hybrid';document.documentElement.dataset.motion=(PUBLIC_SETTINGS&&PUBLIC_SETTINGS.animation)||document.documentElement.dataset.motion||'rich';}catch(_){}
 render();
