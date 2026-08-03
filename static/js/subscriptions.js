@@ -388,12 +388,14 @@ function itemSub(x){
         ? 'Node interface'
         : 'Local interface';
 
-    const address =
-      x.address ||
+    // The interface's own network, shown for orientation. The client address
+    // is chosen by the server at creation time.
+    const network =
       x.server_cidr ||
+      x.interface_address ||
       'network unavailable';
 
-    return `${source} · ${esc(address)}${
+    return `${source} · ${esc(network)}${
       x.listen_port
         ? ' · port ' + esc(x.listen_port)
         : ''
@@ -528,7 +530,7 @@ function currentSourceEntries(){
     if(!(SCOPE === 'all' || src.scope === SCOPE)) continue;
     const key = sourceKeyFromLocation(src);
     const rows = rowMap.get(key) || [];
-    const srcBlob = [src.scope, src.node_name, src.label, src.iface, src.name, src.address, src.listen_port].map(v => String(v||'').toLowerCase()).join(' ');
+    const srcBlob = [src.scope, src.node_name, src.label, src.iface, src.name, src.server_cidr, src.listen_port].map(v => String(v||'').toLowerCase()).join(' ');
     const rowBlob = rows.map(({x}) => configMatchBlob(x)).join(' ');
     if(q && !(srcBlob.includes(q) || rowBlob.includes(q))) continue;
     entries.push([key, rows, src]);
@@ -1161,9 +1163,9 @@ function subscriptionAllowedIpsWithNetworks(
 
   for (const item of items || []) {
     const network = subIpv4NetworkFromCidr(
-      item?.address ||
       item?.server_cidr ||
       item?.interface_address ||
+      item?.address ||
       item?.cidr ||
       ''
     );
@@ -1212,9 +1214,9 @@ function detectSelectedSubscriptionNetworks() {
     }
 
     addNetwork(
-      item?.address ||
       item?.server_cidr ||
       item?.interface_address ||
+      item?.address ||
       item?.cidr ||
       ''
     );
@@ -1278,8 +1280,10 @@ function payloadFromForm() {
       node_id: x.node_id,
       label: x.label,
       location: x.location,
-      address: x.address || x.server_cidr || '',
-      server_cidr: x.server_cidr || x.address || '',
+      // server_cidr is the INTERFACE address: it is used to derive the internal
+      // network only. The client address is allocated server-side, so no
+      // address is sent here.
+      server_cidr: x.server_cidr || x.interface_address || '',
       peer_name: prefix ? `${prefix}-${i+1}` : ''
     };
   });

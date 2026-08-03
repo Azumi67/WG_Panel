@@ -7,7 +7,11 @@ class PeerForm(FlaskForm):
     name                 = StringField('Friendly Name', validators=[DataRequired()])
     address              = SelectField('Peer IP Address', choices=[], validators=[DataRequired()])
     allowed_ips          = StringField('Allowed IPs', validators=[Optional()])
-    endpoint             = StringField('Endpoint (host:port)', validators=[Optional()])
+    # Server address exported in the CLIENT's [Peer] block.
+    endpoint             = StringField('Server endpoint (host:port)', validators=[Optional()])
+    # Fixed remote-client endpoint for the SERVER's [Peer] block. Normally
+    # empty: WireGuard learns a roaming client's endpoint by itself.
+    peer_endpoint        = StringField('Fixed client endpoint (advanced)', validators=[Optional()])
     persistent_keepalive = IntegerField('Keepalive (s)', default=25, validators=[Optional(), NumberRange(min=0)])
     mtu                  = IntegerField('MTU', validators=[Optional(), NumberRange(min=576, max=65535)])
     dns                  = StringField('DNS (for client)', validators=[Optional()])
