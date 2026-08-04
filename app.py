@@ -1891,33 +1891,1636 @@ def _json_save(path, data):
 
 def _load_tg_settings():
     s = _json_load(TELEGRAM_SETTINGS_FILE, {})
-
     notify = s.get('notify') or {}
+
+    defaults = {
+        'app_down': True,
+        'app_up': True,
+        'node_down': True,
+        'node_up': True,
+        'iface_down': True,
+        'iface_up': True,
+        'peer_expired': True,
+        'peer_limit': True,
+        'login_success': True,
+        'login_fail': True,
+        'suspicious_4xx': True,
+        'backup_success': False,
+        'backup_failed': True,
+        'update_success': True,
+        'update_failed': True,
+    }
 
     return {
         'enabled': bool(s.get('enabled', False)),
         'notify': {
-            'app_down': bool(
-                notify.get('app_down', True)
-            ),
-            'iface_down': bool(
-                notify.get('iface_down', True)
-            ),
-            'login_success': bool(
-                notify.get('login_success', True)
-            ),
-            'login_fail': bool(
-                notify.get('login_fail', True)
-            ),
-            'suspicious_4xx': bool(
-                notify.get('suspicious_4xx', True)
-            ),
+            key: bool(notify.get(key, default))
+            for key, default in defaults.items()
         },
-        'bot_token': (
-            s.get('bot_token')
-            or ''
-        ).strip(),
+        'bot_token': (s.get('bot_token') or '').strip(),
     }
+
+_TG_EVENT_LOCK = threading.Lock()
+_TG_EVENT_LAST = {}
+
+
+def _tg_event_escape(value) -> str:
+    import html
+
+    return html.escape(
+        str(value or ''),
+        quote=True,
+    )
+
+
+def _tg_event_enabled(event_key: str) -> bool:
+    settings = _load_tg_settings() or {}
+
+    if not settings.get('enabled'):
+        return False
+
+    notify = settings.get('notify') or {}
+
+    return bool(
+        notify.get(
+            str(event_key or '').strip(),
+            False,
+        )
+    )
+
+
+def _send_telegram_event(
+    event_key: str,
+    title: str,
+    *,
+    status: str = '',
+    details: list[tuple[str, object]] | None = None,
+    dedupe_key: str = '',
+    dedupe_seconds: int = 60,
+) -> None:
+    """
+    Send one operational Telegram event.
+
+    Telegram credentials remain on the panel. This function never sends
+    credentials to a remote node.
+
+    """
+    event_key = str(
+        event_key or ''
+    ).strip()
+
+    if not event_key:
+        return
+
+    if not _tg_event_enabled(event_key):
+        return
+
+    settings = _load_tg_settings() or {}
+
+    bot_token = (
+        settings.get('bot_token')
+        or ''
+    ).strip()
+
+    recipients = [
+        str(
+            admin.get('id')
+            or ''
+        ).strip()
+        for admin in (
+            _load_tg_admins()
+            or []
+        )
+        if (
+            str(
+                admin.get('id')
+                or ''
+            ).strip()
+            and not admin.get('muted')
+        )
+    ]
+
+    if not bot_token or not recipients:
+        return
+
+    event_identity = (
+        event_key,
+        str(
+            dedupe_key
+            or title
+            or event_key
+        ).strip(),
+    )
+
+    monotonic_now = time.monotonic()
+
+    with _TG_EVENT_LOCK:
+        previous_time = float(
+            _TG_EVENT_LAST.get(
+                event_identity
+            )
+            or 0
+        )
+
+        if (
+            dedupe_seconds > 0
+            and monotonic_now - previous_time
+            < dedupe_seconds
+        ):
+            return
+
+        _TG_EVENT_LAST[
+            event_identity
+        ] = monotonic_now
+
+        if len(_TG_EVENT_LAST) > 1000:
+            expiry_time = (
+                monotonic_now
+                - 86400
+            )
+
+            for old_key, old_time in list(
+                _TG_EVENT_LAST.items()
+            ):
+                if float(
+                    old_time or 0
+                ) < expiry_time:
+                    _TG_EVENT_LAST.pop(
+                        old_key,
+                        None,
+                    )
+
+    timestamp = datetime.now(
+        timezone.utc
+    ).strftime(
+        '%Y-%m-%d %H:%M:%S UTC'
+    )
+
+    message_lines = [
+        f'<b>{_tg_event_escape(title)}</b>',
+        '',
+    ]
+
+    if status:
+        message_lines.append(
+            '◆ <b>Status</b>  '
+            f'{_tg_event_escape(status)}'
+        )
+
+    for label, value in (
+        details or []
+    ):
+        if value in (
+            None,
+            '',
+        ):
+            continue
+
+        message_lines.append(
+            f'◇ <b>{_tg_event_escape(label)}</b>  '
+            f'<code>{_tg_event_escape(value)}</code>'
+        )
+
+    message_lines.extend([
+        (
+            '◷ <b>Time</b>  '
+            f'<code>{_tg_event_escape(timestamp)}</code>'
+        ),
+        (
+            '⌂ <b>Panel host</b>  '
+            f'<code>{_tg_event_escape(socket.gethostname())}</code>'
+        ),
+    ])
+
+    message_text = '\n'.join(
+        message_lines
+    )
+
+    flask_app = (
+        current_app
+        ._get_current_object()
+    )
+
+    def worker():
+        with flask_app.app_context():
+            for chat_id in recipients:
+                try:
+                    response = requests.post(
+                        (
+                            'https://api.telegram.org/'
+                            f'bot{bot_token}/sendMessage'
+                        ),
+                        json={
+                            'chat_id': chat_id,
+                            'text': message_text,
+                            'parse_mode': 'HTML',
+                            'disable_web_page_preview': True,
+                        },
+                        timeout=8,
+                    )
+
+                    if not response.ok:
+                        flask_app.logger.warning(
+                            'Telegram event failed: '
+                            'event=%s chat_id=%s '
+                            'status=%s response=%s',
+                            event_key,
+                            chat_id,
+                            response.status_code,
+                            response.text[:300],
+                        )
+
+                except Exception:
+                    flask_app.logger.debug(
+                        'Telegram event failed: '
+                        'event=%s chat_id=%s',
+                        event_key,
+                        chat_id,
+                        exc_info=True,
+                    )
+
+    threading.Thread(
+        target=worker,
+        name=(
+            'telegram-event-'
+            + event_key[:40]
+        ),
+        daemon=True,
+    ).start()
+
+# ========================
+# HTTP 4xx burst monitor
+# ========================
+
+_HTTP_4XX_STATE_FILE = os.path.join(
+    app.instance_path,
+    "suspicious_4xx_state.json",
+)
+
+_HTTP_4XX_LOCK_FILE = os.path.join(
+    app.instance_path,
+    "suspicious_4xx_state.lock",
+)
+
+_HTTP_4XX_STATUSES = {
+    401,
+    403,
+    404,
+    405,
+    429,
+}
+
+_HTTP_4XX_WINDOW_SEC = 60
+_HTTP_4XX_THRESHOLD = 20
+_HTTP_4XX_COOLDOWN_SEC = 600
+
+
+def _suspicious_4xx_client_ip() -> str:
+    """
+    Return the effective request IP.
+
+    """
+    candidates = [
+        request.headers.get(
+            "CF-Connecting-IP"
+        ),
+        request.headers.get(
+            "True-Client-IP"
+        ),
+        request.headers.get(
+            "X-Real-IP"
+        ),
+        request.remote_addr,
+    ]
+
+    for candidate in candidates:
+        value = str(
+            candidate or ""
+        ).strip()
+
+        if value:
+            return value[:128]
+
+    return "unknown"
+
+
+def _suspicious_4xx_ignored_path(
+    path: str,
+) -> bool:
+    """
+    Ignore routine asset and monitor paths.
+
+    Failed requests to application/API routes will be counted..
+    """
+    normalized = str(
+        path or ""
+    ).strip().lower()
+
+    if normalized.startswith(
+        "/static/"
+    ):
+        return True
+
+    if normalized in {
+        "/favicon.ico",
+        "/robots.txt",
+        "/api/healthz",
+        "/api/telegram/heartbeat",
+    }:
+        return True
+
+    return False
+
+
+def _record_suspicious_4xx(
+    response,
+) -> None:
+    status_code = int(
+        getattr(
+            response,
+            "status_code",
+            0,
+        )
+        or 0
+    )
+
+    if status_code not in _HTTP_4XX_STATUSES:
+        return
+
+    request_path = str(
+        request.path or ""
+    )
+
+    if _suspicious_4xx_ignored_path(
+        request_path
+    ):
+        return
+
+    if not _tg_event_enabled(
+        "suspicious_4xx"
+    ):
+        return
+
+    client_ip = (
+        _suspicious_4xx_client_ip()
+    )
+
+    current_epoch = int(
+        time.time()
+    )
+
+    lock_handle = None
+    should_notify = False
+    request_count = 0
+    status_counts = {}
+    recent_paths = []
+
+    try:
+        lock_handle = open(
+            _HTTP_4XX_LOCK_FILE,
+            "a+",
+        )
+
+        fcntl.flock(
+            lock_handle.fileno(),
+            fcntl.LOCK_EX,
+        )
+
+        state = _json_load(
+            _HTTP_4XX_STATE_FILE,
+            {},
+        )
+
+        if not isinstance(
+            state,
+            dict,
+        ):
+            state = {}
+
+        clients = state.get(
+            "clients"
+        )
+
+        if not isinstance(
+            clients,
+            dict,
+        ):
+            clients = {}
+
+        window_start = (
+            current_epoch
+            - _HTTP_4XX_WINDOW_SEC
+        )
+
+        # Remove stale IP records.
+        for old_ip, old_record in list(
+            clients.items()
+        ):
+            if not isinstance(
+                old_record,
+                dict,
+            ):
+                clients.pop(
+                    old_ip,
+                    None,
+                )
+                continue
+
+            last_seen = int(
+                old_record.get(
+                    "last_seen"
+                )
+                or 0
+            )
+
+            if (
+                current_epoch - last_seen
+                > max(
+                    _HTTP_4XX_COOLDOWN_SEC * 2,
+                    3600,
+                )
+            ):
+                clients.pop(
+                    old_ip,
+                    None,
+                )
+
+        record = clients.get(
+            client_ip
+        )
+
+        if not isinstance(
+            record,
+            dict,
+        ):
+            record = {
+                "events": [],
+                "last_alert": 0,
+                "last_seen": 0,
+            }
+
+        events = record.get(
+            "events"
+        )
+
+        if not isinstance(
+            events,
+            list,
+        ):
+            events = []
+
+        cleaned_events = []
+
+        for event_record in events:
+            if not isinstance(
+                event_record,
+                dict,
+            ):
+                continue
+
+            event_time = int(
+                event_record.get(
+                    "ts"
+                )
+                or 0
+            )
+
+            if event_time >= window_start:
+                cleaned_events.append(
+                    event_record
+                )
+
+        cleaned_events.append({
+            "ts": current_epoch,
+            "status": status_code,
+            "path": request_path[:240],
+            "method": str(
+                request.method or ""
+            )[:16],
+        })
+
+        cleaned_events = (
+            cleaned_events[-200:]
+        )
+
+        record["events"] = (
+            cleaned_events
+        )
+        record["last_seen"] = (
+            current_epoch
+        )
+
+        request_count = len(
+            cleaned_events
+        )
+
+        for event_record in cleaned_events:
+            status_text = str(
+                event_record.get(
+                    "status"
+                )
+                or "unknown"
+            )
+
+            status_counts[
+                status_text
+            ] = (
+                status_counts.get(
+                    status_text,
+                    0,
+                )
+                + 1
+            )
+
+        recent_paths = []
+
+        for event_record in reversed(
+            cleaned_events
+        ):
+            path_value = str(
+                event_record.get(
+                    "path"
+                )
+                or ""
+            ).strip()
+
+            if (
+                path_value
+                and path_value
+                not in recent_paths
+            ):
+                recent_paths.append(
+                    path_value
+                )
+
+            if len(recent_paths) >= 5:
+                break
+
+        last_alert = int(
+            record.get(
+                "last_alert"
+            )
+            or 0
+        )
+
+        if (
+            request_count
+            >= _HTTP_4XX_THRESHOLD
+            and (
+                current_epoch - last_alert
+                >= _HTTP_4XX_COOLDOWN_SEC
+            )
+        ):
+            should_notify = True
+            record["last_alert"] = (
+                current_epoch
+            )
+
+        clients[client_ip] = record
+
+        state["clients"] = clients
+        state["updated_at"] = (
+            current_epoch
+        )
+
+        _json_save(
+            _HTTP_4XX_STATE_FILE,
+            state,
+        )
+
+    except Exception:
+        app.logger.debug(
+            "Suspicious 4xx tracker failed",
+            exc_info=True,
+        )
+
+    finally:
+        if lock_handle:
+            try:
+                fcntl.flock(
+                    lock_handle.fileno(),
+                    fcntl.LOCK_UN,
+                )
+            except Exception:
+                pass
+
+            try:
+                lock_handle.close()
+            except Exception:
+                pass
+
+    if not should_notify:
+        return
+
+    status_summary = ", ".join(
+        f"{key}×{value}"
+        for key, value in sorted(
+            status_counts.items()
+        )
+    )
+
+    path_summary = " | ".join(
+        recent_paths
+    )
+
+    _send_telegram_event(
+        "suspicious_4xx",
+        "● Suspicious HTTP activity detected",
+        status="Threshold reached",
+        details=[
+            (
+                "Client IP",
+                client_ip,
+            ),
+            (
+                "Requests",
+                request_count,
+            ),
+            (
+                "Window seconds",
+                _HTTP_4XX_WINDOW_SEC,
+            ),
+            (
+                "Statuses",
+                status_summary,
+            ),
+            (
+                "Recent paths",
+                path_summary[:700],
+            ),
+            (
+                "Last method",
+                request.method,
+            ),
+            (
+                "User agent",
+                str(
+                    request.headers.get(
+                        "User-Agent"
+                    )
+                    or ""
+                )[:300],
+            ),
+        ],
+        dedupe_key=(
+            f"suspicious-4xx:{client_ip}"
+        ),
+        dedupe_seconds=(
+            _HTTP_4XX_COOLDOWN_SEC
+        ),
+    )
+
+@app.after_request
+def _suspicious_4xx_after_request(
+    response,
+):
+    """
+    Record relevant 4xx responses
+    """
+    try:
+        _record_suspicious_4xx(
+            response
+        )
+
+    except Exception:
+        app.logger.debug(
+            "Could not inspect 4xx response",
+            exc_info=True,
+        )
+
+    return response
+
+# ==================================================
+# Node and WG interface notification monitor
+# ==================================================
+
+_NODE_NOTIFY_MONITOR_STARTED = False
+_NODE_NOTIFY_MONITOR_THREAD_LOCK = threading.Lock()
+
+_NODE_NOTIFY_MONITOR_STATE_FILE = os.path.join(
+    app.instance_path,
+    'node_notification_state.json',
+)
+
+_NODE_NOTIFY_MONITOR_LOCK_FILE = os.path.join(
+    app.instance_path,
+    'node_notification_monitor.lock',
+)
+
+try:
+    _NODE_NOTIFY_INTERVAL_SEC = max(
+        15,
+        int(
+            os.getenv(
+                'WG_NODE_NOTIFY_INTERVAL_SEC',
+                '30',
+            )
+        ),
+    )
+except Exception:
+    _NODE_NOTIFY_INTERVAL_SEC = 30
+
+
+def _load_node_notification_state() -> dict:
+    state = _json_load(
+        _NODE_NOTIFY_MONITOR_STATE_FILE,
+        {},
+    )
+
+    return (
+        state
+        if isinstance(state, dict)
+        else {}
+    )
+
+
+def _save_node_notification_state(
+    state: dict,
+) -> None:
+    _json_save(
+        _NODE_NOTIFY_MONITOR_STATE_FILE,
+        state,
+    )
+
+
+def _local_notification_states() -> dict:
+    """
+    Return:
+        {
+            "wg0": {
+                "is_up": True,
+                "address": "...",
+                "listen_port": 51820
+            }
+        }
+    """
+    states = {}
+
+    interfaces = (
+        InterfaceConfig.query
+        .filter(
+            InterfaceConfig.node_id.is_(None)
+        )
+        .order_by(
+            InterfaceConfig.id.asc()
+        )
+        .all()
+    )
+
+    for interface in interfaces:
+        interface_name = (
+            getattr(
+                interface,
+                'name',
+                None,
+            )
+            or ''
+        ).strip()
+
+        if not interface_name:
+            continue
+
+        try:
+            is_up = (
+                subprocess.run(
+                    [
+                        'wg',
+                        'show',
+                        interface_name,
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=4,
+                    check=False,
+                ).returncode
+                == 0
+            )
+        except Exception:
+            is_up = False
+
+        states[interface_name] = {
+            'is_up': bool(is_up),
+            'address': (
+                getattr(
+                    interface,
+                    'address',
+                    None,
+                )
+                or ''
+            ),
+            'listen_port': (
+                getattr(
+                    interface,
+                    'listen_port',
+                    None,
+                )
+            ),
+        }
+
+    return states
+
+
+def _check_local_notifications(
+    state: dict,
+) -> None:
+    local_key = '__local_interfaces__'
+
+    previous_interfaces = (
+        state.get(local_key)
+        or {}
+    )
+
+    current_interfaces = (
+        _local_notification_states()
+    )
+
+    for interface_name, current in (
+        current_interfaces.items()
+    ):
+        current_up = bool(
+            current.get('is_up')
+        )
+
+        old_record = (
+            previous_interfaces.get(
+                interface_name
+            )
+        )
+
+        if not isinstance(old_record, dict):
+            continue
+
+        previous_up = bool(
+            old_record.get('is_up')
+        )
+
+        if previous_up and not current_up:
+            _send_telegram_event(
+                'iface_down',
+                '● WireGuard interface went down',
+                status='Down',
+                details=[
+                    ('Location', 'Local panel'),
+                    ('Interface', interface_name),
+                    (
+                        'Address',
+                        current.get('address'),
+                    ),
+                    (
+                        'Listen port',
+                        current.get('listen_port'),
+                    ),
+                ],
+                dedupe_key=(
+                    f'local-interface-down:'
+                    f'{interface_name}'
+                ),
+                dedupe_seconds=180,
+            )
+
+        elif not previous_up and current_up:
+            _send_telegram_event(
+                'iface_up',
+                '● WireGuard interface came up',
+                status='Up',
+                details=[
+                    ('Location', 'Local panel'),
+                    ('Interface', interface_name),
+                    (
+                        'Address',
+                        current.get('address'),
+                    ),
+                    (
+                        'Listen port',
+                        current.get('listen_port'),
+                    ),
+                ],
+                dedupe_key=(
+                    f'local-interface-up:'
+                    f'{interface_name}'
+                ),
+                dedupe_seconds=60,
+            )
+
+    state[local_key] = current_interfaces
+
+
+def _check_node_notifications(
+    state: dict,
+) -> None:
+    current_epoch = int(
+        time.time()
+    )
+
+    nodes = (
+        Node.query
+        .order_by(
+            Node.id.asc()
+        )
+        .all()
+    )
+
+    for node in nodes:
+        state_key = (f'node:{node.id}')
+
+        if not node.enabled:
+            state.pop(state_key,None,)
+            continue
+
+        previous = (
+            state.get(state_key)
+            or {}
+        )
+
+        previous_online = (
+            previous.get('online')
+        )
+
+        previous_interfaces = (
+            previous.get('interfaces')
+            or {}
+        )
+
+        failed_checks = int(
+            previous.get('failed_checks')
+            or 0
+        )
+
+        health = {}
+        interfaces = []
+        online_now = False
+        error_text = ''
+
+        if node.enabled:
+            try:
+                health = (
+                    node_get(
+                        node,
+                        '/api/health',
+                        timeout=6,
+                    )
+                    or {}
+                )
+
+                online_now = bool(
+                    isinstance(health, dict)
+                    and health.get(
+                        'ok',
+                        True,
+                    )
+                )
+
+                if online_now:
+               # New node agents include interface state directly
+               # in /api/health. avoid response
+                    if isinstance(health,dict,):
+                        health_interfaces = (health.get("interfaces"))
+
+                        if isinstance(health_interfaces,list,):
+                            interfaces = (health_interfaces)
+
+                    # Compatibility fallback for older node agents
+                    if not interfaces:
+                        try:
+                            interface_response = (node_get(node,"/api/interfaces?fast=1",timeout=10,)or {})
+                            if isinstance(interface_response,dict,):
+                                fallback_interfaces = (interface_response.get("interfaces")or [])
+
+                            if isinstance(fallback_interfaces,list,):
+                                interfaces = (fallback_interfaces)
+
+                        except Exception as exc:
+                            app.logger.debug(
+                                "Could not load fallback interface "
+                                "state for node %s: %s",
+                                node.id,
+                                exc,
+                            )
+
+            except Exception as exc:
+                online_now = False
+                error_text = str(exc)
+
+        if online_now:
+            failed_checks = 0
+            confirmed_online = True
+        else:
+            failed_checks += 1
+
+            confirmed_online = (
+                failed_checks < 2
+            )
+
+        first_observation = (
+            previous_online is None
+        )
+
+        if first_observation:
+            previous_online = (
+                confirmed_online
+            )
+
+        if (
+            not first_observation
+            and previous_online
+            and not confirmed_online
+        ):
+            _send_telegram_event(
+                'node_down',
+                '● Node went offline',
+                status='Offline',
+                details=[
+                    ('Node', node.name),
+                    (
+                        'Address',
+                        node.base_url,
+                    ),
+                    (
+                        'Failed checks',
+                        failed_checks,
+                    ),
+                    (
+                        'Error',
+                        error_text[:240],
+                    ),
+                ],
+                dedupe_key=(
+                    f'node-down:{node.id}'
+                ),
+                dedupe_seconds=300,
+            )
+
+        elif (
+            not first_observation
+            and not previous_online
+            and confirmed_online
+        ):
+            offline_since = int(
+                previous.get(
+                    'offline_since'
+                )
+                or current_epoch
+            )
+
+            outage_seconds = max(
+                0,
+                current_epoch
+                - offline_since,
+            )
+
+            _send_telegram_event(
+                'node_up',
+                '● Node came online',
+                status='Recovered',
+                details=[
+                    ('Node', node.name),
+                    (
+                        'Address',
+                        node.base_url,
+                    ),
+                    (
+                        'Outage seconds',
+                        outage_seconds,
+                    ),
+                    (
+                        'Remote host',
+                        (
+                            health.get('host')
+                            if isinstance(
+                                health,
+                                dict,
+                            )
+                            else ''
+                        ),
+                    ),
+                    (
+                        'Public IP',
+                        (
+                            health.get(
+                                'public_ipv4'
+                            )
+                            if isinstance(
+                                health,
+                                dict,
+                            )
+                            else ''
+                        ),
+                    ),
+                ],
+                dedupe_key=(
+                    f'node-up:{node.id}'
+                ),
+                dedupe_seconds=60,
+            )
+
+        current_interfaces = {}
+
+        if confirmed_online:
+            for interface in interfaces:
+                if not isinstance(
+                    interface,
+                    dict,
+                ):
+                    continue
+
+                interface_name = str(
+                    interface.get('name')
+                    or ''
+                ).strip()
+
+                if not interface_name:
+                    continue
+
+                is_up = bool(
+                    interface.get('is_up')
+                )
+
+                current_interfaces[
+                    interface_name
+                ] = {
+                    'is_up': is_up,
+                    'address': (
+                        interface.get('address')
+                        or ''
+                    ),
+                    'listen_port': (
+                        interface.get(
+                            'listen_port'
+                        )
+                    ),
+                }
+
+                old_interface = (
+                    previous_interfaces.get(
+                        interface_name
+                    )
+                )
+
+                if not isinstance(
+                    old_interface,
+                    dict,
+                ):
+                    continue
+
+                old_up = bool(
+                    old_interface.get(
+                        'is_up'
+                    )
+                )
+
+                if old_up and not is_up:
+                    _send_telegram_event(
+                        'iface_down',
+                        '● WireGuard interface went down',
+                        status='Down',
+                        details=[
+                            ('Node', node.name),
+                            (
+                                'Interface',
+                                interface_name,
+                            ),
+                            (
+                                'Address',
+                                interface.get(
+                                    'address'
+                                ),
+                            ),
+                            (
+                                'Listen port',
+                                interface.get(
+                                    'listen_port'
+                                ),
+                            ),
+                        ],
+                        dedupe_key=(
+                            f'node-interface-down:'
+                            f'{node.id}:'
+                            f'{interface_name}'
+                        ),
+                        dedupe_seconds=180,
+                    )
+
+                elif not old_up and is_up:
+                    _send_telegram_event(
+                        'iface_up',
+                        '● WireGuard interface came up',
+                        status='Up',
+                        details=[
+                            ('Node', node.name),
+                            (
+                                'Interface',
+                                interface_name,
+                            ),
+                            (
+                                'Address',
+                                interface.get(
+                                    'address'
+                                ),
+                            ),
+                            (
+                                'Listen port',
+                                interface.get(
+                                    'listen_port'
+                                ),
+                            ),
+                        ],
+                        dedupe_key=(
+                            f'node-interface-up:'
+                            f'{node.id}:'
+                            f'{interface_name}'
+                        ),
+                        dedupe_seconds=60,
+                    )
+
+        if confirmed_online:
+            offline_since = 0
+        else:
+            offline_since = int(
+                previous.get(
+                    'offline_since'
+                )
+                or current_epoch
+            )
+
+        state[state_key] = {
+            'online': bool(
+                confirmed_online
+            ),
+            'failed_checks': (
+                failed_checks
+            ),
+            'offline_since': (
+                offline_since
+            ),
+            'interfaces': (
+                current_interfaces
+                if confirmed_online
+                else previous_interfaces
+            ),
+            'checked_at': (
+                current_epoch
+            ),
+        }
+
+def _check_update_notifications(
+    state: dict,
+) -> None:
+    update_state_key = (
+        '__update_notifications__'
+    )
+
+    previous = (
+        state.get(update_state_key)
+        or {}
+    )
+
+    current = {}
+
+    # --------------------------
+    # Local panel update
+    # --------------------------
+    try:
+        panel_status = (
+            _read_update_status(
+                UPDATE_STATUS_FILE
+            )
+            or {}
+        )
+    except Exception:
+        panel_status = {}
+
+    panel_state = str(
+        panel_status.get('status')
+        or ''
+    ).strip().lower()
+
+    panel_stage = str(
+        panel_status.get('stage')
+        or ''
+    ).strip().lower()
+
+    panel_identity = (
+        panel_status.get('target')
+        or panel_status.get('revision')
+        or panel_status.get('message')
+        or panel_state
+    )
+
+    current['panel'] = {
+        'status': panel_state,
+        'stage': panel_stage,
+        'identity': str(
+            panel_identity or ''
+        ),
+    }
+
+    previous_panel = (
+        previous.get('panel')
+        or {}
+    )
+
+    previous_panel_state = str(
+        previous_panel.get('status')
+        or ''
+    ).strip().lower()
+
+    if (
+        previous_panel_state
+        and previous_panel_state
+        != panel_state
+    ):
+        if panel_state in {
+            'success',
+            'succeeded',
+            'complete',
+            'completed',
+            'done',
+        }:
+            _send_telegram_event(
+                'update_success',
+                '● Panel update completed',
+                status='Completed',
+                details=[
+                    (
+                        'Target',
+                        panel_status.get(
+                            'target'
+                        ),
+                    ),
+                    (
+                        'Message',
+                        panel_status.get(
+                            'message'
+                        ),
+                    ),
+                ],
+                dedupe_key=(
+                    'panel-update-success:'
+                    + str(panel_identity)
+                ),
+                dedupe_seconds=0,
+            )
+
+        elif panel_state in {
+            'failed',
+            'error',
+            'rollback_failed',
+        }:
+            _send_telegram_event(
+                'update_failed',
+                '● Panel update or rollback failed',
+                status='Failed',
+                details=[
+                    ('Stage', panel_stage),
+                    (
+                        'Message',
+                        panel_status.get(
+                            'message'
+                        ),
+                    ),
+                    (
+                        'Error',
+                        panel_status.get(
+                            'detail'
+                        )
+                        or panel_status.get(
+                            'error'
+                        ),
+                    ),
+                ],
+                dedupe_key=(
+                    'panel-update-failed:'
+                    + str(panel_identity)
+                ),
+                dedupe_seconds=300,
+            )
+
+    # --------------------------
+    # Remote node updates
+    # --------------------------
+    for node in (
+        Node.query
+        .filter_by(enabled=True)
+        .order_by(Node.id.asc())
+        .all()
+    ):
+        node_key = (
+            f'node:{node.id}'
+        )
+
+        try:
+            node_status = (
+                node_get(
+                    node,
+                    '/api/system/update/status',
+                    timeout=7,
+                )
+                or {}
+            )
+        except Exception:
+            continue
+
+        node_state = str(
+            node_status.get('status')
+            or ''
+        ).strip().lower()
+
+        node_stage = str(
+            node_status.get('stage')
+            or ''
+        ).strip().lower()
+
+        node_identity = (
+            node_status.get('target')
+            or node_status.get('revision')
+            or node_status.get('message')
+            or node_state
+        )
+
+        current[node_key] = {
+            'status': node_state,
+            'stage': node_stage,
+            'identity': str(
+                node_identity or ''
+            ),
+        }
+
+        old_node = (
+            previous.get(node_key)
+            or {}
+        )
+
+        old_node_state = str(
+            old_node.get('status')
+            or ''
+        ).strip().lower()
+
+        if (
+            not old_node_state
+            or old_node_state
+            == node_state
+        ):
+            continue
+
+        if node_state in {
+            'success',
+            'succeeded',
+            'complete',
+            'completed',
+            'done',
+        }:
+            _send_telegram_event(
+                'update_success',
+                '● Node update completed',
+                status='Completed',
+                details=[
+                    ('Node', node.name),
+                    (
+                        'Target',
+                        node_status.get(
+                            'target'
+                        ),
+                    ),
+                    (
+                        'Message',
+                        node_status.get(
+                            'message'
+                        ),
+                    ),
+                ],
+                dedupe_key=(
+                    f'node-update-success:'
+                    f'{node.id}:'
+                    f'{node_identity}'
+                ),
+                dedupe_seconds=0,
+            )
+
+        elif node_state in {
+            'failed',
+            'error',
+            'rollback_failed',
+        }:
+            _send_telegram_event(
+                'update_failed',
+                '● Node update or rollback failed',
+                status='Failed',
+                details=[
+                    ('Node', node.name),
+                    ('Stage', node_stage),
+                    (
+                        'Message',
+                        node_status.get(
+                            'message'
+                        ),
+                    ),
+                    (
+                        'Error',
+                        node_status.get(
+                            'detail'
+                        )
+                        or node_status.get(
+                            'error'
+                        ),
+                    ),
+                ],
+                dedupe_key=(
+                    f'node-update-failed:'
+                    f'{node.id}:'
+                    f'{node_identity}'
+                ),
+                dedupe_seconds=300,
+            )
+
+    state[update_state_key] = current
+
+
+def _node_monitor_once() -> None:
+    state = (
+        _load_node_notification_state()
+    )
+
+    _check_local_notifications(
+        state
+    )
+
+    _check_node_notifications(
+        state
+    )
+
+    _check_update_notifications(
+        state
+    )
+
+    _save_node_notification_state(
+        state
+    )
+
+
+def _node_monitor_loop() -> None:
+    """
+    Only one Gunicorn worker may run this monitor.
+
+    The process-level boolean is not sufficient because Gunicorn has
+    multiple workers. The file lock prevents duplicate monitors.
+    """
+    lock_handle = None
+
+    try:
+        lock_handle = open(
+            _NODE_NOTIFY_MONITOR_LOCK_FILE,
+            'a+',
+        )
+
+        fcntl.flock(
+            lock_handle.fileno(),
+            fcntl.LOCK_EX
+            | fcntl.LOCK_NB,
+        )
+
+    except Exception:
+        if lock_handle:
+            try:
+                lock_handle.close()
+            except Exception:
+                pass
+
+        return
+
+    while True:
+        try:
+            with app.app_context():
+                _node_monitor_once()
+
+        except Exception:
+            app.logger.exception(
+                'Node notification monitor failed'
+            )
+
+        time.sleep(
+            _NODE_NOTIFY_INTERVAL_SEC
+        )
+
+
+def _node_notify_monitor() -> None:
+    global _NODE_NOTIFY_MONITOR_STARTED
+
+    with _NODE_NOTIFY_MONITOR_THREAD_LOCK:
+        if _NODE_NOTIFY_MONITOR_STARTED:
+            return
+
+        _NODE_NOTIFY_MONITOR_STARTED = True
+
+        monitor_thread = threading.Thread(
+            target=(
+                _node_monitor_loop
+            ),
+            name='node-notification-monitor',
+            daemon=True,
+        )
+
+        monitor_thread.start()
+
 
 def _save_tg_settings(partial):
     cur = _load_tg_settings()
@@ -2077,9 +3680,7 @@ def _request_device_summary() -> tuple[str, str]:
     )
 
 
-def _security_notify_enabled(
-    event_type: str,
-) -> bool:
+def _security_notify_enabled(event_type: str) -> bool:
     settings = _load_tg_settings()
 
     if not settings.get('enabled'):
@@ -2088,25 +3689,13 @@ def _security_notify_enabled(
     notify = settings.get('notify') or {}
 
     if event_type == 'login_success':
-        return bool(
-            notify.get(
-                'login_success',
-                True,
-            )
-        )
+        return bool(notify.get('login_success', True))
 
-    if event_type in {
-        'login_failed',
-        'twofa_failed',
-    }:
-        return bool(
-            notify.get(
-                'login_fail',
-                True,
-            )
-        )
+    if event_type in {'login_failed', 'twofa_failed'}:
+        return bool(notify.get('login_fail', True))
 
     return False
+
 
 
 def _send_security_notification(
@@ -4501,73 +6090,183 @@ def _send_zip_telegram(
 ) -> tuple[bool, str]:
     settings = _load_tg_settings()
 
-    if not settings.get("enabled"):
-        return False, "Telegram disabled."
+    if not settings.get('enabled'):
+        return False, 'Telegram disabled.'
 
     token = (
-        settings.get("bot_token")
-        or ""
+        settings.get('bot_token')
+        or ''
     ).strip()
 
     if not token:
-        return False, "Telegram token missing."
+        return False, 'Telegram token missing.'
 
     selected_chat_id = str(
         chat_id
         or _tg_chatid()
-        or ""
+        or ''
     ).strip()
 
     if not selected_chat_id:
-        return False, "No active Telegram admin selected."
+        return False, (
+            'No active Telegram administrator selected.'
+        )
 
     active_admin_ids = {
-        str(admin.get("id") or "").strip()
-        for admin in (_load_tg_admins() or [])
+        str(
+            admin.get('id')
+            or ''
+        ).strip()
+        for admin in (
+            _load_tg_admins()
+            or []
+        )
         if (
-            not admin.get("muted")
-            and str(admin.get("id") or "").strip()
+            not admin.get('muted')
+            and str(
+                admin.get('id')
+                or ''
+            ).strip()
         )
     }
 
     if selected_chat_id not in active_admin_ids:
         return False, (
-            "Selected Telegram recipient is not an "
-            "active panel administrator."
+            'Selected Telegram recipient is not an '
+            'active panel administrator.'
         )
+
+
+    size_bytes = len(
+        data_bytes
+        or b''
+    )
+
+    size_value = float(
+        size_bytes
+    )
+
+    size_unit = 'B'
+
+    for unit in (
+        'B',
+        'KiB',
+        'MiB',
+        'GiB',
+        'TiB',
+    ):
+        size_unit = unit
+
+        if (
+            size_value < 1024
+            or unit == 'TiB'
+        ):
+            break
+
+        size_value /= 1024.0
+
+    if size_unit == 'B':
+        size_text = (
+            f'{int(size_value)} B'
+        )
+    else:
+        size_text = (
+            f'{size_value:.1f} '
+            f'{size_unit}'
+        )
+
 
     created_at = datetime.now(
         timezone.utc
     ).strftime(
-        "%d %B %Y at %H:%M:%S UTC"
+        '%Y-%m-%d %H:%M:%S UTC'
     )
 
-    caption = (
-        "WG Panel automatic backup\n\n"
-        f"Created: {created_at}\n"
-        f"Filename: {filename}\n"
-        "Stored locally: Yes"
+    safe_filename = (
+        _tg_event_escape(
+            filename
+        )
     )
+
+    safe_size = (
+        _tg_event_escape(
+            size_text
+        )
+    )
+
+    safe_created_at = (
+        _tg_event_escape(
+            created_at
+        )
+    )
+
+    safe_panel_host = (
+        _tg_event_escape(
+            socket.gethostname()
+        )
+    )
+
+    caption = '\n'.join([
+        '▣ <b>WG Panel automatic backup</b>',
+        '<i>Scheduled protected archive</i>',
+        '',
+        '● <b>Status</b>  Completed',
+        (
+            '◇ <b>File</b>  '
+            f'<code>{safe_filename}</code>'
+        ),
+        (
+            '◇ <b>Size</b>  '
+            f'<code>{safe_size}</code>'
+        ),
+        (
+            '◇ <b>Created</b>  '
+            f'<code>{safe_created_at}</code>'
+        ),
+        (
+            '◇ <b>Stored locally</b>  '
+            'Yes'
+        ),
+        (
+            '⌂ <b>Panel host</b>  '
+            f'<code>{safe_panel_host}</code>'
+        ),
+        '',
+        (
+            '⌁ <i>Keep this archive private. '
+            'It may contain WireGuard keys, '
+            'Telegram credentials, panel settings, '
+            'and node configuration.</i>'
+        ),
+    ])
 
     try:
         response = requests.post(
             (
-                "https://api.telegram.org/"
-                f"bot{token}/sendDocument"
+                'https://api.telegram.org/'
+                f'bot{token}/sendDocument'
             ),
             data={
-                "chat_id": selected_chat_id,
-                "disable_notification": True,
-                "caption": caption,
+                'chat_id': (
+                    selected_chat_id
+                ),
+                'disable_notification': (
+                    True
+                ),
+                'parse_mode': 'HTML',
+                'caption': caption,
             },
             files={
-                "document": (
+                'document': (
                     filename,
                     data_bytes,
-                    "application/zip",
+                    'application/zip',
                 )
             },
-            timeout=(10, 120),
+            timeout=(
+                10,
+                120,
+            ),
         )
 
         try:
@@ -4575,54 +6274,67 @@ def _send_zip_telegram(
         except Exception:
             result = {}
 
-        if response.ok and result.get("ok"):
+        if (
+            response.ok
+            and isinstance(
+                result,
+                dict,
+            )
+            and result.get('ok')
+        ):
             return True, (
-                "Backup sent to Telegram admin "
-                f"{selected_chat_id}."
+                'Backup sent to Telegram '
+                f'administrator {selected_chat_id}.'
             )
 
         description = (
-            result.get("description")
-            if isinstance(result, dict)
-            else ""
+            result.get('description')
+            if isinstance(
+                result,
+                dict,
+            )
+            else ''
         )
 
-        details = (
+        detail = (
             description
             or str(result)[:300]
             or response.text[:300]
         )
 
         return False, (
-            f"Telegram error: "
-            f"{response.status_code} {details}"
+            'Telegram error: '
+            f'{response.status_code} '
+            f'{detail}'
         )
 
     except requests.exceptions.ReadTimeout:
         return False, (
-            "Telegram response timed out after upload. "
-            "The backup may still have been delivered."
+            'Telegram response timed out after upload. '
+            'The backup may still have been delivered.'
         )
 
     except requests.exceptions.ConnectTimeout:
         return False, (
-            "Could not connect to Telegram "
-            "within the timeout."
+            'Could not connect to Telegram '
+            'within the timeout.'
         )
 
     except requests.exceptions.RequestException as exc:
         return False, (
-            f"Telegram request error: {exc}"
+            'Telegram request error: '
+            f'{exc}'
         )
 
     except Exception as exc:
         current_app.logger.exception(
-            "Unexpected Telegram backup error: %s",
+            'Unexpected Telegram backup error: %s',
             exc,
         )
 
         return False, (
-            f"Telegram exception: {exc}"
+            'Telegram exception: '
+            f'{exc}'
         )
 
 @app.get('/api/backup/db')
@@ -5045,6 +6757,7 @@ def backup_full():
     selected_chat_id = (request.args.get("chat_id")or "").strip()
 
     node_wg_results = []
+    saved_auto_backup = None
 
     mem = BytesIO()
 
@@ -5197,15 +6910,16 @@ def backup_full():
     # -----------------------------
     if auto_flag:
         try:
-            sched = _load_backup_schedule()
-            keep = int(sched.get("keep", 7))
+            schedule = (_load_backup_schedule())
+            keep = int(schedule.get("keep",7,))
         except Exception:
             keep = 7
 
         try:
-            _save_autobackup(data, keep=keep)
+            saved_auto_backup = (_save_autobackup(data,keep=keep,))
         except Exception as e:
-            current_app.logger.debug("auto backup store failed: %s", e)
+            saved_auto_backup = None
+            current_app.logger.exception("Automatic backup storage failed: %s",exc,)
 
     # -----------------------------
     # Send to Telegram
@@ -5275,11 +6989,73 @@ def backup_full():
 
     resp.headers['X-Backup-Kind'] = 'full'
     resp.headers['X-Backup-Timestamp'] = ts
-    resp.headers['X-Backup-WG'] = '1' if include_wg else '0'
-    resp.headers['X-Backup-TG'] = '1' if send_tg else '0'
-    resp.headers['X-Backup-AUTO'] = '1' if auto_flag else '0'
-    resp.headers['X-Backup-Node-WG'] = str(len(node_wg_results or []))
-    resp.headers['X-Backup-Node-ENV'] = str(node_env_count)
+    resp.headers['X-Backup-WG'] = (
+        '1'
+        if include_wg
+        else '0'
+    )
+    resp.headers['X-Backup-TG'] = (
+       '1'
+       if send_tg
+       else '0'
+    )
+    resp.headers['X-Backup-AUTO'] = (
+        '1'
+        if auto_flag
+        else '0'
+    )
+    resp.headers['X-Backup-Node-WG'] = str(
+        len(
+            node_wg_results
+            or []
+        )
+    )
+    resp.headers['X-Backup-Node-ENV'] = str(
+        node_env_count
+    ) 
+
+    if isinstance(
+        saved_auto_backup,
+        dict,
+    ):
+        saved_name = str(
+            saved_auto_backup.get(
+                'name'
+            )
+            or ''
+        ).strip()
+
+        try:
+            saved_size = int(
+                saved_auto_backup.get(
+                    'size'
+                )
+                or 0
+            )
+        except Exception:
+            saved_size = 0
+
+        try:
+            saved_timestamp = int(saved_auto_backup.get('ts')or 0)
+        except Exception:
+            saved_timestamp = 0
+
+        if saved_name:
+            resp.headers[
+                'X-Backup-Saved-Name'
+            ] = saved_name
+
+        resp.headers[
+            'X-Backup-Saved-Size'
+        ] = str(
+            saved_size
+        )
+
+        resp.headers[
+            'X-Backup-Saved-Timestamp'
+        ] = str(
+            saved_timestamp
+        )
 
     return resp
 
@@ -5681,33 +7457,38 @@ def _backup_due_slot(
 def _run_scheduled_backup(
     sched: dict,
     slot: str,
-) -> None:
+) -> dict:
     """
     Create the same complete ZIP used by Run once.
     """
     from urllib.parse import urlencode
 
     query = {
-        'auto': '1',
-        'wg': (
-            '1'
-            if sched.get('include_wg', True)
-            else '0'
-        ),
-        'tg': (
-            '1'
+        "auto": "1",
+        "wg": (
+            "1"
             if sched.get(
-                'send_to_telegram',
+                "include_wg",
+                True,
+            )
+            else "0"
+        ),
+        "tg": (
+            "1"
+            if sched.get(
+                "send_to_telegram",
                 False,
             )
-            else '0'
+            else "0"
         ),
     }
 
     request_path = (
-        '/api/backup/full?'
+        "/api/backup/full?"
         + urlencode(query)
     )
+
+    backup_metadata = {}
 
     with app.test_request_context(
         request_path
@@ -5716,7 +7497,7 @@ def _run_scheduled_backup(
 
         while hasattr(
             backup_function,
-            '__wrapped__',
+            "__wrapped__",
         ):
             backup_function = (
                 backup_function.__wrapped__
@@ -5724,31 +7505,120 @@ def _run_scheduled_backup(
 
         response = backup_function()
 
-        status_code = getattr(
+        if isinstance(
             response,
-            'status_code',
-            200,
+            tuple,
+        ):
+            flask_response = response[0]
+            tuple_status = (
+                response[1]
+                if len(response) > 1
+                else None
+            )
+        else:
+            flask_response = response
+            tuple_status = None
+
+        status_code = int(
+            tuple_status
+            or getattr(
+                flask_response,
+                "status_code",
+                200,
+            )
+            or 200
         )
 
-        if int(status_code or 200) >= 400:
+        if status_code >= 400:
             raise RuntimeError(
-                'backup endpoint returned '
-                f'HTTP {status_code}'
+                "backup endpoint returned "
+                f"HTTP {status_code}"
             )
+
+        headers = getattr(
+            flask_response,
+            "headers",
+            {},
+        )
+
+        saved_name = str(
+            headers.get(
+                "X-Backup-Saved-Name"
+            )
+            or ""
+        ).strip()
+
+        try:
+            saved_size = int(
+                headers.get(
+                    "X-Backup-Saved-Size"
+                )
+                or 0
+            )
+        except Exception:
+            saved_size = 0
+
+        try:
+            saved_timestamp = int(
+                headers.get(
+                    "X-Backup-Saved-Timestamp"
+                )
+                or 0
+            )
+        except Exception:
+            saved_timestamp = 0
+
+        if not saved_name:
+            raise RuntimeError(
+                "The backup response did not confirm "
+                "a locally saved automatic archive."
+            )
+
+        backup_metadata = {
+            "filename": saved_name,
+            "name": saved_name,
+            "size": saved_size,
+            "size_bytes": saved_size,
+            "timestamp": saved_timestamp,
+        }
 
     state = _json_load(
         _BACKUP_SCHEDULER_STATE_FILE,
         {},
     )
 
+    if not isinstance(
+        state,
+        dict,
+    ):
+        state = {}
+
+    completed_at = (
+        datetime.utcnow()
+        .isoformat(
+            timespec="seconds"
+        )
+        + "Z"
+    )
+
     state.update({
-        'last_slot': slot,
-        'last_success': (
-            datetime.utcnow()
-            .isoformat(timespec='seconds')
-            + 'Z'
+        "last_slot": slot,
+        "last_success": completed_at,
+        "last_success_at": completed_at,
+        "last_file": (
+            backup_metadata.get(
+                "filename"
+            )
+            or ""
         ),
-        'last_error': '',
+        "last_size": int(
+            backup_metadata.get(
+                "size"
+            )
+            or 0
+        ),
+        "last_error": "",
+        "last_error_at": "",
     })
 
     _json_save(
@@ -5756,16 +7626,16 @@ def _run_scheduled_backup(
         state,
     )
 
+    return backup_metadata
 
 def _backup_scheduler_loop():
     """
-    Run the scheduler in only one Gunicorn worker.
+    Run the automatic backup scheduler in only one Gunicorn worker.
+
     """
     lock_handle = None
 
     try:
-        import fcntl
-
         lock_handle = open(
             _BACKUP_SCHEDULER_LOCK_FILE,
             'a+',
@@ -5773,11 +7643,11 @@ def _backup_scheduler_loop():
 
         fcntl.flock(
             lock_handle.fileno(),
-            fcntl.LOCK_EX | fcntl.LOCK_NB,
+            fcntl.LOCK_EX
+            | fcntl.LOCK_NB,
         )
 
     except Exception:
-        # Another Gunicorn worker.
         if lock_handle:
             try:
                 lock_handle.close()
@@ -5789,7 +7659,9 @@ def _backup_scheduler_loop():
     while True:
         try:
             with app.app_context():
-                schedule = _load_backup_schedule()
+                schedule = (
+                    _load_backup_schedule()
+                )
 
                 slot = _backup_due_slot(
                     schedule
@@ -5800,14 +7672,46 @@ def _backup_scheduler_loop():
                     {},
                 )
 
+                if not isinstance(
+                    state,
+                    dict,
+                ):
+                    state = {}
+
                 if (
                     slot
-                    and state.get('last_slot') != slot
+                    and state.get(
+                        'last_slot'
+                    ) != slot
                 ):
                     try:
-                        _run_scheduled_backup(
-                            schedule,
-                            slot,
+                        backup_result = (
+                            _run_scheduled_backup(
+                                schedule,
+                                slot,
+                            )
+                        )
+
+                        completed_at = (
+                            datetime.utcnow()
+                            .isoformat(
+                                timespec='seconds'
+                            )
+                            + 'Z'
+                        )
+
+                        state.update({
+                            'last_slot': slot,
+                            'last_success_at': (
+                                completed_at
+                            ),
+                            'last_error': '',
+                            'last_error_at': '',
+                        })
+
+                        _json_save(
+                            _BACKUP_SCHEDULER_STATE_FILE,
+                            state,
                         )
 
                         app.logger.info(
@@ -5816,16 +7720,93 @@ def _backup_scheduler_loop():
                             slot,
                         )
 
+                        notification_details = [
+                            (
+                                'Schedule slot',
+                                slot,
+                            ),
+                            (
+                                'Completed at',
+                                completed_at,
+                            ),
+                        ]
+
+                        if isinstance(
+                            backup_result,
+                            dict,
+                        ):
+                            backup_filename = (
+                                backup_result.get(
+                                    'filename'
+                                )
+                                or backup_result.get(
+                                    'file'
+                                )
+                                or backup_result.get(
+                                    'name'
+                                )
+                                or ''
+                            )
+
+                            backup_size = (
+                                backup_result.get(
+                                    'size'
+                                )
+                                or backup_result.get(
+                                    'size_bytes'
+                                )
+                                or ''
+                            )
+
+                            if backup_filename:
+                                notification_details.append(
+                                    (
+                                        'File',
+                                        backup_filename,
+                                    )
+                                )
+
+                            if backup_size not in (
+                                None,
+                                '',
+                            ):
+                                notification_details.append(
+                                    (
+                                        'Size bytes',
+                                        backup_size,
+                                    )
+                                )
+
+                        _send_telegram_event(
+                            'backup_success',
+                            (
+                                '● Automatic backup '
+                                'completed'
+                            ),
+                            status='Completed',
+                            details=notification_details,
+                            dedupe_key=(
+                                f'backup-success:{slot}'
+                            ),
+                            dedupe_seconds=0,
+                        )
+
                     except Exception as exc:
+                        failed_at = (
+                            datetime.utcnow()
+                            .isoformat(
+                                timespec='seconds'
+                            )
+                            + 'Z'
+                        )
+
                         state.update({
                             'last_slot': slot,
-                            'last_error': str(exc),
+                            'last_error': str(
+                                exc
+                            ),
                             'last_error_at': (
-                                datetime.utcnow()
-                                .isoformat(
-                                    timespec='seconds'
-                                )
-                                + 'Z'
+                                failed_at
                             ),
                         })
 
@@ -5841,6 +7822,35 @@ def _backup_scheduler_loop():
                             exc,
                         )
 
+                        _send_telegram_event(
+                            'backup_failed',
+                            (
+                                '● Automatic backup '
+                                'failed'
+                            ),
+                            status='Failed',
+                            details=[
+                                (
+                                    'Schedule slot',
+                                    slot,
+                                ),
+                                (
+                                    'Failed at',
+                                    failed_at,
+                                ),
+                                (
+                                    'Error',
+                                    str(
+                                        exc
+                                    )[:300],
+                                ),
+                            ],
+                            dedupe_key=(
+                                f'backup-failed:{slot}'
+                            ),
+                            dedupe_seconds=300,
+                        )
+
         except Exception as exc:
             try:
                 app.logger.exception(
@@ -5853,7 +7863,6 @@ def _backup_scheduler_loop():
         time.sleep(
             _BACKUP_SCHEDULER_INTERVAL_SEC
         )
-
 
 def _start_backup_scheduler():
     global _BACKUP_SCHEDULER_STARTED
@@ -6453,6 +8462,57 @@ def _wg_handshake(peer):
     except Exception:
         return 0
 
+def _wireguard_endpoint(value: str) -> str:
+
+    raw = (value or "").strip()
+
+    if not raw:
+        return ""
+
+    try:
+        host, port = _host_port(raw)
+
+        if not host or not port:
+            raise ValueError(
+                "Fixed client endpoint must use host:port format."
+            )
+
+        port = int(port)
+
+        if not 1 <= port <= 65535:
+            raise ValueError(
+                "Fixed client endpoint port must be between 1 and 65535."
+            )
+
+        try:
+            address = ipaddress.ip_address(host).compressed
+            return _norm_hostport(address, port)
+        except ValueError:
+            pass
+
+        results = socket.getaddrinfo(
+            host,
+            port,
+            type=socket.SOCK_DGRAM,
+        )
+
+        if not results:
+            raise ValueError(
+                f"Could not resolve fixed client endpoint domain: {host}"
+            )
+
+        resolved_ip = results[0][4][0]
+
+        return _norm_hostport(
+            resolved_ip,
+            port,
+        )
+
+    except Exception as exc:
+        raise RuntimeError(
+            f"Fixed client endpoint could not be resolved: {raw}. {exc}"
+        ) from exc
+    
 def _wg_enable(peer):
 
     dev = iface_devname(peer.iface)
@@ -6477,9 +8537,10 @@ def _wg_enable(peer):
     # Only an explicitly configured fixed remote-client endpoint belongs here.
     # peer.endpoint is the server's own address exported to the client and must
     # never be applied to the server-side peer.
-    fixed_endpoint = (getattr(peer, 'peer_endpoint', None) or '').strip()
+    fixed_endpoint = (getattr(peer, "peer_endpoint", None)or "").strip()
+
     if fixed_endpoint:
-        cmd += ['endpoint', fixed_endpoint]
+        cmd += ["endpoint",_wireguard_endpoint(fixed_endpoint),]
 
     if peer.persistent_keepalive:
         cmd += [
@@ -9709,6 +11770,9 @@ def _expire():
     now = now_ts()
     changed = False
 
+    # Queue Telegram messages commit succeeds
+    pending_notifications = []
+
     for peer in Peer.query.all():
 
         should_track_first_use = bool(
@@ -9732,10 +11796,14 @@ def _expire():
                 None,
             )
         ):
-            hs = _latest_handshake(peer)
+            hs = _latest_handshake(
+                peer
+            )
 
             if hs and hs > 0:
-                peer.first_used_at = from_ts(hs)
+                peer.first_used_at = from_ts(
+                    hs
+                )
 
                 if (
                     getattr(
@@ -9754,60 +11822,417 @@ def _expire():
                         False,
                     )
                 ):
-                    exp_ts = add_days_ts(
+                    first_use_expiry_ts = add_days_ts(
                         hs,
-                        float(peer.time_limit_days),
+                        float(
+                            peer.time_limit_days
+                        ),
                     )
 
                     peer.expires_at = from_ts(
-                        exp_ts
+                        first_use_expiry_ts
                     )
 
                 log_event(
                     peer,
                     'first_use',
-                    'First WireGuard handshake recorded',
+                    (
+                        'First WireGuard '
+                        'handshake recorded'
+                    ),
                 )
 
                 changed = True
 
-        if (not getattr(peer, 'start_on_first_use', False)
-            and getattr(peer, 'time_limit_days', None)
-            and not getattr(peer, 'expires_at', None)
-            and not getattr(peer, 'unlimited', False)):
-            anchor_ts = to_ts(getattr(peer, 'first_used_at', None)) or now
-            peer.expires_at = from_ts(add_days_ts(anchor_ts, float(peer.time_limit_days)))
+        if (
+            not getattr(
+                peer,
+                'start_on_first_use',
+                False,
+            )
+            and getattr(
+                peer,
+                'time_limit_days',
+                None,
+            )
+            and not getattr(
+                peer,
+                'expires_at',
+                None,
+            )
+            and not getattr(
+                peer,
+                'unlimited',
+                False,
+            )
+        ):
+            anchor_ts = (
+                to_ts(
+                    getattr(
+                        peer,
+                        'first_used_at',
+                        None,
+                    )
+                )
+                or now
+            )
+
+            peer.expires_at = from_ts(
+                add_days_ts(
+                    anchor_ts,
+                    float(
+                        peer.time_limit_days
+                    ),
+                )
+            )
+
             changed = True
 
-        is_node = getattr(getattr(peer, 'iface', None), 'node_id', None) is not None
+        interface = getattr(
+            peer,
+            'iface',
+            None,
+        )
+
+        is_node = bool(
+            getattr(
+                interface,
+                'node_id',
+                None,
+            )
+            is not None
+        )
+
         total_bytes = None
+
         if not is_node:
-            total_bytes = _wg_transfer(peer)
-            used_effective, _delta, usage_changed = _accumulate_peer_usage(peer, total_bytes)
+            total_bytes = _wg_transfer(
+                peer
+            )
+
+            (
+                used_effective,
+                _delta,
+                usage_changed,
+            ) = _accumulate_peer_usage(
+                peer,
+                total_bytes,
+            )
+
             if usage_changed:
                 changed = True
-        else:
-            used_effective = int(getattr(peer, 'used_bytes_total', 0) or 0)
 
-        exp_ts = to_ts(getattr(peer, 'expires_at', None))
-        if exp_ts and now >= exp_ts and peer.status != 'blocked':
-            _disable_peer(peer, 'expired', status='blocked')
-            log_event(peer, 'expired', f'Expired at {isoz(from_ts(exp_ts))}')
+        else:
+            used_effective = int(
+                getattr(
+                    peer,
+                    'used_bytes_total',
+                    0,
+                )
+                or 0
+            )
+
+        # -----------
+        # Time-limit 
+        # -----------
+
+        expiry_ts = to_ts(
+            getattr(
+                peer,
+                'expires_at',
+                None,
+            )
+        )
+
+        if (
+            expiry_ts
+            and now >= expiry_ts
+            and peer.status != 'blocked'
+        ):
+            disabled = _disable_peer(
+                peer,
+                'expired',
+                status='blocked',
+            )
+
+            log_event(
+                peer,
+                'expired',
+                (
+                    'Expired at '
+                    f'{isoz(from_ts(expiry_ts))}'
+                ),
+            )
+
+            if disabled:
+                peer_name = (
+                    getattr(
+                        peer,
+                        'name',
+                        None,
+                    )
+                    or getattr(
+                        peer,
+                        'friendly_name',
+                        None,
+                    )
+                    or f'Peer {peer.id}'
+                )
+
+                interface_name = (
+                    getattr(
+                        interface,
+                        'name',
+                        None,
+                    )
+                    or ''
+                )
+
+                node_name = ''
+
+                if is_node:
+                    node = getattr(
+                        interface,
+                        'node',
+                        None,
+                    )
+
+                    node_name = (
+                        getattr(
+                            node,
+                            'name',
+                            None,
+                        )
+                        or ''
+                    )
+
+                pending_notifications.append({
+                    'event_key': 'peer_expired',
+                    'title': '● Peer expired',
+                    'status': 'Disabled',
+                    'details': [
+                        (
+                            'Peer',
+                            peer_name,
+                        ),
+                        (
+                            'Location',
+                            (
+                                node_name
+                                or 'Local panel'
+                            ),
+                        ),
+                        (
+                            'Interface',
+                            interface_name,
+                        ),
+                        (
+                            'Address',
+                            getattr(
+                                peer,
+                                'address',
+                                '',
+                            ),
+                        ),
+                        (
+                            'Expired at',
+                            isoz(
+                                from_ts(
+                                    expiry_ts
+                                )
+                            ),
+                        ),
+                    ],
+                    'dedupe_key': (
+                        f'peer-expired:{peer.id}'
+                    ),
+                    'dedupe_seconds': 0,
+                })
+
             changed = True
 
-        limit_bytes = peer.limit_bytes() if hasattr(peer, 'limit_bytes') else None
-        if limit_bytes is not None and peer.status != 'blocked':
-            if used_effective >= limit_bytes:
-                if not is_node:
-                    if total_bytes is None:
-                        total_bytes = _wg_transfer(peer)
-                    _accumulate_peer_usage(peer, total_bytes)
-                _disable_peer(peer, 'limit_reached', status='blocked')
-                log_event(peer, 'limit_reached', f'Used {used_effective} bytes')
-                changed = True
+        # --------------
+        # Traffic-limit 
+        # --------------
 
-    if changed:
+        limit_bytes = (
+            peer.limit_bytes()
+            if hasattr(
+                peer,
+                'limit_bytes',
+            )
+            else None
+        )
+
+        if (
+            limit_bytes is not None
+            and peer.status != 'blocked'
+            and used_effective >= limit_bytes
+        ):
+            if not is_node:
+                if total_bytes is None:
+                    total_bytes = _wg_transfer(
+                        peer
+                    )
+
+                _accumulate_peer_usage(
+                    peer,
+                    total_bytes,
+                )
+
+            disabled = _disable_peer(
+                peer,
+                'limit_reached',
+                status='blocked',
+            )
+
+            log_event(
+                peer,
+                'limit_reached',
+                (
+                    f'Used {used_effective} bytes'
+                ),
+            )
+
+            if disabled:
+                peer_name = (
+                    getattr(
+                        peer,
+                        'name',
+                        None,
+                    )
+                    or getattr(
+                        peer,
+                        'friendly_name',
+                        None,
+                    )
+                    or f'Peer {peer.id}'
+                )
+
+                interface_name = (
+                    getattr(
+                        interface,
+                        'name',
+                        None,
+                    )
+                    or ''
+                )
+
+                node_name = ''
+
+                if is_node:
+                    node = getattr(
+                        interface,
+                        'node',
+                        None,
+                    )
+
+                    node_name = (
+                        getattr(
+                            node,
+                            'name',
+                            None,
+                        )
+                        or ''
+                    )
+
+                pending_notifications.append({
+                    'event_key': 'peer_limit',
+                    'title': (
+                        '● Peer traffic limit reached'
+                    ),
+                    'status': 'Disabled',
+                    'details': [
+                        (
+                            'Peer',
+                            peer_name,
+                        ),
+                        (
+                            'Location',
+                            (
+                                node_name
+                                or 'Local panel'
+                            ),
+                        ),
+                        (
+                            'Interface',
+                            interface_name,
+                        ),
+                        (
+                            'Address',
+                            getattr(
+                                peer,
+                                'address',
+                                '',
+                            ),
+                        ),
+                        (
+                            'Used bytes',
+                            used_effective,
+                        ),
+                        (
+                            'Limit bytes',
+                            limit_bytes,
+                        ),
+                    ],
+                    'dedupe_key': (
+                        f'peer-limit:{peer.id}'
+                    ),
+                    'dedupe_seconds': 0,
+                })
+
+            changed = True
+
+    if not changed:
+        return
+
+    try:
         db.session.commit()
+
+    except Exception:
+        db.session.rollback()
+
+        app.logger.exception(
+            'Peer expiry and limit enforcement '
+            'could not be committed'
+        )
+
+        return
+
+    # Send only after the database state is safely committed.
+    for notification in pending_notifications:
+        try:
+            _send_telegram_event(
+                notification['event_key'],
+                notification['title'],
+                status=notification.get(
+                    'status',
+                    '',
+                ),
+                details=notification.get(
+                    'details',
+                    [],
+                ),
+                dedupe_key=notification.get(
+                    'dedupe_key',
+                    '',
+                ),
+                dedupe_seconds=int(
+                    notification.get(
+                        'dedupe_seconds',
+                        60,
+                    )
+                ),
+            )
+
+        except Exception:
+            app.logger.exception(
+                'Could not queue Telegram peer '
+                'enforcement notification: %s',
+                notification.get(
+                    'event_key',
+                ),
+            )
 
 _EXPIRY_THREAD_STARTED = False
 _EXPIRY_LOCK = threading.Lock()
@@ -20009,6 +22434,8 @@ def subscription_public_inbound_geo(token, link_id):
 _start_retention()
 _start_expiry_enforcer()
 _start_backup_scheduler()
+_node_notify_monitor()
+
 if __name__ == "__main__":
 
     import multiprocessing, ssl
