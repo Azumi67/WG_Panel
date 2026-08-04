@@ -818,44 +818,146 @@ def diagnostics(g):
     update = g["panel_update_status"]()
     tg = _local_telegram_settings(g)
     admins = g["current_admins_full"]()
-    notify = (tg.get("notify") or {}) if isinstance(tg, dict) else {}
+    notify = (
+        (tg.get("notify") or {})
+        if isinstance(tg, dict)
+        else {}
+    )
 
-    installed = str(version.get("current") or g.get("PROJECT_VERSION") or "unknown")
+    installed = str(
+        version.get("current")
+        or g.get("PROJECT_VERSION")
+        or "unknown"
+    )
     latest = str(version.get("latest") or "")
     update_state = str(update.get("status") or "idle").lower()
-    updater_text = "Ready" if update_state == "idle" else update_state.replace("_", " ").title()
-    enabled_count = sum(1 for key in ("app_down","iface_down","login_success","login_fail","suspicious_4xx") if notify.get(key))
+    updater_text = (
+        "Ready"
+        if update_state == "idle"
+        else update_state.replace("_", " ").title()
+    )
+
+    groups = (
+        (
+            "Panel and nodes",
+            (
+                ("app_down", "Panel stopped / unreachable"),
+                ("app_up", "Panel started / recovered"),
+                ("node_down", "Node went offline"),
+                ("node_up", "Node came online"),
+            ),
+        ),
+        (
+            "WireGuard",
+            (
+                ("iface_down", "Interface went down"),
+                ("iface_up", "Interface came up"),
+                ("peer_expired", "Peer expired"),
+                ("peer_limit", "Peer traffic limit reached"),
+            ),
+        ),
+        (
+            "Security",
+            (
+                ("login_success", "Successful admin login"),
+                ("login_fail", "Failed login / 2FA"),
+                ("suspicious_4xx", "Suspicious 4xx activity"),
+            ),
+        ),
+        (
+            "Backups and updates",
+            (
+                ("backup_success", "Backup completed"),
+                ("backup_failed", "Backup failed"),
+                ("update_success", "Update completed"),
+                ("update_failed", "Update / rollback failed"),
+            ),
+        ),
+    )
+
+    all_keys = [
+        key
+        for _group, items in groups
+        for key, _label in items
+    ]
+    enabled_count = sum(
+        1
+        for key in all_keys
+        if bool(notify.get(key))
+    )
 
     lines = [
         "⚙ <b>Settings</b>",
         "<i>Bot integration and protected panel controls</i>",
         "",
         "<b>Telegram integration</b>",
-        f"{'●' if tg.get('enabled') else '○'} Service       {'Enabled' if tg.get('enabled') else 'Disabled'}",
-        f"{'●' if tg.get('bot_token') else '○'} Bot token     {'Configured' if tg.get('bot_token') else 'Missing'}",
+        (
+            f"{'●' if tg.get('enabled') else '○'} "
+            f"Service       "
+            f"{'Enabled' if tg.get('enabled') else 'Disabled'}"
+        ),
+        (
+            f"{'●' if tg.get('bot_token') else '○'} "
+            f"Bot token     "
+            f"{'Configured' if tg.get('bot_token') else 'Missing'}"
+        ),
         f"♙ Administrators <code>{len(admins)}</code>",
-        f"✦ Alerts         <code>{enabled_count}/5</code> enabled",
+        f"◇ Rules          <code>{enabled_count}/{len(all_keys)}</code> enabled",
         "",
         "<b>Panel runtime</b>",
         f"◇ Installed      <code>v{_html(g, installed)}</code>",
-        f"↥ Available      <code>{('v'+_html(g, latest)) if latest else 'not detected'}</code>",
+        (
+            f"↥ Available      "
+            f"<code>{('v' + _html(g, latest)) if latest else 'not detected'}</code>"
+        ),
         f"◷ Updater        {_html(g, updater_text)}",
-        "",
-        "<b>Notification policy</b>",
-        f"{'●' if notify.get('app_down') else '○'} Panel availability",
-        f"{'●' if notify.get('iface_down') else '○'} Interface failures",
-        f"{'●' if notify.get('login_success') else '○'} Successful logins",
-        f"{'●' if notify.get('login_fail') else '○'} Failed logins / 2FA",
-        f"{'●' if notify.get('suspicious_4xx') else '○'} Suspicious requests",
-        "",
-        "<i>TLS, ports, certificates, and account security remain in the authenticated web panel.</i>",
     ]
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚙ Open panel settings", url=f"{g['PANEL'].rstrip('/')}/settings")],
-        [InlineKeyboardButton("↥ Update center", callback_data="home:system"), InlineKeyboardButton("♙ Administrators", callback_data="home:admins")],
-        [InlineKeyboardButton("↻ Refresh", callback_data="home:settings"), InlineKeyboardButton("← Dashboard", callback_data="home:main")],
+    for group_name, items in groups:
+        lines.extend([
+            "",
+            f"<b>{_html(g, group_name)}</b>",
+        ])
+        for key, label in items:
+            lines.append(
+                f"{'●' if notify.get(key) else '○'} "
+                f"{_html(g, label)}"
+            )
+
+    lines.extend([
+        "",
+        "<i>TLS, ports, certificates, and account security remain in the authenticated web panel.</i>",
     ])
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "⚙ Open panel settings",
+                url=f"{g['PANEL'].rstrip('/')}/settings",
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "↥ Update center",
+                callback_data="home:system",
+            ),
+            InlineKeyboardButton(
+                "♙ Administrators",
+                callback_data="home:admins",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "↻ Refresh",
+                callback_data="home:settings",
+            ),
+            InlineKeyboardButton(
+                "← Dashboard",
+                callback_data="home:main",
+            ),
+        ],
+    ])
+
     return "\n".join(lines), keyboard
 
 
