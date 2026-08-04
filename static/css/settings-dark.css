@@ -634,3 +634,78 @@ html[data-theme="dark"] .iface-up-btn { background:#12372d !important; border-co
 html[data-theme="dark"] .iface-up-btn:hover { background:#17483a !important; }
 html[data-theme="dark"] .iface-down-btn { background:#321922 !important; border-color:#6f3445 !important; color:#ff9aae !important; }
 html[data-theme="dark"] .iface-down-btn:hover { background:#43202c !important; }
+
+
+/* Telegram notification rules */
+html[data-theme="dark"] .tg-notify-intro,
+html[data-theme="dark"] .tg-notify-group,
+html[data-theme="dark"] .tg-notify-savebar {
+  background: #0b1921 !important;
+  color: var(--set-text) !important;
+  border-color: #29434f !important;
+}
+
+html[data-theme="dark"] .tg-notify-intro {
+  background: linear-gradient(180deg, #0e2029, #0a171e) !important;
+}
+
+html[data-theme="dark"] .tg-notify-intro strong,
+html[data-theme="dark"] .tg-notify-group > header strong,
+html[data-theme="dark"] .tg-notify-copy b {
+  color: #e8f0f4 !important;
+}
+
+html[data-theme="dark"] .tg-notify-intro span,
+html[data-theme="dark"] .tg-notify-group > header small,
+html[data-theme="dark"] .tg-notify-copy small,
+html[data-theme="dark"] .tg-summary-note,
+html[data-theme="dark"] .tg-notify-savebar > span {
+  color: #91a5af !important;
+}
+
+html[data-theme="dark"] .tg-notify-group > header {
+  background: #10232c !important;
+  border-color: #29434f !important;
+}
+
+html[data-theme="dark"] .tg-notify-row {
+  background: #0b1921 !important;
+  border-color: #213944 !important;
+}
+
+html[data-theme="dark"] .tg-notify-row:hover {
+  background: #10242d !important;
+}
+
+html[data-theme="dark"] .tg-notify-row.critical {
+  box-shadow: inset 3px 0 0 #c75c68;
+}
+
+html[data-theme="dark"] .tg-notify-group-icon.system {
+  color: #9ac7ff;
+  background: #17334a;
+  border-color: #315a78;
+}
+
+html[data-theme="dark"] .tg-notify-group-icon.wireguard {
+  color: #8ee0c4;
+  background: #153b32;
+  border-color: #2d765f;
+}
+
+html[data-theme="dark"] .tg-notify-group-icon.security {
+  color: #f0cd83;
+  background: #40351c;
+  border-color: #6c592c;
+}
+
+html[data-theme="dark"] .tg-notify-group-icon.operations {
+  color: #c9afff;
+  background: #2c2441;
+  border-color: #59477b;
+}
+
+html[data-theme="dark"] .tg-notify-savebar {
+  background: rgba(11, 25, 33, .96) !important;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .35);
+}
