@@ -2811,7 +2811,14 @@ async function getShortLink(idOrPeer) {
     if (editForm.allowed_ips) editForm.allowed_ips.dataset.autoInternalNetworks = '';
     const editInternalToggle = document.getElementById('edit-include-internal-network');
     if (editInternalToggle) editInternalToggle.checked = false;
-    editForm.endpoint && (editForm.endpoint.value = p.endpoint || '');
+    // Prefill the stored value, not the resolved one: `p.endpoint` is what the
+    // peer effectively gets, and writing it back would freeze the interface
+    // default onto this peer the next time any field is saved.
+    if (editForm.endpoint) {
+      editForm.endpoint.value = p.endpoint_saved || '';
+      editForm.endpoint.placeholder = p.endpoint || 'host:port';
+    }
+    editForm.peer_endpoint && (editForm.peer_endpoint.value = p.peer_endpoint || '');
     editForm.persistent_keepalive && (editForm.persistent_keepalive.value = p.persistent_keepalive || '');
     editForm.mtu && (editForm.mtu.value = p.mtu || '');
     editForm.dns && (editForm.dns.value = p.dns || '');
@@ -3377,30 +3384,12 @@ function refreshDefaultIface(iface) {
   if (ep.dataset.lastIface !== String(SELECTED_IFACE_ID)) ep.dataset.userEdited = '0';
   if (ep.dataset.userEdited === '1') return;
 
-  const port = iface.listen_port;
-  const scopeId = getScopeId(); 
+  // Show what the interface will hand out, but leave the field empty so a
+  // blank submit stores NULL and the server-side override applies.
+  ep.value = '';
+  ep.placeholder = iface.effective_endpoint || 'host:port';
+  ep.dataset.lastIface = String(SELECTED_IFACE_ID);
 
-  if (scopeId) {
-    if (window.NODE_PUBLIC_IP && port) {
-      ep.value = `${window.NODE_PUBLIC_IP}:${port}`;
-      ep.dataset.lastIface = String(SELECTED_IFACE_ID);
-      ep.dataset.userEdited = '0';
-    }
-  } else {
-    if (port) {
-      fetch(api('/api/endpoint_presets'), { credentials: 'same-origin' })
-        .then(r => r.ok ? r.json() : null)
-        .then(j => {
-          const pub = j?.public_ipv4 || '';
-          if (pub && ep.dataset.userEdited !== '1') {
-            ep.value = `${pub}:${port}`;
-            ep.dataset.lastIface = String(SELECTED_IFACE_ID);
-            ep.dataset.userEdited = '0';
-          }
-        })
-        .catch(() => {});
-    }
-  }
   ep.addEventListener('input', () => { ep.dataset.userEdited = '1'; }, { once: true });
 }
 
@@ -3411,28 +3400,10 @@ function refreshBulkIface(iface) {
   if (input.dataset.lastIface !== String(SELECTED_IFACE_ID)) input.dataset.userEdited = '0';
   if (input.dataset.userEdited === '1') return;
 
-  const port = iface.listen_port;
-  const scopeId = getScopeId();
+  input.value = '';
+  input.placeholder = iface.effective_endpoint || 'host:port';
+  input.dataset.lastIface = String(SELECTED_IFACE_ID);
 
-  if (scopeId) {
-    if (window.NODE_PUBLIC_IP && port) {
-      input.value = `${window.NODE_PUBLIC_IP}:${port}`;
-      input.dataset.lastIface = String(SELECTED_IFACE_ID);
-      input.dataset.userEdited = '0';
-    }
-  } else {
-    fetch(api('/api/endpoint_presets'), { credentials: 'same-origin' })
-      .then(r => r.ok ? r.json() : null)
-      .then(j => {
-        const pub = j?.public_ipv4 || '';
-        if (pub && input.dataset.userEdited !== '1') {
-          input.value = `${pub}:${port}`;
-          input.dataset.lastIface = String(SELECTED_IFACE_ID);
-          input.dataset.userEdited = '0';
-        }
-      })
-      .catch(() => {});
-  }
   input.addEventListener('input', () => { input.dataset.userEdited = '1'; }, { once: true });
 }
 
@@ -3451,8 +3422,6 @@ async function refreshInterfacesUI({ keepSelection = true, updateCreate = true, 
 
     const j   = await r.json();
     const raw = Array.isArray(j.interfaces) ? j.interfaces : [];
-
-    window.NODE_PUBLIC_IP = getScopeId() ? (j.public_ipv4 || null) : null;
 
     interfaces = raw.map((it, idx) => {
       const syntheticId = scopeId ? `n${scopeId}:${it.name || idx}` : String(it.id ?? idx);
@@ -3996,15 +3965,10 @@ async function refreshBulkDefaults(iface) {
     else countInp.removeAttribute('max');
   }
 
-  try {
-    const r = await fetch(api('/api/endpoint_presets'), { credentials: 'same-origin' });
-    if (r.ok) {
-      const j = await r.json();
-      const pub = j.public_ipv4 || '';
-      const ep = $('#bulk-endpoint');
-      if (ep && !ep.value.trim() && pub && iface.listen_port) ep.value = `${pub}:${iface.listen_port}`;
-    }
-  } catch {}
+  const epBulkPreset = $('#bulk-endpoint');
+  if (epBulkPreset && !epBulkPreset.value.trim()) {
+    epBulkPreset.placeholder = iface.effective_endpoint || 'host:port';
+  }
   const mtu = $('#bulk-mtu'); if (mtu && iface.mtu != null) mtu.value = iface.mtu;
   const dns = $('#bulk-dns'); if (dns && iface.dns) dns.value = iface.dns;
 }
@@ -4571,15 +4535,18 @@ window.addEventListener('DOMContentLoaded', async () => {
     try {
       const addrSel = document.querySelector('#create-address-select, #peer-modal select[name="address"]');
 
-      const r = await fetch(apiPath('/peers'), {
+      const r = await fetch(api('/api/peers'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify({
+          scope: 'node',
+          node_id: scopeId,
           name: (fd.get('name') || '').trim(),
-          iface: SELECTED_IFACE_NAME,
+          iface_name: SELECTED_IFACE_NAME,
           address: addrSel ? addrSel.value : '', 
           endpoint: (fd.get('endpoint') || '').trim(),
+          peer_endpoint: (fd.get('peer_endpoint') || '').trim(),
           persistent_keepalive: fd.get('persistent_keepalive') || 0,
           mtu: fd.get('mtu') || null,
           dns: (fd.get('dns') || '').trim(),

@@ -196,7 +196,17 @@ def _extract_wgip(iface_name: str, target_net: ipa._BaseNetwork) -> set:
         pass
     return used
 
-def available_ips(iface_name: str, iface_addr_field: str, conf_dir: str) -> list[str]:
+MAX_AVAILABLE_IPS = 512
+
+
+def available_ips(iface_name: str, iface_addr_field: str, conf_dir: str,
+                  limit: int = MAX_AVAILABLE_IPS) -> list[str]:
+    """Return a bounded preview of free addresses without enumerating a subnet.
+
+    Allocation only needs the first free host. Bounding the public preview also
+    keeps IPv4 /8 and IPv6 /64 interfaces from allocating enormous lists while
+    still supporting them normally.
+    """
 
     ii = _primary_iface(iface_addr_field)
     if ii is None:
@@ -205,18 +215,46 @@ def available_ips(iface_name: str, iface_addr_field: str, conf_dir: str) -> list
     net = ii.network
     iface_ip = ii.ip
 
-    if net.version == 6 and net.prefixlen < 120:
-        return []  
-
     conf_path = os.path.join(conf_dir, f'{iface_name}.conf')
 
     used_hosts = set()
     used_hosts |= _extract_ips(conf_path, net)
     used_hosts |= _extract_wgip(iface_name, net)
 
-    return [f"{host}/{net.prefixlen}"
-            for host in net.hosts()
-            if host != iface_ip and host not in used_hosts]
+    result = []
+    max_items = max(1, int(limit or MAX_AVAILABLE_IPS))
+    for host in net.hosts():
+        if host == iface_ip or host in used_hosts:
+            continue
+        result.append(f"{host}/{net.prefixlen}")
+        if len(result) >= max_items:
+            break
+    return result
+
+
+def validate_requested_host_cidr(host_cidr: str, iface_addr_field: str) -> str:
+    """Validate an explicit client host against the interface network."""
+    iface = _primary_iface(iface_addr_field)
+    if iface is None:
+        raise ValueError('The interface has no usable Address setting.')
+
+    candidate = ipa.ip_interface(host_cidr)
+    host = candidate.ip
+    net = iface.network
+
+    if host.version != net.version or host not in net:
+        raise ValueError(f'{host} is outside the interface network {net}.')
+    if host == iface.ip:
+        raise ValueError(f'{host} is the interface address.')
+
+    point_to_point = 31 if net.version == 4 else 127
+    if net.prefixlen < point_to_point:
+        if host == net.network_address:
+            raise ValueError(f'{host} is the network address.')
+        if net.version == 4 and host == net.broadcast_address:
+            raise ValueError(f'{host} is the broadcast address.')
+
+    return f"{host}/{32 if host.version == 4 else 128}"
 
 def _read_iface(path):
     address = listen_port = private_key = mtu = dns = None
@@ -291,6 +329,116 @@ def _wg_conf_dir() -> str:
 
 def _iface_conf_path(name: str) -> str:
     return os.path.join(_wg_conf_dir(), f'{name}.conf')
+
+
+def _write_conf_atomic(path: str, text: str):
+    """Replace an interface config atomically, preserving its mode (0600).
+
+    A partial write here would corrupt the interface the next time wg-quick
+    reads it, so the new content always lands via a temp file plus rename.
+    """
+    import tempfile
+
+    directory = os.path.dirname(path) or '.'
+    os.makedirs(directory, exist_ok=True)
+
+    try:
+        mode = os.stat(path).st_mode & 0o777
+    except OSError:
+        mode = 0o600
+
+    fd, tmp_path = tempfile.mkstemp(prefix='.wgconf.', dir=directory)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, path)
+        tmp_path = None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+def _conf_has_peer(path: str, pub: str) -> bool:
+    """True when `path` still contains a [Peer] block for `pub`."""
+    if not os.path.isfile(path):
+        return False
+
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as handle:
+            in_peer = False
+            for raw in handle:
+                line = raw.strip()
+                if line.startswith('[') and line.endswith(']'):
+                    in_peer = (line[1:-1].lower() == 'peer')
+                    continue
+                if in_peer and line.lower().startswith('publickey') and '=' in line:
+                    if line.split('=', 1)[1].strip() == pub:
+                        return True
+    except OSError:
+        return False
+
+    return False
+
+
+def _upsert_peer_block_text(existing: str, pub: str, block_lines: list[str]) -> str:
+    """Replace ``pub``'s block once, or append it when this is a new peer."""
+    lines = (existing or '').splitlines(keepends=True)
+    out = []
+    replaced = False
+    i = 0
+
+    while i < len(lines):
+        if lines[i].strip().lower() != '[peer]':
+            out.append(lines[i])
+            i += 1
+            continue
+
+        block = [lines[i]]
+        i += 1
+        while i < len(lines) and not lines[i].strip().startswith('['):
+            block.append(lines[i])
+            i += 1
+
+        block_pub = ''
+        for line in block:
+            text = line.strip()
+            if text.lower().startswith('publickey') and '=' in text:
+                block_pub = text.split('=', 1)[1].strip()
+                break
+
+        if block_pub == pub:
+            if not replaced:
+                out.append('\n'.join(block_lines).rstrip('\n') + '\n')
+                replaced = True
+        else:
+            out.extend(block)
+
+    if not replaced:
+        prefix = ''.join(out).rstrip('\n')
+        if prefix:
+            prefix += '\n\n'
+        return prefix + '\n'.join(block_lines).rstrip('\n') + '\n'
+
+    return ''.join(out)
+
+
+def _runtime_has_peer(iface: str, pub: str) -> bool:
+    """True when `pub` is still a live peer on `iface`."""
+    try:
+        out = subprocess.check_output(
+            ['wg', 'show', iface, 'allowed-ips'],
+            stderr=subprocess.DEVNULL, timeout=4,
+        ).decode('utf-8', 'replace')
+    except Exception:
+        return False
+
+    return any(line.split('\t', 1)[0].strip() == pub for line in out.splitlines())
 
 # ------------------------------------------------------------
 # Node WireGuard .conf backup / restore
@@ -2026,13 +2174,12 @@ def add_peer():
         pub = (j.get('public_key') or '').strip()
         host_cidr = (j.get('host_cidr') or '').strip()
 
-        if not iface or not pub or not host_cidr:
-            return jsonify(error="iface, public_key, and host_cidr are required"), 400
+        if not iface or not pub:
+            return jsonify(error="iface and public_key are required"), 400
 
-        try:
-            host = hostPrefix(host_cidr)
-        except Exception as e:
-            return jsonify(error="invalid host_cidr", detail=str(e)), 400
+        # host_cidr is optional: validation/allocation happens under the same
+        # lock that installs the peer so config and runtime cannot race it.
+        host = None
 
         conf = os.path.join(WG_CONF_PATH, f'{iface}.conf')
         lock_path = conf + '.lock'
@@ -2088,33 +2235,99 @@ def add_peer():
                     pass
             return False
 
+        def _block_value(block, key):
+            wanted = key.lower()
+            for line in block or []:
+                text = line.strip()
+                if text.lower().startswith(wanted) and '=' in text:
+                    return text.split('=', 1)[1].strip()
+            return ''
+
+        def _runtime_set(wanted_host, wanted_endpoint='', wanted_keepalive=0):
+            cmd = ['wg', 'set', iface, 'peer', pub, 'allowed-ips', wanted_host]
+            if wanted_endpoint:
+                cmd += ['endpoint', wanted_endpoint]
+            if int(wanted_keepalive or 0) > 0:
+                cmd += ['persistent-keepalive', str(int(wanted_keepalive))]
+            return subprocess.run(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, timeout=12,
+            )
+
+        def _runtime_remove():
+            return subprocess.run(
+                ['wg', 'set', iface, 'peer', pub, 'remove'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, timeout=12,
+            )
+
+        def _restore_runtime(block):
+            if not block:
+                _runtime_remove()
+                return
+            old_allowed = (_block_allowed_ips(block) or [''])[0]
+            old_endpoint = _block_value(block, 'endpoint')
+            old_keepalive = _block_value(block, 'persistentkeepalive') or 0
+            _runtime_remove()
+            if old_allowed:
+                _runtime_set(old_allowed, old_endpoint, old_keepalive)
+
         with open(lock_path, 'w') as lockf:
             fcntl.flock(lockf, fcntl.LOCK_EX)
 
+            meta = _read_iface(conf) if os.path.exists(conf) else None
+            if not meta:
+                return jsonify(
+                    error="interface_conf_not_found",
+                    detail=f"{conf} does not exist. Create the interface first."
+                ), 404
+
+            if host_cidr:
+                try:
+                    host = validate_requested_host_cidr(host_cidr, meta['address'])
+                except Exception as e:
+                    return jsonify(error="invalid_host_cidr", detail=str(e)), 400
+
             blocks = _peer_blocks_from_conf(conf)
+            previous_block = next(
+                (block for block in blocks if _block_public_key(block) == pub),
+                None,
+            )
+            duplicate = previous_block is not None
 
-            for block in blocks:
-                existing_pub = _block_public_key(block)
-                if existing_pub == pub:
+            if host is None and duplicate:
+                # Updating an existing peer with no explicit address: keep the
+                # address it already has. Falling through to allocation would
+                # hand it a DIFFERENT host, because `available_ips` treats the
+                # peer's own current address as taken and excludes it - so an
+                # endpoint- or keepalive-only update would silently re-address
+                # the client and invalidate its config.
+                existing = (_block_allowed_ips(previous_block) or [''])[0]
+                if existing:
                     try:
-                        subprocess.run(
-                            ['wg', 'set', iface, 'peer', pub, 'allowed-ips', host],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            check=False,
-                            timeout=6
-                        )
+                        host = validate_requested_host_cidr(existing, meta['address'])
                     except Exception:
-                        pass
+                        # An unusable existing AllowedIPs (a route, not a host)
+                        # falls through to normal allocation below.
+                        app.logger.warning(
+                            "Peer %s on %s has an unusable AllowedIPs %r; allocating a new address",
+                            pub, iface, existing,
+                        )
+                        host = None
 
+            if host is None:
+                free = available_ips(iface, meta['address'], WG_CONF_PATH, limit=1)
+                if not free:
+                    # Distinct from a host_cidr collision (also 409): this code
+                    # tells the panel the pool is empty so it must NOT retry.
+                    # The panel maps it to `address_pool_exhausted`.
                     return jsonify(
-                        ok=True,
-                        duplicate=True,
-                        reason="public_key_already_exists",
+                        error="address_pool_exhausted",
+                        detail=f"No free client address left on {iface}.",
                         iface=iface,
-                        public_key=pub,
-                        host_cidr=host
-                    ), 200
+                    ), 409
+
+                host = hostPrefix(free[0])
 
             for block in blocks:
                 existing_pub = _block_public_key(block)
@@ -2154,55 +2367,71 @@ def add_peer():
                         stderr=(up.stderr or up.stdout or '').strip()
                     ), 500
 
-            cmd = ['wg', 'set', iface, 'peer', pub, 'allowed-ips', host]
-
             endpoint = (j.get('endpoint') or '').strip()
-            if endpoint:
-                cmd += ['endpoint', endpoint]
-
             keepalive = j.get('persistent_keepalive')
             try:
                 keepalive = int(keepalive or 0)
             except Exception:
                 keepalive = 0
 
-            if keepalive > 0:
-                cmd += ['persistent-keepalive', str(keepalive)]
+            # Removing before an update is intentional: omitting Endpoint or a
+            # keepalive must clear the previous values, which `wg set` cannot do
+            # by merely leaving those arguments out.
+            if duplicate:
+                removed = _runtime_remove()
+                if removed.returncode != 0:
+                    return jsonify(
+                        error="wg_remove_before_update_failed",
+                        stderr=(removed.stderr or removed.stdout or '').strip(),
+                    ), 500
 
-            proc = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
+            proc = _runtime_set(host, endpoint, keepalive)
 
             if proc.returncode != 0:
+                if duplicate:
+                    try:
+                        _restore_runtime(previous_block)
+                    except Exception:
+                        app.logger.exception('Could not restore peer after failed update')
                 return jsonify(
                     error="wg_set_failed",
                     stderr=(proc.stderr or '').strip()
                 ), 500
 
-            with open(conf, 'a', encoding='utf-8') as f:
-                f.write('\n[Peer]\n')
-                f.write(f'PublicKey = {pub}\n')
-                f.write(f'AllowedIPs = {host}\n')
+            block = ['', '[Peer]', f'PublicKey = {pub}', f'AllowedIPs = {host}']
 
-                if endpoint:
-                    f.write(f'Endpoint = {endpoint}\n')
+            # `endpoint` here is a fixed remote-client endpoint for the SERVER's
+            # peer block. The node's own public address must never land here.
+            if endpoint:
+                block.append(f'Endpoint = {endpoint}')
 
-                if keepalive > 0:
-                    f.write(f'PersistentKeepalive = {keepalive}\n')
+            if keepalive > 0:
+                block.append(f'PersistentKeepalive = {keepalive}')
 
-                f.write('\n')
+            block.append('')
+
+            with open(conf, 'r', encoding='utf-8', errors='ignore') as f:
+                existing = f.read()
 
             try:
-                os.chmod(conf, 0o600)
+                _write_conf_atomic(conf, _upsert_peer_block_text(existing, pub, block))
+                if not _conf_has_peer(conf, pub) or not _runtime_has_peer(iface, pub):
+                    raise RuntimeError('Peer update could not be verified in config and runtime.')
             except Exception:
-                pass
+                try:
+                    _write_conf_atomic(conf, existing)
+                except Exception:
+                    app.logger.exception('Could not restore config after peer update failure')
+                try:
+                    _restore_runtime(previous_block)
+                except Exception:
+                    app.logger.exception('Could not restore runtime after config update failure')
+                raise
 
             return jsonify(
                 ok=True,
-                duplicate=False,
+                duplicate=duplicate,
+                updated=duplicate,
                 iface=iface,
                 public_key=pub,
                 host_cidr=host
@@ -2524,32 +2753,128 @@ def disable_peer(pub):
 @app.route('/api/peer/<path:pub>', methods=['DELETE'])
 @require_api_key
 def delete_peer(pub):
+    """Remove a peer from the runtime and from every interface config.
+
+    Both layers are verified afterwards and reported separately, so the panel
+    never deletes its own row on the strength of an unconfirmed removal.
+    Each config file is rewritten atomically under its own interface lock.
+    """
+    import fcntl
+
+    pub = (pub or '').strip()
+    if not pub:
+        return jsonify(ok=False, error='public_key_required'), 400
+
+    conf_dir = _wg_conf_dir()
+    errors = []
+    runtime_removed = False
+    config_removed = False
+    runtime_ifaces = []
+
     try:
-        dump = subprocess.check_output(['wg','show','all','dump']).decode().splitlines()
+        dump = subprocess.check_output(
+            ['wg', 'show', 'all', 'dump'], timeout=8
+        ).decode('utf-8', 'replace').splitlines()
         for line in dump:
             parts = line.split('\t')
-            if len(parts) == 9 and parts[1] == pub:
-                subprocess.run(['wg','set',parts[0],'peer',pub,'remove'])
-                break
-    except Exception:
-        pass
-    for fn in os.listdir(WG_CONF_PATH):
-        if not fn.endswith('.conf'): continue
-        p = os.path.join(WG_CONF_PATH, fn)
-        lines = open(p,'r').readlines()
-        out=[]; i=0
-        while i<len(lines):
-            if lines[i].strip().lower()=='[peer]':
-                block=[lines[i]]; i+=1
-                while i<len(lines) and not lines[i].strip().startswith('['):
-                    block.append(lines[i]); i+=1
-                if any(l.lower().startswith('publickey') and l.split('=',1)[1].strip()==pub for l in block):
-                    continue
-                out.extend(block)
-            else:
-                out.append(lines[i]); i+=1
-        open(p,'w').writelines(out)
-    return jsonify(ok=True)
+            if len(parts) >= 9 and parts[1] == pub:
+                runtime_ifaces.append(parts[0])
+    except Exception as e:
+        errors.append(f'could not read the WireGuard runtime: {e}')
+
+    for iface in runtime_ifaces:
+        result = subprocess.run(
+            ['wg', 'set', iface, 'peer', pub, 'remove'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=12,
+            check=False,
+        )
+        if result.returncode != 0:
+            errors.append(
+                f'{iface}: {(result.stderr or result.stdout or "wg set failed").strip()}'
+            )
+        elif _runtime_has_peer(iface, pub):
+            errors.append(f'{iface}: the peer is still present after removal')
+        else:
+            runtime_removed = True
+
+    if not runtime_ifaces and not errors:
+        # Nothing live to remove: an interface that is down is not a failure.
+        runtime_removed = True
+
+    try:
+        conf_names = [fn for fn in os.listdir(conf_dir) if fn.endswith('.conf')]
+    except OSError as e:
+        return jsonify(
+            ok=False, error='conf_dir_unreadable', detail=str(e),
+            runtime_removed=runtime_removed, config_removed=False,
+        ), 500
+
+    found_in_config = False
+
+    for fn in conf_names:
+        path = os.path.join(conf_dir, fn)
+        if not _conf_has_peer(path, pub):
+            continue
+
+        found_in_config = True
+        lock_path = path + '.lock'
+
+        try:
+            with open(lock_path, 'w') as lockf:
+                fcntl.flock(lockf, fcntl.LOCK_EX)
+
+                with open(path, 'r', encoding='utf-8', errors='ignore') as handle:
+                    lines = handle.readlines()
+
+                out, i = [], 0
+                while i < len(lines):
+                    if lines[i].strip().lower() == '[peer]':
+                        block = [lines[i]]
+                        i += 1
+                        while i < len(lines) and not lines[i].strip().startswith('['):
+                            block.append(lines[i])
+                            i += 1
+                        matches = any(
+                            l.strip().lower().startswith('publickey')
+                            and '=' in l
+                            and l.split('=', 1)[1].strip() == pub
+                            for l in block
+                        )
+                        if not matches:
+                            out.extend(block)
+                    else:
+                        out.append(lines[i])
+                        i += 1
+
+                _write_conf_atomic(path, ''.join(out))
+
+                if _conf_has_peer(path, pub):
+                    errors.append(f'{fn}: the peer block is still present after removal')
+                else:
+                    config_removed = True
+
+        except Exception as e:
+            errors.append(f'{fn}: {e}')
+
+    if not found_in_config and not errors:
+        config_removed = True
+
+    if errors:
+        return jsonify(
+            ok=False,
+            error='peer_removal_incomplete',
+            detail='; '.join(errors),
+            public_key=pub,
+            runtime_removed=runtime_removed,
+            config_removed=config_removed,
+        ), 500
+
+    return jsonify(
+        ok=True,
+        public_key=pub,
+        runtime_removed=runtime_removed,
+        config_removed=config_removed,
+    )
 
 @app.route('/api/iface/<name>/available_ips')
 @require_api_key

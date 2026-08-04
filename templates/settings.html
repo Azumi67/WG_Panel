@@ -334,6 +334,24 @@ html[data-theme="dark"] #set-panels .cards {
                                 <input class="input" id="i-mtu" type="number" min="576" max="9000" inputmode="numeric" placeholder="Auto">
                                 <small>Leave empty to use automatic MTU selection.</small>
                             </div>
+
+                            <div class="form-group iface-field-card is-editable">
+                                <div class="iface-field-label"><i class="fa-solid fa-tower-broadcast"></i><label for="i-ep-host">Client endpoint host</label></div>
+                                <input class="input" id="i-ep-host" placeholder="vpn.example.com">
+                                <small>Written into exported client configs. Leave both fields empty to use auto-detection.</small>
+                            </div>
+
+                            <div class="form-group iface-field-card is-editable">
+                                <div class="iface-field-label"><i class="fa-solid fa-plug-circle-bolt"></i><label for="i-ep-port">Client endpoint port</label></div>
+                                <input class="input" id="i-ep-port" type="number" min="1" max="65535" inputmode="numeric" placeholder="51820">
+                                <small>May differ from the listen port when the server is behind NAT.</small>
+                            </div>
+
+                            <div class="form-group iface-field-card is-readonly">
+                                <div class="iface-field-label"><i class="fa-solid fa-wand-magic-sparkles"></i><label for="i-ep-effective">Peers get</label></div>
+                                <input class="input" id="i-ep-effective" disabled>
+                                <small id="i-ep-source">Saving affects configs exported from now on. Already-downloaded configs are never rewritten.</small>
+                            </div>
                         </div>
 
                         <div class="iface-actionbar">
@@ -345,6 +363,9 @@ html[data-theme="dark"] #set-panels .cards {
                                 <button class="btn iface-save-btn" id="iface-save"><i class="fa-solid fa-floppy-disk"></i> Save changes</button>
                                 <button class="btn secondary iface-up-btn" id="iface-up"><i class="fa-solid fa-play"></i> Bring up</button>
                                 <button class="btn danger iface-down-btn" id="iface-down"><i class="fa-solid fa-stop"></i> Bring down</button>
+                                <button class="btn secondary" id="iface-ep-save" type="button"><i class="fa-solid fa-tower-broadcast"></i> Save endpoint</button>
+                                <button class="btn secondary" id="iface-ep-clear" type="button"><i class="fa-solid fa-eraser"></i> Clear endpoint</button>
+                                <button class="btn danger" id="iface-ep-apply" type="button"><i class="fa-solid fa-arrows-turn-to-dots"></i> Apply to existing peers</button>
                             </div>
                         </div>
                     </div>

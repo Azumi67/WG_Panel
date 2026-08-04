@@ -187,7 +187,8 @@
                 <div class="peerx-section-head"><span><i class="fas fa-network-wired"></i></span><div><b>WireGuard config</b><small>Endpoint, routing, DNS, MTU, and keepalive.</small></div></div>
                 <div class="peerx-form-grid two">
                     <div class="form-group wide auto-network-field">{{ form.allowed_ips.label }} {{ form.allowed_ips(class="input", id="peer-allowed-ips", value=(form.allowed_ips.data or "0.0.0.0/0, ::/0"), placeholder="0.0.0.0/0, ::/0") }}<label class="auto-network-toggle" for="peer-include-internal-network"><input type="checkbox" id="peer-include-internal-network"><span class="auto-network-switch" aria-hidden="true"></span><span class="auto-network-copy"><b>Include private networks</b><small>Append detected networks; disable to remove only those added automatically.</small></span></label><input type="hidden" id="peer-internal-network" value=""></div>
-                    <label class="form-group">{{ form.endpoint.label }} {{ form.endpoint(class="input", id="peer-endpoint", placeholder="host:port") }}</label>
+                    <label class="form-group">{{ form.endpoint.label }} {{ form.endpoint(class="input", id="peer-endpoint", placeholder="host:port") }}<small class="field-hint">This server's address, written into the client's config. Leave empty to use the interface default.</small></label>
+                    <label class="form-group">{{ form.peer_endpoint.label }} {{ form.peer_endpoint(class="input", id="peer-fixed-endpoint", placeholder="leave empty") }}<small class="field-hint">Advanced. Only for a client with a fixed address; WireGuard learns roaming clients on its own.</small></label>
                     <label class="form-group">{{ form.persistent_keepalive.label }} {{ form.persistent_keepalive(class="input", id="peer-keepalive", placeholder="25") }}</label>
                     <label class="form-group">{{ form.mtu.label }} {{ form.mtu(class="input", id="peer-mtu", placeholder="1280") }}</label>
                     <label class="form-group wide">{{ form.dns.label }} {{ form.dns(class="input", id="peer-dns", placeholder="1.1.1.1, 1.0.0.1") }}</label>
@@ -266,7 +267,8 @@
                       <span aria-hidden="true"></span>
                       <b>Include local networks <small>Add detected private networks without changing existing Allowed IPs.</small></b>
                     </label>
-                    <label class="form-group wide peerx-endpoint-field"><span>Endpoint</span><input name="endpoint" class="input" placeholder="host:port"></label>
+                    <label class="form-group wide peerx-endpoint-field"><span>Server endpoint</span><input name="endpoint" class="input" placeholder="host:port"><small class="field-hint">This server's address, written into the client's config. Leave empty to use the interface default.</small></label>
+                    <label class="form-group wide"><span>Fixed client endpoint</span><input name="peer_endpoint" class="input" placeholder="leave empty"><small class="field-hint">Advanced. Only for a client with a fixed address; WireGuard learns roaming clients on its own.</small></label>
                     <label class="form-group"><span>Keepalive (s)</span><input name="persistent_keepalive" type="number" class="input" placeholder="25"></label>
                     <label class="form-group"><span>MTU</span><input name="mtu" type="number" class="input" placeholder="1280"></label>
                     <label class="form-group wide"><span>DNS</span><input name="dns" class="input" placeholder="1.1.1.1, 8.8.8.8"></label>
@@ -341,7 +343,7 @@
                 <div class="peerx-section-head"><span><i class="fas fa-network-wired"></i></span><div><b>WireGuard config</b><small>Applied to every peer in this batch.</small></div></div>
                 <div class="peerx-form-grid two">
                     <div class="form-group wide auto-network-field"><span>Allowed IPs</span><input id="bulk-allowed_ips" name="allowed_ips" class="input" placeholder="0.0.0.0/0, ::/0" value="0.0.0.0/0, ::/0"><label class="auto-network-toggle" for="bulk-include-internal-network"><input type="checkbox" id="bulk-include-internal-network"><span class="auto-network-switch" aria-hidden="true"></span><span class="auto-network-copy"><b>Include private networks</b><small>Append detected networks; disable to remove only those added automatically.</small></span></label><input type="hidden" id="bulk-internal-network" value=""></div>
-                    <label class="form-group"><span>Endpoint</span><input id="bulk-endpoint" name="endpoint" class="input" placeholder="host:port"></label>
+                    <label class="form-group"><span>Endpoint</span><input id="bulk-endpoint" name="endpoint" class="input" placeholder="host:port"><small class="field-hint">Leave empty to use the interface default.</small></label>
                     <label class="form-group"><span>Keepalive (s)</span><input id="bulk-keepalive" name="persistent_keepalive" type="number" class="input" placeholder="e.g. 25"></label>
                     <label class="form-group"><span>MTU</span><input id="bulk-mtu" name="mtu" type="number" class="input" placeholder="optional"></label>
                     <label class="form-group wide"><span>DNS</span><input id="bulk-dns" name="dns" class="input" placeholder="1.1.1.1, 8.8.8.8"></label>

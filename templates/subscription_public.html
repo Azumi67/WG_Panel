@@ -3,13 +3,35 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta id="browser-theme-color" name="theme-color" content="#06101e">
   <title>{{ portal_title|default(sub.name) }} — WireGuard</title>
+  <script>
+  (() => {
+    // Keep the theme-color meta in sync with the active theme so the browser
+    // chrome matches the page in light mode too (review finding #20).
+    const META = { light: '#f4f7fb', dark: '#06101e' };
+    let theme;
+    try {
+      const saved = localStorage.getItem('sub-theme');
+      theme = saved === 'light' || saved === 'dark'
+        ? saved
+        : (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    } catch (_) {
+      theme = 'dark';
+    }
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    const m = document.getElementById('browser-theme-color');
+    if (m) m.setAttribute('content', META[theme] || META.dark);
+  })();
+</script>
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}">
   <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Regular.woff2') }}" as="font" type="font/woff2" crossorigin>
   <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-SemiBold.woff2') }}" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/subscription_public.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/subscription_public.css') }}?v=20260801-liquid-sky-v6">
 </head>
 <body>
+<div class="live-bg" aria-hidden="true"><span class="aurora aurora-a"></span><span class="aurora aurora-b"></span><span class="aurora aurora-c"></span><span class="grid-glow"></span></div>
 <canvas id="particles" aria-hidden="true"></canvas>
 <div class="wrap">
   <main class="portal-shell">
@@ -17,9 +39,9 @@
       <div class="portal-id">
         <div class="portal-icon"><i class="{{ portal_icon|default('fas fa-bolt') }}"></i></div>
         <div class="portal-copy">
-          <div class="portal-label">{{ portal_label|default('Secure WireGuard portal') }}</div>
+          <div class="portal-meta"><div class="portal-label">{{ portal_label|default('Secure WireGuard portal') }}</div><span class="hero-live"><i class="fas fa-circle"></i> Live</span></div>
           <h1 id="sub-name">{{ portal_title|default(sub.name) }}</h1>
-          <p>{{ portal_subtitle|default('Your access is ready. Install WireGuard, then scan QR or import a config.') }}</p>
+          <p>{{ portal_subtitle|default('Your account is ready. Install WireGuard, then scan QR or import a config.') }}</p>
         </div>
       </div>
       <div class="portal-actions" aria-label="Public subscription actions">
@@ -30,13 +52,17 @@
       </div>
     </section>
 
+    <div class="access-banner" id="access-banner" role="status" hidden></div>
+
     <section class="quick-stats glass" aria-label="Client summary">
       <article><span>Status</span><b id="hero-state">—</b><small id="hero-configs">—</small></article>
       <article><span>Data</span><b id="hero-data">—</b><small id="data-pct-label">—</small></article>
       <article><span>Time</span><b id="hero-time">—</b><small id="timer-mode">—</small></article>
     </section>
 
-    <section class="stats-grid" aria-label="Usage and time">
+    <section class="usage-section" aria-label="Usage and time">
+      <div class="mobile-section-title"><span><i class="fas fa-chart-pie"></i> Usage overview</span><small>Live usage</small></div>
+      <div class="stats-grid">
       <article class="stat-card glass data-stat">
         <div class="stat-head"><span><i class="fas fa-database"></i> Data remaining</span></div>
         <div class="stat-body">
@@ -51,6 +77,7 @@
           <div class="stat-copy"><div class="big" id="time-human">—</div><div class="subline" id="time-sub">—</div><div class="meter"><span id="time-meter" style="width:100%"></span></div></div>
         </div>
       </article>
+      </div>
     </section>
 
     <section class="install-card glass">
@@ -63,7 +90,7 @@
       </div>
     </section>
 
-    <section class="configs glass">
+    <section class="configs glass" id="configs-section">
       <div class="section-head"><div><h2><i class="fas fa-location-dot"></i> Configs</h2><p>Choose the closest location. Icons stay compact on every screen.</p></div><span id="cfg-count">—</span></div>
       <div id="loc-grid" class="loc-grid"></div>
     </section>
@@ -81,6 +108,7 @@
     </section>
   </main>
 </div>
+
 <div class="toast" id="toast">Copied</div>
 <script>
 let DATA = {{ data|tojson }};
@@ -89,6 +117,6 @@ const CONFIG_URL = {{ url_for('subscription_public_config', token=sub.token, _ex
 const API_URL = {{ url_for('subscription_public_api', token=sub.token, _external=True)|tojson }};
 const PUBLIC_SETTINGS = {display_mode: {{ sub_display_mode|default('hybrid')|tojson }}, animation: {{ sub_animation|default('rich')|tojson }}};
 </script>
-<script defer src="{{ url_for('static', filename='js/subscription_public.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/subscription_public.js') }}?v=20260801-liquid-sky-v6"></script>
 </body>
 </html>

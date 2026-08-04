@@ -6,10 +6,12 @@ from flask import (
     Flask, render_template, redirect, url_for, flash, request,
     jsonify, abort, current_app, make_response, send_file, session, g
 )
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, IntegrityError
 from cryptography.fernet import Fernet, InvalidToken
 from pathlib import Path
 from functools import wraps
+from contextlib import contextmanager
+import fcntl
 import zipfile, socket
 from flask_login import (
     LoginManager, UserMixin, login_user, login_required, logout_user, current_user
@@ -36,7 +38,7 @@ from models import (
 )
 from forms import PeerForm
 from auth import require_api_key, admin_required, require_api_key_or_login
-from sqlalchemy import or_, and_, text, inspect, func
+from sqlalchemy import or_, and_, text, inspect, func, event
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 from urllib.parse import urlparse, urljoin
 import secrets
@@ -231,13 +233,164 @@ def _migrate_shortlinks_json_to_db():
     )
 
 
+class SchemaMigrationError(RuntimeError):
+    """The database could not be brought up to the schema this build maps.
+
+    Fatal on purpose: see `_migrate_schema`.
+    """
+
+
 def _shortlink_schema():
     """
     short_link table & migrate old JSON links
 
+    Loads `Peer` through the ORM, so it must run after `_peer_schema()`.
     """
     db.create_all()
     _migrate_shortlinks_json_to_db()
+
+
+def _peer_schema():
+    """Bring older databases up to the peer/subscription schema this build needs.
+
+    Adds `peer.address_host` (canonical host for the uniqueness invariant),
+    `peer.peer_endpoint` (explicit server-side peer endpoint) and
+    `subscription_peer.owned` (whether the subscription created the peer).
+    """
+    insp = inspect(db.engine)
+
+    if not insp.has_table('peer'):
+        return
+
+    statements = []
+
+    peer_cols = {c['name'] for c in insp.get_columns('peer')}
+    if 'address_host' not in peer_cols:
+        statements.append('ALTER TABLE peer ADD COLUMN address_host VARCHAR(64)')
+    if 'peer_endpoint' not in peer_cols:
+        statements.append('ALTER TABLE peer ADD COLUMN peer_endpoint VARCHAR(128)')
+
+    if insp.has_table('subscription_peer'):
+        link_cols = {c['name'] for c in insp.get_columns('subscription_peer')}
+        if 'owned' not in link_cols:
+            # Legacy links get owned=0 on purpose: we cannot tell whether the
+            # subscription created the peer, and deleting someone else's peer
+            # is not recoverable.
+            statements.append(
+                'ALTER TABLE subscription_peer '
+                'ADD COLUMN owned BOOLEAN NOT NULL DEFAULT 0'
+            )
+
+    if statements:
+        with db.engine.begin() as conn:
+            for sql in statements:
+                conn.execute(text(sql))
+
+    _backfill_peer_address_hosts()
+
+
+def _backfill_peer_address_hosts():
+    """Fill `address_host` for legacy rows, then enforce per-interface uniqueness.
+
+    The rest of the code assumes the ``(iface_id, address_host)`` unique index
+    exists as the backstop for :func:`allocate_peer_address` (see the
+    ``interface_allocation_lock`` docstring). Silently skipping it on a
+    migrated DB with historical duplicates would remove that invariant, so
+    duplicates are *resolved* here, not just logged: the lowest-``id`` peer in
+    each duplicate group keeps its host, and the others are blanked to
+    ``address_host`` (NULL), which drops them out of the index while leaving
+    the row itself and its ``address`` untouched for manual recovery.
+    """
+    pending = (
+        db.session.query(Peer)
+        .filter(or_(Peer.address_host.is_(None), Peer.address_host == ''))
+        .all()
+    )
+    for peer in pending:
+        peer.address_host = peer_address_host(peer.address)
+
+    if pending:
+        db.session.commit()
+
+    duplicates = (
+        db.session.query(Peer.iface_id, Peer.address_host, func.count(Peer.id))
+        .filter(Peer.address_host.isnot(None))
+        .group_by(Peer.iface_id, Peer.address_host)
+        .having(func.count(Peer.id) > 1)
+        .all()
+    )
+
+    if duplicates:
+        resolved = 0
+        for iface_id, host, _count in duplicates:
+            # Keep the oldest peer (lowest id) on its host; detach the rest by
+            # blanking address_host. Their `address` column is unchanged.
+            dup_peers = (
+                db.session.query(Peer.id)
+                .filter(Peer.iface_id == iface_id, Peer.address_host == host)
+                .order_by(Peer.id.asc())
+                .all()
+            )
+            loser_ids = [pid for (pid,) in dup_peers[1:]]
+            if loser_ids:
+                db.session.query(Peer).filter(Peer.id.in_(loser_ids)).update(
+                    {Peer.address_host: None}, synchronize_session=False
+                )
+                resolved += len(loser_ids)
+        db.session.commit()
+        app.logger.warning(
+            "Resolved %s duplicate peer address_host row(s) by blanking the "
+            "newer duplicates (their `address` column is unchanged). "
+            "Duplicates were: %s",
+            resolved,
+            '; '.join(
+                f'iface_id={iface_id} address={host} peers={count}'
+                for iface_id, host, count in duplicates
+            ),
+        )
+
+    if 'uq_peer_iface_address_host' in {ix['name'] for ix in inspect(db.engine).get_indexes('peer')}:
+        return
+
+    try:
+        with db.engine.begin() as conn:
+            conn.execute(text(
+                'CREATE UNIQUE INDEX uq_peer_iface_address_host '
+                'ON peer (iface_id, address_host)'
+            ))
+    except Exception:
+        # Already present as a table-level constraint on a fresh database.
+        app.logger.debug("Peer address uniqueness index not created", exc_info=True)
+
+
+def _interface_schema():
+    """Add the client endpoint override columns to older databases.
+
+    Both columns stay NULL on upgrade, so endpoint behaviour is unchanged until
+    an operator saves an override. `db.create_all()` does not alter existing
+    tables, which is why this exists.
+    """
+    insp = inspect(db.engine)
+
+    if not insp.has_table('interface_config'):
+        return
+
+    cols = {c['name'] for c in insp.get_columns('interface_config')}
+    statements = []
+
+    if 'endpoint_host' not in cols:
+        statements.append(
+            'ALTER TABLE interface_config ADD COLUMN endpoint_host VARCHAR(255)'
+        )
+    if 'endpoint_port' not in cols:
+        statements.append(
+            'ALTER TABLE interface_config ADD COLUMN endpoint_port INTEGER'
+        )
+
+    if statements:
+        with db.engine.begin() as conn:
+            for sql in statements:
+                conn.execute(text(sql))
 
 app.config.from_object(Config)
 os.makedirs(app.instance_path, exist_ok=True)
@@ -6321,6 +6474,13 @@ def _wg_enable(peer):
         host_cidr,
     ]
 
+    # Only an explicitly configured fixed remote-client endpoint belongs here.
+    # peer.endpoint is the server's own address exported to the client and must
+    # never be applied to the server-side peer.
+    fixed_endpoint = (getattr(peer, 'peer_endpoint', None) or '').strip()
+    if fixed_endpoint:
+        cmd += ['endpoint', fixed_endpoint]
+
     if peer.persistent_keepalive:
         cmd += [
             'persistent-keepalive',
@@ -7236,7 +7396,8 @@ def user_peer(token):
     'name': p.name,
     'iface': p.iface.name,
     'address': p.address,
-    'endpoint': p.endpoint or '',
+    'endpoint': _effective_client_endpoint(p),
+    'peer_endpoint': getattr(p, 'peer_endpoint', None) or '',
     'status': p.status,
     'unlimited': bool(getattr(p, 'unlimited', False)),
     'limit_unit': unit,
@@ -7530,63 +7691,647 @@ def _read_iface_conf(conf_path: str | None) -> str | None:
     return None
 
 
-def _available_ips(iface):
-    """
-    Available IPs are derived from the interface subnet (Address=...).
-    For LOCAL interfaces: prefer reading Address from /etc/wireguard/<iface>.conf
+# ---------------------------------------------------------------------------
+# Address allocation contract
+# ---------------------------------------------------------------------------
+# One allocator, used by every path that can create a peer: the /users form,
+# /api/peers, /api/peers/bulk, subscription inbound creation and node create.
+#
+# Vocabulary (see wg-quick(8)): `Address` belongs to the INTERFACE, a peer's
+# `AllowedIPs` selects traffic for that peer. The interface host address is
+# therefore never a client address, and no placeholder peer is required at
+# interface creation.
+# ---------------------------------------------------------------------------
 
+# Upper bound on host enumeration so a /64 cannot hang a request.
+MAX_ENUMERATED_HOSTS = 8192
+
+
+class AddressAllocationError(Exception):
+    """Base class for peer address allocation problems."""
+
+    http_status = 400
+    error_code = 'address_error'
+
+
+class AddressInvalid(AddressAllocationError):
+    """The requested address can never be used on this interface."""
+
+    http_status = 400
+    error_code = 'invalid_address'
+
+
+class AddressConflict(AddressAllocationError):
+    """The requested address is well formed but already reserved."""
+
+    http_status = 409
+    error_code = 'address_conflict'
+
+
+class AddressPoolExhausted(AddressConflict):
+    """The interface network has no free client address left."""
+
+    error_code = 'address_pool_exhausted'
+
+
+def _iface_is_node(iface) -> bool:
+    name = getattr(iface, 'name', '') or ''
+    return getattr(iface, 'node_id', None) is not None or (':' in name)
+
+
+def interface_ip_interface(iface):
+    """Return the interface's own ``ip_interface`` (host address + network).
+
+    For local interfaces the on-disk ``Address=`` wins over the database copy,
+    because the file is what ``wg-quick`` actually applies.
+    """
+    if not iface:
+        return None
+
+    addr_field = None
+    if not _iface_is_node(iface):
+        addr_field = _read_iface_conf(getattr(iface, 'path', None))
+
+    if not addr_field:
+        addr_field = getattr(iface, 'address', None)
+
+    cidr = _first_cidr(addr_field)
+    if not cidr:
+        return None
+
+    if (not _iface_is_node(iface)) and addr_field and getattr(iface, 'address', None) != addr_field:
+        try:
+            iface.address = addr_field
+            db.session.add(iface)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+    try:
+        return ipaddress.ip_interface(cidr)
+    except ValueError:
+        return None
+
+
+def _usable_hosts(net):
+    """Yield client-usable hosts of ``net``, bounded to keep requests cheap.
+
+    ``network.hosts()`` already handles the /31 and /32 (and /127, /128) edge
+    cases documented in the ``ipaddress`` module.
+    """
+    for index, host in enumerate(net.hosts()):
+        if index >= MAX_ENUMERATED_HOSTS:
+            return
+        yield host
+
+
+def _db_peer_hosts(iface, exclude_peer_id=None):
+    """Canonical hosts recorded in the database for this interface.
+
+    Queried directly rather than through ``iface.peers`` so that peers added
+    earlier in the same transaction (autoflushed) are taken into account.
+    """
+    hosts = set()
+    iface_id = getattr(iface, 'id', None)
+    if not iface_id:
+        return hosts
+
+    for address, address_host in db.session.query(Peer.address, Peer.address_host).filter(
+        Peer.iface_id == iface_id,
+        Peer.id != exclude_peer_id if exclude_peer_id else True,
+    ):
+        host = _safe_ip(address_host) or _safe_ip(address)
+        if host is not None:
+            hosts.add(host)
+
+    return hosts
+
+
+def _reserved_hosts(iface, ip_iface, *, exclude_peer_id=None, exclude_address=None, extra=()):
+    """Every host address that must not be handed to a new peer.
+
+    ``exclude_address`` releases a peer's own current host so that re-saving it
+    unchanged is not reported as a conflict with itself.
+    """
+    net = ip_iface.network
+    reserved = {ip_iface.ip}
+
+    point_to_point = 31 if net.version == 4 else 127
+    if net.prefixlen < point_to_point:
+        reserved.add(net.network_address)
+        if net.version == 4:
+            reserved.add(net.broadcast_address)
+
+    reserved |= _db_peer_hosts(iface, exclude_peer_id=exclude_peer_id)
+
+    if not _iface_is_node(iface):
+        reserved |= _wg_allowed_ips(iface)
+        reserved |= _conf_allowed_ips(iface)
+
+    for value in extra or ():
+        host = _safe_ip(value)
+        if host is not None:
+            reserved.add(host)
+
+    own_host = _safe_ip(exclude_address)
+    if own_host is not None and own_host != ip_iface.ip:
+        reserved.discard(own_host)
+
+    return reserved
+
+
+def _validate_requested_host(ip_iface, requested):
+    """Parse an explicitly requested client address, or return ``None``."""
+    text = str(requested or '').strip()
+    if not text:
+        return None
+
+    try:
+        candidate = ipaddress.ip_interface(text)
+    except ValueError:
+        raise AddressInvalid(f'{text} is not a valid IP address.')
+
+    host = candidate.ip
+    net = ip_iface.network
+
+    if host.version != net.version:
+        raise AddressInvalid(
+            f'{host} is IPv{host.version} but the interface network is IPv{net.version}.'
+        )
+
+    if host not in net:
+        raise AddressInvalid(f'{host} is outside the interface network {net}.')
+
+    point_to_point = 31 if net.version == 4 else 127
+    if net.prefixlen < point_to_point:
+        if host == net.network_address:
+            raise AddressInvalid(f'{host} is the network address of {net}.')
+        if net.version == 4 and host == net.broadcast_address:
+            raise AddressInvalid(f'{host} is the broadcast address of {net}.')
+
+    return host
+
+
+def allocate_peer_address(iface, requested=None, *, exclude_peer_id=None,
+                          exclude_address=None, extra_reserved=()):
+    """Return the client address (``host/prefix``) to give a peer.
+
+    ``AddressInvalid`` (400) means the input can never work on this interface;
+    ``AddressConflict`` / ``AddressPoolExhausted`` (409) mean it is well formed
+    but unavailable. Nothing is mutated - callers install the peer themselves.
+    """
+    ip_iface = interface_ip_interface(iface)
+    if ip_iface is None:
+        raise AddressInvalid(
+            f'Interface {getattr(iface, "name", "?")} has no usable Address= setting.'
+        )
+
+    net = ip_iface.network
+    reserved = _reserved_hosts(
+        iface, ip_iface,
+        exclude_peer_id=exclude_peer_id,
+        exclude_address=exclude_address,
+        extra=extra_reserved,
+    )
+
+    host = _validate_requested_host(ip_iface, requested)
+    if host is not None:
+        if host in reserved:
+            raise AddressConflict(
+                f'{host} is already in use on {getattr(iface, "name", "?")}.'
+            )
+        return f'{host}/{net.prefixlen}'
+
+    for candidate in _usable_hosts(net):
+        if candidate not in reserved:
+            return f'{candidate}/{net.prefixlen}'
+
+    raise AddressPoolExhausted(f'No free client address left in {net}.')
+
+
+def address_error_response(exc: AddressAllocationError):
+    """Turn an allocation failure into the documented 400/409 JSON response."""
+    return jsonify(error=exc.error_code, detail=str(exc)), exc.http_status
+
+
+def client_address_on(iface, value):
+    """Re-express a host address with the interface's own prefix length.
+
+    A node reports a peer as ``10.77.77.2/32`` (its ``AllowedIPs``), but the
+    client's ``Address=`` must carry the interface prefix.
+    """
+    host = _safe_ip(value)
+    if host is None:
+        return None
+
+    ip_iface = interface_ip_interface(iface)
+    if ip_iface is None:
+        return str(value).strip()
+
+    return f'{host}/{ip_iface.network.prefixlen}'
+
+
+class NodePeerInstallError(Exception):
+    """The node refused or failed to install the peer.
+
+    ``code`` is the stable API error code surfaced in the JSON response; it is
+    used instead of ``str(exc)`` so a future message change cannot turn a
+    machine-readable code into prose (see finding #15).
+    """
+
+    def __init__(self, code, status=502, detail='', message=None):
+        super().__init__(message or code)
+        self.code = code
+        self.status = status
+        self.detail = detail
+
+
+def node_install_peer(node, iface_name, mirror, *, public_key, requested_address=None,
+                      peer_endpoint='', keepalive=0, mtu=None, dns=None,
+                      allowed_ips='0.0.0.0/0, ::/0', attempts=3):
+    """Install a peer on a node and return the address the node assigned.
+
+    The node agent allocates under its own per-interface lock, which is the
+    only place that can see that node's live runtime and config, so we let it
+    choose unless the caller supplied an address. A validated explicit address
+    is still honoured for backward compatibility, and a host conflict is
+    retried a bounded number of times against fresh data.
+
+    Two distinct 409s come back from the agent and must not be conflated:
+
+    * ``address_pool_exhausted`` -- the network has no free host. Not retryable;
+      mapped to the documented ``409 address_pool_exhausted`` so the client
+      does not see a misleading ``node_create_failed``.
+    * ``host_cidr_already_used`` -- someone took this exact host between our
+      pick and the install. Retryable when the caller did not pin an address.
+
+    When the caller *did* pin an address, a 409 collision is surfaced as-is
+    rather than papered over with a different address: returning a different
+    address with HTTP 200 would violate the "supply ``address`` to pin one"
+    contract documented in api_docs.html (finding #8).
+
+    ``peer_endpoint`` is a fixed remote-client endpoint. The node's own public
+    endpoint must never be sent here: that is client-facing data.
+    """
+    host_cidr = None
+    if requested_address:
+        # Raises AddressInvalid / AddressConflict, which the caller maps to 400/409.
+        host_cidr = allocate_peer_address(mirror, requested=requested_address)
+
+    last_error = None
+
+    for attempt in range(max(1, attempts)):
+        payload = {
+            'iface': iface_name,
+            'public_key': public_key,
+            'endpoint': (peer_endpoint or '').strip(),
+            'persistent_keepalive': keepalive or 0,
+            'mtu': mtu,
+            'dns': dns,
+            'allowed_ips': allowed_ips,
+        }
+        if host_cidr:
+            payload['host_cidr'] = host_cidr
+
+        try:
+            response = node_post(node, '/api/peers/add', payload) or {}
+        except requests.HTTPError as e:
+            status = getattr(getattr(e, 'response', None), 'status_code', 0)
+            body = getattr(getattr(e, 'response', None), 'text', '') or ''
+            agent_code = _node_agent_error_code(getattr(e, 'response', None))
+
+            # The pool is genuinely empty. Never retry; let the caller surface
+            # the documented address_pool_exhausted code. The second clause is
+            # the fallback for an older agent that has no structured `error`
+            # code and only says "pool" in prose.
+            if (
+                agent_code == 'address_pool_exhausted'
+                or (status == 409 and not host_cidr and 'pool' in body)
+            ):
+                raise NodePeerInstallError(
+                    'address_pool_exhausted', 409,
+                    f'The node interface {iface_name} has no free client address.',
+                )
+
+            # An explicit address collided: surface it instead of substituting.
+            if requested_address and status in (400, 409):
+                raise NodePeerInstallError(
+                    'address_conflict', 409,
+                    f'The requested address is not available on {iface_name}.',
+                )
+
+            # Older agent that still needs host_cidr in the payload: supply one
+            # and retry. Only when the caller did not pin an address.
+            needs_panel_side_address = (
+                status == 400 and not host_cidr and 'host_cidr' in body
+            )
+            # A peer took our auto-picked host between pick and install: re-pick
+            # and retry. Bounded by `attempts`; not done for explicit requests.
+            retryable_conflict = (
+                agent_code == 'host_cidr_already_used'
+                and not requested_address
+                and attempt + 1 < attempts
+            )
+
+            if needs_panel_side_address or retryable_conflict:
+                host_cidr = _node_pick_available_ip(node, iface_name, mirror)
+                last_error = e
+                continue
+
+            raise NodePeerInstallError('node_create_failed', 502, body[:800] or str(e))
+        except NodePeerInstallError:
+            raise
+        except AddressAllocationError:
+            # _node_pick_available_ip / allocate_peer_address can raise these;
+            # let them propagate so the caller maps them via address_error_response.
+            raise
+        except Exception as e:
+            raise NodePeerInstallError('node_create_failed', 502, str(e))
+
+        assigned = ''
+        if isinstance(response, dict):
+            assigned = str(response.get('host_cidr') or '').strip()
+
+        assigned = assigned or host_cidr
+        if not assigned:
+            raise NodePeerInstallError(
+                'node_create_failed', 502,
+                'The node did not report the address it assigned.'
+            )
+
+        address = client_address_on(mirror, assigned)
+        if not address:
+            raise NodePeerInstallError(
+                'node_create_failed', 502, f'The node returned an unusable address {assigned!r}.'
+            )
+        return address
+
+    raise NodePeerInstallError(
+        'node_create_failed', 502,
+        f'Could not reserve an address on {iface_name}: {last_error}'
+    )
+
+
+def node_reapply_peer(peer):
+    """Upsert a panel peer into its node's runtime and durable config."""
+    iface = getattr(peer, 'iface', None)
+    node = getattr(iface, 'node', None)
+    if iface is None or node is None:
+        raise NodePeerInstallError(
+            'node_update_failed', 500, 'The peer node or interface is unavailable.'
+        )
+
+    payload = {
+        'iface': iface_devname(iface),
+        'public_key': peer.public_key,
+        'host_cidr': _host_peer(peer),
+        'endpoint': (getattr(peer, 'peer_endpoint', None) or '').strip(),
+        'persistent_keepalive': getattr(peer, 'persistent_keepalive', None) or 0,
+        'mtu': getattr(peer, 'mtu', None),
+        'dns': getattr(peer, 'dns', None),
+    }
+
+    try:
+        response = node_post(node, '/api/peers/add', payload) or {}
+    except requests.HTTPError as exc:
+        body = getattr(getattr(exc, 'response', None), 'text', '') or ''
+        raise NodePeerInstallError('node_update_failed', 502, body[:800] or str(exc))
+    except Exception as exc:
+        raise NodePeerInstallError('node_update_failed', 502, str(exc))
+
+    if isinstance(response, dict) and response.get('ok') is False:
+        raise NodePeerInstallError(
+            'node_update_failed', 502,
+            str(response.get('detail') or response.get('error') or 'The node rejected the update.'),
+        )
+
+    if isinstance(response, dict) and response.get('duplicate') and response.get('updated') is not True:
+        raise NodePeerInstallError(
+            'node_update_unsupported', 502,
+            'The node agent does not support full peer updates; update the node agent first.',
+        )
+
+    return response
+
+
+def _node_agent_error_code(response):
+    """Best-effort parse of the agent's structured ``error`` code from a 4xx/5xx body.
+
+    The agent returns ``{"error": "...", "detail": "..."}``. Older agents or
+    proxies may return plain text, in which case ``''`` is returned and callers
+    fall back to substring matching.
+    """
+    if response is None:
+        return ''
+    try:
+        body = response.json()
+    except Exception:
+        return ''
+    if isinstance(body, dict):
+        return str(body.get('error') or '').strip().lower()
+    return ''
+
+
+def _node_pick_available_ip(node, iface_name, mirror):
+    """Ask a node for a free address, falling back to the panel's mirror view."""
+    try:
+        available = node_get(node, f'/api/iface/{iface_name}/available_ips')
+        if isinstance(available, dict):
+            available = available.get('available_ips') or []
+        if isinstance(available, list) and available:
+            return available[0]
+    except Exception:
+        current_app.logger.warning(
+            'Could not read available_ips from node %s iface %s',
+            getattr(node, 'id', '?'), iface_name, exc_info=True,
+        )
+
+    if mirror is not None:
+        return allocate_peer_address(mirror)
+
+    raise NodePeerInstallError('node_no_available_ip', 409, f'No free address on {iface_name}.')
+
+
+def ensure_node_mirror_iface(node, iface_name, remote_iface=None, *, mtu=None, dns=None,
+                             listen_port=None, server_cidr=None):
+    """Return (creating or refreshing) the panel's mirror row for a node interface."""
+    remote_iface = remote_iface or {}
+    db_iface_name = f'n{node.id}:{iface_name}'
+    iface = InterfaceConfig.query.filter_by(name=db_iface_name).first()
+
+    address = (remote_iface.get('address') or server_cidr or '').strip()
+
+    try:
+        port = int(remote_iface.get('listen_port') or listen_port or 51820)
+    except Exception:
+        port = 51820
+
+    if not iface:
+        iface = InterfaceConfig(
+            name=db_iface_name,
+            path=f'/etc/wireguard/{iface_name}.conf',
+            address=address or '10.0.0.1/24',
+            listen_port=port,
+            private_key='(remote)',
+            mtu=remote_iface.get('mtu') or mtu,
+            dns=remote_iface.get('dns') or dns,
+            node_id=node.id,
+        )
+        db.session.add(iface)
+        db.session.flush()
+        return iface
+
+    changed = False
+    if address and iface.address != address:
+        iface.address = address
+        changed = True
+    if remote_iface.get('listen_port') and iface.listen_port != port:
+        iface.listen_port = port
+        changed = True
+    if remote_iface.get('mtu') and iface.mtu != remote_iface.get('mtu'):
+        iface.mtu = remote_iface.get('mtu')
+        changed = True
+    if remote_iface.get('dns') and iface.dns != remote_iface.get('dns'):
+        iface.dns = remote_iface.get('dns')
+        changed = True
+    if getattr(iface, 'node_id', None) != node.id:
+        iface.node_id = node.id
+        changed = True
+
+    if changed:
+        db.session.flush()
+
+    return iface
+
+
+def resolve_requested_peer_address(iface, value, *, allow_legacy_interface_address=False):
+    """Validate a requested peer address without silently reinterpreting it.
+
+    Only the legacy generic ``address`` field may contain the interface's own
+    ``Address`` value; callers opt into ignoring that exact value. The explicit
+    ``peer_address`` field is always strict, so malformed or reserved input is
+    returned as a structured 400 instead of unexpectedly auto-allocating.
+    """
+    text = str(value or '').strip()
+    if not text:
+        return None
+
+    try:
+        candidate = ipaddress.ip_interface(text)
+    except ValueError:
+        raise AddressInvalid(f'{text} is not a valid IP address.')
+
+    ip_iface = interface_ip_interface(iface)
+    if (
+        allow_legacy_interface_address
+        and ip_iface is not None
+        and candidate.ip == ip_iface.ip
+    ):
+        return None
+
+    return text
+
+
+def requested_peer_address_from_target(iface, target):
+    """Resolve strict ``peer_address`` before the legacy ``address`` alias."""
+    explicit = str((target or {}).get('peer_address') or '').strip()
+    if explicit:
+        return resolve_requested_peer_address(iface, explicit)
+
+    return resolve_requested_peer_address(
+        iface,
+        (target or {}).get('address'),
+        allow_legacy_interface_address=True,
+    )
+
+
+def peer_address_host(address):
+    """Canonical host string stored in ``Peer.address_host`` (``None`` if unparseable)."""
+    host = _safe_ip(address)
+    return str(host) if host is not None else None
+
+
+@event.listens_for(Peer, 'before_insert')
+@event.listens_for(Peer, 'before_update')
+def _keep_peer_address_host_in_sync(mapper, connection, target):
+    """Derive the canonical host from ``address`` on every write.
+
+    Doing it here means the uniqueness invariant holds for every code path,
+    including direct edits through /api/peer/<id>.
+
+    Note: ``address_host`` is a derived, system-owned column. It must never be
+    hand-edited: this listener unconditionally re-derives it from ``address``,
+    so a manual fix to ``address_host`` alone is reverted on the next unrelated
+    edit of the row (review finding #5). Recover from duplicate hosts via the
+    migration in ``_backfill_peer_address_hosts``, which blanks the losers.
+    """
+    target.address_host = peer_address_host(target.address)
+
+
+_ALLOC_LOCK_DIR = os.path.join(app.instance_path, 'locks')
+
+
+@contextmanager
+def interface_allocation_lock(iface):
+    """Serialise allocate-then-install for one interface across workers.
+
+    A plain database read cannot prevent two gunicorn workers from picking the
+    same free host, so the whole critical section is guarded by a per-interface
+    ``flock``. The database unique constraint is the backstop.
+    """
+    name = re.sub(r'[^A-Za-z0-9_.:-]+', '_', str(getattr(iface, 'name', '') or 'iface'))
+    handle = None
+    try:
+        os.makedirs(_ALLOC_LOCK_DIR, exist_ok=True)
+        handle = open(os.path.join(_ALLOC_LOCK_DIR, f'{name}.alloc.lock'), 'w')
+        fcntl.flock(handle, fcntl.LOCK_EX)
+    except Exception:
+        # A missing lock file must not stop peer creation; the unique
+        # constraint still rejects a duplicate host.
+        current_app.logger.warning('Could not take allocation lock for %s', name, exc_info=True)
+        handle = None
+
+    try:
+        yield
+    finally:
+        if handle is not None:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            handle.close()
+
+
+def _available_ips(iface, limit=MAX_ENUMERATED_HOSTS):
+    """Free client addresses on ``iface``, in ascending order.
+
+    Same reservation rules as :func:`allocate_peer_address`, so the picker in
+    the UI and the server-side allocator can never disagree.
     """
     if not iface:
         return []
 
-    import ipaddress as _ipa
-
     try:
-        is_node_iface = (getattr(iface, "node_id", None) is not None) or (":" in (iface.name or ""))
-
-        addr_field = None
-        if not is_node_iface:
-            addr_field = _read_iface_conf(getattr(iface, "path", None))
-
-        if not addr_field:
-            addr_field = getattr(iface, "address", None)
-
-        addr = _first_cidr(addr_field)
-        if not addr:
+        ip_iface = interface_ip_interface(iface)
+        if ip_iface is None:
             return []
 
-        if (not is_node_iface) and addr_field and (getattr(iface, "address", None) != addr_field):
-            try:
-                iface.address = addr_field
-                db.session.add(iface)
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
+        net = ip_iface.network
+        reserved = _reserved_hosts(iface, ip_iface)
 
-        net = _ipa.ip_network(addr, strict=False)
-        iface_ip = _ipa.ip_interface(addr).ip
-
-        used_hosts = set()
-
-        for p in (getattr(iface, "peers", None) or []):
-            h = _safe_ip(getattr(p, "address", None))
-            if h is not None:
-                used_hosts.add(h)
-
-        if not is_node_iface:
-            used_hosts |= _wg_allowed_ips(iface)
-            used_hosts |= _conf_allowed_ips(iface)
-
-        out = [
-            f"{host}/{net.prefixlen}"
-            for host in net.hosts()
-            if host != iface_ip and host not in used_hosts
-        ]
-
-        return sorted(out, key=lambda cidr: int(_ipa.ip_interface(cidr).ip))
+        out = []
+        for host in _usable_hosts(net):
+            if host in reserved:
+                continue
+            out.append(f'{host}/{net.prefixlen}')
+            if len(out) >= limit:
+                break
+        return out
 
     except Exception as e:
-        current_app.logger.exception("_available_ips failed for iface=%r: %s", getattr(iface, "name", None), e)
+        current_app.logger.exception(
+            "_available_ips failed for iface=%r: %s", getattr(iface, "name", None), e
+        )
         return []
 
 
@@ -7637,113 +8382,379 @@ def _norm_conftext(txt: str) -> str:
     return txt
 
 
-def _peer_to_conf(peer: Peer):
-    conf_path = getattr(peer.iface, 'path', None)
-    if not conf_path:
-        return
+def _write_conf_atomic(conf_path: str, text_body: str):
+    """Replace ``conf_path`` atomically, preserving its mode (default 0600)."""
+    directory = os.path.dirname(conf_path) or '.'
+    os.makedirs(directory, exist_ok=True)
+
     try:
-        os.makedirs(os.path.dirname(conf_path), exist_ok=True)
+        mode = os.stat(conf_path).st_mode & 0o777
+    except OSError:
+        mode = 0o600
 
-        if _peer_in_conf(conf_path, peer.public_key):
-            return
-
-        host_cidr = _host_peer(peer)
-
-        block_lines = [
-            '[Peer]',
-            f'PublicKey = {peer.public_key}',
-            f'AllowedIPs = {host_cidr}',
-        ]
-        if peer.endpoint:
-            block_lines.append(f'Endpoint = {peer.endpoint}')
-        if peer.persistent_keepalive:
-            block_lines.append(f'PersistentKeepalive = {peer.persistent_keepalive}')
-
-        block_txt = '\n'.join(block_lines) + '\n'
-
-        existing = ''
-        if os.path.isfile(conf_path):
-            with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
-                existing = f.read()
-
-        existing = (existing or '').replace('\r\n', '\n').replace('\r', '\n').rstrip('\n')
-
-        if existing.strip() == '':
-            combined = block_txt
-        else:
-            combined = existing + '\n\n' + block_txt
-
-        combined = _norm_conftext(combined)
-
-        import tempfile
-        d = os.path.dirname(conf_path) or '.'
-        fd, tmp_path = tempfile.mkstemp(prefix='.wgconf.', dir=d)
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as tf:
-                tf.write(combined)
-            os.replace(tmp_path, conf_path)
-        finally:
+    import tempfile
+    fd, tmp_path = tempfile.mkstemp(prefix='.wgconf.', dir=directory)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            handle.write(text_body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, conf_path)
+        tmp_path = None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
             try:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-            except Exception:
+                os.unlink(tmp_path)
+            except OSError:
                 pass
 
-    except Exception as e:
-        current_app.logger.warning("Failed to append peer to conf %s: %s", conf_path, e)
+
+def _peer_to_conf(peer: Peer):
+    """Write ``peer``'s ``[Peer]`` block into the SERVER's interface config.
+
+    The block deliberately carries no ``Endpoint`` unless the operator set an
+    explicit ``peer_endpoint``: ``Peer.endpoint`` is the *server's* address as
+    exported to the client, and writing it here would make the server send the
+    client's traffic to itself. See wg(8): ``Endpoint`` is the remote peer's
+    address, and WireGuard learns a roaming client's endpoint on its own.
+
+    Raises on failure so callers can compensate.
+    """
+    conf_path = getattr(peer.iface, 'path', None)
+    if not conf_path:
+        raise RuntimeError('The interface has no configuration file path.')
+
+    if _peer_in_conf(conf_path, peer.public_key):
+        return
+
+    block_lines = [
+        '[Peer]',
+        f'PublicKey = {peer.public_key}',
+        f'AllowedIPs = {_host_peer(peer)}',
+    ]
+
+    fixed_endpoint = (getattr(peer, 'peer_endpoint', None) or '').strip()
+    if fixed_endpoint:
+        block_lines.append(f'Endpoint = {fixed_endpoint}')
+    if peer.persistent_keepalive:
+        block_lines.append(f'PersistentKeepalive = {peer.persistent_keepalive}')
+
+    block_txt = '\n'.join(block_lines) + '\n'
+
+    existing = ''
+    if os.path.isfile(conf_path):
+        with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
+            existing = f.read()
+
+    existing = (existing or '').replace('\r\n', '\n').replace('\r', '\n').rstrip('\n')
+    combined = block_txt if existing.strip() == '' else existing + '\n\n' + block_txt
+
+    _write_conf_atomic(conf_path, _norm_conftext(combined))
+
+    if not _peer_in_conf(conf_path, peer.public_key):
+        raise RuntimeError(f'Peer block was not persisted to {conf_path}.')
 
 
 def _remove_peer(peer: Peer):
+    """Drop ``peer``'s ``[Peer]`` block from the server's interface config.
+
+    Raises if the block is still present afterwards, so a caller never reports
+    success on a peer that a later ``wg-quick up`` would bring back.
+    """
     conf_path = getattr(peer.iface, 'path', None)
-    if not (conf_path and os.path.isfile(conf_path)):
+    if not conf_path:
         return
-    try:
-        with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
-            lines = f.readlines()
+    if not os.path.isfile(conf_path):
+        return
 
-        out_lines, i = [], 0
-        while i < len(lines):
-            line = lines[i]
-            if line.strip().lower() == '[peer]':
-                block = [line]
-                i += 1
-                while i < len(lines) and not lines[i].strip().startswith('['):
-                    block.append(lines[i]); i += 1
+    with open(conf_path, 'r', encoding='utf-8', errors='ignore') as f:
+        lines = f.readlines()
 
-                has_pk = any(
-                    l.strip().lower().startswith('publickey')
-                    and '=' in l
-                    and l.split('=', 1)[1].strip() == peer.public_key
-                    for l in block
-                )
-                if not has_pk:
-                    out_lines.extend(block)
-            else:
-                out_lines.append(line); i += 1
+    out_lines, i = [], 0
+    while i < len(lines):
+        line = lines[i]
+        if line.strip().lower() == '[peer]':
+            block = [line]
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith('['):
+                block.append(lines[i]); i += 1
 
-        combined = _norm_conftext(''.join(out_lines))
+            has_pk = any(
+                l.strip().lower().startswith('publickey')
+                and '=' in l
+                and l.split('=', 1)[1].strip() == peer.public_key
+                for l in block
+            )
+            if not has_pk:
+                out_lines.extend(block)
+        else:
+            out_lines.append(line); i += 1
 
-        import tempfile
-        d = os.path.dirname(conf_path) or '.'
-        fd, tmp_path = tempfile.mkstemp(prefix='.wgconf.', dir=d)
-        try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as tf:
-                tf.write(combined)
-            os.replace(tmp_path, conf_path)
-        finally:
-            try:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-            except Exception:
-                pass
+    _write_conf_atomic(conf_path, _norm_conftext(''.join(out_lines)))
 
-    except Exception as e:
-        current_app.logger.warning("Failed to remove peer from conf %s: %s", conf_path, e)
+    if _peer_in_conf(conf_path, peer.public_key):
+        raise RuntimeError(f'Peer block is still present in {conf_path}.')
 
 
 def _sync_peer(peer: Peer):
     _remove_peer(peer)
     _peer_to_conf(peer)
+
+
+def _wg_disable_quiet(peer: Peer):
+    """Best-effort runtime removal used to undo a half-finished create."""
+    try:
+        _wg_disable(peer)
+    except Exception:
+        current_app.logger.warning(
+            "Could not roll back runtime peer %s on %s",
+            getattr(peer, 'public_key', '?'),
+            getattr(getattr(peer, 'iface', None), 'name', '?'),
+            exc_info=True,
+        )
+
+
+def _remove_peer_quiet(peer: Peer):
+    """Best-effort config removal used to undo a half-finished create."""
+    try:
+        _remove_peer(peer)
+    except Exception:
+        current_app.logger.warning(
+            "Could not roll back config peer %s",
+            getattr(peer, 'public_key', '?'),
+            exc_info=True,
+        )
+
+
+def _rollback_local_created_peer(peer: Peer):
+    """Remove both local side effects created before a database commit."""
+    errors = []
+    dev = iface_devname(peer.iface) if getattr(peer, 'iface', None) else ''
+    if dev and _iface_up(dev):
+        try:
+            _wg_disable(peer)
+            if peer.public_key in _wg_peer_keys(dev):
+                raise RuntimeError(f'{peer.public_key} is still present in {dev}.')
+        except Exception as exc:
+            errors.append(f'runtime: {exc}')
+
+    try:
+        _remove_peer(peer)
+    except Exception as exc:
+        errors.append(f'config: {exc}')
+
+    if errors:
+        raise RuntimeError('; '.join(errors))
+
+
+def _rollback_node_created_peer(node, public_key):
+    """Convergently remove a node peer created before a database commit."""
+    response = node_delete(node, f'/api/peer/{public_key}') or {}
+    if isinstance(response, dict) and response.get('ok') is False:
+        raise RuntimeError(
+            str(response.get('detail') or response.get('error') or 'node cleanup failed')
+        )
+
+
+class PeerCreateCompensation:
+    """Reverse external peer installs when a surrounding transaction fails."""
+
+    def __init__(self):
+        self._actions = []
+
+    def register_local(self, peer):
+        self._actions.append(
+            ('local', getattr(peer, 'public_key', ''), lambda: _rollback_local_created_peer(peer))
+        )
+
+    def register_node(self, node, public_key):
+        self._actions.append(
+            ('node', public_key, lambda: _rollback_node_created_peer(node, public_key))
+        )
+
+    def rollback(self):
+        failures = []
+        for scope, public_key, action in reversed(self._actions):
+            try:
+                action()
+            except Exception as exc:
+                app.logger.exception(
+                    'Could not compensate %s peer creation for %s', scope, public_key
+                )
+                failures.append({
+                    'scope': scope,
+                    'public_key': public_key,
+                    'detail': str(exc),
+                })
+        self._actions.clear()
+        return failures
+
+
+class PeerRemovalError(Exception):
+    """A peer could not be fully removed; the database row was kept.
+
+    ``phase`` says which layer failed ('runtime', 'config' or 'node') so an
+    operator - or a retry - knows what still needs cleaning up.
+    """
+
+    def __init__(self, phase, message, status=500):
+        super().__init__(message)
+        self.phase = phase
+        self.status = status
+
+
+def _peer_is_on_node(peer: Peer) -> bool:
+    iface = getattr(peer, 'iface', None)
+    if iface is None:
+        return False
+    return _iface_is_node(iface)
+
+
+def reapply_peer_external(peer: Peer):
+    """Make runtime and durable config match the current in-memory peer row."""
+    if _peer_is_on_node(peer):
+        node_reapply_peer(peer)
+        return
+
+    _wg_enable(peer)
+    _sync_peer(peer)
+
+
+def remove_peer_everywhere(peer: Peer):
+    """Remove a peer from runtime, durable config and the database.
+
+    Order matters: runtime first (so no traffic keeps flowing while the rest
+    happens), then the durable config (so a later `wg-quick up` cannot bring
+    the peer back), then the database rows in one transaction. If either
+    WireGuard layer cannot be verified the database row is deliberately kept
+    and ``PeerRemovalError`` is raised, because the row is the only handle
+    left for retrying.
+
+    Returns the number of shortlinks that were removed with the peer.
+    """
+    if _peer_is_on_node(peer):
+        _remove_node_peer(peer)
+    else:
+        _remove_local_peer_runtime_and_config(peer)
+
+    return _delete_peer_rows(peer)
+
+
+def _remove_local_peer_runtime_and_config(peer: Peer):
+    dev = iface_devname(peer.iface) if getattr(peer, 'iface', None) else ''
+
+    # A down interface has no runtime peer to remove, and that is not a failure.
+    if dev and _iface_up(dev):
+        try:
+            _wg_disable(peer)
+        except Exception as e:
+            raise PeerRemovalError('runtime', str(e), 502)
+
+        if peer.public_key in _wg_peer_keys(dev):
+            raise PeerRemovalError(
+                'runtime',
+                f'{peer.public_key} is still present in the {dev} runtime.',
+                502,
+            )
+
+    try:
+        _remove_peer(peer)
+    except Exception as e:
+        raise PeerRemovalError('config', str(e), 500)
+
+
+def _remove_node_peer(peer: Peer):
+    node = getattr(getattr(peer, 'iface', None), 'node', None)
+    if node is None:
+        raise PeerRemovalError('node', 'The node for this peer is unknown.', 500)
+
+    try:
+        response = node_delete(node, f'/api/peer/{peer.public_key}') or {}
+    except Exception as e:
+        raise PeerRemovalError('node', str(e), 502)
+
+    if not isinstance(response, dict):
+        return
+
+    if response.get('ok') is False:
+        raise PeerRemovalError(
+            'node', str(response.get('error') or 'The node reported a failure.'), 502
+        )
+
+    # Newer agents report each layer; older ones only report ok=True.
+    for key, phase in (('runtime_removed', 'runtime'), ('config_removed', 'config')):
+        if key in response and not response.get(key):
+            raise PeerRemovalError(
+                phase,
+                f'The node did not confirm {phase} removal of {peer.public_key}.',
+                502,
+            )
+
+
+def _wg_peer_keys(dev: str) -> set:
+    """Public keys currently configured on a running interface."""
+    keys = set()
+    try:
+        out = subprocess.check_output(
+            ['wg', 'show', dev, 'allowed-ips'],
+            stderr=subprocess.DEVNULL, timeout=2.0
+        ).decode()
+    except Exception:
+        return keys
+
+    for line in out.splitlines():
+        key = line.split('\t', 1)[0].strip()
+        if key:
+            keys.add(key)
+    return keys
+
+
+def _delete_peer_rows(peer: Peer):
+    """Drop the peer and everything that points at it, in one transaction.
+
+    Returns the number of shortlinks removed, so callers can report the real
+    count instead of assuming one.
+    """
+    try:
+        removed_shortlinks = _delete_shortlinks_for_peer_ids([peer.id])
+        SubscriptionPeer.query.filter_by(peer_id=peer.id).delete(synchronize_session=False)
+        PeerEvent.query.filter_by(peer_id=peer.id).delete(synchronize_session=False)
+        db.session.delete(peer)
+        db.session.commit()
+        return int(removed_shortlinks or 0)
+    except Exception as e:
+        db.session.rollback()
+        raise PeerRemovalError('database', str(e), 500)
+
+
+def peer_removal_response(exc: PeerRemovalError, peer_id=None):
+    """Structured error for a removal that left recoverable state behind."""
+    return jsonify(
+        ok=False,
+        error='peer_removal_failed',
+        phase=exc.phase,
+        detail=str(exc),
+        peer_id=peer_id,
+        recoverable=True,
+    ), exc.status
+
+
+def install_local_peer(peer: Peer):
+    """Install a peer into the running interface and its durable config.
+
+    Runtime first, because ``wg set`` validates the device and the address;
+    durable config second. If either step fails, both are undone so a failed
+    create cannot leave an invisible peer behind. Raises on failure.
+    """
+    _check_iface_up(peer.iface)
+    _wg_enable(peer)
+
+    try:
+        _sync_peer(peer)
+    except Exception:
+        _wg_disable_quiet(peer)
+        raise
 
 # ----------------------
 # Config export helpers
@@ -8015,6 +9026,248 @@ def _node_endpoint_fallback(
 
     return _norm_hostport(host, port)
 
+class EndpointValidationError(ValueError):
+    """A rejected endpoint override. ``code`` is the API error code."""
+
+    def __init__(self, code, detail):
+        super().__init__(detail)
+        self.code = code
+        self.detail = detail
+
+
+_DNS_LABEL_RE = re.compile(r'^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$')
+_HOST_FORBIDDEN = ('://', '/', '@', '?', '#', '\\')
+
+
+def _parse_endpoint_host(value):
+    """Return a normalised host, or raise EndpointValidationError."""
+    if any(ch.isspace() for ch in value):
+        raise EndpointValidationError(
+            'endpoint_host_whitespace',
+            'The host may not contain whitespace.',
+        )
+
+    for token in _HOST_FORBIDDEN:
+        if token in value:
+            raise EndpointValidationError(
+                'endpoint_host_not_a_host',
+                'The host must be a bare name or IP address, without a scheme, '
+                'path, credentials or query string.',
+            )
+
+    bracketed = value.startswith('[') and value.endswith(']')
+    candidate = value[1:-1] if bracketed else value
+
+    try:
+        # Stored bare and compressed so one host has one spelling.
+        return ipaddress.ip_address(candidate).compressed
+    except ValueError:
+        pass
+
+    if bracketed:
+        raise EndpointValidationError(
+            'endpoint_host_invalid',
+            'Bracketed hosts must be valid IPv6 addresses.',
+        )
+
+    if ':' in candidate:
+        # Not an IP and still has a colon: an embedded port, not a guess.
+        raise EndpointValidationError(
+            'endpoint_host_has_port',
+            'Put the port in the port field; the host must not contain one.',
+        )
+
+    name = candidate[:-1] if candidate.endswith('.') else candidate
+
+    if not name or len(name) > 253:
+        raise EndpointValidationError(
+            'endpoint_host_invalid',
+            'The host must be between 1 and 253 characters long.',
+        )
+
+    for label in name.split('.'):
+        if not _DNS_LABEL_RE.match(label):
+            raise EndpointValidationError(
+                'endpoint_host_invalid',
+                'Each DNS label must be 1 to 63 letters, digits or hyphens, and '
+                'may not start or end with a hyphen.',
+            )
+
+    return name.lower()
+
+
+def _parse_endpoint_port(value):
+    """Return a port in 1..65535, or raise EndpointValidationError."""
+    if isinstance(value, bool):
+        raise EndpointValidationError(
+            'endpoint_port_invalid', 'The port must be a whole number.'
+        )
+
+    try:
+        port = int(str(value).strip())
+    except (TypeError, ValueError):
+        raise EndpointValidationError(
+            'endpoint_port_invalid', 'The port must be a whole number.'
+        )
+
+    if not 1 <= port <= 65535:
+        raise EndpointValidationError(
+            'endpoint_port_range', 'The port must be between 1 and 65535.'
+        )
+
+    return port
+
+
+def parse_endpoint_override(host, port):
+    """Validate an interface endpoint override.
+
+    Returns ``(host, port)`` normalised, or ``(None, None)`` when both inputs
+    are empty, which means "clear the override". A partial pair is rejected:
+    merge semantics would let two edits made at different times silently
+    combine into a working endpoint nobody reviewed.
+    """
+    host_raw = '' if host is None else str(host).strip()
+    port_raw = '' if port is None else str(port).strip()
+
+    if not host_raw and not port_raw:
+        return (None, None)
+
+    if not host_raw or not port_raw:
+        raise EndpointValidationError(
+            'endpoint_partial',
+            'Send host and port together, or send both empty to clear the override.',
+        )
+
+    return (_parse_endpoint_host(host_raw), _parse_endpoint_port(port_raw))
+
+
+def parse_endpoint_string(value):
+    """Validate an explicit ``host:port`` endpoint and return it normalised.
+
+    Returns '' for an empty value. Not applied to the existing create routes -
+    they accept free-form endpoints today and tightening that without a
+    compatibility review would be an unguarded behaviour change. Available for
+    a later spec.
+    """
+    text_value = (value or '').strip()
+    if not text_value:
+        return ''
+
+    host, port = _host_port(text_value)
+    if not host or not port:
+        raise EndpointValidationError(
+            'endpoint_invalid',
+            'The endpoint must be host:port, for example vpn.example.com:51820.',
+        )
+
+    host, port = parse_endpoint_override(host, port)
+    return _norm_hostport(host, port)
+
+
+def remote_iface_name(iface):
+    """'wg0' from a node mirror row named 'n3:wg0'; the plain name otherwise."""
+    name = (getattr(iface, 'name', '') or '').strip()
+    return name.split(':', 1)[1] if ':' in name else name
+
+
+def iface_endpoint_override(iface):
+    """The interface's saved client endpoint override, or '' when unset."""
+    if iface is None:
+        return ''
+
+    host = (getattr(iface, 'endpoint_host', None) or '').strip()
+    port = getattr(iface, 'endpoint_port', None)
+
+    if not host or not port:
+        if host or port:
+            # A hand-edited row degrades to auto-detection instead of
+            # producing a malformed endpoint.
+            current_app.logger.warning(
+                'Interface %s has an incomplete endpoint override '
+                '(host=%r port=%r); ignoring it.',
+                getattr(iface, 'name', '?'), host, port,
+            )
+        return ''
+
+    return _norm_hostport(host, int(port))
+
+
+def resolve_client_endpoint(iface, explicit=None, *, node=None, remote_iface=None):
+    """The server address written into a CLIENT's [Peer] block.
+
+    Precedence: explicit value, then the interface's saved override, then
+    auto-detection, then ''. This is the only place that rule lives; every
+    create and export path must come through here.
+
+    Never pass the result to `wg set ... peer ... endpoint` or into a server or
+    node [Peer] block - see `_peer_to_conf`.
+    """
+    explicit = (explicit or '').strip()
+    if explicit:
+        return explicit
+
+    if iface is None:
+        return ''
+
+    override = iface_endpoint_override(iface)
+    if override:
+        # Returning here also skips the node round-trips below, so exporting a
+        # config for a peer on an unreachable node still works.
+        return override
+
+    try:
+        if getattr(iface, 'node_id', None) is not None:
+            return (_node_endpoint_fallback(
+                node or getattr(iface, 'node', None),
+                remote_iface_name(iface),
+                remote_iface,
+            ) or '').strip()
+
+        return (_endpoint_fallback(iface) or '').strip()
+
+    except Exception:
+        current_app.logger.warning(
+            'Endpoint auto-detection failed for interface %s',
+            getattr(iface, 'name', '?'), exc_info=True,
+        )
+        return ''
+
+
+def resolve_client_endpoint_cheap(iface, explicit=None):
+    """`resolve_client_endpoint`, minus any per-call network round-trip.
+
+    Precedence: explicit value, then the interface's saved override, then -
+    for a local interface only - cheap local auto-detection. A node
+    interface with no override returns '': node auto-detection
+    (`_node_endpoint_fallback`) makes up to two HTTP calls to the node, and
+    doing that per row would turn a peer listing into a multi-minute stall
+    whenever a node is slow or unreachable. The full value still resolves at
+    export time via `resolve_client_endpoint`; this is display-only.
+    """
+    explicit = (explicit or '').strip()
+    if explicit:
+        return explicit
+
+    if iface is None:
+        return ''
+
+    override = iface_endpoint_override(iface)
+    if override:
+        return override
+
+    if getattr(iface, 'node_id', None) is not None:
+        return ''
+
+    try:
+        return (_endpoint_fallback(iface) or '').strip()
+    except Exception:
+        current_app.logger.warning(
+            'Endpoint auto-detection failed for interface %s',
+            getattr(iface, 'name', '?'), exc_info=True,
+        )
+        return ''
+
+
 def _server_publickey(iface):
     try:
         nid = getattr(iface, 'node_id', None)
@@ -8221,47 +9474,48 @@ def node_peer_logs(nid, pub):
 def node_peer_delete(nid, pub):
     n = Node.query.get_or_404(nid)
 
-    try:
-        node_delete(n, f'/api/peer/{pub}')
-    except Exception as e:
-        current_app.logger.exception("Node peer delete failed")
-        return jsonify(error="node_delete_failed", detail=str(e)), 502
+    p = (
+        db.session.query(Peer)
+        .join(InterfaceConfig, Peer.iface_id == InterfaceConfig.id)
+        .filter(Peer.public_key == pub)
+        .filter(or_(
+            InterfaceConfig.name.like(f"n{nid}:%"),
+            InterfaceConfig.node_id == nid
+        ))
+        .first()
+    )
 
-    removed_shortlinks = 0
+    if p is None:
+        # No panel row: still ask the node to clean up, then report idempotently.
+        try:
+            node_delete(n, f'/api/peer/{pub}')
+        except Exception as e:
+            current_app.logger.exception("Node peer delete failed")
+            return jsonify(error="node_delete_failed", detail=str(e)), 502
+        return jsonify(ok=True, shortlinks_removed=0)
 
+    peer_id = p.id
     try:
-        p = (
-            db.session.query(Peer)
-            .join(InterfaceConfig, Peer.iface_id == InterfaceConfig.id)
-            .filter(Peer.public_key == pub)
-            .filter(or_(
-                InterfaceConfig.name.like(f"n{nid}:%"),
-                InterfaceConfig.node_id == nid
-            ))
-            .first()
+        removed_shortlinks = remove_peer_everywhere(p)
+    except PeerRemovalError as e:
+        current_app.logger.error(
+            "node peer delete failed at %s stage for node_id=%s pub=%s: %s", e.phase, nid, pub, e
         )
-
-        if p:
-            removed_shortlinks = _delete_shortlinks_for_peer_ids([p.id])
-
-            try:
-                SubscriptionPeer.query.filter_by(peer_id=p.id).delete(
-                    synchronize_session=False
-                )
-            except Exception:
-                pass
-            db.session.delete(p)
-            db.session.commit()
-
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.exception("Node peer DB cleanup failed: %s", e)
-        return jsonify(
-            error="node_peer_deleted_but_db_cleanup_failed",
-            detail=str(e)
-        ), 500
+        return peer_removal_response(e, peer_id=peer_id)
 
     return jsonify(ok=True, shortlinks_removed=removed_shortlinks)
+
+def _effective_client_endpoint(peer: Peer) -> str:
+    """The server/node ``host:port`` that goes into the CLIENT's [Peer] block.
+
+    This is the client-facing server endpoint, not the server-side peer
+    endpoint - see :func:`_peer_to_conf`.
+    """
+    return resolve_client_endpoint(
+        getattr(peer, 'iface', None),
+        explicit=getattr(peer, 'endpoint', None),
+    )
+
 
 def _client_conf_txt(peer: Peer) -> str:
 
@@ -8279,13 +9533,7 @@ def _client_conf_txt(peer: Peer) -> str:
     except Exception:
         dns_val = (peer.dns or (iface.dns if iface is not None else "") or "")
 
-    ep = peer.endpoint or ""
-    if not ep:
-        try:
-            if iface is not None:
-                ep = _endpoint_fallback(iface) or ""
-        except Exception:
-            ep = ""
+    ep = _effective_client_endpoint(peer)
 
     mtu_val = peer.mtu or (iface.mtu if iface is not None else None)
 
@@ -8727,6 +9975,13 @@ def repoint_endpoints():
 
     changed = 0
     for p in Peer.query.all():
+        # An interface override is an operator decision. A public IP change
+        # must not drag peers off it, even when the override happens to be the
+        # old public IP.
+        override = iface_endpoint_override(getattr(p, 'iface', None))
+        if override and (p.endpoint or '').strip() == override:
+            continue
+
         host, port = _host_port(p.endpoint or '')
         if host == prev:
             p.endpoint = f"{cur}:{port}" if port else cur
@@ -8740,15 +9995,36 @@ def repoint_endpoints():
 # -----------
 # Bootstrap
 # ___________
+def _migrate_schema():
+    """Bring the database up to the schema this build maps, or raise.
+
+    Order matters. Everything here that loads a model through the ORM selects
+    every mapped column, so each ALTER TABLE has to run before the first query
+    that depends on it. In particular `_shortlink_schema()` ->
+    `_migrate_shortlinks_json_to_db()` loads `Peer`, which now maps
+    `address_host` and `peer_endpoint`; running it ahead of `_peer_schema()`
+    fails with "no such column" on any database created before those columns
+    existed.
+
+    Raises `SchemaMigrationError` on any failure. Serving traffic against a
+    half-migrated database is worse than not starting: every peer query would
+    fail, and the panel would keep answering as though it were healthy.
+    """
+    try:
+        db.create_all()
+        _admin_columns()
+        _peer_schema()
+        _interface_schema()
+        _shortlink_schema()
+    except Exception as exc:
+        raise SchemaMigrationError(str(exc)) from exc
+
+    app.logger.info("DB initialized / migrated OK")
+
+
 def bootstrap():
     with app.app_context():
-        try:
-            db.create_all()
-            _admin_columns()
-            _shortlink_schema()
-            app.logger.info("DB initialized / migrated OK")
-        except OperationalError:
-            app.logger.exception("DB init failed")
+        _migrate_schema()
         from models import InterfaceConfig
 
         p = (app.config.get('WG_CONF_PATH')
@@ -9693,6 +10969,52 @@ def node_ifaces(nid):
             'scope_networks': item_scope_networks,
         })
 
+        mirror = InterfaceConfig.query.filter_by(name=f'n{nid}:{name}').first()
+
+        if mirror is not None:
+            # Built by hand rather than via `_endpoint_default_payload`: that
+            # helper always calls `_node_endpoint_fallback` for its auto
+            # value, which costs up to two node HTTP calls. This loop already
+            # runs one `node_get` per interface below (available_ips), so a
+            # second per-row round-trip would make the whole listing stall
+            # whenever the node is slow or down. Auto-detection is left to
+            # export time, same as `resolve_client_endpoint_cheap`.
+            #
+            # Keep in sync with `_endpoint_default_payload`: the only
+            # intentional difference is `auto_endpoint` staying `''` here,
+            # because the probe that would fill it in is deliberately
+            # skipped rather than run per row.
+            override = iface_endpoint_override(mirror)
+            host = (getattr(mirror, 'endpoint_host', None) or '').strip() or None
+            port = getattr(mirror, 'endpoint_port', None)
+
+            item.update({
+                'endpoint_host': host,
+                'endpoint_port': int(port) if port else None,
+                'endpoint_override': override,
+                'auto_endpoint': '',
+                'effective_endpoint': override,
+                # 'auto' (not 'none') when there is no override: detection
+                # was never attempted here, so nothing has been established
+                # about what auto-detection would return. 'none' would
+                # assert a negative the panel hasn't checked; export time
+                # may still resolve an endpoint. See the module-level rule
+                # in `_endpoint_default_payload`'s docstring neighbourhood.
+                'endpoint_source': 'override' if override else 'auto',
+            })
+        else:
+            # Not mirrored yet: no override is possible, and the probe is
+            # skipped for the same reason as above. 'auto': export time
+            # decides.
+            item.update({
+                'endpoint_host': None,
+                'endpoint_port': None,
+                'endpoint_override': '',
+                'auto_endpoint': '',
+                'effective_endpoint': '',
+                'endpoint_source': 'auto',
+            })
+
         try:
             available_result = node_get(
                 node,
@@ -9981,6 +11303,10 @@ def iface_settings(iid):
             dns=iface.dns,
             mtu=iface.mtu,
             is_up=_iface_up(dev),
+            **{
+                k: v for k, v in _endpoint_default_payload(iface).items()
+                if k not in ('iface_id', 'iface', 'listen_port', 'scope')
+            },
         )
 
     data = request.get_json(silent=True)
@@ -10355,6 +11681,434 @@ def iface_settings(iid):
     )
 
 
+def _endpoint_default_payload(iface, *, scope=None, node=None, remote_iface=None):
+    """One shape for every response reporting an interface's endpoint default.
+
+    `endpoint_override` is what the operator saved; `auto_endpoint` is what
+    detection would return. They are reported separately and never collapsed,
+    so "I set this" stays distinguishable from "the panel guessed this".
+    """
+    if scope is None:
+        scope = 'node' if getattr(iface, 'node_id', None) is not None else 'local'
+
+    host = (getattr(iface, 'endpoint_host', None) or '').strip() or None
+    port = getattr(iface, 'endpoint_port', None)
+    override = iface_endpoint_override(iface)
+
+    auto = ''
+    try:
+        if scope == 'node':
+            auto = (_node_endpoint_fallback(
+                node or getattr(iface, 'node', None),
+                remote_iface_name(iface),
+                remote_iface,
+            ) or '').strip()
+        else:
+            auto = (_endpoint_fallback(iface) or '').strip()
+    except Exception:
+        # A node that is down must never stop an operator reading the override.
+        current_app.logger.debug(
+            'Endpoint auto-detection unavailable for %s',
+            getattr(iface, 'name', '?'), exc_info=True,
+        )
+        auto = ''
+
+    effective = override or auto
+
+    payload = {
+        'scope': scope,
+        'iface_id': iface.id,
+        'iface': remote_iface_name(iface) if scope == 'node' else (iface.name or ''),
+        'listen_port': iface.listen_port,
+        'endpoint_host': host,
+        'endpoint_port': int(port) if port else None,
+        'endpoint_override': override,
+        'auto_endpoint': auto,
+        'effective_endpoint': effective,
+        'endpoint_source': 'override' if override else ('auto' if auto else 'none'),
+    }
+
+    if scope == 'node':
+        payload['node_id'] = getattr(iface, 'node_id', None)
+
+    if not effective:
+        payload['warning'] = (
+            'No endpoint could be determined. Exported configs will have no '
+            'Endpoint line until an override is saved.'
+        )
+
+    return payload
+
+
+@app.get('/api/iface/<int:iid>/endpoint-default')
+@require_api_key_or_login
+def api_iface_endpoint_default_get(iid):
+    iface = db.session.get(InterfaceConfig, iid)
+
+    if iface is None:
+        return jsonify(
+            ok=False,
+            error='iface_not_found',
+            detail=f'Interface {iid} was not found.',
+        ), 404
+
+    return jsonify(ok=True, **_endpoint_default_payload(iface))
+
+
+@app.put('/api/iface/<int:iid>/endpoint-default')
+@require_api_key_or_login
+def api_iface_endpoint_default_put(iid):
+    iface = db.session.get(InterfaceConfig, iid)
+
+    if iface is None:
+        return jsonify(
+            ok=False,
+            error='iface_not_found',
+            detail=f'Interface {iid} was not found.',
+        ), 404
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify(
+            ok=False,
+            error='invalid_payload',
+            detail='The request body must be a JSON object.',
+        ), 400
+
+    try:
+        host, port = parse_endpoint_override(data.get('host'), data.get('port'))
+    except EndpointValidationError as exc:
+        return jsonify(ok=False, error=exc.code, detail=exc.detail), 400
+
+    iface.endpoint_host = host
+    iface.endpoint_port = port
+    db.session.commit()
+
+    current_app.logger.info(
+        'Endpoint default %s for local interface %s: host=%s port=%s',
+        'cleared' if host is None else 'saved',
+        iface.name, host or '-', port or '-',
+    )
+
+    return jsonify(ok=True, **_endpoint_default_payload(iface))
+
+
+class NodeIfaceLookupError(Exception):
+    """A node interface could not be resolved into a panel mirror row."""
+
+    def __init__(self, code, status, detail):
+        super().__init__(detail)
+        self.code = code
+        self.status = status
+        self.detail = detail
+
+
+def _node_mirror_for_endpoint_default(node, name):
+    """Return (mirror row, remote interface dict) for a node interface.
+
+    Creates the mirror when the panel has not seen this interface yet, but only
+    from data the node actually reported: `ensure_node_mirror_iface` otherwise
+    defaults the address to 10.0.0.1/24, and persisting that invented value
+    would corrupt later allocation.
+    """
+    db_name = f'n{node.id}:{name}'
+    iface = InterfaceConfig.query.filter_by(name=db_name).first()
+
+    if iface is not None:
+        return iface, {}
+
+    try:
+        listing = node_get(node, '/api/interfaces', timeout=10) or {}
+    except Exception as exc:
+        raise NodeIfaceLookupError(
+            'node_unreachable', 502,
+            f'Node {node.id} could not be reached: {exc}',
+        )
+
+    rows = listing.get('interfaces') if isinstance(listing, dict) else listing
+
+    remote = next(
+        (
+            row for row in (rows or [])
+            if isinstance(row, dict)
+            and str(row.get('name') or row.get('iface') or '').strip() == name
+        ),
+        None,
+    )
+
+    if remote is None:
+        raise NodeIfaceLookupError(
+            'node_iface_not_found', 404,
+            f'Node {node.id} has no interface named {name}.',
+        )
+
+    iface = ensure_node_mirror_iface(node, name, remote_iface=remote)
+    db.session.commit()
+
+    return iface, remote
+
+
+@app.get('/api/nodes/<int:nid>/iface/<name>/endpoint-default')
+@require_api_key_or_login
+def api_node_iface_endpoint_default_get(nid, name):
+    node = db.session.get(Node, nid)
+
+    if node is None:
+        return jsonify(
+            ok=False, error='node_not_found', detail=f'Node {nid} was not found.'
+        ), 404
+
+    iface = InterfaceConfig.query.filter_by(name=f'n{nid}:{name}').first()
+
+    if iface is not None:
+        return jsonify(
+            ok=True,
+            **_endpoint_default_payload(iface, scope='node', node=node),
+        )
+
+    # Not mirrored yet, so there is no override to report. Auto-detection still
+    # tells the operator what peers would get today. A GET must not create rows
+    # and must not fail because a node is down.
+    try:
+        auto = (_node_endpoint_fallback(node, name) or '').strip()
+    except Exception:
+        auto = ''
+
+    return jsonify(
+        ok=True,
+        scope='node',
+        node_id=nid,
+        iface=name,
+        iface_id=None,
+        listen_port=None,
+        endpoint_host=None,
+        endpoint_port=None,
+        endpoint_override='',
+        auto_endpoint=auto,
+        effective_endpoint=auto,
+        endpoint_source='auto' if auto else 'none',
+    )
+
+
+@app.put('/api/nodes/<int:nid>/iface/<name>/endpoint-default')
+@require_api_key_or_login
+def api_node_iface_endpoint_default_put(nid, name):
+    node = db.session.get(Node, nid)
+
+    if node is None:
+        return jsonify(
+            ok=False, error='node_not_found', detail=f'Node {nid} was not found.'
+        ), 404
+
+    data = request.get_json(silent=True)
+
+    if not isinstance(data, dict):
+        return jsonify(
+            ok=False,
+            error='invalid_payload',
+            detail='The request body must be a JSON object.',
+        ), 400
+
+    try:
+        host, port = parse_endpoint_override(data.get('host'), data.get('port'))
+    except EndpointValidationError as exc:
+        return jsonify(ok=False, error=exc.code, detail=exc.detail), 400
+
+    try:
+        iface, remote = _node_mirror_for_endpoint_default(node, name)
+    except NodeIfaceLookupError as exc:
+        return jsonify(ok=False, error=exc.code, detail=exc.detail), exc.status
+
+    iface.endpoint_host = host
+    iface.endpoint_port = port
+    db.session.commit()
+
+    current_app.logger.info(
+        'Endpoint default %s for node %s interface %s: host=%s port=%s',
+        'cleared' if host is None else 'saved',
+        nid, name, host or '-', port or '-',
+    )
+
+    return jsonify(
+        ok=True,
+        **_endpoint_default_payload(
+            iface, scope='node', node=node, remote_iface=remote
+        ),
+    )
+
+
+class EndpointApplyError(Exception):
+    """Applying an endpoint default to existing peers could not start."""
+
+    def __init__(self, code, status, detail):
+        super().__init__(detail)
+        self.code = code
+        self.status = status
+        self.detail = detail
+
+
+def _apply_endpoint_default(iface, *, dry_run, overwrite_explicit,
+                            scope='local', node=None, remote_iface=None):
+    """Stamp the interface's effective endpoint onto its existing peers.
+
+    This writes only `Peer.endpoint`. It touches no runtime, no server config
+    and no node, so there is no per-peer failure mode: either the single
+    transaction commits or nothing changes.
+    """
+    effective = resolve_client_endpoint(iface, node=node, remote_iface=remote_iface)
+
+    if not effective:
+        raise EndpointApplyError(
+            'endpoint_unavailable', 409,
+            'No endpoint could be determined for this interface, so there is '
+            'nothing to apply.',
+        )
+
+    peers = Peer.query.filter_by(iface_id=iface.id).all()
+    explicit = [p for p in peers if (p.endpoint or '').strip()]
+
+    # Candidates before the no-op filter: every peer when overwriting
+    # explicit values, otherwise only peers with no endpoint of their own.
+    candidates = peers if overwrite_explicit else [
+        p for p in peers if not (p.endpoint or '').strip()
+    ]
+
+    # Drop peers whose endpoint already equals the value we would write, so
+    # `updated`/`would_update` count actual changes rather than rows that
+    # merely get dirtied and re-flushed (review finding #6).
+    targets = [p for p in candidates if (p.endpoint or '').strip() != effective]
+
+    result = {
+        'scope': scope,
+        'iface': remote_iface_name(iface) if scope == 'node' else (iface.name or ''),
+        'effective_endpoint': effective,
+        'total_peers': len(peers),
+        'eligible': len(targets),
+        'skipped_explicit': 0 if overwrite_explicit else len(explicit),
+        'dry_run': bool(dry_run),
+    }
+
+    if dry_run:
+        result['would_update'] = len(targets)
+        return result
+
+    for peer in targets:
+        peer.endpoint = effective
+
+    db.session.commit()
+
+    current_app.logger.info(
+        'Applied endpoint %s to %s peers on interface %s',
+        effective, len(targets), iface.name,
+    )
+
+    result['updated'] = len(targets)
+    return result
+
+
+def _apply_request_flags(data):
+    """(dry_run, overwrite_explicit) from an apply request body."""
+    data = data if isinstance(data, dict) else {}
+    return (
+        _sub_bool(data.get('dry_run')),
+        _sub_bool(data.get('overwrite_explicit')),
+    )
+
+
+@app.post('/api/iface/<int:iid>/endpoint-default/apply')
+@require_api_key_or_login
+def api_iface_endpoint_default_apply(iid):
+    iface = db.session.get(InterfaceConfig, iid)
+
+    if iface is None:
+        return jsonify(
+            ok=False, error='iface_not_found',
+            detail=f'Interface {iid} was not found.',
+        ), 404
+
+    dry_run, overwrite_explicit = _apply_request_flags(
+        request.get_json(silent=True)
+    )
+
+    try:
+        result = _apply_endpoint_default(
+            iface, dry_run=dry_run, overwrite_explicit=overwrite_explicit,
+        )
+    except EndpointApplyError as exc:
+        return jsonify(ok=False, error=exc.code, detail=exc.detail), exc.status
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception('Applying the endpoint default failed')
+        return jsonify(
+            ok=False, error='endpoint_apply_failed', detail=str(exc)
+        ), 500
+
+    return jsonify(ok=True, **result)
+
+
+@app.post('/api/nodes/<int:nid>/iface/<name>/endpoint-default/apply')
+@require_api_key_or_login
+def api_node_iface_endpoint_default_apply(nid, name):
+    node = db.session.get(Node, nid)
+
+    if node is None:
+        return jsonify(
+            ok=False, error='node_not_found', detail=f'Node {nid} was not found.'
+        ), 404
+
+    dry_run, overwrite_explicit = _apply_request_flags(
+        request.get_json(silent=True)
+    )
+
+    remote = None
+
+    if dry_run:
+        # A dry run must never create the mirror row - the same rule the
+        # sibling GET route follows (api_node_iface_endpoint_default_get):
+        # look it up read-only and do not fail just because the node is down.
+        iface = InterfaceConfig.query.filter_by(name=f'n{nid}:{name}').first()
+
+        if iface is None:
+            try:
+                auto = (_node_endpoint_fallback(node, name) or '').strip()
+            except Exception:
+                auto = ''
+
+            return jsonify(
+                ok=True,
+                scope='node',
+                iface=name,
+                effective_endpoint=auto,
+                total_peers=0,
+                eligible=0,
+                skipped_explicit=0,
+                dry_run=True,
+                would_update=0,
+            )
+    else:
+        try:
+            iface, remote = _node_mirror_for_endpoint_default(node, name)
+        except NodeIfaceLookupError as exc:
+            return jsonify(ok=False, error=exc.code, detail=exc.detail), exc.status
+
+    try:
+        result = _apply_endpoint_default(
+            iface, dry_run=dry_run, overwrite_explicit=overwrite_explicit,
+            scope='node', node=node, remote_iface=remote,
+        )
+    except EndpointApplyError as exc:
+        return jsonify(ok=False, error=exc.code, detail=exc.detail), exc.status
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception('Applying the node endpoint default failed')
+        return jsonify(
+            ok=False, error='endpoint_apply_failed', detail=str(exc)
+        ), 500
+
+    return jsonify(ok=True, **result)
+
+
 @app.post('/api/iface/<int:iid>/<action>')
 @login_required
 def iface_updown(iid, action):
@@ -10705,7 +12459,8 @@ def node_peers(nid):
             exp_ts      = to_ts(getattr(p, 'expires_at', None))
             ttl_seconds = max(0, exp_ts - now_ts()) if exp_ts else None
 
-            iface_raw  = p.iface.name if p.iface else ''
+            p_iface    = p.iface
+            iface_raw  = p_iface.name if p_iface else ''
             iface_disp = iface_raw.split(':', 1)[1] if iface_raw.startswith(f"n{nid}:") else iface_raw
 
             if p.status == 'blocked':
@@ -10727,10 +12482,15 @@ def node_peers(nid):
                 'iface': iface_disp,
                 'iface_raw': iface_raw,
                 'name': p.name,
-                'listen_port': (p.iface.listen_port if p.iface else None) or port_by_name.get(iface_disp),
+                'listen_port': (p_iface.listen_port if p_iface else None) or port_by_name.get(iface_disp),
                 'server_public_ip': node_pub_ip,
                 'address': p.address,
-                'endpoint': p.endpoint or '',
+                'endpoint': resolve_client_endpoint_cheap(p_iface, explicit=p.endpoint),
+                # The resolved value above is for display. Editors must round-trip
+                # the stored column instead, or saving an unrelated field would
+                # freeze a derived endpoint onto the peer.
+                'endpoint_saved': p.endpoint or '',
+                'peer_endpoint': getattr(p, 'peer_endpoint', None) or '',
                 'allowed_ips': p.allowed_ips or '',
                 'persistent_keepalive': p.persistent_keepalive,
                 'mtu': p.mtu,
@@ -10765,74 +12525,108 @@ def node_peers(nid):
 
         return jsonify(peers=out), 200
 
-    data = request.get_json() or {}
-    priv = subprocess.check_output(['wg', 'genkey']).strip().decode()
-    pub  = subprocess.check_output(['wg', 'pubkey'], input=priv.encode()).strip().decode()
+    data = request.get_json(silent=True) or {}
+    iface_name = (data.get('iface') or '').strip()
+    if not iface_name:
+        return jsonify(error='iface is required'), 400
 
-    payload = {
-        'iface': data['iface'],
-        'public_key': pub,
-        'host_cidr': data['address'],
-        'endpoint': data.get('endpoint') or '',
-        'persistent_keepalive': data.get('persistent_keepalive') or 0,
-        'mtu': data.get('mtu'),
-        'dns': data.get('dns'),
-        'allowed_ips': (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip(),
-    }
-    node_post(n, '/api/peers/add', payload)
+    try:
+        priv = subprocess.check_output(['wg', 'genkey']).strip().decode()
+        pub = subprocess.check_output(
+            ['wg', 'pubkey'], input=(priv + '\n').encode()
+        ).strip().decode()
+    except Exception as exc:
+        return jsonify(error='key_generation_failed', detail=str(exc)), 500
 
-    db_iface_name = f"n{nid}:{data['iface']}"
-    iface = InterfaceConfig.query.filter_by(name=db_iface_name).first()
-    if not iface:
-        iface = InterfaceConfig(
-            name=db_iface_name,
-            path=f"/etc/wireguard/{data['iface']}.conf",
-            address=data.get('server_cidr') or '10.0.0.1/24',
-            listen_port=int(data.get('listen_port') or 51820),
-            private_key='(remote)',
-            mtu=data.get('mtu'),
-            dns=data.get('dns')
+    remote_iface = {}
+    try:
+        remote_payload = node_get(n, '/api/interfaces', timeout=10) or {}
+        rows = remote_payload.get('interfaces') or [] if isinstance(remote_payload, dict) else remote_payload
+        remote_iface = next(
+            (row for row in (rows or []) if str((row or {}).get('name') or '') == iface_name),
+            {},
+        ) or {}
+    except Exception:
+        current_app.logger.warning(
+            'Could not refresh node %s interface %s before peer create',
+            nid, iface_name, exc_info=True,
         )
-        try:
-            iface.node_id = n.id
-        except Exception:
-            pass
-        db.session.add(iface)
-        db.session.commit()
-        _on_boot()
 
-    def _conv_time_limit(d):
-        try: dval = float(d.get('time_limit_days') or 0) or 0.0
-        except Exception: dval = 0.0
-        try: hval = float(d.get('time_limit_hours') or 0) or 0.0
-        except Exception: hval = 0.0
-        return (dval + hval/24.0) if (dval or hval) else None
-
-    combined_days = _conv_time_limit(data)
-
-    peer = Peer(
-        iface_id=iface.id,
-        name=(data.get('name') or ''),
-        public_key=pub,
-        private_key=priv,
-        address=data['address'],
-        allowed_ips=payload['allowed_ips'],
-        endpoint=data.get('endpoint') or '',
-        persistent_keepalive=data.get('persistent_keepalive') or None,
-        mtu=data.get('mtu') or None,
-        dns=data.get('dns') or None,
-        status='online',
-        data_limit_value=int(data.get('data_limit_value') or 0),
-        data_limit_unit=data.get('data_limit_unit') or 'Mi',
-        start_on_first_use=bool(data.get('start_on_first_use')),
-        time_limit_days=combined_days,
-        unlimited=bool(data.get('unlimited')),
-        phone_number=data.get('phone_number') or '',
-        telegram_id=data.get('telegram_id') or ''
+    iface = ensure_node_mirror_iface(
+        n, iface_name, remote_iface,
+        listen_port=data.get('listen_port'),
+        server_cidr=data.get('server_cidr'),
+        mtu=data.get('mtu'),
+        dns=data.get('dns'),
     )
-    db.session.add(peer)
-    db.session.commit()
-    return jsonify(ok=True, id=peer.id)
+    peer_endpoint = (data.get('peer_endpoint') or '').strip()
+    allowed_ips = (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip()
+
+    try:
+        address = node_install_peer(
+            n, iface_name, iface,
+            public_key=pub,
+            requested_address=(data.get('address') or '').strip(),
+            peer_endpoint=peer_endpoint,
+            keepalive=data.get('persistent_keepalive') or 0,
+            mtu=data.get('mtu'),
+            dns=data.get('dns'),
+            allowed_ips=allowed_ips,
+        )
+    except AddressAllocationError as exc:
+        db.session.rollback()
+        return address_error_response(exc)
+    except NodePeerInstallError as exc:
+        # The request may have reached the node before a timeout/proxy failure.
+        # Delete by the newly generated key; the node endpoint is convergent.
+        try:
+            _rollback_node_created_peer(n, pub)
+        except Exception:
+            current_app.logger.exception('Ambiguous node create cleanup failed for %s', pub)
+        db.session.rollback()
+        return jsonify(error=exc.code, detail=exc.detail), exc.status
+
+    compensation = PeerCreateCompensation()
+    compensation.register_node(n, pub)
+    try:
+        peer = Peer(
+            iface_id=iface.id,
+            name=(data.get('name') or '').strip() or 'peer',
+            public_key=pub,
+            private_key=priv,
+            address=address,
+            allowed_ips=allowed_ips,
+            endpoint=(data.get('endpoint') or '').strip() or None,
+            peer_endpoint=peer_endpoint or None,
+            persistent_keepalive=data.get('persistent_keepalive') or None,
+            mtu=data.get('mtu') or None,
+            dns=(data.get('dns') or '').strip() or None,
+            status='online',
+            data_limit_value=int(data.get('data_limit_value') or 0),
+            data_limit_unit=data.get('data_limit_unit') or 'Mi',
+            start_on_first_use=_sub_bool(data.get('start_on_first_use')),
+            time_limit_days=_conv_time_limit(data),
+            unlimited=_sub_bool(data.get('unlimited')),
+            phone_number=(data.get('phone_number') or '').strip(),
+            telegram_id=(data.get('telegram_id') or '').strip(),
+        )
+        db.session.add(peer)
+        db.session.commit()
+    except Exception as exc:
+        cleanup_failures = compensation.rollback()
+        db.session.rollback()
+        current_app.logger.exception('DB save failed after legacy node peer create')
+        return jsonify(
+            error='db_save_failed', detail=str(exc),
+            cleanup_complete=not cleanup_failures,
+            cleanup_failures=cleanup_failures,
+        ), 502 if cleanup_failures else 500
+
+    return jsonify(
+        ok=True, id=peer.id, address=peer.address,
+        endpoint=_effective_client_endpoint(peer),
+        peer_endpoint=peer.peer_endpoint or '',
+    )
 
 
 ##############################################
@@ -11797,10 +13591,6 @@ def users():
                 form.mtu.data = sel_iface.mtu
             if form.dns.data is None:
                 form.dns.data = sel_iface.dns
-            if not form.endpoint.data:
-                fallback = _endpoint_fallback(sel_iface)
-                if fallback:
-                    form.endpoint.data = fallback
 
     if form.validate_on_submit():
         iface = sel_iface or (db.session.get(InterfaceConfig, form.iface.data) if form.iface.data else None)
@@ -11821,9 +13611,9 @@ def users():
             name=form.name.data,
             public_key=pub,
             private_key=priv,
-            address=form.address.data,
             allowed_ips=form.allowed_ips.data,
             endpoint=form.endpoint.data,
+            peer_endpoint=(form.peer_endpoint.data or '').strip() or None,
             persistent_keepalive=form.persistent_keepalive.data,
             mtu=form.mtu.data,
             dns=form.dns.data,
@@ -11841,42 +13631,56 @@ def users():
             exp_ts = add_days_ts(now_ts(), float(peer.time_limit_days))
             peer.expires_at = from_ts(exp_ts)
 
-        db.session.add(peer)
-        db.session.commit()
-        short_token = None
-        short_url = None
+        installed = False
+
+        with interface_allocation_lock(iface):
+            try:
+                peer.address = allocate_peer_address(iface, requested=form.address.data)
+            except AddressAllocationError as e:
+                flash(str(e), 'error')
+                return render_template('users.html', form=form)
+
+            try:
+                db.session.add(peer)
+                db.session.flush()
+
+                install_local_peer(peer)
+                installed = True
+                peer.status = 'online'
+
+                db.session.add(PeerEvent(
+                    peer_id=peer.id,
+                    event='created',
+                    details=(
+                        f"iface={iface.name}; "
+                        f"limit={getattr(peer,'data_limit_value',0)}"
+                        f"{getattr(peer,'data_limit_unit','')}; "
+                        f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
+                    ),
+                ))
+                db.session.commit()
+                flash('Peer created & enabled', 'success')
+
+            except Exception as e:
+                if installed:
+                    _wg_disable_quiet(peer)
+                    _remove_peer_quiet(peer)
+                db.session.rollback()
+                current_app.logger.exception("Peer create failed for %s: %s", form.name.data, e)
+                flash(
+                    'Peer was not created: the interface could not accept it. '
+                    'Bring the interface up and try again.',
+                    'error',
+                )
+                return render_template('users.html', form=form)
+
+        # The shortlink row is created here so it exists; its URL is rendered
+        # by the listing the redirect lands on, so the returned tuple is not
+        # captured (review finding #12 - confirmed unused, not a regression).
         try:
-            short_token, short_url = _shortlink_for_peer(peer)
+            _shortlink_for_peer(peer)
         except Exception:
             current_app.logger.exception("shortlink create failed for local peer %s", peer.id)
-
-        try:
-            _peer_to_conf(peer)
-        except Exception:
-            current_app.logger.exception("append to conf failed for peer %s", peer.id)
-
-        try:
-            _wg_enable(peer)
-            peer.status = 'online'
-            db.session.commit()
-            log_event(
-                peer, 'created',
-                f"iface={iface.name}; "
-                f"limit={getattr(peer,'data_limit_value',0)}{getattr(peer,'data_limit_unit','')}; "
-                f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
-            )
-            flash('Peer created & enabled', 'success')
-        except Exception as e:
-            current_app.logger.exception("Enable failed for %s: %s", peer.name, e)
-            peer.status = 'offline'
-            db.session.commit()
-            log_event(
-                peer, 'created',
-                f"(enable failed) iface={iface.name}; "
-                f"limit={getattr(peer,'data_limit_value',0)}{getattr(peer,'data_limit_unit','')}; "
-                f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
-            )
-            flash('Peer created, but interface was not up. It has been left offline—bring the interface up and click “Enable”.', 'error')
 
         return redirect(url_for('users'))
 
@@ -12520,7 +14324,9 @@ def peers_create():
         n = Node.query.get_or_404(nid)
 
         name = (data.get('name') or '').strip() or 'peer'
-        endpoint = ''
+        # Explicit value only. An unset endpoint resolves through the interface
+        # override at export time; see `resolve_client_endpoint`.
+        endpoint = (data.get('endpoint') or '').strip()
         allowed_ips = (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip()
         keepalive = _clean_keepalive(data.get('persistent_keepalive'))
         mtu = _clean_mtu(data.get('mtu'))
@@ -12547,22 +14353,6 @@ def peers_create():
         node_ifaces = {}
         remote_iface = {}
         try:
-            parsed_node_url = urlparse(
-                (
-                    getattr(n, 'base_url', '')
-                    or ''
-                ).strip()
-            )
-
-            node_endpoint_host = str(
-                parsed_node_url.hostname
-                or ''
-            ).strip()
-
-        except Exception:
-            node_endpoint_host = ''
-
-        try:
             node_ifaces = node_get(
                 n,
                 "/api/interfaces",
@@ -12571,11 +14361,6 @@ def peers_create():
 
             if isinstance(node_ifaces, dict):
                 rows = node_ifaces.get("interfaces") or []
-                if not node_endpoint_host:
-                    node_endpoint_host = str(
-                        node_ifaces.get("public_ipv4")
-                        or ""
-                    ).strip()
             else:
                 rows = node_ifaces or []
 
@@ -12598,78 +14383,6 @@ def peers_create():
             )
             node_ifaces = {}
             remote_iface = {}
-
-        if not endpoint:
-            # First fallback: ask the node health endpoint for its public IPv4.
-            if not node_endpoint_host:
-                try:
-                    node_health = node_get(
-                        n,
-                        "/api/health",
-                        timeout=6,
-                    ) or {}
-
-                    if isinstance(node_health, dict):
-                        node_endpoint_host = str(
-                            node_health.get("public_ipv4") or ""
-                        ).strip()
-
-                except Exception:
-                    node_endpoint_host = ""
-
-            if not node_endpoint_host:
-                try:
-                    parsed_node_url = urlparse(
-                        (
-                            getattr(n, "base_url", "")
-                            or ""
-                        ).strip()
-                    )
-                    node_endpoint_host = str(
-                        parsed_node_url.hostname or ""
-                    ).strip()
-                except Exception:
-                    node_endpoint_host = ""
-
-            try:
-                listen_port = int(
-                    remote_iface.get("listen_port")
-                    or data.get("listen_port")
-                    or 51820
-                )
-            except Exception:
-                listen_port = 51820
-
-            if node_endpoint_host and listen_port:
-                endpoint = _norm_hostport(
-                    node_endpoint_host,
-                    listen_port,
-                )
-
-        if not endpoint:
-            current_app.logger.warning(
-                "Could not auto-detect node endpoint: "
-                "node_id=%s iface=%s base_url=%s",
-                nid,
-                iface_name,
-                getattr(n, "base_url", ""),
-            )
-
-        addr = (data.get('address') or '').strip()
-        if not addr:
-            try:
-                avail = node_get(n, f"/api/iface/{iface_name}/available_ips")
-                if isinstance(avail, dict):
-                    avail = avail.get("available_ips", [])
-                if not isinstance(avail, list) or not avail:
-                    return jsonify(
-                        error="node_no_available_ip",
-                        detail="empty or invalid available_ips"
-                    ), 409
-                addr = avail[0]
-            except Exception as e:
-                current_app.logger.exception("node available_ips failed: %s", e)
-                return jsonify(error="node_available_ips_failed", detail=str(e)), 502
 
         # Make sure remote interface is up. it should making sure that it is up otherwise pass.
         try:
@@ -12695,110 +14408,86 @@ def peers_create():
             current_app.logger.exception("key generation failed")
             return jsonify(error="key_generation_failed", detail=str(e)), 500
 
-        node_payload = {
-            'iface': iface_name,
-            'public_key': pub,
-            'host_cidr': addr,
-            'endpoint': endpoint,
-            'persistent_keepalive': keepalive or 0,
-            'mtu': mtu,
-            'dns': dns,
-            'allowed_ips': allowed_ips,
-        }
-
-        try:
-            node_post(n, '/api/peers/add', node_payload)
-        except requests.HTTPError as e:
-            body = getattr(e.response, 'text', '') if getattr(e, 'response', None) else ''
-            current_app.logger.exception("node_create_failed node_id=%s iface=%s", nid, iface_name)
-            return jsonify(
-                error="node_create_failed",
-                detail=str(e),
-                body=(body[:800] if body else '')
-            ), 502
-        except Exception as e:
-            current_app.logger.exception("node_create_failed node_id=%s iface=%s", nid, iface_name)
-            return jsonify(error="node_create_failed", detail=str(e)), 502
-
-        db_iface_name = f"n{nid}:{iface_name}"
-        iface = InterfaceConfig.query.filter_by(name=db_iface_name).first()
-
-        if not iface:
-            iface = InterfaceConfig(
-                name=db_iface_name,
-                path=f"/etc/wireguard/{iface_name}.conf",
-                address=(
-                    remote_iface.get('address') or
-                    data.get('server_cidr') or
-                    '10.0.0.1/24'
-                ),
-                listen_port=int(
-                    remote_iface.get('listen_port') or
-                    data.get('listen_port') or
-                    51820
-                ),
-                private_key='(remote)',
-                mtu=remote_iface.get('mtu') or mtu,
-                dns=remote_iface.get('dns') or dns,
-                node_id=n.id,
-            )
-            db.session.add(iface)
-            db.session.flush()
-        else:
-            changed = False
-
-            if remote_iface.get('address') and iface.address != remote_iface.get('address'):
-                iface.address = remote_iface.get('address')
-                changed = True
-
-            if remote_iface.get('listen_port'):
-                try:
-                    lp = int(remote_iface.get('listen_port'))
-                    if iface.listen_port != lp:
-                        iface.listen_port = lp
-                        changed = True
-                except Exception:
-                    pass
-
-            if remote_iface.get('mtu') and iface.mtu != remote_iface.get('mtu'):
-                iface.mtu = remote_iface.get('mtu')
-                changed = True
-
-            if remote_iface.get('dns') and iface.dns != remote_iface.get('dns'):
-                iface.dns = remote_iface.get('dns')
-                changed = True
-
-            if getattr(iface, 'node_id', None) != n.id:
-                iface.node_id = n.id
-                changed = True
-
-            if changed:
-                db.session.flush()
-
-        peer = Peer(
-            iface_id=iface.id,
-            name=name,
-            public_key=pub,
-            private_key=priv,
-            address=addr,
-            allowed_ips=allowed_ips,
-            endpoint=endpoint,
-            persistent_keepalive=keepalive,
-            mtu=mtu,
-            dns=dns,
-            status='online',
-            data_limit_value=data_limit_value,
-            data_limit_unit=data_limit_unit,
-            start_on_first_use=start_on_first_use,
-            time_limit_days=combined_days,
-            unlimited=unlimited,
-            phone_number=phone or '',
-            telegram_id=tg or '',
+        # The mirror row has to exist before allocation so a requested address
+        # can be validated against the node interface's real network.
+        iface = ensure_node_mirror_iface(
+            n, iface_name, remote_iface,
+            mtu=mtu, dns=dns,
+            listen_port=data.get('listen_port'),
+            server_cidr=data.get('server_cidr'),
         )
 
-        if peer.time_limit_days and not peer.start_on_first_use and not peer.unlimited:
-            exp_ts = add_days_ts(now_ts(), float(peer.time_limit_days))
-            peer.expires_at = from_ts(exp_ts)
+        try:
+            addr = node_install_peer(
+                n, iface_name, iface,
+                public_key=pub,
+                requested_address=(data.get('address') or '').strip(),
+                peer_endpoint=(data.get('peer_endpoint') or '').strip(),
+                keepalive=keepalive or 0,
+                mtu=mtu,
+                dns=dns,
+                allowed_ips=allowed_ips,
+            )
+        except AddressAllocationError as e:
+            db.session.rollback()
+            return address_error_response(e)
+        except NodePeerInstallError as e:
+            cleanup_failures = []
+            try:
+                _rollback_node_created_peer(n, pub)
+            except Exception as cleanup_exc:
+                cleanup_failures.append({
+                    'scope': 'node', 'public_key': pub, 'detail': str(cleanup_exc),
+                })
+                current_app.logger.exception(
+                    'Ambiguous node create cleanup failed for %s', pub
+                )
+            db.session.rollback()
+            current_app.logger.warning(
+                "node_create_failed node_id=%s iface=%s: %s", nid, iface_name, e.detail
+            )
+            return jsonify(
+                error=e.code, detail=e.detail,
+                cleanup_complete=not cleanup_failures,
+                cleanup_failures=cleanup_failures,
+            ), 502 if cleanup_failures else e.status
+
+        compensation = PeerCreateCompensation()
+        compensation.register_node(n, pub)
+        try:
+            peer = Peer(
+                iface_id=iface.id,
+                name=name,
+                public_key=pub,
+                private_key=priv,
+                address=addr,
+                allowed_ips=allowed_ips,
+                endpoint=endpoint or None,
+                peer_endpoint=(data.get('peer_endpoint') or '').strip() or None,
+                persistent_keepalive=keepalive,
+                mtu=mtu,
+                dns=dns,
+                status='online',
+                data_limit_value=data_limit_value,
+                data_limit_unit=data_limit_unit,
+                start_on_first_use=start_on_first_use,
+                time_limit_days=combined_days,
+                unlimited=unlimited,
+                phone_number=phone or '',
+                telegram_id=tg or '',
+            )
+
+            if peer.time_limit_days and not peer.start_on_first_use and not peer.unlimited:
+                exp_ts = add_days_ts(now_ts(), float(peer.time_limit_days))
+                peer.expires_at = from_ts(exp_ts)
+        except Exception as e:
+            cleanup_failures = compensation.rollback()
+            db.session.rollback()
+            return jsonify(
+                error='peer_prepare_failed', detail=str(e),
+                cleanup_complete=not cleanup_failures,
+                cleanup_failures=cleanup_failures,
+            ), 502 if cleanup_failures else 400
 
         short_token = None
         short_url = None
@@ -12835,15 +14524,14 @@ def peers_create():
             db.session.commit()
 
         except Exception as e:
+            cleanup_failures = compensation.rollback()
             db.session.rollback()
             current_app.logger.exception("DB save failed after node peer create: %s", e)
-
-            try:
-                node_delete(n, f"/api/peer/{pub}")
-            except Exception:
-                pass
-
-            return jsonify(error="db_save_failed", detail=str(e)), 500
+            return jsonify(
+                error="db_save_failed", detail=str(e),
+                cleanup_complete=not cleanup_failures,
+                cleanup_failures=cleanup_failures,
+            ), 502 if cleanup_failures else 500
 
         return jsonify(
             success=True,
@@ -12856,6 +14544,8 @@ def peers_create():
             shortlink=short_url or '',
             shortlink_token=short_token or '',
             address=peer.address,
+            endpoint=_effective_client_endpoint(peer),
+            peer_endpoint=peer.peer_endpoint or '',
             phone_number=peer.phone_number or '',
             telegram_id=peer.telegram_id or ''
         ), 200
@@ -12898,19 +14588,9 @@ def peers_create():
     phone = (data.get('phone_number') or data.get('phone') or '').strip()
     tg = (data.get('telegram_id') or data.get('telegram') or '').strip()
 
-    address = (data.get('address') or '').strip()
-    if not address:
-        try:
-            avail = _available_ips(iface)
-            if not avail:
-                return jsonify(error='No available IPs for this interface'), 409
-            address = avail[0]
-        except Exception as e:
-            current_app.logger.exception("Failed to get available IPs: %s", e)
-            return jsonify(error='address_allocation_failed', detail=str(e)), 500
-
     allowed_ips = (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip()
     endpoint = (data.get('endpoint') or '').strip()
+    peer_endpoint = (data.get('peer_endpoint') or '').strip()
     keepalive = _clean_keepalive(data.get('persistent_keepalive'))
     mtu = _clean_mtu(data.get('mtu'))
     dns = (data.get('dns') or '').strip() or None
@@ -12930,9 +14610,9 @@ def peers_create():
         name=(data.get('name') or '').strip() or 'peer',
         public_key=pub,
         private_key=priv,
-        address=address,
         allowed_ips=allowed_ips,
-        endpoint=endpoint,
+        endpoint=endpoint or None,
+        peer_endpoint=peer_endpoint or None,
         persistent_keepalive=keepalive,
         mtu=mtu,
         dns=dns,
@@ -12952,48 +14632,60 @@ def peers_create():
 
     short_token = None
     short_url = None
+    installed = False
 
+    # Allocate and install under one per-interface lock so two workers cannot
+    # claim the same host.
+    with interface_allocation_lock(iface):
+        try:
+            peer.address = allocate_peer_address(iface, requested=data.get('address'))
+        except AddressAllocationError as e:
+            return address_error_response(e)
+
+        try:
+            db.session.add(peer)
+            db.session.flush()
+
+            install_local_peer(peer)
+            installed = True
+
+            try:
+                log_event(
+                    peer,
+                    'created',
+                    f"Limit={peer.data_limit_value}{peer.data_limit_unit or ''}; "
+                    f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
+                )
+            except Exception:
+                pass
+
+            try:
+                logpanel_action(
+                    "peer_create",
+                    f"pid={peer.id}; scope=local; iface={iface.name}; "
+                    f"unlimited={peer.unlimited}; days={peer.time_limit_days}"
+                )
+            except Exception:
+                pass
+
+            db.session.commit()
+
+        except Exception as e:
+            if installed:
+                _wg_disable_quiet(peer)
+                _remove_peer_quiet(peer)
+            db.session.rollback()
+            current_app.logger.exception("local peer create failed: %s", e)
+            return jsonify(error="local_create_failed", detail=str(e)), 500
+
+    # The shortlink is convenience data: it commits separately and its failure
+    # must not undo a peer that is already live.
     try:
-        db.session.add(peer)
-        db.session.flush()
-
-        try:
-            short_token, short_url = _shortlink_for_peer(peer)
-        except Exception:
-            current_app.logger.exception(
-                "shortlink create failed for local peer %s",
-                getattr(peer, "id", "?")
-            )
-
-        _peer_to_conf(peer)
-        _check_iface_up(peer.iface)
-        _wg_enable(peer)
-
-        try:
-            log_event(
-                peer,
-                'created',
-                f"Limit={peer.data_limit_value}{peer.data_limit_unit or ''}; "
-                f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
-            )
-        except Exception:
-            pass
-
-        try:
-            logpanel_action(
-                "peer_create",
-                f"pid={peer.id}; scope=local; iface={iface.name}; "
-                f"unlimited={peer.unlimited}; days={peer.time_limit_days}"
-            )
-        except Exception:
-            pass
-
-        db.session.commit()
-
-    except Exception as e:
-        db.session.rollback()
-        current_app.logger.exception("local peer create failed: %s", e)
-        return jsonify(error="local_create_failed", detail=str(e)), 500
+        short_token, short_url = _shortlink_for_peer(peer)
+    except Exception:
+        current_app.logger.exception(
+            "shortlink create failed for local peer %s", getattr(peer, "id", "?")
+        )
 
     return jsonify(
         success=True,
@@ -13004,6 +14696,8 @@ def peers_create():
         shortlink=short_url or '',
         shortlink_token=short_token or '',
         address=peer.address,
+        endpoint=_effective_client_endpoint(peer),
+        peer_endpoint=peer.peer_endpoint or '',
         phone_number=peer.phone_number or '',
         telegram_id=peer.telegram_id or ''
     ), 200
@@ -13210,7 +14904,12 @@ def panel_peers():
                 'server_public_ip': server_public_ip,
 
                 'address': peer.address,
-                'endpoint': peer.endpoint or '',
+                'endpoint': resolve_client_endpoint_cheap(interface, explicit=peer.endpoint),
+                # The resolved value above is for display. Editors must round-trip
+                # the stored column instead, or saving an unrelated field would
+                # freeze a derived endpoint onto the peer.
+                'endpoint_saved': peer.endpoint or '',
+                'peer_endpoint': getattr(peer, 'peer_endpoint', None) or '',
                 'allowed_ips': peer.allowed_ips or '',
 
                 'persistent_keepalive':
@@ -13409,7 +15108,8 @@ def panel_peers_bulk():
         })
 
         allowed_ips = (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip()
-        endpoint = ''
+        # Explicit value only; the interface override resolves at export time.
+        endpoint = (data.get('endpoint') or '').strip()
 
         try:
             keepalive = int(data.get('persistent_keepalive') or 0)
@@ -13458,22 +15158,6 @@ def panel_peers_bulk():
         node_ifaces = {}
         remote_iface = {}
         try:
-            parsed_node_url = urlparse(
-                (
-                    getattr(n, 'base_url', '')
-                    or ''
-                ).strip()
-            )
-
-            node_endpoint_host = str(
-                parsed_node_url.hostname
-                or ''
-            ).strip()
-
-        except Exception:
-            node_endpoint_host = ''
-
-        try:
             node_ifaces = node_get(
                 n,
                 "/api/interfaces",
@@ -13482,11 +15166,6 @@ def panel_peers_bulk():
 
             if isinstance(node_ifaces, dict):
                 rows = node_ifaces.get("interfaces") or []
-                if not node_endpoint_host:
-                    node_endpoint_host = str(
-                        node_ifaces.get("public_ipv4")
-                        or ""
-                    ).strip()
             else:
                 rows = node_ifaces or []
 
@@ -13511,64 +15190,6 @@ def panel_peers_bulk():
             remote_iface = {}
 
 
-        if not endpoint:
-            # First fallback: ask the node health endpoint for its public IPv4.
-            if not node_endpoint_host:
-                try:
-                    node_health = node_get(
-                        n,
-                        "/api/health",
-                        timeout=6,
-                    ) or {}
-
-                    if isinstance(node_health, dict):
-                        node_endpoint_host = str(
-                            node_health.get("public_ipv4") or ""
-                        ).strip()
-
-                except Exception:
-                    node_endpoint_host = ""
-
-            # Final fallback: use the hostname/IP saved in the node base_url.
-            # The node-agent HTTP port is not being used.
-            if not node_endpoint_host:
-                try:
-                    parsed_node_url = urlparse(
-                        (
-                            getattr(n, "base_url", "")
-                            or ""
-                        ).strip()
-                    )
-                    node_endpoint_host = str(
-                        parsed_node_url.hostname or ""
-                    ).strip()
-                except Exception:
-                    node_endpoint_host = ""
-
-            try:
-                listen_port = int(
-                    remote_iface.get("listen_port")
-                    or data.get("listen_port")
-                    or 51820
-                )
-            except Exception:
-                listen_port = 51820
-
-            if node_endpoint_host and listen_port:
-                endpoint = _norm_hostport(
-                    node_endpoint_host,
-                    listen_port,
-                )
-
-        if not endpoint:
-            current_app.logger.warning(
-                "Could not auto-detect bulk node endpoint: "
-                "node_id=%s iface=%s base_url=%s",
-                nid,
-                iface_name,
-                getattr(n, "base_url", ""),
-            )
-
         try:
             avail = node_get(n, f"/api/iface/{iface_name}/available_ips", timeout=10)
             if isinstance(avail, dict):
@@ -13589,68 +15210,27 @@ def panel_peers_bulk():
         if not avail_ips:
             return jsonify(error="No available IPs for this node interface"), 409
 
-        if count > len(avail_ips):
-            count = len(avail_ips)
+        # `avail_ips` is only a "the pool is not empty" probe. It is NOT a
+        # capacity limit: the agent bounds that list (MAX_AVAILABLE_IPS, 512)
+        # and allocates each address itself under its own lock, since
+        # `node_install_peer` below is called without `requested_address`.
+        # Clamping `count` to len(avail_ips) would silently truncate any batch
+        # larger than the agent's preview window and report it as a full
+        # success. The loop instead stops on `address_pool_exhausted`, exactly
+        # like the local bulk path.
+        requested_count = count
 
         try:
             node_post(n, f"/api/iface/{iface_name}/up", {})
         except Exception:
             pass
 
-        db_iface_name = f"n{nid}:{iface_name}"
-        iface = InterfaceConfig.query.filter_by(name=db_iface_name).first()
-
-        if not iface:
-            iface = InterfaceConfig(
-                name=db_iface_name,
-                path=f"/etc/wireguard/{iface_name}.conf",
-                address=(
-                    remote_iface.get('address') or
-                    data.get('server_cidr') or
-                    '10.0.0.1/24'
-                ),
-                listen_port=int(
-                    remote_iface.get('listen_port') or
-                    data.get('listen_port') or
-                    51820
-                ),
-                private_key='(remote)',
-                mtu=remote_iface.get('mtu') or mtu,
-                dns=remote_iface.get('dns') or dns,
-                node_id=n.id,
-            )
-            db.session.add(iface)
-            db.session.flush()
-        else:
-            changed = False
-
-            if remote_iface.get('address') and iface.address != remote_iface.get('address'):
-                iface.address = remote_iface.get('address')
-                changed = True
-
-            if remote_iface.get('listen_port'):
-                try:
-                    lp = int(remote_iface.get('listen_port'))
-                    if iface.listen_port != lp:
-                        iface.listen_port = lp
-                        changed = True
-                except Exception:
-                    pass
-
-            if remote_iface.get('mtu') and iface.mtu != remote_iface.get('mtu'):
-                iface.mtu = remote_iface.get('mtu')
-                changed = True
-
-            if remote_iface.get('dns') and iface.dns != remote_iface.get('dns'):
-                iface.dns = remote_iface.get('dns')
-                changed = True
-
-            if getattr(iface, 'node_id', None) != n.id:
-                iface.node_id = n.id
-                changed = True
-
-            if changed:
-                db.session.flush()
+        iface = ensure_node_mirror_iface(
+            n, iface_name, remote_iface,
+            mtu=mtu, dns=dns,
+            listen_port=data.get('listen_port'),
+            server_cidr=data.get('server_cidr'),
+        )
 
         rx = re.compile(rf'^{re.escape(prefix)}(\d+)$')
         existing = {
@@ -13670,6 +15250,7 @@ def panel_peers_bulk():
 
         created, errors = [], []
         shortlinks_by_id = {}
+        pool_exhausted = False
 
         for i in range(count):
             pub = ''
@@ -13688,20 +15269,24 @@ def panel_peers_bulk():
                 ).strip().decode()
 
                 name = f"{prefix}{next_num + i}"
-                addr = avail_ips[i]
 
-                node_payload = {
-                    'iface': iface_name,
-                    'public_key': pub,
-                    'host_cidr': addr,
-                    'endpoint': endpoint,
-                    'persistent_keepalive': keepalive or 0,
-                    'mtu': mtu,
-                    'dns': dns,
-                    'allowed_ips': allowed_ips,
-                }
-
-                node_post(n, '/api/peers/add', node_payload, timeout=12)
+                try:
+                    addr = node_install_peer(
+                        n, iface_name, iface,
+                        public_key=pub,
+                        peer_endpoint=(data.get('peer_endpoint') or '').strip(),
+                        keepalive=keepalive or 0,
+                        mtu=mtu,
+                        dns=dns,
+                        allowed_ips=allowed_ips,
+                    )
+                except NodePeerInstallError as e:
+                    if e.code == 'address_pool_exhausted':
+                        # The pool ran out mid-batch: stop, keep what worked,
+                        # and tell the caller how many we actually got.
+                        pool_exhausted = True
+                        break
+                    raise
 
                 peer = Peer(
                     iface_id=iface.id,
@@ -13710,7 +15295,8 @@ def panel_peers_bulk():
                     private_key=priv,
                     address=addr,
                     allowed_ips=allowed_ips,
-                    endpoint=endpoint,
+                    endpoint=endpoint or None,
+                    peer_endpoint=(data.get('peer_endpoint') or '').strip() or None,
                     persistent_keepalive=keepalive if keepalive > 0 else None,
                     mtu=mtu,
                     dns=dns,
@@ -13759,6 +15345,9 @@ def panel_peers_bulk():
                 created.append(peer)
 
             except requests.HTTPError as e:
+                # Now rare: node_install_peer wraps HTTP errors as
+                # NodePeerInstallError. Kept as a safety net for any direct
+                # node_* call that might raise HTTPError in future.
                 body = getattr(e.response, 'text', '') if getattr(e, 'response', None) else ''
                 current_app.logger.exception(
                     "node bulk create failed node_id=%s iface=%s index=%s",
@@ -13770,6 +15359,25 @@ def panel_peers_bulk():
                     'index': i,
                     'error': str(e),
                     'body': body[:800] if body else '',
+                })
+
+                if pub:
+                    try:
+                        node_delete(n, f"/api/peer/{pub}")
+                    except Exception:
+                        pass
+
+            except NodePeerInstallError as e:
+                # Surface the agent's structured error code + detail rather
+                # than the bare class name (review finding #15).
+                current_app.logger.exception(
+                    "node bulk create failed node_id=%s iface=%s index=%s code=%s",
+                    nid, iface_name, i, e.code
+                )
+                errors.append({
+                    'index': i,
+                    'error': e.code,
+                    'detail': e.detail,
                 })
 
                 if pub:
@@ -13825,6 +15433,8 @@ def panel_peers_bulk():
             iface=iface_name,
             created=len(created),
             errors=errors,
+            requested_count=requested_count,
+            pool_exhausted=pool_exhausted,
             first_name=created[0].name if created else None,
             last_name=created[-1].name if created else None,
             peers=[{
@@ -13866,12 +15476,6 @@ def panel_peers_bulk():
         'time_limit_days': data.get('time_limit_days'),
         'time_limit_hours': data.get('time_limit_hours'),
     })
-
-    avail_ips = _available_ips(iface)
-    if not avail_ips:
-        return jsonify(error="No available IPs for this interface"), 409
-    if count > len(avail_ips):
-        count = len(avail_ips)
 
     rx = re.compile(rf'^{re.escape(prefix)}(\d+)$')
     existing = {
@@ -13919,88 +15523,93 @@ def panel_peers_bulk():
         data.get('telegram')
     )
 
+    peer_endpoint = (data.get('peer_endpoint') or '').strip()
+
     created, errors = [], []
     shortlinks_by_id = {}
+    pool_exhausted = False
 
-    for i in range(count):
-        try:
-            priv = subprocess.check_output(['wg', 'genkey']).strip().decode()
-            pub  = subprocess.check_output(['wg', 'pubkey'], input=priv.encode()).strip().decode()
-            name = f"{prefix}{next_num + i}"
-            addr = avail_ips[i]
-
-            peer = Peer(
-                iface_id=iface.id, name=name,
-                public_key=pub, private_key=priv,
-                address=addr, allowed_ips=allowed_ips,
-                endpoint=endpoint,
-                persistent_keepalive=keepalive,
-                mtu=mtu, dns=dns,
-                status='offline',
-                data_limit_value=int(dlim_val) if dlim_val else 0,
-                data_limit_unit=dlim_unit,
-                time_limit_days=combined_days,
-                start_on_first_use=start_on_first_use,
-                unlimited=unlimited,
-                phone_number=phones[i] if i < len(phones) else '',
-                telegram_id=tgs[i] if i < len(tgs) else '',
-            )
-
-            if peer.time_limit_days and not peer.start_on_first_use and not peer.unlimited:
-                exp_ts = add_days_ts(now_ts(), float(peer.time_limit_days))
-                peer.expires_at = from_ts(exp_ts)
-
-            db.session.add(peer)
-            db.session.flush()
-
+    with interface_allocation_lock(iface):
+        for i in range(count):
+            peer = None
+            installed = False
             try:
-                token, url = _shortlink_for_peer(peer)
-                shortlinks_by_id[int(peer.id)] = {
-                    "token": token or "",
-                    "url": url or "",
-                }
-            except Exception:
-                current_app.logger.exception(
-                    "shortlink create failed for bulk peer %s",
-                    getattr(peer, "id", "?")
+                # Allocate one at a time so each peer sees the ones before it.
+                addr = allocate_peer_address(iface)
+
+                priv = subprocess.check_output(['wg', 'genkey']).strip().decode()
+                pub  = subprocess.check_output(['wg', 'pubkey'], input=priv.encode()).strip().decode()
+                name = f"{prefix}{next_num + i}"
+
+                peer = Peer(
+                    iface_id=iface.id, name=name,
+                    public_key=pub, private_key=priv,
+                    address=addr, allowed_ips=allowed_ips,
+                    endpoint=endpoint or None,
+                    peer_endpoint=peer_endpoint or None,
+                    persistent_keepalive=keepalive,
+                    mtu=mtu, dns=dns,
+                    status='online',
+                    data_limit_value=int(dlim_val) if dlim_val else 0,
+                    data_limit_unit=dlim_unit,
+                    time_limit_days=combined_days,
+                    start_on_first_use=start_on_first_use,
+                    unlimited=unlimited,
+                    phone_number=phones[i] if i < len(phones) else '',
+                    telegram_id=tgs[i] if i < len(tgs) else '',
                 )
 
-            try:
-                _peer_to_conf(peer)
-            except Exception:
-                current_app.logger.exception("append to conf failed for peer %s", peer.id)
+                if peer.time_limit_days and not peer.start_on_first_use and not peer.unlimited:
+                    exp_ts = add_days_ts(now_ts(), float(peer.time_limit_days))
+                    peer.expires_at = from_ts(exp_ts)
 
-            created.append(peer)
+                db.session.add(peer)
+                db.session.flush()
 
-        except Exception as e:
-            current_app.logger.exception("bulk create failed at index %s: %s", i, e)
-            errors.append({'index': i, 'error': str(e)})
+                install_local_peer(peer)
+                installed = True
 
-    db.session.commit()
+                db.session.add(PeerEvent(
+                    peer_id=peer.id,
+                    event='created',
+                    details=(
+                        f"bulk; Limit={peer.data_limit_value}{peer.data_limit_unit or ''}; "
+                        f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
+                    ),
+                ))
+                db.session.commit()
+                created.append(peer)
 
-    try:
-        _check_iface_up(iface)
-    except Exception as e:
-        current_app.logger.warning("Could not bring up %s before enabling peers: %s", iface.name, e)
+            except AddressPoolExhausted:
+                # The pool ran out mid-batch: stop, keep what already worked.
+                db.session.rollback()
+                pool_exhausted = True
+                break
+            except Exception as e:
+                if installed and peer is not None:
+                    _wg_disable_quiet(peer)
+                    _remove_peer_quiet(peer)
+                db.session.rollback()
+                current_app.logger.exception("bulk create failed at index %s: %s", i, e)
+                errors.append({'index': i, 'error': str(e)})
 
     for peer in created:
         try:
-            _wg_enable(peer)
-            peer.status = 'online'
-            db.session.commit()
-            log_event(peer, 'created',
-                      f"bulk; Limit={peer.data_limit_value}{peer.data_limit_unit or ''}; "
-                      f"days={peer.time_limit_days}; unlimited={peer.unlimited}")
-            logpanel_action("peer_create", f"pid={peer.id}; iface={iface.name}; unlimited={peer.unlimited}; days={peer.time_limit_days}")
+            token, url = _shortlink_for_peer(peer)
+            shortlinks_by_id[int(peer.id)] = {"token": token or "", "url": url or ""}
+        except Exception:
+            current_app.logger.exception(
+                "shortlink create failed for bulk peer %s", getattr(peer, "id", "?")
+            )
 
-        except Exception as e:
-            current_app.logger.exception("Enable failed for %s: %s", peer.name, e)
-            peer.status = 'offline'
-            db.session.commit()
-            log_event(peer, 'created',
-                      f"bulk (enable failed); Limit={peer.data_limit_value}{peer.data_limit_unit or ''}; "
-                      f"days={peer.time_limit_days}; unlimited={peer.unlimited}")
-            logpanel_action("peer_create", f"pid={peer.id}; iface={iface.name}; enable_failed=1; unlimited={peer.unlimited}; days={peer.time_limit_days}")
+        try:
+            logpanel_action(
+                "peer_create",
+                f"pid={peer.id}; iface={iface.name}; unlimited={peer.unlimited}; "
+                f"days={peer.time_limit_days}"
+            )
+        except Exception:
+            pass
 
 
     return jsonify(
@@ -14009,6 +15618,8 @@ def panel_peers_bulk():
         iface=iface.name,
         created=len(created),
         errors=errors,
+        requested_count=count,
+        pool_exhausted=pool_exhausted,
         first_name=created[0].name if created else None,
         last_name=created[-1].name if created else None,
         peers=[{
@@ -14123,18 +15734,35 @@ def get_interfaces():
         if ':' in (i.name or ''):
             continue
 
-        out.append({
-        'id': i.id,
-        'name': i.name,
-        'address': i.address or '',
-        'server_cidr': i.address or '',
-        'scope_networks': scope_networks,
-        'listen_port': i.listen_port,
-        'mtu': i.mtu,
-        'dns': i.dns,
-        'available_ips': _available_ips(i),
-        'is_up': _iface_up(i.name),
+        row = {
+            'id': i.id,
+            'name': i.name,
+            'address': i.address or '',
+            'server_cidr': i.address or '',
+            'scope_networks': scope_networks,
+            'listen_port': i.listen_port,
+            'mtu': i.mtu,
+            'dns': i.dns,
+            'available_ips': _available_ips(i),
+            'is_up': _iface_up(i.name),
+        }
+        # Endpoint default, built WITHOUT a per-row `_endpoint_fallback`
+        # subprocess probe: this list is polled frequently by the UI, and a
+        # probe per interface per request would multiply subprocess fanout.
+        # Auto-detection still runs at export time via `resolve_client_endpoint`
+        # (see `resolve_client_endpoint_cheap`); the listing only needs the
+        # saved override and a source flag the UI can show. Built by hand for
+        # the same reason and with the same shape as the `node_ifaces` loop.
+        override = iface_endpoint_override(i)
+        row.update({
+            'endpoint_host': (getattr(i, 'endpoint_host', None) or '').strip() or None,
+            'endpoint_port': int(i.endpoint_port) if getattr(i, 'endpoint_port', None) else None,
+            'endpoint_override': override,
+            'auto_endpoint': '',
+            'effective_endpoint': override,
+            'endpoint_source': 'override' if override else 'auto',
         })
+        out.append(row)
 
     return jsonify({'interfaces': out})
 
@@ -14478,29 +16106,54 @@ def iface_delete(iface_id):
         except Exception:
             current_app.logger.exception("Failed to bring interface down before delete: %s", dev)
 
-        _delete_shortlinks_for_peer_ids([p.id for p in peers if p])
-        if delete_peers:
+        # `_iface_down` swallows its own failures (it falls back to `ip link
+        # del` with check=False), so it cannot be trusted to report that the
+        # device is gone. Verify, because deleting the rows below is what
+        # removes the operator's last handle on these peers: if the device is
+        # still up, every peer stays live in the kernel with nothing left to
+        # manage it.
+        if _iface_up(dev):
+            current_app.logger.warning(
+                "%s is still up after bringing it down; removing its peers individually",
+                dev,
+            )
             for peer in peers:
                 try:
-                    try:
-                        _wg_disable(peer)
-                    except Exception:
-                        pass
-
-                    try:
-                        _remove_peer(peer)
-                    except Exception:
-                        pass
-
-                    SubscriptionPeer.query.filter_by(peer_id=peer.id).delete(synchronize_session=False)
-
-                    db.session.delete(peer)
+                    _wg_disable(peer)
                 except Exception:
                     current_app.logger.exception(
-                        "Failed deleting peer %s while deleting interface %s",
-                        getattr(peer, 'id', '?'),
-                        iface.name
+                        "Failed to remove peer %s from the %s runtime",
+                        getattr(peer, 'id', '?'), dev,
                     )
+
+            still_live = _wg_peer_keys(dev) & {p.public_key for p in peers if p}
+            if still_live:
+                db.session.rollback()
+                return jsonify(
+                    success=False,
+                    error='interface_still_up',
+                    detail=(
+                        f'{dev} could not be brought down and {len(still_live)} of its '
+                        f'peer(s) are still live in the runtime. Nothing was deleted; '
+                        f'bring the interface down manually and retry.'
+                    ),
+                    live_peers=len(still_live),
+                ), 502
+
+        _delete_shortlinks_for_peer_ids([p.id for p in peers if p])
+
+        deleted_peers = 0
+        if delete_peers:
+            # The interface is verified down and its config file is removed
+            # below, so every peer's runtime and durable state goes with the
+            # interface.
+            for peer in peers:
+                SubscriptionPeer.query.filter_by(peer_id=peer.id).delete(
+                    synchronize_session=False
+                )
+                db.session.delete(peer)
+                deleted_peers += 1
+            db.session.flush()
 
         if conf_path:
             try:
@@ -14546,7 +16199,7 @@ def iface_delete(iface_id):
         return jsonify(
             success=True,
             deleted_interface=dev,
-            deleted_peers=peer_count if delete_peers else 0
+            deleted_peers=deleted_peers
         )
 
     except Exception as e:
@@ -15034,8 +16687,32 @@ def api_edit(pid):
         data['time_limit_days'] = _conv_time_limit(data)
         data.pop('time_limit_hours', None)
 
+    if 'address' in data:
+        # Re-addressing a peer must go through the same validation as creating one.
+        #
+        # An empty value is rejected rather than passed through: on create,
+        # `allocate_peer_address` reads a blank `requested` as "pick any free
+        # host", which on edit would silently move an existing peer to an
+        # arbitrary address and reinstall it, breaking every config already
+        # handed out for it. Omit the field to leave the address alone.
+        if not str(data.get('address') or '').strip():
+            return jsonify(
+                error='invalid_address',
+                detail='address may not be empty; omit the field to leave it unchanged.',
+            ), 400
+
+        try:
+            data['address'] = allocate_peer_address(
+                p.iface,
+                requested=data['address'],
+                exclude_peer_id=p.id,
+                exclude_address=p.address,
+            )
+        except AddressAllocationError as e:
+            return address_error_response(e)
+
     updated = []
-    for f in ('name','address','allowed_ips','endpoint','persistent_keepalive','mtu','dns',
+    for f in ('name','address','allowed_ips','endpoint','peer_endpoint','persistent_keepalive','mtu','dns',
               'data_limit_value','data_limit_unit','time_limit_days','start_on_first_use','unlimited',
               'phone_number','telegram_id'):
         if f in data:
@@ -15053,31 +16730,80 @@ def api_edit(pid):
         else:
             p.expires_at = None
 
-    db.session.commit()
+    external_fields = {'address', 'peer_endpoint', 'persistent_keepalive'}
+    needs_external_apply = bool(external_fields.intersection(updated))
+    external_attempted = False
     try:
-        _wg_enable(p); _sync_peer(p)
+        # Flush first so uniqueness/type failures occur before touching
+        # WireGuard. Commit only after runtime and durable config both accept
+        # the candidate state.
+        db.session.flush()
+        if needs_external_apply:
+            external_attempted = True
+            reapply_peer_external(p)
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception('Peer %s edit failed; restoring previous state', pid)
+
+        recovery_error = None
+        if external_attempted:
+            previous = db.session.get(Peer, pid)
+            if previous is not None:
+                try:
+                    reapply_peer_external(previous)
+                except Exception as restore_exc:
+                    recovery_error = str(restore_exc)
+                    current_app.logger.exception(
+                        'Could not restore peer %s after failed edit', pid
+                    )
+
+        if recovery_error:
+            return jsonify(
+                success=False,
+                ok=False,
+                error='peer_edit_recovery_failed',
+                detail=str(exc),
+                recovery_detail=recovery_error,
+                saved_fields=[],
+                recoverable=True,
+            ), 502
+
+        status = 409 if isinstance(exc, IntegrityError) else 502 if external_attempted else 500
+        return jsonify(
+            success=False,
+            ok=False,
+            error='peer_reapply_failed' if external_attempted else 'peer_edit_failed',
+            detail=str(exc),
+            saved_fields=[],
+            rolled_back=True,
+        ), status
+
+    try:
+        log_event(p, 'edited', f"Fields: {', '.join(updated)}")
+        logpanel_action("peer_edit", f"pid={p.id}; fields={', '.join(updated)}")
     except Exception:
-        pass
-    log_event(p, 'edited', f"Fields: {', '.join(updated)}")
-    logpanel_action("peer_edit", f"pid={p.id}; fields={', '.join(updated)}")
-    return jsonify(success=True)
+        db.session.rollback()
+        current_app.logger.warning('Peer %s was edited but audit logging failed', pid, exc_info=True)
+
+    return jsonify(success=True, ok=True)
 
 
 @app.route('/api/peer/<int:pid>', methods=['DELETE'])
 @require_api_key
 def api_delete(pid):
     p = db.session.get(Peer, pid) or abort(404)
-    try: _wg_disable(p)
-    except Exception: pass
-    try: _remove_peer(p)
-    except Exception: pass
 
-    _delete_shortlinks_for_peer_ids([p.id])
+    try:
+        remove_peer_everywhere(p)
+    except PeerRemovalError as e:
+        current_app.logger.error(
+            "peer delete failed at %s stage for pid=%s: %s", e.phase, pid, e
+        )
+        return peer_removal_response(e, peer_id=pid)
 
-    db.session.delete(p)
-    db.session.commit()
     logpanel_action("peer_delete", f"pid={pid}")
-    return jsonify(success=True)
+    return jsonify(success=True, ok=True)
 
 
 @app.route('/api/peer/<int:pid>/logs')
@@ -16121,7 +17847,10 @@ def _peer_payload_subscription(sub,target,data,idx=0,total=1,):
     return {
         'name': name,
         'allowed_ips': allowed_ips,
+        # Client-facing server endpoint (exported in the client's [Peer] block).
         'endpoint': (data.get('endpoint')or '').strip(),
+        # Optional fixed remote-client endpoint for the server's [Peer] block.
+        'peer_endpoint': (data.get('peer_endpoint')or '').strip(),
         'persistent_keepalive':data.get('persistent_keepalive') or None,
         'mtu':data.get('mtu') or None,
         'dns':data.get('dns') or None,
@@ -16133,60 +17862,58 @@ def _peer_payload_subscription(sub,target,data,idx=0,total=1,):
         'phone_number': (getattr(sub,'phone_number','',)or ''),
         'telegram_id': (getattr(sub,'telegram_id','',)or ''),}
 
-def _create_subscription_peer(target, payload):
+def _create_subscription_peer(target, payload, compensation=None):
+    """Create one subscription inbound through the shared allocation contract.
+
+    A target's generic `address` field is treated as a hint only: older
+    browsers put the interface's own CIDR there, and that is not a client
+    address. Everything else goes through `allocate_peer_address`, so a
+    subscription can never assign the server host or a duplicate.
+    """
     scope = (target.get('scope') or 'local').lower()
     priv = subprocess.check_output(['wg', 'genkey']).strip().decode()
     pub = subprocess.check_output(['wg', 'pubkey'], input=priv.encode()).strip().decode()
+
+    # The server endpoint exported to the client; never the server-side peer endpoint.
+    payload = dict(payload)
+    peer_endpoint = (payload.pop('peer_endpoint', '') or '').strip()
+
     if scope == 'node':
         nid = _sub_int(target.get('node_id'))
         iface_name = (target.get('iface') or '').strip()
         if not nid or not iface_name:
             raise ValueError('node_id and iface are required for node target')
+
         node = db.session.get(Node, nid) or abort(404)
-        addr = (target.get('address') or '').strip()
-        if not addr:
-            try:
-                avail = node_get(node, f'/api/iface/{iface_name}/available_ips')
-                if isinstance(avail, dict):
-                    avail = avail.get('available_ips') or []
-                addr = (avail or [None])[0]
-            except Exception:
-                addr = None
-        if not addr:
-            db_iface_name = f'n{nid}:{iface_name}'
-            mirror = InterfaceConfig.query.filter_by(name=db_iface_name).first()
-            ips = _available_ips(mirror) if mirror else []
-            addr = (ips or [None])[0]
-        if not addr:
-            raise ValueError(f'No available IP for node interface {iface_name}')
-        node_payload = {
-            'iface': iface_name,
-            'public_key': pub,
-            'host_cidr': addr,
-            'endpoint': payload.get('endpoint') or '',
-            'persistent_keepalive': payload.get('persistent_keepalive') or 0,
-            'mtu': payload.get('mtu'),
-            'dns': payload.get('dns'),
-            'allowed_ips': payload.get('allowed_ips') or '0.0.0.0/0, ::/0',
-        }
-        node_post(node, '/api/peers/add', node_payload)
-        db_iface_name = f'n{nid}:{iface_name}'
-        iface = InterfaceConfig.query.filter_by(name=db_iface_name).first()
-        if not iface:
-            iface = InterfaceConfig(
-                name=db_iface_name,
-                path=f'/etc/wireguard/{iface_name}.conf',
-                address=target.get('server_cidr') or '10.0.0.1/24',
-                listen_port=_sub_int(target.get('listen_port'), 51820),
-                private_key='(remote)', mtu=payload.get('mtu'), dns=payload.get('dns')
-            )
-            try:
-                iface.node_id = node.id
-            except Exception:
-                pass
-            db.session.add(iface)
-            db.session.flush()
-        peer = Peer(iface_id=iface.id, public_key=pub, private_key=priv, address=addr, status='online', **payload)
+
+        iface = ensure_node_mirror_iface(
+            node, iface_name,
+            listen_port=_sub_int(target.get('listen_port'), 51820),
+            server_cidr=target.get('server_cidr') or target.get('interface_address'),
+            mtu=payload.get('mtu'),
+            dns=payload.get('dns'),
+        )
+
+        # Register before the request: a timeout can be ambiguous even when the
+        # node installed the peer and the panel never received the response.
+        if compensation is not None:
+            compensation.register_node(node, pub)
+
+        addr = node_install_peer(
+            node, iface_name, iface,
+            public_key=pub,
+            requested_address=requested_peer_address_from_target(iface, target),
+            peer_endpoint=peer_endpoint,
+            keepalive=payload.get('persistent_keepalive') or 0,
+            mtu=payload.get('mtu'),
+            dns=payload.get('dns'),
+            allowed_ips=payload.get('allowed_ips') or '0.0.0.0/0, ::/0',
+        )
+        peer = Peer(
+            iface_id=iface.id, public_key=pub, private_key=priv,
+            address=addr, peer_endpoint=peer_endpoint or None,
+            status='online', **payload
+        )
         db.session.add(peer)
         db.session.flush()
         return peer
@@ -16197,21 +17924,30 @@ def _create_subscription_peer(target, payload):
         iface = InterfaceConfig.query.filter_by(name=(target.get('iface') or '').strip()).first()
     if not iface:
         raise ValueError('iface_id is required for local target')
-    addr = (target.get('address') or '').strip() or ((_available_ips(iface) or [None])[0])
-    if not addr:
-        raise ValueError(f'No available IP for local interface {iface.name}')
-    peer = Peer(iface_id=iface.id, public_key=pub, private_key=priv, address=addr, status='online', **payload)
-    db.session.add(peer)
-    db.session.flush()
-    try:
-        _wg_enable(peer)
-        _sync_peer(peer)
-    except Exception:
-        current_app.logger.exception('subscription local peer enable failed')
+
+    with interface_allocation_lock(iface):
+        requested = requested_peer_address_from_target(iface, target)
+        addr = allocate_peer_address(iface, requested=requested)
+
+        peer = Peer(
+            iface_id=iface.id, public_key=pub, private_key=priv,
+            address=addr, peer_endpoint=peer_endpoint or None,
+            status='online', **payload
+        )
+        db.session.add(peer)
+        db.session.flush()
+
+        # Installation failures must surface: the caller rolls the whole
+        # subscription transaction back rather than leaving a dead inbound.
+        install_local_peer(peer)
+        if compensation is not None:
+            compensation.register_local(peer)
+
     return peer
 
-def _attach_subscription_target(sub, target, data, idx=0, total=1):
+def _attach_subscription_target(sub, target, data, idx=0, total=1, compensation=None):
     if target.get('peer_id'):
+        # Attaching an existing peer: never rekey, readdress or reinstall it.
         peer = db.session.get(Peer, int(target.get('peer_id'))) or abort(404)
         existing = SubscriptionPeer.query.filter_by(peer_id=peer.id).first()
         if existing and existing.subscription_id != sub.id:
@@ -16219,13 +17955,13 @@ def _attach_subscription_target(sub, target, data, idx=0, total=1):
         if existing:
             link = existing
         else:
-            link = SubscriptionPeer(subscription_id=sub.id, peer_id=peer.id)
+            link = SubscriptionPeer(subscription_id=sub.id, peer_id=peer.id, owned=False)
             db.session.add(link)
             db.session.flush()
     else:
         payload = _peer_payload_subscription(sub, target, data, idx=idx, total=total)
-        peer = _create_subscription_peer(target, payload)
-        link = SubscriptionPeer(subscription_id=sub.id, peer_id=peer.id)
+        peer = _create_subscription_peer(target, payload, compensation=compensation)
+        link = SubscriptionPeer(subscription_id=sub.id, peer_id=peer.id, owned=True)
         db.session.add(link)
         db.session.flush()
     link.sort_order = idx
@@ -16720,13 +18456,29 @@ def api_subscriptions_locations():
             or ''
         )
 
+        endpoint_override = iface_endpoint_override(iface)
+        endpoint_value = resolve_client_endpoint(iface)
+
         local_locations.append({
             'scope': 'local',
             'iface_id': iface.id,
             'iface': iface_name,
             'label': iface_name,
-            'address': interface_address,
+            # The interface's own Address=. It is NOT a client address, so it
+            # is never published under a generic `address` key any more.
+            'interface_address': interface_address,
             'server_cidr': interface_address,
+            'endpoint': endpoint_value,
+            'endpoint_override': endpoint_override,
+            # Same rule as `_endpoint_default_payload`: 'override' when the
+            # operator set one; otherwise 'auto' only if auto-detection (run
+            # above, not deferred) actually produced a value, else 'none' --
+            # detection was attempted and came back empty, which is not the
+            # same claim as "auto-detection will provide it".
+            'endpoint_source': (
+                'override' if endpoint_override
+                else ('auto' if endpoint_value else 'none')
+            ),
             'scope_networks': _private_networks(),
             'listen_port': iface.listen_port,
             'dns': iface.dns or '',
@@ -16822,6 +18574,12 @@ def api_subscriptions_locations():
                     or ''
                 )
 
+                endpoint_override = (
+                    iface_endpoint_override(mirror)
+                    if mirror is not None
+                    else ''
+                )
+
                 interfaces.append({
                     'scope': 'node',
                     'node_id': node.id,
@@ -16840,7 +18598,7 @@ def api_subscriptions_locations():
                         f'{remote_name}'
                     ),
 
-                    'address': interface_address,
+                    'interface_address': interface_address,
                     'server_cidr': interface_address,
                     'scope_networks': list(dict.fromkeys((item.get('scope_networks')if isinstance(item.get('scope_networks'),list,)else node_scope_networks)or node_scope_networks)),
 
@@ -16854,6 +18612,20 @@ def api_subscriptions_locations():
                     ),
 
                     'mtu': item.get('mtu'),
+
+                    # No `_node_endpoint_fallback` call here: that helper can
+                    # make up to two node HTTP calls, and this loop already
+                    # runs once per node interface. An empty 'endpoint' means
+                    # auto-detection decides at export time, same as
+                    # `resolve_client_endpoint_cheap`.
+                    'endpoint': endpoint_override,
+                    'endpoint_override': endpoint_override,
+                    # Same rule as `_endpoint_default_payload` and the local
+                    # locations above: 'override' when set, else 'auto'.
+                    # Never 'none' here -- detection is deliberately never
+                    # attempted in this loop, so nothing has been
+                    # established that would justify asserting a negative.
+                    'endpoint_source': 'override' if endpoint_override else 'auto',
 
                     'available': len(
                         item.get('available_ips')
@@ -16895,6 +18667,8 @@ def api_subscriptions_locations():
                     or ''
                 )
 
+                endpoint_override = iface_endpoint_override(iface)
+
                 interfaces.append({
                     'scope': 'node',
                     'node_id': node.id,
@@ -16907,7 +18681,7 @@ def api_subscriptions_locations():
                         f'{remote_name}'
                     ),
 
-                    'address': interface_address,
+                    'interface_address': interface_address,
                     'server_cidr': interface_address,
 
                     'listen_port': (
@@ -16916,6 +18690,15 @@ def api_subscriptions_locations():
 
                     'dns': iface.dns or '',
                     'mtu': iface.mtu,
+
+                    'endpoint': endpoint_override,
+                    'endpoint_override': endpoint_override,
+                    # Same rule as the live path above and
+                    # `_endpoint_default_payload`: 'override' when set, else
+                    # 'auto' -- detection is never attempted on this
+                    # (node-unreachable) fallback path either, so 'none'
+                    # would assert a negative that was never checked.
+                    'endpoint_source': 'override' if endpoint_override else 'auto',
 
                     'available': len(
                         _available_ips(iface)
@@ -16951,7 +18734,7 @@ def api_subscriptions_inbounds_catalog():
             'iface': raw.split(':',1)[1] if raw.startswith('n') and ':' in raw else raw,
             'name': p.name,
             'address': p.address,
-            'endpoint': p.endpoint or '',
+            'endpoint': resolve_client_endpoint_cheap(iface, explicit=p.endpoint),
             'allowed_ips': p.allowed_ips or '',
             'dns': p.dns or '',
             'status': p.status or 'offline',
@@ -16989,16 +18772,47 @@ def api_subscriptions():
     db.session.add(sub)
     db.session.flush()
     targets = data.get('targets') or []
+    compensation = PeerCreateCompensation()
     try:
         for idx, target in enumerate(targets):
-            _attach_subscription_target(sub, target or {}, data, idx=idx, total=len(targets))
+            _attach_subscription_target(
+                sub, target or {}, data, idx=idx, total=len(targets),
+                compensation=compensation,
+            )
         _sync_all_subscription_peers(sub, rename=True)
         db.session.commit()
         return jsonify(ok=True, subscription=_subscription_row(sub)), 201
+    except AddressAllocationError as e:
+        cleanup_failures = compensation.rollback()
+        db.session.rollback()
+        if cleanup_failures:
+            return jsonify(
+                error='subscription_create_cleanup_failed',
+                detail=str(e),
+                address_error=e.error_code,
+                cleanup_complete=False,
+                cleanup_failures=cleanup_failures,
+            ), 502
+        return address_error_response(e)
+    except NodePeerInstallError as e:
+        cleanup_failures = compensation.rollback()
+        db.session.rollback()
+        return jsonify(
+            error=e.code,
+            detail=e.detail,
+            cleanup_complete=not cleanup_failures,
+            cleanup_failures=cleanup_failures,
+        ), 502 if cleanup_failures else e.status
     except Exception as e:
+        cleanup_failures = compensation.rollback()
         db.session.rollback()
         current_app.logger.exception('subscription create failed')
-        return jsonify(error='subscription_create_failed', detail=str(e)), 500
+        return jsonify(
+            error='subscription_create_failed',
+            detail=str(e),
+            cleanup_complete=not cleanup_failures,
+            cleanup_failures=cleanup_failures,
+        ), 502 if cleanup_failures else 500
 
 @app.get('/api/subscriptions/<int:sid>')
 @require_api_key_or_login
@@ -17026,17 +18840,50 @@ def api_subscription_add_inbounds(sid):
     sub = db.session.get(Subscription, sid) or abort(404)
     data = request.get_json(silent=True) or {}
     targets = data.get('targets') or []
+    compensation = PeerCreateCompensation()
     try:
         base = db.session.query(func.max(SubscriptionPeer.sort_order)).filter_by(subscription_id=sub.id).scalar() or 0
         for off, target in enumerate(targets):
-            _attach_subscription_target(sub, target or {}, data, idx=base + off + 1, total=len(getattr(sub, 'links', []) or []) + len(targets))
+            _attach_subscription_target(
+                sub, target or {}, data,
+                idx=base + off + 1,
+                total=len(getattr(sub, 'links', []) or []) + len(targets),
+                compensation=compensation,
+            )
         _sync_all_subscription_peers(sub, rename=True)
         db.session.commit()
         return jsonify(ok=True, subscription=_subscription_row(sub))
+    except AddressAllocationError as e:
+        cleanup_failures = compensation.rollback()
+        db.session.rollback()
+        if cleanup_failures:
+            return jsonify(
+                error='subscription_add_inbound_cleanup_failed',
+                detail=str(e),
+                address_error=e.error_code,
+                cleanup_complete=False,
+                cleanup_failures=cleanup_failures,
+            ), 502
+        return address_error_response(e)
+    except NodePeerInstallError as e:
+        cleanup_failures = compensation.rollback()
+        db.session.rollback()
+        return jsonify(
+            error=e.code,
+            detail=e.detail,
+            cleanup_complete=not cleanup_failures,
+            cleanup_failures=cleanup_failures,
+        ), 502 if cleanup_failures else e.status
     except Exception as e:
+        cleanup_failures = compensation.rollback()
         db.session.rollback()
         current_app.logger.exception('subscription add inbound failed')
-        return jsonify(error='subscription_add_inbound_failed', detail=str(e)), 500
+        return jsonify(
+            error='subscription_add_inbound_failed',
+            detail=str(e),
+            cleanup_complete=not cleanup_failures,
+            cleanup_failures=cleanup_failures,
+        ), 502 if cleanup_failures else 500
 
 @app.patch('/api/subscriptions/<int:sid>/inbounds/<int:link_id>')
 @require_api_key_or_login
@@ -17054,21 +18901,30 @@ def api_subscription_remove_inbound(sid, link_id):
     sub = link.subscription
     delete_peer = _sub_bool(request.args.get('delete_peer'))
     peer = link.peer
-    db.session.delete(link)
+
     if delete_peer and peer:
+        if not bool(getattr(link, 'owned', False)):
+            return jsonify(
+                ok=False,
+                error='peer_not_owned',
+                detail=(
+                    f'Peer {peer.name} was attached to this subscription, not created '
+                    f'by it. Detach it here and delete it from the peers page instead.'
+                ),
+            ), 409
+
+        # remove_peer_everywhere also drops the link row in the same transaction.
         try:
-            if getattr(peer.iface, 'node_id', None) is not None:
-                node_delete(peer.iface.node, f'/api/peer/{peer.public_key}')
-            else:
-                try: _wg_disable(peer)
-                except Exception: pass
-                try: _remove_peer(peer)
-                except Exception: pass
-        except Exception:
-            current_app.logger.exception('subscription inbound peer delete failed')
-        _delete_shortlinks_for_peer_ids([peer.id])
-        db.session.delete(peer)
-    db.session.flush()
+            remove_peer_everywhere(peer)
+        except PeerRemovalError as e:
+            current_app.logger.error(
+                'subscription inbound peer delete failed at %s stage: %s', e.phase, e
+            )
+            return peer_removal_response(e, peer_id=peer.id)
+    else:
+        db.session.delete(link)
+        db.session.flush()
+
     _sync_all_subscription_peers(sub, rename=True)
     db.session.commit()
     return jsonify(ok=True, subscription=_subscription_row(sub))
@@ -17076,31 +18932,73 @@ def api_subscription_remove_inbound(sid, link_id):
 @app.delete('/api/subscriptions/<int:sid>')
 @require_api_key_or_login
 def api_subscription_delete(sid):
+    """Delete a subscription.
+
+    Peers the subscription created are deleted; peers that were merely
+    attached are detached and left running. `delete_peers=0` detaches
+    everything instead.
+    """
     sub = db.session.get(Subscription, sid) or abort(404)
+
     delete_peers = request.args.get('delete_peers')
     delete_peers = True if delete_peers is None else _sub_bool(delete_peers)
-    peers = [l.peer for l in list(sub.links or []) if l.peer]
+
+    owned, attached = [], []
+    for link in list(sub.links or []):
+        if not link.peer:
+            continue
+        if delete_peers and bool(getattr(link, 'owned', False)):
+            owned.append(link.peer)
+        else:
+            attached.append(link.peer)
+
+    deleted, failures = 0, []
+
+    for peer in owned:
+        # Capture identifying fields up front: remove_peer_everywhere commits
+        # the row deletion itself, after which `peer` is detached/expired and
+        # reading peer.id / peer.name in the failure branch can raise
+        # DetachedInstanceError (review finding #7).
+        peer_id = peer.id
+        peer_name = peer.name
+        try:
+            remove_peer_everywhere(peer)
+            deleted += 1
+        except PeerRemovalError as e:
+            current_app.logger.error(
+                'subscription %s: peer %s could not be removed at the %s stage: %s',
+                sid, peer_id, e.phase, e,
+            )
+            failures.append({'peer_id': peer_id, 'name': peer_name, 'phase': e.phase,
+                             'detail': str(e)})
+
+    if failures:
+        # Keep the subscription so the remaining peers stay reachable for a retry.
+        db.session.rollback()
+        return jsonify(
+            ok=False,
+            error='subscription_delete_incomplete',
+            deleted=deleted,
+            detached=0,
+            failed=len(failures),
+            failures=failures,
+        ), 502
+
     try:
         db.session.delete(sub)
-        if delete_peers:
-            _delete_shortlinks_for_peer_ids([p.id for p in peers if p])
-            for peer in peers:
-                try:
-                    if getattr(peer.iface, 'node_id', None) is not None:
-                        node_delete(peer.iface.node, f'/api/peer/{peer.public_key}')
-                    else:
-                        try: _wg_disable(peer)
-                        except Exception: pass
-                        try: _remove_peer(peer)
-                        except Exception: pass
-                except Exception:
-                    current_app.logger.exception('failed deleting subscription peer %s', getattr(peer, 'id', '?'))
-                db.session.delete(peer)
         db.session.commit()
-        return jsonify(ok=True, deleted_peers=bool(delete_peers))
     except Exception as e:
         db.session.rollback()
+        current_app.logger.exception('subscription delete failed')
         return jsonify(error='subscription_delete_failed', detail=str(e)), 500
+
+    return jsonify(
+        ok=True,
+        deleted_peers=bool(delete_peers),
+        deleted=deleted,
+        detached=len(attached),
+        failed=0,
+    )
 
 @app.post('/api/subscriptions/<int:sid>/disable')
 @require_api_key_or_login
@@ -17680,6 +19578,78 @@ def _peer_used_for_subscription(peer) -> int:
     except Exception:
         return int(getattr(peer, 'used_bytes_total', 0) or 0)
 
+def subscription_access(sub, used_bytes=None) -> dict:
+    """Whether this subscription may still hand out working configs.
+
+    The public page always renders and explains the state; the config, ZIP and
+    QR endpoints refuse when access is revoked, so a saved link cannot keep
+    working after the subscription is disabled, expires or runs out of data.
+    """
+    if not bool(getattr(sub, 'enabled', True)):
+        return {
+            'allowed': False,
+            'reason': 'disabled',
+            'message': 'This subscription has been disabled. Please contact support.',
+        }
+
+    if bool(getattr(sub, 'unlimited', False)):
+        return {'allowed': True, 'reason': '', 'message': ''}
+
+    expires_ts = to_ts(getattr(sub, 'expires_at', None))
+    if expires_ts and expires_ts <= now_ts():
+        return {
+            'allowed': False,
+            'reason': 'expired',
+            'message': 'This subscription has expired. Please renew it to continue.',
+        }
+
+    limit = sub.limit_bytes() if hasattr(sub, 'limit_bytes') else None
+    if limit:
+        try:
+            used = int(_sub_used_bytes(sub) if used_bytes is None else used_bytes)
+        except Exception:
+            used = 0
+        if used >= int(limit):
+            return {
+                'allowed': False,
+                'reason': 'data_exhausted',
+                'message': 'This subscription has used all of its data allowance.',
+            }
+
+    return {'allowed': True, 'reason': '', 'message': ''}
+
+
+def _subscription_inbound_state(sub):
+    """A non-blocking signal for the portal: are there any usable inbounds?
+
+    ``subscription_access`` deliberately does *not* revoke access when this is
+    empty, because the page must still render its explanatory state. The
+    payload exposes it so the UI can show "no configs available" instead of a
+    misleading "Ready" over an empty grid (review finding #3).
+    """
+    links = getattr(sub, 'links', None) or []
+    usable = sum(
+        1 for link in links
+        if getattr(link, 'peer', None) is not None
+        and str(getattr(getattr(link, 'peer', None), 'status', '') or '').lower() != 'removed'
+    )
+    return {'inbound_count': usable, 'has_inbounds': usable > 0}
+
+
+def _subscription_access_or_403(sub):
+    """Return a 403 response when access is revoked, otherwise ``None``."""
+    access = subscription_access(sub)
+    if access['allowed']:
+        return None
+
+    return jsonify(
+        ok=False,
+        error='subscription_access_revoked',
+        reason=access['reason'],
+        message=access['message'],
+    ), 403
+
+
 def _subscription_public_payload(sub) -> dict:
     try:
         _expire()
@@ -17692,12 +19662,25 @@ def _subscription_public_payload(sub) -> dict:
     locs = []
     dirty = False
 
+    # Usage is needed to decide access. Do that before resolving any public
+    # host or endpoint so a revoked token never triggers or receives topology
+    # discovery as a side effect of rendering its explanatory status page.
     for link in links:
         peer = getattr(link, 'peer', None)
         if not peer:
             continue
         used_bytes += _peer_used_for_subscription(peer)
-        host = _public_host_peer(peer)
+
+    access = subscription_access(sub, used_bytes=used_bytes)
+    access.update(_subscription_inbound_state(sub))
+    may_disclose_topology = bool(access['allowed'])
+
+    for link in links:
+        peer = getattr(link, 'peer', None)
+        if not peer:
+            continue
+
+        host = _public_host_peer(peer) if may_disclose_topology else ''
 
         cc = (getattr(link, 'country_code', '') or '').strip().upper()
         flag = (getattr(link, 'flag', '') or '').strip()
@@ -17725,9 +19708,16 @@ def _subscription_public_payload(sub) -> dict:
                 dirty = True
 
 
-        endpoint = getattr(peer, 'endpoint', '') or ''
-        if not endpoint and getattr(peer, 'iface', None):
-            endpoint = _endpoint_fallback(peer.iface) or ''
+        # Go through the shared resolver rather than the local-only fallback:
+        # a node peer stores no endpoint of its own, and `_endpoint_fallback`
+        # would hand out the panel's host with the node interface's listen port.
+        endpoint = ''
+        if may_disclose_topology and getattr(peer, 'iface', None):
+            endpoint = resolve_client_endpoint_cheap(
+                peer.iface, explicit=getattr(peer, 'endpoint', '')
+            )
+        elif may_disclose_topology:
+            endpoint = getattr(peer, 'endpoint', '') or ''
 
         locs.append({
             'link_id': link.id,
@@ -17749,6 +19739,7 @@ def _subscription_public_payload(sub) -> dict:
 
     exp_ts = to_ts(getattr(sub, 'expires_at', None))
     ttl_seconds = max(0, exp_ts - now_ts()) if exp_ts else None
+
     if limit_bytes is not None:
         used_bytes = min(int(used_bytes), int(limit_bytes))
 
@@ -17763,9 +19754,11 @@ def _subscription_public_payload(sub) -> dict:
         'data_limit_value': getattr(sub, 'data_limit_value', 0) or 0,
         'data_limit_unit': getattr(sub, 'data_limit_unit', 'Gi') or 'Gi',
         'start_on_first_use': bool(getattr(sub, 'start_on_first_use', False)),
+        'first_used_at': isoz(getattr(sub, 'first_used_at', None)),
         'expires_at': isoz(getattr(sub, 'expires_at', None)),
         'expires_at_ts': exp_ts,
         'ttl_seconds': ttl_seconds,
+        'access': access,
         'locations': locs,
     }
 
@@ -17867,6 +19860,11 @@ def subscription_public_api(token):
 @app.get('/s/<token>/config', endpoint='subscription_public_config')
 def subscription_public_config(token):
     sub = Subscription.query.filter_by(token=token).first() or abort(404)
+
+    revoked = _subscription_access_or_403(sub)
+    if revoked:
+        return revoked
+
     mem = BytesIO()
     with zipfile.ZipFile(mem, 'w', zipfile.ZIP_DEFLATED) as z:
         for link in sorted(sub.links, key=lambda x: (x.sort_order or 0, x.id or 0)):
@@ -17892,6 +19890,10 @@ def subscription_public_inbound_config(
         .first()
         or abort(404)
     )
+
+    revoked = _subscription_access_or_403(sub)
+    if revoked:
+        return revoked
 
     link = (
         SubscriptionPeer.query
@@ -17942,6 +19944,11 @@ def subscription_public_inbound_config(
 @app.get('/s/<token>/inbound/<int:link_id>/qr')
 def subscription_public_inbound_qr(token, link_id):
     sub = Subscription.query.filter_by(token=token).first() or abort(404)
+
+    revoked = _subscription_access_or_403(sub)
+    if revoked:
+        return revoked
+
     link = SubscriptionPeer.query.filter_by(id=link_id, subscription_id=sub.id).first() or abort(404)
     peer = link.peer or abort(404)
     img = qrcode.make(_client_config_txt(peer))
@@ -17954,6 +19961,14 @@ def subscription_public_inbound_qr(token, link_id):
 @app.get('/s/<token>/inbound/<int:link_id>/geo')
 def subscription_public_inbound_geo(token, link_id):
     sub = Subscription.query.filter_by(token=token).first() or abort(404)
+
+    # Geo reveals the public host of an active inbound; gate it behind the
+    # same access check as the config/QR endpoints so a revoked subscription
+    # cannot be probed for live topology (review finding #11).
+    revoked = _subscription_access_or_403(sub)
+    if revoked:
+        return revoked
+
     link = SubscriptionPeer.query.filter_by(id=link_id, subscription_id=sub.id).first() or abort(404)
     peer = link.peer or abort(404)
 
@@ -18176,7 +20191,17 @@ if __name__ == "__main__":
 
     try:
         bootstrap()
+    except SchemaMigrationError as e:
+        # A half-migrated database must not serve traffic: peer queries would
+        # fail against the missing columns while the panel still answered as
+        # though it were healthy.
+        app.logger.critical(
+            "Refusing to start: the database schema could not be migrated: %s", e
+        )
+        raise SystemExit(1)
     except Exception as e:
+        # Interface discovery and the boot-time housekeeping below the schema
+        # step are best-effort; the panel is still usable without them.
         app.logger.exception("bootstrap failed: %s", e)
 
     _Guni(app, options).run()
