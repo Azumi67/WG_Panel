@@ -19,8 +19,8 @@ html[data-theme="dark"] #set-panels .cards {
   color:#edf3f6;
 }
 </style>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}?v=20260730-v55">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/settings-dark.css') }}?v=20260730-v55">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}?v=20260804-tg-notify-v1">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/settings-dark.css') }}?v=20260804-tg-notify-v1">
 {% endblock %}
 
 {% block content %}
@@ -334,24 +334,6 @@ html[data-theme="dark"] #set-panels .cards {
                                 <input class="input" id="i-mtu" type="number" min="576" max="9000" inputmode="numeric" placeholder="Auto">
                                 <small>Leave empty to use automatic MTU selection.</small>
                             </div>
-
-                            <div class="form-group iface-field-card is-editable">
-                                <div class="iface-field-label"><i class="fa-solid fa-tower-broadcast"></i><label for="i-ep-host">Client endpoint host</label></div>
-                                <input class="input" id="i-ep-host" placeholder="vpn.example.com">
-                                <small>Written into exported client configs. Leave both fields empty to use auto-detection.</small>
-                            </div>
-
-                            <div class="form-group iface-field-card is-editable">
-                                <div class="iface-field-label"><i class="fa-solid fa-plug-circle-bolt"></i><label for="i-ep-port">Client endpoint port</label></div>
-                                <input class="input" id="i-ep-port" type="number" min="1" max="65535" inputmode="numeric" placeholder="51820">
-                                <small>May differ from the listen port when the server is behind NAT.</small>
-                            </div>
-
-                            <div class="form-group iface-field-card is-readonly">
-                                <div class="iface-field-label"><i class="fa-solid fa-wand-magic-sparkles"></i><label for="i-ep-effective">Peers get</label></div>
-                                <input class="input" id="i-ep-effective" disabled>
-                                <small id="i-ep-source">Saving affects configs exported from now on. Already-downloaded configs are never rewritten.</small>
-                            </div>
                         </div>
 
                         <div class="iface-actionbar">
@@ -363,9 +345,6 @@ html[data-theme="dark"] #set-panels .cards {
                                 <button class="btn iface-save-btn" id="iface-save"><i class="fa-solid fa-floppy-disk"></i> Save changes</button>
                                 <button class="btn secondary iface-up-btn" id="iface-up"><i class="fa-solid fa-play"></i> Bring up</button>
                                 <button class="btn danger iface-down-btn" id="iface-down"><i class="fa-solid fa-stop"></i> Bring down</button>
-                                <button class="btn secondary" id="iface-ep-save" type="button"><i class="fa-solid fa-tower-broadcast"></i> Save endpoint</button>
-                                <button class="btn secondary" id="iface-ep-clear" type="button"><i class="fa-solid fa-eraser"></i> Clear endpoint</button>
-                                <button class="btn danger" id="iface-ep-apply" type="button"><i class="fa-solid fa-arrows-turn-to-dots"></i> Apply to existing peers</button>
                             </div>
                         </div>
                     </div>
@@ -451,45 +430,255 @@ html[data-theme="dark"] #set-panels .cards {
                             </div>
                         </details>
 
-                        <details id="tg-acc-notify" class="acc">
+                        <details id="tg-acc-notify" class="acc tg-notify-acc" open>
                             <summary class="acc-bar">
-                                <span><i class="fa-solid fa-bell"></i> Notify on</span>
+                                <span>
+                                    <i class="fa-solid fa-bell"></i>
+                                    Notification rules
+                                    <small class="tg-summary-note">Choose exactly which events Telegram should report.</small>
+                                </span>
                                 <span class="chev" aria-hidden="true"></span>
                             </summary>
-                            <div class="acc-body" id="tg-acc-notify-body">
-                                <div class="toggle-grid">
-                                    <label class="toggle-row">
-                                        <span>App start/stop</span>
-                                        <label class="switch sm">
-                                            <input type="checkbox" id="tg-n-app">
-                                            <span class="slider"></span>
-                                        </label>
-                                    </label>
-                                    <label class="toggle-row">
-                                        <span>Interface down</span>
-                                        <label class="switch sm">
-                                            <input type="checkbox" id="tg-n-iface">
-                                            <span class="slider"></span>
-                                        </label>
-                                    </label>
-                                    <label class="toggle-row">
-                                        <span>Failed login bursts</span>
-                                        <label class="switch sm">
-                                            <input type="checkbox" id="tg-n-login">
-                                            <span class="slider"></span>
-                                        </label>
-                                    </label>
-                                    <label class="toggle-row">
-                                        <span>Suspicious 4xx spikes</span>
-                                        <label class="switch sm">
-                                            <input type="checkbox" id="tg-n-4xx">
-                                            <span class="slider"></span>
-                                        </label>
-                                    </label>
+
+                            <div class="acc-body tg-notify-body" id="tg-acc-notify-body">
+                                <div class="tg-notify-intro">
+                                    <div>
+                                        <strong>Event notifications</strong>
+                                        <span>Messages are sent only after a real state change. Repeated checks do not create duplicate alerts.</span>
+                                    </div>
+                                    <div class="tg-notify-quick">
+                                        <button class="btn secondary sm" id="tg-notify-critical" type="button">
+                                            <i class="fa-solid fa-shield-halved"></i> Critical only
+                                        </button>
+                                        <button class="btn secondary sm" id="tg-notify-all" type="button">
+                                            <i class="fa-solid fa-check-double"></i> Select all
+                                        </button>
+                                        <button class="btn secondary sm" id="tg-notify-none" type="button">
+                                            <i class="fa-solid fa-xmark"></i> Clear
+                                        </button>
+                                    </div>
                                 </div>
-                                <div class="right mt8">
-                                    <button class="btn" id="tg-save"><i class="fa-solid fa-save"></i> Save Telegram
-                                        Settings</button>
+
+                                <div class="tg-notify-groups">
+                                    <section class="tg-notify-group">
+                                        <header>
+                                            <span class="tg-notify-group-icon system"><i class="fa-solid fa-server"></i></span>
+                                            <div>
+                                                <strong>Panel and nodes</strong>
+                                                <small>Availability and recovery events.</small>
+                                            </div>
+                                        </header>
+                                        <div class="tg-notify-grid">
+                                            <label class="tg-notify-row critical">
+                                                <span class="tg-notify-copy">
+                                                    <b>Panel stopped or unreachable</b>
+                                                    <small>Reports watchdog detection of panel failure.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-app-down">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+
+                                            <label class="tg-notify-row">
+                                                <span class="tg-notify-copy">
+                                                    <b>Panel started or recovered</b>
+                                                    <small>Reports startup and recovery after an outage.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-app-up">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+
+                                            <label class="tg-notify-row critical">
+                                                <span class="tg-notify-copy">
+                                                    <b>Node went offline</b>
+                                                    <small>Reports the node name, address, and failed checks.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-node-down">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+
+                                            <label class="tg-notify-row">
+                                                <span class="tg-notify-copy">
+                                                    <b>Node came online</b>
+                                                    <small>Reports recovery and approximate outage duration.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-node-up">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+                                        </div>
+                                    </section>
+
+                                    <section class="tg-notify-group">
+                                        <header>
+                                            <span class="tg-notify-group-icon wireguard"><i class="fa-solid fa-network-wired"></i></span>
+                                            <div>
+                                                <strong>WireGuard</strong>
+                                                <small>Interface and peer lifecycle events.</small>
+                                            </div>
+                                        </header>
+                                        <div class="tg-notify-grid">
+                                            <label class="tg-notify-row critical">
+                                                <span class="tg-notify-copy">
+                                                    <b>Interface went down</b>
+                                                    <small>Local or node interface is no longer active.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-iface-down">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+
+                                            <label class="tg-notify-row">
+                                                <span class="tg-notify-copy">
+                                                    <b>Interface came up</b>
+                                                    <small>Reports interface recovery or successful start.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-iface-up">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+
+                                            <label class="tg-notify-row">
+                                                <span class="tg-notify-copy">
+                                                    <b>Peer expired</b>
+                                                    <small>Reports timer expiration and automatic disable.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-peer-expired">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+
+                                            <label class="tg-notify-row">
+                                                <span class="tg-notify-copy">
+                                                    <b>Peer traffic limit reached</b>
+                                                    <small>Reports data-limit enforcement and peer disable.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-peer-limit">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+                                        </div>
+                                    </section>
+
+                                    <section class="tg-notify-group">
+                                        <header>
+                                            <span class="tg-notify-group-icon security"><i class="fa-solid fa-shield-halved"></i></span>
+                                            <div>
+                                                <strong>Security</strong>
+                                                <small>Authentication and suspicious request activity.</small>
+                                            </div>
+                                        </header>
+                                        <div class="tg-notify-grid">
+                                            <label class="tg-notify-row">
+                                                <span class="tg-notify-copy">
+                                                    <b>Successful admin login</b>
+                                                    <small>Includes account, IP address, device, and time.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-login-success">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+
+                                            <label class="tg-notify-row critical">
+                                                <span class="tg-notify-copy">
+                                                    <b>Failed login or 2FA</b>
+                                                    <small>Reports rejected login and verification attempts.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-login-fail">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+
+                                            <label class="tg-notify-row critical">
+                                                <span class="tg-notify-copy">
+                                                    <b>Suspicious 4xx activity</b>
+                                                    <small>Reports bursts of rejected or unauthorized requests.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-4xx">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+                                        </div>
+                                    </section>
+
+                                    <section class="tg-notify-group">
+                                        <header>
+                                            <span class="tg-notify-group-icon operations"><i class="fa-solid fa-gears"></i></span>
+                                            <div>
+                                                <strong>Backups and updates</strong>
+                                                <small>Operational completion and failure events.</small>
+                                            </div>
+                                        </header>
+                                        <div class="tg-notify-grid">
+                                            <label class="tg-notify-row">
+                                                <span class="tg-notify-copy">
+                                                    <b>Backup completed</b>
+                                                    <small>Reports successful scheduled or manual backup creation.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-backup-success">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+
+                                            <label class="tg-notify-row critical">
+                                                <span class="tg-notify-copy">
+                                                    <b>Backup failed</b>
+                                                    <small>Reports the failed stage and available error detail.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-backup-failed">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+
+                                            <label class="tg-notify-row">
+                                                <span class="tg-notify-copy">
+                                                    <b>Update completed</b>
+                                                    <small>Reports successful panel or node update.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-update-success">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+
+                                            <label class="tg-notify-row critical">
+                                                <span class="tg-notify-copy">
+                                                    <b>Update or rollback failed</b>
+                                                    <small>Reports failed install, validation, restart, or rollback.</small>
+                                                </span>
+                                                <span class="switch sm">
+                                                    <input type="checkbox" id="tg-n-update-failed">
+                                                    <span class="slider"></span>
+                                                </span>
+                                            </label>
+                                        </div>
+                                    </section>
+                                </div>
+
+                                <div class="tg-notify-savebar">
+                                    <span>
+                                        <i class="fa-solid fa-circle-info"></i>
+                                        Changes apply to future events.
+                                    </span>
+                                    <button class="btn" id="tg-save" type="button">
+                                        <i class="fa-solid fa-floppy-disk"></i>
+                                        Save notification rules
+                                    </button>
                                 </div>
                             </div>
                         </details>
@@ -742,7 +931,7 @@ html[data-theme="dark"] #set-panels .cards {
     </section>
 
     
-    <script defer src="{{ url_for('static', filename='js/settings.js') }}?v=20260730-v55"></script>
+    <script defer src="{{ url_for('static', filename='js/settings.js') }}?v=20260804-tg-notify-v1"></script>
     <script defer src="{{ url_for('static', filename='js/qrcode.min.js') }}"></script>
 
 
