@@ -114,11 +114,28 @@
             if (val) copy(val.trim());
         });
 
-        document.addEventListener('DOMContentLoaded', () => {
-        if (typeof window.toast === 'function') {
-          window.toast('Peers page ready', 'info');
-        } else if (typeof window.toastSafe === 'function') {
-          window.toastSafe('Peers page ready', 'info', false);
-        }
-      });
     })();
+
+
+(() => {
+  const cards = ['peer-wg-advanced', 'edit-wg-advanced'].map(id => document.getElementById(id)).filter(Boolean);
+  const markAttention = (card) => {
+    if (!card || card.open) return;
+    card.classList.remove('endpoint-attention');
+    void card.offsetWidth;
+    card.classList.add('endpoint-attention');
+    window.setTimeout(() => card.classList.remove('endpoint-attention'), 5200);
+  };
+  cards.forEach(card => {
+    card.addEventListener('toggle', () => {
+      if (card.open) card.classList.remove('endpoint-attention');
+    });
+  });
+  document.getElementById('create-peer-btn')?.addEventListener('click', () => {
+    window.setTimeout(() => markAttention(document.getElementById('peer-wg-advanced')), 360);
+  });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.edit-btn,[data-action="edit"],[data-peer-edit]')) return;
+    window.setTimeout(() => markAttention(document.getElementById('edit-wg-advanced')), 420);
+  });
+})();
