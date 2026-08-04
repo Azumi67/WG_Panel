@@ -1,8 +1,8 @@
 {% extends 'base.html' %}
 {% block head_extras %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/users.css') }}?v=20260729-v17">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/users-page.css') }}?v=20260729-v17">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-dark.css') }}?v=20260729-v17">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/users.css') }}?v=20260804-pr18-bulk-fixed-match1">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/users-page.css') }}?v=20260804-pr18-bulk-fixed-match1">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-dark.css') }}?v=20260804-pr18-bulk-fixed-match1">
 {% endblock %}
 {% block content %}
 
@@ -46,7 +46,7 @@
     </div>
 </section>
 
-<script src="{{ url_for('static', filename='js/users-scope.js') }}?v=separated-1"></script>
+<script src="{{ url_for('static', filename='js/users-scope.js') }}?v=20260804-pr18-bulk-fixed-match1"></script>
 
 <div id="iface-bar" class="iface-bar" style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0;">
 </div>
@@ -130,6 +130,8 @@
             {{ form.hidden_tag() }}
             <input type="hidden" id="create-iface-id" name="iface">
 
+            
+            <div class="peerx-column peerx-left-col">
             <section class="peerx-form-card peerx-profile-card">
                 <div class="peerx-section-head">
                     <span><i class="fas fa-sliders"></i></span>
@@ -157,9 +159,6 @@
                     </div>
                 </div>
             </section>
-
-            
-            <div class="peerx-column peerx-left-col">
 <section class="peerx-form-card">
                 <div class="peerx-section-head"><span><i class="fas fa-id-card"></i></span><div><b>Identity</b><small>Name and client address.</small></div></div>
                 <div class="peerx-form-grid two">
@@ -181,20 +180,7 @@
                     </div>
                 </div>
             </section>
-            </div>
-            <div class="peerx-column peerx-right-col">
-<section class="peerx-form-card">
-                <div class="peerx-section-head"><span><i class="fas fa-network-wired"></i></span><div><b>WireGuard config</b><small>Endpoint, routing, DNS, MTU, and keepalive.</small></div></div>
-                <div class="peerx-form-grid two">
-                    <div class="form-group wide auto-network-field">{{ form.allowed_ips.label }} {{ form.allowed_ips(class="input", id="peer-allowed-ips", value=(form.allowed_ips.data or "0.0.0.0/0, ::/0"), placeholder="0.0.0.0/0, ::/0") }}<label class="auto-network-toggle" for="peer-include-internal-network"><input type="checkbox" id="peer-include-internal-network"><span class="auto-network-switch" aria-hidden="true"></span><span class="auto-network-copy"><b>Include private networks</b><small>Append detected networks; disable to remove only those added automatically.</small></span></label><input type="hidden" id="peer-internal-network" value=""></div>
-                    <label class="form-group">{{ form.endpoint.label }} {{ form.endpoint(class="input", id="peer-endpoint", placeholder="host:port") }}<small class="field-hint">This server's address, written into the client's config. Leave empty to use the interface default.</small></label>
-                    <label class="form-group">{{ form.peer_endpoint.label }} {{ form.peer_endpoint(class="input", id="peer-fixed-endpoint", placeholder="leave empty") }}<small class="field-hint">Advanced. Only for a client with a fixed address; WireGuard learns roaming clients on its own.</small></label>
-                    <label class="form-group">{{ form.persistent_keepalive.label }} {{ form.persistent_keepalive(class="input", id="peer-keepalive", placeholder="25") }}</label>
-                    <label class="form-group">{{ form.mtu.label }} {{ form.mtu(class="input", id="peer-mtu", placeholder="1280") }}</label>
-                    <label class="form-group wide">{{ form.dns.label }} {{ form.dns(class="input", id="peer-dns", placeholder="1.1.1.1, 1.0.0.1") }}</label>
-                </div>
-            </section>
-<section class="peerx-form-card">
+<section class="peerx-form-card peerx-contact-side-card">
                 <div class="peerx-section-head"><span><i class="fas fa-address-book"></i></span><div><b>Contact</b><small>Optional details for search and management.</small></div></div>
                 <div class="peerx-form-grid two">
                     <label class="form-group">{{ form.phone_number.label }} {{ form.phone_number(class="input", placeholder="+31...") }}</label>
@@ -202,11 +188,42 @@
                 </div>
             </section>
             </div>
-
+            <div class="peerx-column peerx-right-col">
+<section class="peerx-form-card peerx-wireguard-card">
+                <div class="peerx-section-head peerx-section-head-endpoint">
+                    <div class="peerx-section-head-main">
+                        <span><i class="fas fa-network-wired"></i></span>
+                        <div><b>WireGuard config</b><small>Routing, endpoints, DNS, keepalive, and MTU.</small></div>
+                    </div>
+                    <details class="peerx-endpoint-help peerx-inline-help-endpoint">
+                        <summary aria-label="Endpoint information" title="Endpoint information"><span class="peerx-help-pulse" aria-hidden="true"></span><i class="fas fa-circle-info" aria-hidden="true"></i></summary>
+                        <div class="peerx-endpoint-help-pop"><b>Endpoint information</b><p><strong>Server endpoint</strong> is written into the exported client config. <strong>Saved endpoint</strong> is a reusable override. <strong>Fixed client endpoint</strong> is only for a peer with a stable reachable IP or domain; leave it empty for roaming clients.</p></div>
+                    </details>
+                </div>
+                <div class="peerx-form-grid two peerx-wireguard-grid">
+                    <label class="form-group wide peerx-endpoint-field">
+                        <span class="peerx-endpoint-label"><span class="peerx-endpoint-label-title">Server endpoint</span><span class="peerx-endpoint-label-meta"><span class="peerx-endpoint-chip peerx-endpoint-chip-host">host</span><span class="peerx-endpoint-sep">:</span><span class="peerx-endpoint-chip peerx-endpoint-chip-port">port</span></span></span>
+                        {{ form.endpoint(class="input", id="peer-endpoint", placeholder="Leave empty to use interface default") }}
+                        <span class="endpoint-effective" id="peer-endpoint-effective" data-state="loading"><i class="fas fa-link" aria-hidden="true"></i><span>Interface default:</span><b id="peer-endpoint-effective-value">Detecting…</b></span>
+                    </label>
+                    <label class="form-group wide peerx-fixed-endpoint-field">
+                        <span class="peerx-endpoint-label"><span class="peerx-endpoint-label-title">Fixed client endpoint <em class="field-optional">Optional</em></span><span class="peerx-endpoint-label-meta"><span class="peerx-endpoint-chip peerx-endpoint-chip-host">host</span><span class="peerx-endpoint-sep">:</span><span class="peerx-endpoint-chip peerx-endpoint-chip-port">port</span></span></span>
+                        {{ form.peer_endpoint(class="input", id="peer-fixed-endpoint", placeholder="Leave empty for roaming clients") }}
+                        <small class="field-hint">Only for a client with a stable reachable IP or domain.</small>
+                    </label>
+                    <div class="form-group wide auto-network-field">{{ form.allowed_ips.label }} {{ form.allowed_ips(class="input", id="peer-allowed-ips", value=(form.allowed_ips.data or "0.0.0.0/0, ::/0"), placeholder="0.0.0.0/0, ::/0") }}<label class="auto-network-toggle" for="peer-include-internal-network"><input type="checkbox" id="peer-include-internal-network"><span class="auto-network-switch" aria-hidden="true"></span><span class="auto-network-copy"><b>Include private networks</b><small>Append detected networks; disable to remove only those added automatically.</small></span></label><input type="hidden" id="peer-internal-network" value=""></div>
+                    <label class="form-group wide">{{ form.dns.label }} {{ form.dns(class="input", id="peer-dns", placeholder="1.1.1.1, 1.0.0.1") }}</label>
+                    <div class="peerx-inline-wireguard wide">
+                        <label class="form-group">{{ form.persistent_keepalive.label }} {{ form.persistent_keepalive(class="input", id="peer-keepalive", placeholder="25") }}</label>
+                        <label class="form-group">{{ form.mtu.label }} {{ form.mtu(class="input", id="peer-mtu", placeholder="Interface/profile default") }}</label>
+                    </div>
+                </div>
+            </section>
             <footer class="modal-footer peerx-form-actions">
                 <button type="button" class="btn secondary" id="create-cancel">Cancel</button>
                 <button type="submit" class="btn"><i class="fas fa-save"></i> Save peer</button>
             </footer>
+            </div>
         </form>
     </div>
 </div>
@@ -255,26 +272,7 @@
                     </div>
                 </div>
             </section>
-            </div>
-            <div class="peerx-column peerx-right-col">
-<section class="peerx-form-card">
-                <div class="peerx-section-head"><span><i class="fas fa-network-wired"></i></span><div><b>WireGuard config</b><small>Routing and client config fields.</small></div></div>
-                <div class="peerx-form-grid two">
-                    <label class="form-group wide"><span>Allowed IPs</span><input id="edit-allowed-ips" name="allowed_ips" class="input" placeholder="0.0.0.0/0, ::/0"></label>
-                    <input type="hidden" id="edit-internal-network" value="">
-                    <label class="peerx-switch peerx-internal-switch wide" for="edit-include-internal-network">
-                      <input type="checkbox" id="edit-include-internal-network" name="include_internal_network" value="1">
-                      <span aria-hidden="true"></span>
-                      <b>Include local networks <small>Add detected private networks without changing existing Allowed IPs.</small></b>
-                    </label>
-                    <label class="form-group wide peerx-endpoint-field"><span>Server endpoint</span><input name="endpoint" class="input" placeholder="host:port"><small class="field-hint">This server's address, written into the client's config. Leave empty to use the interface default.</small></label>
-                    <label class="form-group wide"><span>Fixed client endpoint</span><input name="peer_endpoint" class="input" placeholder="leave empty"><small class="field-hint">Advanced. Only for a client with a fixed address; WireGuard learns roaming clients on its own.</small></label>
-                    <label class="form-group"><span>Keepalive (s)</span><input name="persistent_keepalive" type="number" class="input" placeholder="25"></label>
-                    <label class="form-group"><span>MTU</span><input name="mtu" type="number" class="input" placeholder="1280"></label>
-                    <label class="form-group wide"><span>DNS</span><input name="dns" class="input" placeholder="1.1.1.1, 8.8.8.8"></label>
-                </div>
-            </section>
-<section class="peerx-form-card">
+<section class="peerx-form-card peerx-contact-side-card">
                 <div class="peerx-section-head"><span><i class="fas fa-address-book"></i></span><div><b>Contact</b><small>Optional phone and Telegram data.</small></div></div>
                 <div class="peerx-form-grid two">
                     <label class="form-group"><span>Phone Number</span><input name="phone_number" class="input" placeholder="+31..."></label>
@@ -282,11 +280,40 @@
                 </div>
             </section>
             </div>
-
+            <div class="peerx-column peerx-right-col">
+<section class="peerx-form-card peerx-wireguard-card">
+                <div class="peerx-section-head peerx-section-head-endpoint">
+                    <div class="peerx-section-head-main">
+                        <span><i class="fas fa-network-wired"></i></span>
+                        <div><b>WireGuard config</b><small>Routing and endpoint settings.</small></div>
+                    </div>
+                    <details class="peerx-endpoint-help peerx-inline-help-endpoint">
+                        <summary aria-label="Endpoint information" title="Endpoint information"><span class="peerx-help-pulse" aria-hidden="true"></span><i class="fas fa-circle-info" aria-hidden="true"></i></summary>
+                        <div class="peerx-endpoint-help-pop"><b>Endpoint information</b><p><strong>Server endpoint</strong> is written into the client config. <strong>Fixed client endpoint</strong> is only for a stable reachable client IP or domain.</p></div>
+                    </details>
+                </div>
+                <div class="peerx-form-grid two peerx-wireguard-grid">
+                    <label class="form-group wide peerx-endpoint-field">
+                        <span class="peerx-endpoint-label"><span class="peerx-endpoint-label-title">Server endpoint</span><span class="peerx-endpoint-label-meta"><span class="peerx-endpoint-chip peerx-endpoint-chip-host">host</span><span class="peerx-endpoint-sep">:</span><span class="peerx-endpoint-chip peerx-endpoint-chip-port">port</span></span></span>
+                        <input name="endpoint" class="input" placeholder="Leave empty to use interface default">
+                        <span class="endpoint-effective" id="edit-endpoint-effective" data-state="loading"><i class="fas fa-link" aria-hidden="true"></i><span>Interface default:</span><b id="edit-endpoint-effective-value">Detecting…</b></span>
+                    </label>
+                    <label class="form-group wide peerx-fixed-endpoint-field"><span class="peerx-endpoint-label"><span class="peerx-endpoint-label-title">Fixed client endpoint <em class="field-optional">Optional</em></span><span class="peerx-endpoint-label-meta"><span class="peerx-endpoint-chip peerx-endpoint-chip-host">host</span><span class="peerx-endpoint-sep">:</span><span class="peerx-endpoint-chip peerx-endpoint-chip-port">port</span></span></span><input name="peer_endpoint" class="input" placeholder="Leave empty for roaming clients"><small class="field-hint">Only for a client with a stable reachable IP or domain.</small></label>
+                    <label class="form-group wide"><span>Allowed IPs</span><input id="edit-allowed-ips" name="allowed_ips" class="input" placeholder="0.0.0.0/0, ::/0"></label>
+                    <input type="hidden" id="edit-internal-network" value="">
+                    <label class="peerx-switch peerx-internal-switch wide" for="edit-include-internal-network"><input type="checkbox" id="edit-include-internal-network" name="include_internal_network" value="1"><span aria-hidden="true"></span><b>Include local networks <small>Add detected private networks without changing existing Allowed IPs.</small></b></label>
+                    <label class="form-group wide"><span>DNS</span><input name="dns" class="input" placeholder="1.1.1.1, 8.8.8.8"></label>
+                    <div class="peerx-inline-wireguard wide">
+                        <label class="form-group"><span>Keepalive (s)</span><input name="persistent_keepalive" type="number" class="input" placeholder="25"></label>
+                        <label class="form-group"><span>MTU</span><input name="mtu" type="number" class="input" placeholder="Interface/profile default"></label>
+                    </div>
+                </div>
+            </section>
             <footer class="modal-footer peerx-form-actions">
                 <button type="button" class="btn secondary" id="edit-cancel">Cancel</button>
                 <button type="submit" class="btn"><i class="fas fa-save"></i> Save changes</button>
             </footer>
+            </div>
         </form>
     </div>
 </div>
@@ -337,19 +364,7 @@
                     </div>
                 </div>
             </section>
-            </div>
-            <div class="peerx-column peerx-right-col">
-<section class="peerx-form-card">
-                <div class="peerx-section-head"><span><i class="fas fa-network-wired"></i></span><div><b>WireGuard config</b><small>Applied to every peer in this batch.</small></div></div>
-                <div class="peerx-form-grid two">
-                    <div class="form-group wide auto-network-field"><span>Allowed IPs</span><input id="bulk-allowed_ips" name="allowed_ips" class="input" placeholder="0.0.0.0/0, ::/0" value="0.0.0.0/0, ::/0"><label class="auto-network-toggle" for="bulk-include-internal-network"><input type="checkbox" id="bulk-include-internal-network"><span class="auto-network-switch" aria-hidden="true"></span><span class="auto-network-copy"><b>Include private networks</b><small>Append detected networks; disable to remove only those added automatically.</small></span></label><input type="hidden" id="bulk-internal-network" value=""></div>
-                    <label class="form-group"><span>Endpoint</span><input id="bulk-endpoint" name="endpoint" class="input" placeholder="host:port"><small class="field-hint">Leave empty to use the interface default.</small></label>
-                    <label class="form-group"><span>Keepalive (s)</span><input id="bulk-keepalive" name="persistent_keepalive" type="number" class="input" placeholder="e.g. 25"></label>
-                    <label class="form-group"><span>MTU</span><input id="bulk-mtu" name="mtu" type="number" class="input" placeholder="optional"></label>
-                    <label class="form-group wide"><span>DNS</span><input id="bulk-dns" name="dns" class="input" placeholder="1.1.1.1, 8.8.8.8"></label>
-                </div>
-            </section>
-<section class="peerx-form-card">
+<section class="peerx-form-card peerx-contact-side-card">
                 <div class="peerx-section-head"><span><i class="fas fa-address-book"></i></span><div><b>Contact lists</b><small>Optional. One item per line or comma-separated.</small></div></div>
                 <div class="peerx-form-grid two">
                     <label class="form-group"><span>Phone numbers</span><textarea id="bulk-phone_numbers" name="phone_numbers" rows="3" class="input" placeholder="+15551234567, +15557654321"></textarea></label>
@@ -357,16 +372,36 @@
                 </div>
             </section>
             </div>
-
+            <div class="peerx-column peerx-right-col">
+<section class="peerx-form-card peerx-wireguard-card">
+                <div class="peerx-section-head peerx-section-head-endpoint">
+                    <div class="peerx-section-head-main">
+                        <span><i class="fas fa-network-wired"></i></span>
+                        <div><b>WireGuard config</b><small>Shared routing and endpoint settings.</small></div>
+                    </div>
+                    <details class="peerx-endpoint-help peerx-inline-help-endpoint">
+                        <summary aria-label="Endpoint information" title="Endpoint information"><span class="peerx-help-pulse" aria-hidden="true"></span><i class="fas fa-circle-info" aria-hidden="true"></i></summary>
+                        <div class="peerx-endpoint-help-pop"><b>Endpoint information</b><p>Server endpoint is written into each exported client config. Fixed client endpoint should normally remain empty in bulk creation.</p></div>
+                    </details>
+                </div>
+                <div class="peerx-form-grid two peerx-wireguard-grid">
+                    <label class="form-group wide peerx-endpoint-field"><span class="peerx-endpoint-label"><span class="peerx-endpoint-label-title">Server endpoint</span><span class="peerx-endpoint-label-meta"><span class="peerx-endpoint-chip peerx-endpoint-chip-host">host</span><span class="peerx-endpoint-sep">:</span><span class="peerx-endpoint-chip peerx-endpoint-chip-port">port</span></span></span><input id="bulk-endpoint" name="endpoint" class="input" placeholder="Leave empty to use interface default"><span class="endpoint-effective" id="bulk-endpoint-effective" data-state="loading"><i class="fas fa-link" aria-hidden="true"></i><span>Interface default:</span><b id="bulk-endpoint-effective-value">Detecting…</b></span></label>
+                    <label class="form-group wide peerx-fixed-endpoint-field"><span class="peerx-endpoint-label"><span class="peerx-endpoint-label-title">Fixed client endpoint <em class="field-optional">Optional</em></span><span class="peerx-endpoint-label-meta"><span class="peerx-endpoint-chip peerx-endpoint-chip-host">host</span><span class="peerx-endpoint-sep">:</span><span class="peerx-endpoint-chip peerx-endpoint-chip-port">port</span></span></span><input id="bulk-fixed-endpoint" name="peer_endpoint" class="input" placeholder="Leave empty for roaming clients"><small class="field-hint">Usually leave empty for a batch of roaming clients.</small></label>
+                    <div class="form-group wide auto-network-field"><label for="bulk-allowed-ips">Allowed IPs</label><input id="bulk-allowed-ips" name="allowed_ips" class="input" value="0.0.0.0/0, ::/0" placeholder="0.0.0.0/0, ::/0"><label class="auto-network-toggle" for="bulk-include-internal-network"><input type="checkbox" id="bulk-include-internal-network"><span class="auto-network-switch" aria-hidden="true"></span><span class="auto-network-copy"><b>Include private networks</b><small>Append detected networks; disable to remove only those added automatically.</small></span></label><input type="hidden" id="bulk-internal-network" value=""></div>
+                    <label class="form-group wide"><span>DNS</span><input id="bulk-dns" name="dns" class="input" placeholder="1.1.1.1, 8.8.8.8"></label>
+                    <div class="peerx-inline-wireguard wide"><label class="form-group"><span>Keepalive (s)</span><input id="bulk-keepalive" name="persistent_keepalive" type="number" class="input" placeholder="e.g. 25"></label><label class="form-group"><span>MTU</span><input id="bulk-mtu" name="mtu" type="number" class="input" placeholder="Interface/profile default"></label></div>
+                </div>
+            </section>
             <footer class="modal-footer peerx-form-actions">
                 <button type="button" id="bulk-close-btn" class="btn secondary">Cancel</button>
                 <button type="submit" class="btn"><i class="fas fa-layer-group"></i> Create batch</button>
             </footer>
+            </div>
         </form>
     </div>
 </div>
 
-<script src="{{ url_for('static', filename='js/users.js') }}?v=separated-1"></script>
+<script src="{{ url_for('static', filename='js/users.js') }}?v=20260804-pr18-bulk-fixed-match1"></script>
 
 
 
