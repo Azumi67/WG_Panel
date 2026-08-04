@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block head_extras %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/api_docs.css') }}?v=20260731-v56">
-<script defer src="{{ url_for('static', filename='js/api_docs.js') }}?v=20260731-v56"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/api_docs.css') }}?v=20260804-v57">
+<script defer src="{{ url_for('static', filename='js/api_docs.js') }}?v=20260804-v57"></script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 {% endblock %}
 {% block content %}
@@ -9,7 +9,7 @@
   <div class="api-orb o1"></div><div class="api-orb o2"></div>
   <header class="api-hero">
     <div class="hero-grid">
-      <div><h1 class="hero-title"><span class="badge-logo"><i class="fa-solid fa-code"></i></span><span>API Docs</span></h1><p class="hero-sub">Current panel and node-agent API, including combined VERSION and Git revision checks, detached updates, rate-limit-safe GitHub downloads, rollback reporting, backup and restore, Telegram, WireGuard interfaces, peers, subscriptions, and nodes.</p></div>
+      <div><h1 class="hero-title"><span class="badge-logo"><i class="fa-solid fa-code"></i></span><span>API Docs</span></h1><p class="hero-sub">Current panel and node-agent API, including combined VERSION and Git revision checks, detached updates, rollback reporting, automatic-backup metadata, Telegram event policy, suspicious 4xx burst detection, node health interface state, fixed remote-client endpoints, WireGuard interfaces, peers, subscriptions, and nodes.</p></div>
       <div class="stat-stack"><div class="stat-card"><b>154</b><span>Panel API</span></div><div class="stat-card"><b>25</b><span>Panel pages</span></div><div class="stat-card"><b>21</b><span>Node API</span></div></div>
     </div>
   </header>
@@ -39,7 +39,15 @@
 </nav>
     <main class="content">
       <div class="quick-cards"><div class="quick-card"><div class="quick-icon"><i class="fa-solid fa-key"></i></div><h3>Access</h3><p>Use your panel session in the browser. For scripts, send <code>Authorization: Bearer &lt;PANEL_API_KEY&gt;</code>. Node-agent examples use <code>&lt;NODE_API_KEY&gt;</code>.</p></div><div class="quick-card"><div class="quick-icon"><i class="fa-solid fa-terminal"></i></div><h3>Commands</h3><p>Each API route includes a copy-ready command. Page routes show the browser URL because they are meant for the panel UI.</p></div><div class="quick-card"><div class="quick-icon"><i class="fa-solid fa-flask"></i></div><h3>Testing</h3><p>Start with health checks and list routes. Try create or update actions on a test interface before changing real peers.</p></div></div>
-      <div id="noResults" class="no-results" x-show="noResults" x-transition.opacity>No matching routes found.</div>
+      
+<div class="api-security-note" style="margin: 0 0 18px;">
+  <b>Current operational behavior.</b>
+  The panel watchdog sends <code>app_down</code> and <code>app_up</code> independently;
+  suspicious HTTP activity is detected as a rolling 4xx burst rather than one alert per request;
+  automatic full backups expose the retained archive name, size, and timestamp in response headers;
+  and updated node agents return interface state directly from <code>/api/health</code>.
+</div>
+<div id="noResults" class="no-results" x-show="noResults" x-transition.opacity>No matching routes found.</div>
       
 <section class="doc-section" id="sec-System" data-section="System">
   <div class="section-head"><div><h2>System</h2><p>12 documented methods</p></div><a href="#top" class="top-link">Top</a></div>
@@ -4099,11 +4107,11 @@ https://panel.example.com/u/example-token"><i class="fa-regular fa-copy"></i> Co
     </div>
   </div>
 </article>
-<article class="route-row" data-text="backup &amp; restore get /api/backup/full backup_full creates a complete migration backup and can retain it locally or send it to a selected telegram administrator.">
+<article class="route-row" data-text="backup and restore get /api/backup/full backup_full complete migration backup automatic retained copy response metadata headers telegram wireguard node env">
   <button class="route-main" type="button" aria-expanded="false">
     <span class="method m-get">GET</span>
     <code class="route-path">/api/backup/full</code>
-    <span class="route-desc">Creates a complete migration backup and can retain it locally or send it to a selected Telegram administrator.</span>
+    <span class="route-desc">Creates a complete migration backup, optionally retains it locally, and exposes saved-archive metadata.</span>
     <span class="auth-pill">Login or API key</span>
     <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
   </button>
@@ -4111,24 +4119,33 @@ https://panel.example.com/u/example-token"><i class="fa-regular fa-copy"></i> Co
     <div class="detail-grid">
       <div class="detail-card">
         <div class="detail-title">What it does</div>
-        <p>Creates a complete migration backup and can retain it locally or send it to a selected Telegram administrator.</p>
+        <p>Builds a full ZIP containing panel data and, when requested, local WireGuard files plus reachable node WireGuard configurations and node-agent environment files. With <code>auto=1</code>, the archive is retained in the automatic-backup directory before the ZIP response is returned.</p>
         <div class="api-param-list">
-          <div><code>auto=1</code><span>Store a retained copy in <code>instance/backups</code>.</span></div>
-          <div><code>wg=1|0</code><span>Include local WireGuard configs plus reachable node configs and node-agent <code>.env</code> files.</span></div>
-          <div><code>tg=1|0</code><span>Send the completed ZIP to Telegram.</span></div>
-          <div><code>chat_id=&lt;id&gt;</code><span>Select a configured, active, unmuted Telegram administrator.</span></div>
+          <div><code>auto=1</code><span>Retain a local automatic-backup copy.</span></div>
+          <div><code>wg=1|0</code><span>Include local and reachable-node WireGuard configuration material.</span></div>
+          <div><code>tg=1|0</code><span>Send the generated archive to configured Telegram recipients when enabled.</span></div>
         </div>
-        <p class="api-security-note"><strong>Sensitive archive:</strong> full backups can include the panel <code>.env</code>, node-agent <code>.env</code> files, API keys, encryption keys, and WireGuard private keys.</p>
+        <div class="api-security-note">The ZIP may contain private keys, API keys, Telegram settings, and node-agent <code>.env</code> files. Store and transmit it as sensitive material.</div>
         <div class="meta-line"><span>app.py</span><span>handler: <code>backup_full</code></span></div>
       </div>
       <div class="detail-card command-card">
         <div class="detail-title">Example command</div>
-        <pre><code>curl -X GET &quot;https://panel.example.com/api/backup/full?auto=1&amp;wg=1&amp;tg=1&amp;chat_id=&lt;TELEGRAM_ADMIN_ID&gt;&quot; \
+        <pre><code>curl -i -X GET &quot;https://panel.example.com/api/backup/full?auto=1&amp;wg=1&amp;tg=0&quot; \
   -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot; \
-  --output wgpanel-full-backup.zip</code></pre>
-        <button class="copy-btn" type="button" data-copy="curl -X GET &quot;https://panel.example.com/api/backup/full?auto=1&amp;wg=1&amp;tg=1&amp;chat_id=&lt;TELEGRAM_ADMIN_ID&gt;&quot; \
-  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot; \
-  --output wgpanel-full-backup.zip"><i class="fa-regular fa-copy"></i> Copy</button>
+  -o full-backup.zip</code></pre>
+        <div class="detail-title">Response metadata headers</div>
+        <pre><code>X-Backup-Kind: full
+X-Backup-Timestamp: 20260804_172500
+X-Backup-WG: 1
+X-Backup-TG: 0
+X-Backup-AUTO: 1
+X-Backup-Node-WG: 2
+X-Backup-Node-ENV: 2
+X-Backup-Saved-Name: auto_full_20260804_172500.zip
+X-Backup-Saved-Size: 184320
+X-Backup-Saved-Timestamp: 1785864300</code></pre>
+        <div class="api-security-note"><code>X-Backup-Saved-*</code> is present when <code>auto=1</code> successfully retained a local copy. The scheduler consumes these headers to report the real filename and size.</div>
+        <button class="copy-btn" type="button" data-copy="curl -i -X GET &quot;https://panel.example.com/api/backup/full?auto=1&amp;wg=1&amp;tg=0&quot; -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot; -o full-backup.zip"><i class="fa-regular fa-copy"></i> Copy</button>
       </div>
     </div>
   </div>
@@ -5142,11 +5159,11 @@ https://panel.example.com/logs"><i class="fa-regular fa-copy"></i> Copy</button>
     </div>
   </div>
 </article>
-<article class="route-row" data-text="telegram get /api/telegram/settings tg_settings_get reads or saves telegram settings.">
+<article class="route-row" data-text="telegram get /api/telegram/settings tg_settings_get notification policy app down app up node interface peer login suspicious 4xx backup update">
   <button class="route-main" type="button" aria-expanded="false">
     <span class="method m-get">GET</span>
     <code class="route-path">/api/telegram/settings</code>
-    <span class="route-desc">Reads or saves Telegram settings.</span>
+    <span class="route-desc">Returns Telegram integration status and the complete notification policy.</span>
     <span class="auth-pill">Login session</span>
     <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
   </button>
@@ -5154,15 +5171,36 @@ https://panel.example.com/logs"><i class="fa-regular fa-copy"></i> Copy</button>
     <div class="detail-grid">
       <div class="detail-card">
         <div class="detail-title">What it does</div>
-        <p>Reads or saves Telegram settings.</p>
+        <p>Returns whether Telegram integration is enabled, whether a token is configured, and the current event switches.</p>
+        <div class="api-param-list">
+          <div><code>app_down</code> / <code>app_up</code><span>Panel outage and recovery are independent watchdog events.</span></div>
+          <div><code>node_down</code> / <code>node_up</code><span>Remote node availability transitions.</span></div>
+          <div><code>iface_down</code> / <code>iface_up</code><span>WireGuard interface state transitions.</span></div>
+          <div><code>peer_expired</code> / <code>peer_limit</code><span>Peer enforcement events.</span></div>
+          <div><code>login_success</code> / <code>login_fail</code><span>Administrative authentication events.</span></div>
+          <div><code>suspicious_4xx</code><span>Rolling burst detection for 401, 403, 404, 405, and 429 responses.</span></div>
+          <div><code>backup_success</code> / <code>backup_failed</code><span>Scheduled backup outcomes.</span></div>
+          <div><code>update_success</code> / <code>update_failed</code><span>Panel or node updater outcomes.</span></div>
+        </div>
+        <div class="api-security-note">The 4xx monitor currently uses a 60-second window, threshold 20, and a 10-minute per-IP cooldown. Static assets, favicon, robots, health, and Telegram heartbeat paths are ignored.</div>
         <div class="meta-line"><span>app.py</span><span>handler: <code>tg_settings_get</code></span></div>
       </div>
       <div class="detail-card command-card">
         <div class="detail-title">Example command</div>
         <pre><code>curl -X GET &quot;https://panel.example.com/api/telegram/settings&quot; \
   -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot;</code></pre>
-        <button class="copy-btn" type="button" data-copy="curl -X GET &quot;https://panel.example.com/api/telegram/settings&quot; \
-  -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot;"><i class="fa-regular fa-copy"></i> Copy</button>
+        <div class="detail-title">Response shape</div>
+        <pre><code>{
+  &quot;enabled&quot;: true,
+  &quot;has_token&quot;: true,
+  &quot;notify&quot;: {
+    &quot;app_down&quot;: true,
+    &quot;app_up&quot;: true,
+    &quot;suspicious_4xx&quot;: true,
+    &quot;backup_success&quot;: false
+  }
+}</code></pre>
+        <button class="copy-btn" type="button" data-copy="curl -X GET &quot;https://panel.example.com/api/telegram/settings&quot; -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot;"><i class="fa-regular fa-copy"></i> Copy</button>
       </div>
     </div>
   </div>
@@ -5353,7 +5391,7 @@ https://panel.example.com/"><i class="fa-regular fa-copy"></i> Copy</button>
 </article></div>
 </section>
 <section class="doc-section" id="sec-Node-Agent" data-section="Node Agent">
-  <div class="section-head"><div><h2>Node Agent</h2><p>20 documented methods</p></div><a href="#top" class="top-link">Top</a></div>
+  <div class="section-head"><div><h2>Node Agent</h2><p>20 documented methods · health includes interface state</p></div><a href="#top" class="top-link">Top</a></div>
   <div class="route-list">
 <article class="route-row" data-text="backup &amp; restore get /api/backup/wg node_backup_wg creates a node backup containing all wireguard interface configs and the node-agent .env file when available.">
   <button class="route-main" type="button" aria-expanded="false">
@@ -5441,11 +5479,11 @@ PORT=9898
     </div>
   </div>
 </article>
-<article class="route-row" data-text="node agent get /api/health health checks that the node agent is reachable.">
+<article class="route-row" data-text="node agent get /api/health health uptime version interfaces address listen port is up monitoring">
   <button class="route-main" type="button" aria-expanded="false">
     <span class="method m-get">GET</span>
     <code class="route-path">/api/health</code>
-    <span class="route-desc">Checks that the node agent is reachable.</span>
+    <span class="route-desc">Returns node reachability, uptime, agent version, public IP, and WireGuard interface state.</span>
     <span class="auth-pill">Node API key</span>
     <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
   </button>
@@ -5453,15 +5491,32 @@ PORT=9898
     <div class="detail-grid">
       <div class="detail-card">
         <div class="detail-title">What it does</div>
-        <p>Checks that the node agent is reachable.</p>
+        <p>Provides the primary node-monitor response. Updated panels use the embedded <code>interfaces</code> list for interface up/down monitoring and call <code>/api/interfaces?fast=1</code> only as a compatibility fallback for older agents.</p>
+        <div class="api-security-note">Node availability is determined by this health request. A later fallback interface request failing must not by itself mark the whole node offline.</div>
         <div class="meta-line"><span>node_agent.py</span><span>handler: <code>health</code></span></div>
       </div>
       <div class="detail-card command-card">
         <div class="detail-title">Example command</div>
         <pre><code>curl -X GET &quot;https://node-1.example.net:9109/api/health&quot; \
   -H &quot;Authorization: Bearer &lt;NODE_API_KEY&gt;&quot;</code></pre>
-        <button class="copy-btn" type="button" data-copy="curl -X GET &quot;https://node-1.example.net:9109/api/health&quot; \
-  -H &quot;Authorization: Bearer &lt;NODE_API_KEY&gt;&quot;"><i class="fa-regular fa-copy"></i> Copy</button>
+        <div class="detail-title">Response example</div>
+        <pre><code>{
+  &quot;ok&quot;: true,
+  &quot;host&quot;: &quot;node-1&quot;,
+  &quot;now&quot;: 1785864300,
+  &quot;public_ipv4&quot;: &quot;203.0.113.10&quot;,
+  &quot;uptime_seconds&quot;: 86400,
+  &quot;version&quot;: &quot;1.0.5&quot;,
+  &quot;interfaces&quot;: [
+    {
+      &quot;name&quot;: &quot;wg0&quot;,
+      &quot;address&quot;: &quot;10.66.66.1/24&quot;,
+      &quot;listen_port&quot;: 51820,
+      &quot;is_up&quot;: true
+    }
+  ]
+}</code></pre>
+        <button class="copy-btn" type="button" data-copy="curl -X GET &quot;https://node-1.example.net:9109/api/health&quot; -H &quot;Authorization: Bearer &lt;NODE_API_KEY&gt;&quot;"><i class="fa-regular fa-copy"></i> Copy</button>
       </div>
     </div>
   </div>
@@ -5773,11 +5828,11 @@ PORT=9898
     </div>
   </div>
 </article>
-<article class="route-row" data-text="node agent post /api/peer/&lt;path:pub&gt;/enable enable_peer node agent endpoint for peer enable.">
+<article class="route-row" data-text="node agent post /api/peer path pub enable enable_peer fixed endpoint domain resolution blackhole route">
   <button class="route-main" type="button" aria-expanded="false">
     <span class="method m-post">POST</span>
     <code class="route-path">/api/peer/&lt;path:pub&gt;/enable</code>
-    <span class="route-desc">Node agent endpoint for peer enable.</span>
+    <span class="route-desc">Restores a saved peer to the live WireGuard runtime and removes its blackhole route.</span>
     <span class="auth-pill">Node API key</span>
     <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
   </button>
@@ -5785,19 +5840,25 @@ PORT=9898
     <div class="detail-grid">
       <div class="detail-card">
         <div class="detail-title">What it does</div>
-        <p>Node agent endpoint for peer enable.</p>
+        <p>Reads the peer's saved interface, AllowedIPs, endpoint, and keepalive; brings the interface up when needed; restores the peer with <code>wg set</code>; and removes the host blackhole route used while disabled.</p>
+        <div class="api-security-note">Saved domain endpoints are resolved before the live runtime command. The hostname remains unchanged in the persistent WireGuard configuration.</div>
         <div class="meta-line"><span>node_agent.py</span><span>handler: <code>enable_peer</code></span></div>
       </div>
       <div class="detail-card command-card">
         <div class="detail-title">Example command</div>
-        <pre><code>curl -X POST &quot;https://node-1.example.net:9109/api/peer/PUBLIC_KEY_EXAMPLE/enable&quot; \
+        <pre><code>curl -X POST &quot;https://node-1.example.net:9109/api/peer/PEER_PUBLIC_KEY/enable&quot; \
   -H &quot;Authorization: Bearer &lt;NODE_API_KEY&gt;&quot; \
   -H &quot;Content-Type: application/json&quot; \
-  --data &#x27;{}&#x27;</code></pre>
-        <button class="copy-btn" type="button" data-copy="curl -X POST &quot;https://node-1.example.net:9109/api/peer/PUBLIC_KEY_EXAMPLE/enable&quot; \
-  -H &quot;Authorization: Bearer &lt;NODE_API_KEY&gt;&quot; \
-  -H &quot;Content-Type: application/json&quot; \
-  --data &#x27;{}&#x27;"><i class="fa-regular fa-copy"></i> Copy</button>
+  --data &#x27;{
+    &quot;host_cidr&quot;: &quot;10.66.66.2/32&quot;
+  }&#x27;</code></pre>
+        <div class="detail-title">Important errors</div>
+        <pre><code>400 invalid_fixed_endpoint
+400 peer_interface_missing
+404 peer_not_found
+500 interface_enable_failed
+500 peer_enable_failed</code></pre>
+        <button class="copy-btn" type="button" data-copy="curl -X POST &quot;https://node-1.example.net:9109/api/peer/PEER_PUBLIC_KEY/enable&quot; -H &quot;Authorization: Bearer &lt;NODE_API_KEY&gt;&quot; -H &quot;Content-Type: application/json&quot; --data &#x27;{&quot;host_cidr&quot;:&quot;10.66.66.2/32&quot;}&#x27;"><i class="fa-regular fa-copy"></i> Copy</button>
       </div>
     </div>
   </div>
@@ -5827,11 +5888,11 @@ PORT=9898
     </div>
   </div>
 </article>
-<article class="route-row" data-text="node agent post /api/peers/add add_peer adds a peer directly on the node agent.">
+<article class="route-row" data-text="node agent post /api/peers/add add_peer fixed remote client endpoint domain resolution allocation update rollback persistent config">
   <button class="route-main" type="button" aria-expanded="false">
     <span class="method m-post">POST</span>
     <code class="route-path">/api/peers/add</code>
-    <span class="route-desc">Adds a peer directly on the node agent.</span>
+    <span class="route-desc">Creates or updates a node peer with locked address allocation and fixed remote-client endpoint support.</span>
     <span class="auth-pill">Node API key</span>
     <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
   </button>
@@ -5839,7 +5900,15 @@ PORT=9898
     <div class="detail-grid">
       <div class="detail-card">
         <div class="detail-title">What it does</div>
-        <p>Adds a peer directly on the node agent.</p>
+        <p>Adds or updates a peer under an interface-specific file lock. It validates or allocates the client host address, prevents duplicate addresses, updates the live WireGuard runtime, writes the persistent peer block atomically, verifies both runtime and config, and rolls back on failure.</p>
+        <div class="api-param-list">
+          <div><code>iface</code><span>Target WireGuard interface name.</span></div>
+          <div><code>public_key</code><span>Peer public key.</span></div>
+          <div><code>host_cidr</code><span>Optional explicit client host. Omit to allocate the first free host.</span></div>
+          <div><code>endpoint</code><span>Optional fixed remote-client endpoint in <code>host:port</code>, IPv4, domain, or bracketed IPv6 form.</span></div>
+          <div><code>persistent_keepalive</code><span>Optional keepalive seconds.</span></div>
+        </div>
+        <div class="api-security-note">For a domain endpoint, the live <code>wg set</code> operation uses a resolved IP address, while the original hostname remains in the saved <code>.conf</code>. This is a server-side peer endpoint and must not be confused with the node's public endpoint exported to clients.</div>
         <div class="meta-line"><span>node_agent.py</span><span>handler: <code>add_peer</code></span></div>
       </div>
       <div class="detail-card command-card">
@@ -5848,22 +5917,21 @@ PORT=9898
   -H &quot;Authorization: Bearer &lt;NODE_API_KEY&gt;&quot; \
   -H &quot;Content-Type: application/json&quot; \
   --data &#x27;{
-  &quot;iface&quot;: &quot;wg0&quot;,
-  &quot;public_key&quot;: &quot;PUBLIC_KEY_EXAMPLE&quot;,
-  &quot;allowed_ips&quot;: &quot;10.70.0.2/32&quot;,
-  &quot;endpoint&quot;: &quot;&quot;,
-  &quot;persistent_keepalive&quot;: 25
-}&#x27;</code></pre>
-        <button class="copy-btn" type="button" data-copy="curl -X POST &quot;https://node-1.example.net:9109/api/peers/add&quot; \
-  -H &quot;Authorization: Bearer &lt;NODE_API_KEY&gt;&quot; \
-  -H &quot;Content-Type: application/json&quot; \
-  --data &#x27;{
-  &quot;iface&quot;: &quot;wg0&quot;,
-  &quot;public_key&quot;: &quot;PUBLIC_KEY_EXAMPLE&quot;,
-  &quot;allowed_ips&quot;: &quot;10.70.0.2/32&quot;,
-  &quot;endpoint&quot;: &quot;&quot;,
-  &quot;persistent_keepalive&quot;: 25
-}&#x27;"><i class="fa-regular fa-copy"></i> Copy</button>
+    &quot;iface&quot;: &quot;wg0&quot;,
+    &quot;public_key&quot;: &quot;PEER_PUBLIC_KEY&quot;,
+    &quot;host_cidr&quot;: &quot;10.66.66.2/32&quot;,
+    &quot;endpoint&quot;: &quot;client.example.com:51820&quot;,
+    &quot;persistent_keepalive&quot;: 25
+  }&#x27;</code></pre>
+        <div class="detail-title">Important errors</div>
+        <pre><code>400 invalid_fixed_endpoint
+400 invalid_host_cidr
+404 interface_conf_not_found
+409 host_cidr_already_used
+409 address_pool_exhausted
+500 wg_set_failed
+500 wg_remove_before_update_failed</code></pre>
+        <button class="copy-btn" type="button" data-copy="curl -X POST &quot;https://node-1.example.net:9109/api/peers/add&quot; -H &quot;Authorization: Bearer &lt;NODE_API_KEY&gt;&quot; -H &quot;Content-Type: application/json&quot; --data &#x27;{&quot;iface&quot;:&quot;wg0&quot;,&quot;public_key&quot;:&quot;PEER_PUBLIC_KEY&quot;,&quot;host_cidr&quot;:&quot;10.66.66.2/32&quot;,&quot;endpoint&quot;:&quot;client.example.com:51820&quot;,&quot;persistent_keepalive&quot;:25}&#x27;"><i class="fa-regular fa-copy"></i> Copy</button>
       </div>
     </div>
   </div>
