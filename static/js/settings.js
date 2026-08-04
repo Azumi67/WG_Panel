@@ -534,13 +534,6 @@ document.getElementById('rt-restart')
     }
     if (btnUp) { btnUp.dataset.scope = scope; btnUp.dataset.target = String(target ?? ''); }
     if (btnDn) { btnDn.dataset.scope = scope; btnDn.dataset.target = String(target ?? ''); }
-
-    ['iface-ep-save', 'iface-ep-clear', 'iface-ep-apply'].forEach((id) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.dataset.scope = scope;
-      el.dataset.target = String(target ?? '');
-    });
   }
 
   function ifaceView(meta) {
@@ -551,29 +544,6 @@ document.getElementById('rt-restart')
     set('i-listen',  meta?.listen_port ?? '');
     set('i-dns',     meta?.dns ?? '');
     set('i-mtu',     meta?.mtu ?? '');
-    // The endpoint inputs are the only editable fields on node scope, and the
-    // node status poll re-renders this view every 10s. Never overwrite what an
-    // operator is part-way through typing; a deliberate (re)load clears the flag.
-    const setEditable = (id, v) => {
-      const el = document.getElementById(id);
-      if (!el || el === document.activeElement || el.dataset.userEdited === '1') return;
-      el.value = (v ?? '');
-    };
-    setEditable('i-ep-host', meta?.endpoint_host ?? '');
-    setEditable('i-ep-port', meta?.endpoint_port ?? '');
-    set('i-ep-effective', meta?.effective_endpoint ?? '');
-
-    const srcEl = document.getElementById('i-ep-source');
-    if (srcEl) {
-      const src = meta?.endpoint_source || 'none';
-      const auto = meta?.auto_endpoint || '(none detected)';
-      srcEl.textContent =
-        src === 'override'
-          ? `Saved override in use. Auto-detection would give ${auto}.`
-          : src === 'auto'
-            ? `Auto-detected. Save a host and port above to override it.`
-            : 'No endpoint could be determined. Exported configs will have no Endpoint line.';
-    }
 
     const badge = $('#iface-status');
     if (badge) {
@@ -602,24 +572,8 @@ document.getElementById('rt-restart')
     } catch (e) { console.error(e); toast('Failed to load interfaces', 'error'); }
   }
 
-  // A deliberate (re)load is authoritative: drop any in-progress edit so the
-  // freshly fetched override wins. Only the background poll defers to typing.
-  function clearEndpointEdits() {
-    ['i-ep-host', 'i-ep-port'].forEach((id) => {
-      const el = document.getElementById(id);
-      if (el) el.dataset.userEdited = '0';
-    });
-  }
-
-  ['i-ep-host', 'i-ep-port'].forEach((id) => {
-    document.getElementById(id)?.addEventListener('input', (e) => {
-      e.currentTarget.dataset.userEdited = '1';
-    });
-  });
-
   async function loadIfaceLocal(id) {
     if (!id) return;
-    clearEndpointEdits();
     if (loadIfaceAbort) loadIfaceAbort.abort();
     const ctrl = new AbortController(); loadIfaceAbort = ctrl;
     try {
@@ -780,7 +734,6 @@ document.getElementById('rt-restart')
 
 
   async function loadIfaceNode(name) {
-    clearEndpointEdits();
     const meta = NODE_IFACES.find(x => x.name === name) || {};
     ifaceView(meta);
     setActions({ save:false, scope:'node', target:name });
@@ -867,62 +820,6 @@ document.getElementById('rt-restart')
       toast('Interface saved', 'success');
       refreshIfaceStatusLocal(iid);
     } catch (e) { toast('Save failed: ' + e.message, 'error'); }
-  });
-
-  function endpointRoute(el, suffix = '') {
-    const scope  = el?.dataset.scope || IFACE_SCOPE;
-    const target = el?.dataset.target || ($('#iface-select')?.value || '');
-    if (!target) return null;
-    return scope === 'local'
-      ? `/api/iface/${target}/endpoint-default${suffix}`
-      : `/api/nodes/${IFACE_NODE}/iface/${encodeURIComponent(target)}/endpoint-default${suffix}`;
-  }
-
-  async function reloadIfaceCurrent() {
-    if (IFACE_SCOPE === 'local') {
-      await loadIfaceLocal($('#iface-select')?.value);
-    } else {
-      await loadNodeIfaces(IFACE_NODE);
-      await loadIfaceNode($('#iface-select')?.value);
-    }
-  }
-
-  $('#iface-ep-save')?.addEventListener('click', async (e) => {
-    const url = endpointRoute(e.currentTarget);
-    if (!url) { toast('Select an interface first.', 'error'); return; }
-    const host = ($('#i-ep-host')?.value || '').trim();
-    const port = Number($('#i-ep-port')?.value || 0) || null;
-    try {
-      await jfetch(url, { method: 'PUT', body: { host: host || null, port } });
-      await reloadIfaceCurrent();
-      toast('Endpoint default saved. Configs exported from now on will use it.', 'success');
-    } catch (err) { toast('Save failed: ' + err.message, 'error'); }
-  });
-
-  $('#iface-ep-clear')?.addEventListener('click', async (e) => {
-    const url = endpointRoute(e.currentTarget);
-    if (!url) { toast('Select an interface first.', 'error'); return; }
-    try {
-      await jfetch(url, { method: 'PUT', body: { host: null, port: null } });
-      await reloadIfaceCurrent();
-      toast('Endpoint default cleared. Auto-detection is back in use.', 'success');
-    } catch (err) { toast('Clear failed: ' + err.message, 'error'); }
-  });
-
-  $('#iface-ep-apply')?.addEventListener('click', async (e) => {
-    const url = endpointRoute(e.currentTarget, '/apply');
-    if (!url) { toast('Select an interface first.', 'error'); return; }
-    try {
-      const dry = await jfetch(url, { method: 'POST', body: { dry_run: true } });
-      const msg =
-        `Stamp ${dry.effective_endpoint} onto ${dry.would_update} existing peer(s)?\n` +
-        `${dry.skipped_explicit} peer(s) with their own endpoint will be skipped.\n\n` +
-        `Already-downloaded configs are not rewritten.`;
-      if (!window.confirm(msg)) return;
-      const done = await jfetch(url, { method: 'POST', body: { dry_run: false } });
-      toast(`Applied to ${done.updated} peer(s).`, 'success');
-      await reloadIfaceCurrent();
-    } catch (err) { toast('Apply failed: ' + err.message, 'error'); }
   });
 
   async function toggleIface(action, elId) {
@@ -1265,10 +1162,26 @@ document.getElementById('rt-restart')
         $('#tg-token').value = '';
         $('#tg-token').placeholder = s.has_token ? '•••••• (token already set)' : '123456:ABC-DEF...';
         const n = s.notify || {};
-        $('#tg-n-app').checked   = !!n.app_down;
-        $('#tg-n-iface').checked = !!n.iface_down;
-        $('#tg-n-login').checked = !!n.login_fail;
-        $('#tg-n-4xx').checked   = !!n.suspicious_4xx;
+        const setChecked = (id, value) => {
+          const el = document.getElementById(id);
+          if (el) el.checked = !!value;
+        };
+
+        setChecked('tg-n-app-down',       n.app_down);
+        setChecked('tg-n-app-up',         n.app_up);
+        setChecked('tg-n-node-down',      n.node_down);
+        setChecked('tg-n-node-up',        n.node_up);
+        setChecked('tg-n-iface-down',     n.iface_down);
+        setChecked('tg-n-iface-up',       n.iface_up);
+        setChecked('tg-n-peer-expired',   n.peer_expired);
+        setChecked('tg-n-peer-limit',     n.peer_limit);
+        setChecked('tg-n-login-success',  n.login_success);
+        setChecked('tg-n-login-fail',     n.login_fail);
+        setChecked('tg-n-4xx',            n.suspicious_4xx);
+        setChecked('tg-n-backup-success', n.backup_success);
+        setChecked('tg-n-backup-failed',  n.backup_failed);
+        setChecked('tg-n-update-success', n.update_success);
+        setChecked('tg-n-update-failed',  n.update_failed);
         updateChips({ enabled: s.enabled, has_token: s.has_token, admins: [] });
       } catch { toast('Failed to load Telegram settings', 'error'); }
     }
@@ -1276,10 +1189,21 @@ document.getElementById('rt-restart')
       const payload = {
         enabled: $('#tg-enabled').checked,
         notify: {
-          app_down:   $('#tg-n-app').checked,
-          iface_down: $('#tg-n-iface').checked,
-          login_fail: $('#tg-n-login').checked,
-          suspicious_4xx: $('#tg-n-4xx').checked
+          app_down:       !!$('#tg-n-app-down')?.checked,
+          app_up:         !!$('#tg-n-app-up')?.checked,
+          node_down:      !!$('#tg-n-node-down')?.checked,
+          node_up:        !!$('#tg-n-node-up')?.checked,
+          iface_down:     !!$('#tg-n-iface-down')?.checked,
+          iface_up:       !!$('#tg-n-iface-up')?.checked,
+          peer_expired:   !!$('#tg-n-peer-expired')?.checked,
+          peer_limit:     !!$('#tg-n-peer-limit')?.checked,
+          login_success:  !!$('#tg-n-login-success')?.checked,
+          login_fail:     !!$('#tg-n-login-fail')?.checked,
+          suspicious_4xx: !!$('#tg-n-4xx')?.checked,
+          backup_success: !!$('#tg-n-backup-success')?.checked,
+          backup_failed:  !!$('#tg-n-backup-failed')?.checked,
+          update_success: !!$('#tg-n-update-success')?.checked,
+          update_failed:  !!$('#tg-n-update-failed')?.checked
         }
       };
       try {
@@ -1308,6 +1232,44 @@ document.getElementById('rt-restart')
         updateChips({ enabled: $('#tg-enabled').checked, has_token: false, admins: [] });
       } catch (e) { toast('Clear failed: ' + e.message, 'error'); }
     }
+
+    function notificationInputs() {
+      return Array.from(
+        document.querySelectorAll('#tg-acc-notify-body input[type="checkbox"]')
+      );
+    }
+
+    function applyNotificationPreset(mode) {
+      const criticalIds = new Set([
+        'tg-n-app-down',
+        'tg-n-node-down',
+        'tg-n-iface-down',
+        'tg-n-login-fail',
+        'tg-n-4xx',
+        'tg-n-backup-failed',
+        'tg-n-update-failed'
+      ]);
+
+      notificationInputs().forEach((input) => {
+        input.checked =
+          mode === 'all'
+            ? true
+            : mode === 'critical'
+              ? criticalIds.has(input.id)
+              : false;
+      });
+    }
+
+    $('#tg-notify-critical')?.addEventListener('click', () =>
+      applyNotificationPreset('critical')
+    );
+    $('#tg-notify-all')?.addEventListener('click', () =>
+      applyNotificationPreset('all')
+    );
+    $('#tg-notify-none')?.addEventListener('click', () =>
+      applyNotificationPreset('none')
+    );
+
     async function loadStatus() {
       try { const j = await jfetch('/api/telegram/status'); updateStatusChips(j); } catch {}
     }
