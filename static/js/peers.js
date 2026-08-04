@@ -734,6 +734,85 @@ function selectedInterfaceObject() {
 }
 
 
+function interfaceDefaultEndpoint(ifaceOverride = null) {
+  const iface = ifaceOverride || selectedInterfaceObject();
+  if (!iface) return '';
+
+  const direct = [
+    iface.default_endpoint,
+    iface.client_endpoint,
+    iface.server_endpoint,
+    iface.endpoint,
+    iface.public_endpoint,
+    iface.endpoint_default
+  ].map(v => String(v || '').trim()).find(Boolean);
+  if (direct) return direct;
+
+  const host = [
+    iface.endpoint_host,
+    iface.default_endpoint_host,
+    iface.client_endpoint_host,
+    iface.public_endpoint_host,
+    iface.server_public_ip,
+    iface.public_ip,
+    iface.host
+  ].map(v => String(v || '').trim()).find(Boolean);
+
+  const port = [
+    iface.endpoint_port,
+    iface.default_endpoint_port,
+    iface.client_endpoint_port,
+    iface.public_endpoint_port,
+    iface.listen_port
+  ].map(v => String(v ?? '').trim()).find(Boolean);
+
+  if (!host) return '';
+  if (!port) return host;
+  return host.includes(':') && !host.startsWith('[') ? `[${host}]:${port}` : `${host}:${port}`;
+}
+
+function updateEndpointInheritanceUI() {
+  const inherited = interfaceDefaultEndpoint();
+  const targets = [
+    ['#peer-endpoint', '#peer-endpoint-effective', '#peer-endpoint-effective-value'],
+    ['#edit-peer-form [name="endpoint"]', '#edit-endpoint-effective', '#edit-endpoint-effective-value'],
+    ['#bulk-endpoint', '#bulk-endpoint-effective', '#bulk-endpoint-effective-value']
+  ];
+
+  for (const [inputSel, boxSel, valueSel] of targets) {
+    const input = document.querySelector(inputSel);
+    const box = document.querySelector(boxSel);
+    const value = document.querySelector(valueSel);
+    if (!input || !box || !value) continue;
+
+    const refresh = () => {
+      const custom = String(input.value || '').trim();
+      if (custom) {
+        box.dataset.state = 'override';
+        box.querySelector('span').textContent = 'Custom override:';
+        value.textContent = custom;
+      } else if (inherited) {
+        box.dataset.state = 'inherited';
+        box.querySelector('span').textContent = 'Using interface default:';
+        value.textContent = inherited;
+      } else {
+        box.dataset.state = 'missing';
+        box.querySelector('span').textContent = 'Interface default:';
+        value.textContent = 'Not configured';
+      }
+    };
+
+    if (input.dataset.endpointPreviewWired !== '1') {
+      input.addEventListener('input', refresh);
+      input.addEventListener('change', refresh);
+      input.dataset.endpointPreviewWired = '1';
+    }
+    refresh();
+  }
+}
+window.updateEndpointInheritanceUI = updateEndpointInheritanceUI;
+
+
 function applyInternalNetworkToAllowedIps(
   allowedInput,
   checkbox,
@@ -1303,15 +1382,20 @@ async function getPresets() {
     input.dataset.enhanced = '1';
 
     const row = document.createElement('div');
-    row.className = 'ep-row';
+    row.className = 'ep-row endpoint-presets-compact';
     row.innerHTML = `
-      <select id="ep-saved" class="input" style="flex:1 1 320px; min-width:240px">
-        <option value="">Saved endpoints…</option>
+      <div class="endpoint-presets-copy">
+        <i class="fas fa-bookmark" aria-hidden="true"></i>
+        <span><b>Saved endpoint</b><small>Select a preset only when this peer should override the interface default.</small></span>
+      </div>
+      <select id="ep-saved" class="input" aria-label="Saved endpoint">
+        <option value="">No override — use interface default</option>
       </select>
-      <button type="button" class="btn secondary" id="ep-save" title="Save current"><i class="fas fa-save"></i></button>
-      <button type="button" class="btn secondary" id="ep-apply" title="Apply selected"><i class="fas fa-clipboard-check"></i></button>
-      <button type="button" class="btn secondary" id="ep-del" title="Delete selected"><i class="fas fa-trash"></i></button>`;
+      <button type="button" class="btn secondary" id="ep-apply" title="Use selected endpoint" aria-label="Use selected endpoint"><i class="fas fa-check"></i></button>
+      <button type="button" class="btn secondary endpoint-preset-action" id="ep-save" title="Save current endpoint" aria-label="Save current endpoint"><i class="fas fa-save"></i></button>
+      <button type="button" class="btn secondary danger endpoint-preset-action" id="ep-del" title="Delete selected endpoint" aria-label="Delete selected endpoint"><i class="fas fa-trash"></i></button>`;
     input.parentElement.appendChild(row);
+    updateEndpointInheritanceUI();
 
 
     const fire = () => { input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); };
@@ -1336,7 +1420,7 @@ async function getPresets() {
   const sel = row.querySelector('#ep-saved');
   const opts = (endpointPresets || []).map((p, idx) =>
     `<option value="${idx}">${(p.label || `${p.host}:${p.port}`)} (${p.host}:${p.port})</option>`).join('');
-  sel.innerHTML = `<option value="">Saved endpoints…</option>${opts}`;
+  sel.innerHTML = `<option value="">No override — use interface default</option>${opts}`;
 }
 refreshSavedOptions();
 
@@ -2816,7 +2900,7 @@ async function getShortLink(idOrPeer) {
     // default onto this peer the next time any field is saved.
     if (editForm.endpoint) {
       editForm.endpoint.value = p.endpoint_saved || '';
-      editForm.endpoint.placeholder = p.endpoint || 'host:port';
+      editForm.endpoint.placeholder = p.endpoint || 'Leave empty to use interface default';
     }
     editForm.peer_endpoint && (editForm.peer_endpoint.value = p.peer_endpoint || '');
     editForm.persistent_keepalive && (editForm.persistent_keepalive.value = p.persistent_keepalive || '');
@@ -3387,7 +3471,7 @@ function refreshDefaultIface(iface) {
   // Show what the interface will hand out, but leave the field empty so a
   // blank submit stores NULL and the server-side override applies.
   ep.value = '';
-  ep.placeholder = iface.effective_endpoint || 'host:port';
+  ep.placeholder = 'Leave empty to use interface default';
   ep.dataset.lastIface = String(SELECTED_IFACE_ID);
 
   ep.addEventListener('input', () => { ep.dataset.userEdited = '1'; }, { once: true });
@@ -3401,7 +3485,7 @@ function refreshBulkIface(iface) {
   if (input.dataset.userEdited === '1') return;
 
   input.value = '';
-  input.placeholder = iface.effective_endpoint || 'host:port';
+  input.placeholder = 'Leave empty to use interface default';
   input.dataset.lastIface = String(SELECTED_IFACE_ID);
 
   input.addEventListener('input', () => { input.dataset.userEdited = '1'; }, { once: true });
@@ -3967,7 +4051,7 @@ async function refreshBulkDefaults(iface) {
 
   const epBulkPreset = $('#bulk-endpoint');
   if (epBulkPreset && !epBulkPreset.value.trim()) {
-    epBulkPreset.placeholder = iface.effective_endpoint || 'host:port';
+    epBulkPreset.placeholder = 'Leave empty to use interface default';
   }
   const mtu = $('#bulk-mtu'); if (mtu && iface.mtu != null) mtu.value = iface.mtu;
   const dns = $('#bulk-dns'); if (dns && iface.dns) dns.value = iface.dns;
@@ -4938,4 +5022,60 @@ if (scopeEl) {
   } else {
     run();
   }
+
+  document.addEventListener('change', (event) => {
+    if (event.target?.matches?.('#peer-scope, #create-address-select, #bulk-iface')) {
+      setTimeout(updateEndpointInheritanceUI, 0);
+    }
+  });
+  document.addEventListener('peer-scope-ready', () => setTimeout(updateEndpointInheritanceUI, 0));
+})();
+
+
+/* Peer create state + endpoint help fix */
+(() => {
+  const modal = document.getElementById('peer-modal');
+  const form = document.getElementById('create-peer-form');
+  if (!modal || !form) return;
+
+  function resetCreatePeerState() {
+    form.reset();
+    form.dataset.nodeSubmitting = '0';
+    const allowed = document.getElementById('peer-allowed-ips');
+    if (allowed) {
+      allowed.value = '0.0.0.0/0, ::/0';
+      delete allowed.dataset.autoInternalNetworks;
+      allowed.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    const include = document.getElementById('peer-include-internal-network');
+    if (include) include.checked = false;
+    const hiddenNetworks = document.getElementById('peer-internal-network');
+    if (hiddenNetworks) hiddenNetworks.value = '';
+    const fixed = document.getElementById('peer-fixed-endpoint');
+    if (fixed) fixed.value = '';
+    const server = document.getElementById('peer-endpoint');
+    if (server) { server.value = ''; server.dataset.userEdited = '0'; }
+    const profile = document.getElementById('use-profile-toggle');
+    if (profile) profile.checked = false;
+    const info = document.getElementById('peer-wg-advanced');
+    if (info) info.classList.remove('is-open');
+    window.__profileSnapshot = null;
+    setTimeout(() => {
+      if (typeof window.updateEndpointInheritanceUI === 'function') window.updateEndpointInheritanceUI();
+    }, 0);
+  }
+
+  document.getElementById('create-peer-btn')?.addEventListener('click', resetCreatePeerState, true);
+  ['modal-close','create-cancel'].forEach(id => document.getElementById(id)?.addEventListener('click', resetCreatePeerState));
+  modal.querySelector('.modal-backdrop')?.addEventListener('click', resetCreatePeerState);
+
+  document.addEventListener('click', (event) => {
+    const trigger = event.target.closest('.endpoint-info-trigger');
+    if (!trigger) return;
+    const card = trigger.closest('.peerx-endpoint-info');
+    if (!card) return;
+    const open = !card.classList.contains('is-open');
+    card.classList.toggle('is-open', open);
+    trigger.setAttribute('aria-expanded', String(open));
+  });
 })();
