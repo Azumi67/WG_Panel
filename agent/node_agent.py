@@ -311,7 +311,90 @@ def _route(cmd, cidr):
 @app.route('/api/health')
 @require_api_key
 def health():
-    return jsonify(ok=True, host=socket.gethostname(), now=int(time.time()), public_ipv4=_public_ipv4())
+    """
+    Return node health, uptime, version, and WireGuard interface state.
+
+    The panel uses this information for:
+    - node online/offline monitoring
+    - node recovery notifications
+    - interface up/down notifications
+    """
+    interface_states = []
+
+    try:
+        config_directory = _wg_conf_dir()
+
+        if os.path.isdir(config_directory):
+            for filename in sorted(
+                os.listdir(config_directory)
+            ):
+                if not filename.endswith('.conf'):
+                    continue
+
+                config_path = os.path.join(
+                    config_directory,
+                    filename,
+                )
+
+                metadata = _read_iface(
+                    config_path
+                )
+
+                if not metadata:
+                    continue
+
+                interface_name = (
+                    metadata.get('name')
+                    or ''
+                ).strip()
+
+                if not interface_name:
+                    continue
+
+                interface_states.append({
+                    'name': interface_name,
+                    'address': (
+                        metadata.get('address')
+                        or ''
+                    ),
+                    'listen_port': metadata.get(
+                        'listen_port'
+                    ),
+                    'is_up': bool(
+                        _iface_up(interface_name)
+                    ),
+                })
+
+    except Exception:
+        app.logger.debug(
+            'Could not include interface states '
+            'in node health response',
+            exc_info=True,
+        )
+
+    try:
+        uptime_seconds = int(
+            float(
+                Path('/proc/uptime')
+                .read_text(
+                    encoding='utf-8'
+                )
+                .split()[0]
+            )
+        )
+
+    except Exception:
+        uptime_seconds = 0
+
+    return jsonify(
+        ok=True,
+        host=socket.gethostname(),
+        now=int(time.time()),
+        public_ipv4=_public_ipv4(),
+        uptime_seconds=uptime_seconds,
+        version=NODE_AGENT_VERSION,
+        interfaces=interface_states,
+    )
 
 
 def _safe_iface_name(name: str) -> str:
@@ -2158,6 +2241,116 @@ def node_system_update_start():
         status=queued,
     ), 202
 
+def _runtime_endpoint(value: str | None) -> str:
+    """
+    Resolve a fixed client endpoint for a live `wg set` operation.
+
+    Wg's live runtime requires an endpoint it can resolve and accept.
+    The original hostname remains stored in the persistent .conf file.
+
+    Accepted formats:
+        client.example.com:51820
+        203.0.113.10:51820
+        [2001:db8::10]:51820
+    """
+    raw = str(
+        value or ''
+    ).strip()
+
+    if not raw:
+        return ''
+
+    # Bracketed IPv6:
+    # [2001:db8::10]:51820
+    match = re.fullmatch(
+        r'\[([^]]+)\]:(\d+)',
+        raw,
+    )
+
+    if match:
+        endpoint_host = (
+            match.group(1)
+            or ''
+        ).strip()
+
+        port = int(
+            match.group(2)
+        )
+
+    else:
+        endpoint_host, separator, port_text = (
+            raw.rpartition(':')
+        )
+
+        endpoint_host = endpoint_host.strip()
+        port_text = port_text.strip()
+
+        if (
+            not separator
+            or not endpoint_host
+            or not port_text.isdigit()
+        ):
+            raise ValueError(
+                'Fixed client endpoint must use '
+                'host:port format.'
+            )
+
+        port = int(
+            port_text
+        )
+
+    if not 1 <= port <= 65535:
+        raise ValueError(
+            'Fixed client endpoint port must be '
+            'between 1 and 65535.'
+        )
+
+    try:
+        resolved_ip = ipa.ip_address(
+            endpoint_host
+        ).compressed
+
+    except ValueError:
+        try:
+            results = socket.getaddrinfo(
+                endpoint_host,
+                port,
+                family=socket.AF_UNSPEC,
+                type=socket.SOCK_DGRAM,
+            )
+
+        except socket.gaierror as exc:
+            raise ValueError(
+                'Could not resolve fixed client '
+                f'endpoint domain: {endpoint_host}'
+            ) from exc
+
+        if not results:
+            raise ValueError(
+                'Could not resolve fixed client '
+                f'endpoint domain: {endpoint_host}'
+            )
+
+        resolved_ip = str(
+            results[0][4][0]
+        ).strip()
+
+    try:
+        normalized_ip = ipa.ip_address(
+            resolved_ip
+        ).compressed
+
+    except ValueError as exc:
+        raise ValueError(
+            'The fixed client endpoint resolved '
+            'to an invalid IP address.'
+        ) from exc
+
+    if ':' in normalized_ip:
+        return f'[{normalized_ip}]:{port}'
+
+    return f'{normalized_ip}:{port}'
+
 @app.route('/api/peers/add', methods=['POST'])
 @require_api_key
 def add_peer():
@@ -2262,15 +2455,40 @@ def add_peer():
             )
 
         def _restore_runtime(block):
-            if not block:
-                _runtime_remove()
-                return
-            old_allowed = (_block_allowed_ips(block) or [''])[0]
-            old_endpoint = _block_value(block, 'endpoint')
-            old_keepalive = _block_value(block, 'persistentkeepalive') or 0
+        """Restore the previous runtime peer after a failed update.
+        Saved hostname endpoints must be resolved before being passed to
+        the live Wg runtime."""
+        if not block:
             _runtime_remove()
-            if old_allowed:
-                _runtime_set(old_allowed, old_endpoint, old_keepalive)
+            return
+
+        old_allowed = (_block_allowed_ips(block)or [''])[0]
+
+        old_endpoint = _block_value(block,'endpoint',)
+
+        old_keepalive = (_block_value(block,'persistentkeepalive',)or 0)
+
+        _runtime_remove()
+
+        if not old_allowed:
+            return
+
+        runtime_old_endpoint = ''
+
+        if old_endpoint:
+            runtime_old_endpoint = (_runtime_endpoint(old_endpoint))
+
+        restore_result = _runtime_set(old_allowed,runtime_old_endpoint,old_keepalive,)
+
+        if restore_result.returncode != 0:
+            raise RuntimeError(
+               (
+                    restore_result.stderr
+                    or restore_result.stdout
+                    or 'Could not restore the previous peer runtime.'
+                ).strip()
+            )
+        #This matters when an update fails. Without it, rollback may attempt to restore the original domain directly...
 
         with open(lock_path, 'w') as lockf:
             fcntl.flock(lockf, fcntl.LOCK_EX)
@@ -2367,7 +2585,20 @@ def add_peer():
                         stderr=(up.stderr or up.stdout or '').strip()
                     ), 500
 
-            endpoint = (j.get('endpoint') or '').strip()
+            endpoint = (j.get('endpoint')or '').strip()
+
+            try:
+                runtime_endpoint = (_runtime_endpoint(endpoint)
+                                    if endpoint
+                                    else '')
+
+            except ValueError as exc:
+                return jsonify(
+                    ok=False,
+                    error='invalid_fixed_endpoint',
+                    detail=str(exc),
+                    endpoint=endpoint,), 400
+
             keepalive = j.get('persistent_keepalive')
             try:
                 keepalive = int(keepalive or 0)
@@ -2385,7 +2616,7 @@ def add_peer():
                         stderr=(removed.stderr or removed.stdout or '').strip(),
                     ), 500
 
-            proc = _runtime_set(host, endpoint, keepalive)
+            proc = _runtime_set(host,runtime_endpoint,keepalive,)
 
             if proc.returncode != 0:
                 if duplicate:
@@ -2631,10 +2862,15 @@ def enable_peer(pub):
         ]
 
     if info.get('endpoint'):
-        command += [
-            'endpoint',
-            info['endpoint'],
-        ]
+        try:
+            runtime_endpoint = (
+                runtime_endpoint(
+                    info['endpoint']
+                )
+            )
+        except ValueError as exc:
+            return jsonify(ok=False,error='invalid_fixed_endpoint',detail=str(exc),endpoint=info.get('endpoint'),interface=interface_name,), 400
+        command += ['endpoint',runtime_endpoint,]
 
     if info.get('keep'):
         command += [
