@@ -1949,3 +1949,252 @@ button.ui-btn.primary {
     padding: 9px !important;
   }
 }
+
+
+#card-telegram .tg-notify-acc {
+  overflow: visible;
+}
+
+#card-telegram .tg-notify-acc > .acc-bar {
+  min-height: 58px;
+}
+
+#card-telegram .tg-notify-acc > .acc-bar > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+#card-telegram .tg-summary-note {
+  margin-left: 4px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+#card-telegram .tg-notify-body {
+  display: block !important;
+  padding: 16px 18px 18px;
+}
+
+.tg-notify-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 15px;
+  margin-bottom: 16px;
+  border: 1px solid #dbe4ee;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #fbfdff, #f6f9fc);
+}
+
+.tg-notify-intro > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.tg-notify-intro strong {
+  color: #172033;
+  font-size: 14px;
+}
+
+.tg-notify-intro span {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tg-notify-quick {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.tg-notify-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.tg-notify-group {
+  min-width: 0;
+  border: 1px solid #dbe4ee;
+  border-radius: 16px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.tg-notify-group > header {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 66px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #e5ebf2;
+  background: #f8fafc;
+}
+
+.tg-notify-group > header > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tg-notify-group > header strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.tg-notify-group > header small {
+  margin-top: 2px;
+  color: #718096;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.tg-notify-group-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 11px;
+}
+
+.tg-notify-group-icon.system {
+  color: #1d4ed8;
+  background: #eaf2ff;
+  border-color: #cadcff;
+}
+
+.tg-notify-group-icon.wireguard {
+  color: #047857;
+  background: #e8f8f2;
+  border-color: #c4eadc;
+}
+
+.tg-notify-group-icon.security {
+  color: #b45309;
+  background: #fff5dc;
+  border-color: #f7dfa4;
+}
+
+.tg-notify-group-icon.operations {
+  color: #6d28d9;
+  background: #f2ecff;
+  border-color: #dccdff;
+}
+
+.tg-notify-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+.tg-notify-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 72px;
+  padding: 11px 14px;
+  border-bottom: 1px solid #edf1f5;
+  cursor: pointer;
+  transition: background-color .15s ease;
+}
+
+.tg-notify-row:last-child {
+  border-bottom: 0;
+}
+
+.tg-notify-row:hover {
+  background: #fbfcfe;
+}
+
+.tg-notify-row.critical {
+  box-shadow: inset 3px 0 0 #ef4444;
+}
+
+.tg-notify-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tg-notify-copy b {
+  color: #1f2937;
+  font-size: 12.5px;
+  line-height: 1.3;
+}
+
+.tg-notify-copy small {
+  margin-top: 3px;
+  color: #718096;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.tg-notify-row .switch {
+  flex: 0 0 auto;
+}
+
+.tg-notify-savebar {
+  position: sticky;
+  bottom: 8px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 11px 12px 11px 14px;
+  border: 1px solid #dbe4ee;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, .09);
+  backdrop-filter: blur(12px);
+}
+
+.tg-notify-savebar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.tg-notify-savebar > span i {
+  color: #3b82f6;
+}
+
+@media (max-width: 1080px) {
+  .tg-notify-groups {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  #card-telegram .tg-summary-note {
+    display: none;
+  }
+
+  .tg-notify-intro,
+  .tg-notify-savebar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tg-notify-quick {
+    justify-content: flex-start;
+  }
+
+  .tg-notify-savebar .btn {
+    width: 100%;
+  }
+}
