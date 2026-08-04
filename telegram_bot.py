@@ -2978,38 +2978,203 @@ def render_bot_settings():
     notify = tg.get("notify") or {}
     portal = subscription_portal_settings()
 
+    notification_groups = (
+        (
+            "Panel and nodes",
+            (
+                ("app_down", "Panel stopped / unreachable"),
+                ("app_up", "Panel started / recovered"),
+                ("node_down", "Node went offline"),
+                ("node_up", "Node came online"),
+            ),
+        ),
+        (
+            "WireGuard",
+            (
+                ("iface_down", "Interface went down"),
+                ("iface_up", "Interface came up"),
+                ("peer_expired", "Peer expired"),
+                ("peer_limit", "Peer traffic limit reached"),
+            ),
+        ),
+        (
+            "Security",
+            (
+                ("login_success", "Successful admin login"),
+                ("login_fail", "Failed login / 2FA"),
+                ("suspicious_4xx", "Suspicious 4xx activity"),
+            ),
+        ),
+        (
+            "Backups and updates",
+            (
+                ("backup_success", "Backup completed"),
+                ("backup_failed", "Backup failed"),
+                ("update_success", "Update completed"),
+                ("update_failed", "Update / rollback failed"),
+            ),
+        ),
+    )
+
+    all_keys = [
+        key
+        for _group, items in notification_groups
+        for key, _label in items
+    ]
+    enabled_count = sum(
+        1
+        for key in all_keys
+        if bool(notify.get(key))
+    )
+
     def mark(key: str) -> str:
-        return "●" if bool(notify.get(key)) else "⊘"
+        return "●" if bool(notify.get(key)) else "○"
 
     lines = [
-        "⚙ <b>Bot Settings</b>",
+        "⚙ <b>Bot settings</b>",
+        "<i>Telegram integration and notification policy</i>",
         "",
-        f"◇ <b>Telegram integration</b>: {'Enabled' if tg.get('enabled') else 'Disabled'}",
-        f"◇ <b>Bot token</b>: {'Configured' if tg.get('has_token') else 'Missing'}",
-        "",
-        "● <b>Notifications</b>",
-        f"{mark('app_down')} Panel availability",
-        f"{mark('iface_down')} Interface failures",
-        f"{mark('login_success')} Successful logins",
-        f"{mark('login_fail')} Failed logins / 2FA",
-        f"{mark('suspicious_4xx')} Suspicious requests",
-        "",
-        "⌁ <b>Subscription portal</b>",
-        f"Layout: <code>{html(portal.get('layout') or 'aurora')}</code>",
-        f"Stats: <code>{html(portal.get('display_mode') or 'hybrid')}</code>",
-        f"Motion: <code>{html(portal.get('animation') or 'rich')}</code>",
-        "",
-        "TLS, ports, runtime workers, and certificates remain web-only to prevent accidental lockout.",
+        "<b>Integration</b>",
+        (
+            f"{'●' if tg.get('enabled') else '○'} "
+            f"Service       "
+            f"{'Enabled' if tg.get('enabled') else 'Disabled'}"
+        ),
+        (
+            f"{'●' if tg.get('has_token') else '○'} "
+            f"Bot token     "
+            f"{'Configured' if tg.get('has_token') else 'Missing'}"
+        ),
+        f"◇ Rules         <code>{enabled_count}/{len(all_keys)}</code> enabled",
     ]
 
+    for group_name, items in notification_groups:
+        lines.extend([
+            "",
+            f"<b>{html(group_name)}</b>",
+        ])
+        for key, label in items:
+            lines.append(
+                f"{mark(key)} {html(label)}"
+            )
+
+    lines.extend([
+        "",
+        "<b>Subscription portal</b>",
+        f"◇ Layout       <code>{html(portal.get('layout') or 'aurora')}</code>",
+        f"◇ Statistics   <code>{html(portal.get('display_mode') or 'hybrid')}</code>",
+        f"◇ Motion       <code>{html(portal.get('animation') or 'rich')}</code>",
+        "",
+        "<i>TLS, certificates, ports, and runtime workers remain web-only.</i>",
+    ])
+
     rows = [
-        [InlineKeyboardButton(f"{mark('app_down')} Panel alert", callback_data="settings:notify:app_down"), InlineKeyboardButton(f"{mark('iface_down')} Interface alert", callback_data="settings:notify:iface_down")],
-        [InlineKeyboardButton(f"{mark('login_success')} Login success", callback_data="settings:notify:login_success"), InlineKeyboardButton(f"{mark('login_fail')} Login rejected", callback_data="settings:notify:login_fail")],
-        [InlineKeyboardButton(f"{mark('suspicious_4xx')} Security requests", callback_data="settings:notify:suspicious_4xx")],
-        [InlineKeyboardButton("↻ Refresh", callback_data="home:settings")],
-        [InlineKeyboardButton("← Home", callback_data="home:main")],
+        [
+            InlineKeyboardButton(
+                f"{mark('app_down')} Panel down",
+                callback_data="settings:notify:app_down",
+            ),
+            InlineKeyboardButton(
+                f"{mark('app_up')} Panel up",
+                callback_data="settings:notify:app_up",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                f"{mark('node_down')} Node down",
+                callback_data="settings:notify:node_down",
+            ),
+            InlineKeyboardButton(
+                f"{mark('node_up')} Node up",
+                callback_data="settings:notify:node_up",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                f"{mark('iface_down')} Interface down",
+                callback_data="settings:notify:iface_down",
+            ),
+            InlineKeyboardButton(
+                f"{mark('iface_up')} Interface up",
+                callback_data="settings:notify:iface_up",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                f"{mark('peer_expired')} Peer expired",
+                callback_data="settings:notify:peer_expired",
+            ),
+            InlineKeyboardButton(
+                f"{mark('peer_limit')} Peer limit",
+                callback_data="settings:notify:peer_limit",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                f"{mark('login_success')} Login success",
+                callback_data="settings:notify:login_success",
+            ),
+            InlineKeyboardButton(
+                f"{mark('login_fail')} Login rejected",
+                callback_data="settings:notify:login_fail",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                f"{mark('suspicious_4xx')} Suspicious 4xx",
+                callback_data="settings:notify:suspicious_4xx",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                f"{mark('backup_success')} Backup success",
+                callback_data="settings:notify:backup_success",
+            ),
+            InlineKeyboardButton(
+                f"{mark('backup_failed')} Backup failed",
+                callback_data="settings:notify:backup_failed",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                f"{mark('update_success')} Update success",
+                callback_data="settings:notify:update_success",
+            ),
+            InlineKeyboardButton(
+                f"{mark('update_failed')} Update failed",
+                callback_data="settings:notify:update_failed",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "◆ Critical only",
+                callback_data="settings:notify:preset:critical",
+            ),
+            InlineKeyboardButton(
+                "● Select all",
+                callback_data="settings:notify:preset:all",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "○ Clear all",
+                callback_data="settings:notify:preset:none",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "↻ Refresh",
+                callback_data="home:settings",
+            ),
+            InlineKeyboardButton(
+                "← Dashboard",
+                callback_data="home:main",
+            ),
+        ],
     ]
+
     return "\n".join(lines), InlineKeyboardMarkup(rows)
+
 
 def render_update_center(*, fresh: bool = False):
     version = panel_version_info(fresh=fresh)
@@ -3188,12 +3353,45 @@ def kb_backup_prefs(prefs: dict) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("← Backup", callback_data="backup:menu")],
     ])
 
-async def _send_zipfile(update, content: bytes, filename: str):
-    bio = io.BytesIO(content); bio.seek(0)
+async def _send_zipfile(
+    update,
+    content: bytes,
+    filename: str,
+    *,
+    kind: str = "backup",
+):
+    bio = io.BytesIO(content)
+    bio.seek(0)
+
+    caption = "\n".join([
+        "▣ <b>WG Panel backup</b>",
+        "",
+        f"◇ Type      <code>{html(kind.title())}</code>",
+        f"◇ File      <code>{html(filename)}</code>",
+        f"◇ Size      <code>{html(_human_bytes(len(content)))}</code>",
+        (
+            "◇ Created   <code>"
+            + html(
+                datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M:%S UTC"
+                )
+            )
+            + "</code>"
+        ),
+        "",
+        "⌁ <i>Keep this archive private. It may contain keys, tokens, and panel settings.</i>",
+    ])
+
     await update.effective_chat.send_document(
-        document=InputFile(bio, filename=filename),
-        caption=filename
+        document=InputFile(
+            bio,
+            filename=filename,
+        ),
+        caption=caption,
+        parse_mode=ParseMode.HTML,
+        disable_content_type_detection=True,
     )
+
 
 BACKUP_STATE_FILE = str(INSTANCE_DIR / "tg_backup_state.json")
 AUTO_BACKUP_DIR   = (INSTANCE_DIR / "backups")
@@ -3468,24 +3666,87 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_send(update, text_out, keyboard)
         return
 
-    if data.startswith("settings:notify:"):
-        key = data.rsplit(":", 1)[-1]
-        allowed = {"app_down", "iface_down", "login_success", "login_fail", "suspicious_4xx"}
-        if key not in allowed:
-            await q.answer("Unsupported setting.", show_alert=True)
-            return
+    if data.startswith("settings:notify:preset:"):
+        preset = data.rsplit(":", 1)[-1]
         current = await asyncio.to_thread(telegram_settings_data)
         notify = dict(current.get("notify") or {})
-        notify[key] = not bool(notify.get(key))
+
+        all_keys = {
+            "app_down", "app_up", "node_down", "node_up",
+            "iface_down", "iface_up", "peer_expired", "peer_limit",
+            "login_success", "login_fail", "suspicious_4xx",
+            "backup_success", "backup_failed",
+            "update_success", "update_failed",
+        }
+        critical_keys = {
+            "app_down", "node_down", "iface_down",
+            "login_fail", "suspicious_4xx",
+            "backup_failed", "update_failed",
+        }
+
+        if preset == "all":
+            for key in all_keys:
+                notify[key] = True
+        elif preset == "critical":
+            for key in all_keys:
+                notify[key] = key in critical_keys
+        elif preset == "none":
+            for key in all_keys:
+                notify[key] = False
+        else:
+            await q.answer("Unsupported preset.", show_alert=True)
+            return
+
         result = await asyncio.to_thread(
             save_telegram_notifications,
             notify,
             bool(current.get("enabled", True)),
         )
         if not result.get("ok"):
-            await q.answer(str(result.get("detail") or result.get("error") or "Save failed"), show_alert=True)
+            await q.answer(
+                str(result.get("detail") or result.get("error") or "Save failed"),
+                show_alert=True,
+            )
             return
-        _log_admin("telegram_notification_toggle", f"key={key}; enabled={int(bool(notify[key]))}")
+
+        _log_admin("telegram_notification_preset", f"preset={preset}")
+        text_out, keyboard = await asyncio.to_thread(render_bot_settings)
+        await edit_send(update, text_out, keyboard)
+        return
+
+    if data.startswith("settings:notify:"):
+        key = data.rsplit(":", 1)[-1]
+        allowed = {
+            "app_down", "app_up", "node_down", "node_up",
+            "iface_down", "iface_up", "peer_expired", "peer_limit",
+            "login_success", "login_fail", "suspicious_4xx",
+            "backup_success", "backup_failed",
+            "update_success", "update_failed",
+        }
+        if key not in allowed:
+            await q.answer("Unsupported setting.", show_alert=True)
+            return
+
+        current = await asyncio.to_thread(telegram_settings_data)
+        notify = dict(current.get("notify") or {})
+        notify[key] = not bool(notify.get(key))
+
+        result = await asyncio.to_thread(
+            save_telegram_notifications,
+            notify,
+            bool(current.get("enabled", True)),
+        )
+        if not result.get("ok"):
+            await q.answer(
+                str(result.get("detail") or result.get("error") or "Save failed"),
+                show_alert=True,
+            )
+            return
+
+        _log_admin(
+            "telegram_notification_toggle",
+            f"key={key}; enabled={int(bool(notify[key]))}",
+        )
         text_out, keyboard = await asyncio.to_thread(render_bot_settings)
         await edit_send(update, text_out, keyboard)
         return
@@ -4687,26 +4948,57 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if data == "backup:schedule":
         s = _backup_schedule()
-        enabled = "ON" if s.get("enabled") else "OFF"
-        msg = (
-        "◷ <b>Scheduled backups</b>\n"
-        "Schedule is stored in the panel and executed by this bot.\n\n"
-        f"• Status: <b>{enabled}</b>\n"
-        f"• Frequency: <b>{html(str(s.get('freq') or 'daily'))}</b>\n"
-        f"• Time: <b>{html(str(s.get('time') or '03:00'))}</b>\n"
-        f"• Timezone: <b>{html(str(s.get('timezone') or 'UTC'))}</b>\n"
-        f"• Next run (UTC): <b>{html(str(s.get('next_run') or '—'))}</b>\n"
-        )
+        enabled = bool(s.get("enabled"))
+        freq = str(s.get("freq") or "daily")
+        run_time = str(s.get("time") or "03:00")
+        timezone_name = str(s.get("timezone") or "UTC")
+        next_run = str(s.get("next_run") or "—")
+        keep = int(s.get("keep") or 7)
+
+        msg = "\n".join([
+            "◷ <b>Automatic backup</b>",
+            "<i>Protected archive schedule</i>",
+            "",
+            "<b>Schedule</b>",
+            (
+                f"{'●' if enabled else '○'} Status       "
+                f"{'Enabled' if enabled else 'Disabled'}"
+            ),
+            f"◇ Frequency    <code>{html(freq)}</code>",
+            f"◇ Time         <code>{html(run_time)} {html(timezone_name)}</code>",
+            f"◇ Retention    <code>{keep}</code> archive(s)",
+            f"◇ Next run     <code>{html(next_run)}</code>",
+            "",
+            "<b>Contents</b>",
+            (
+                f"{'●' if s.get('include_wg') else '○'} "
+                "WireGuard configurations"
+            ),
+            (
+                f"{'●' if s.get('send_to_telegram') else '○'} "
+                "Telegram delivery"
+            ),
+            "",
+            "⌁ <i>Automatic backups are stored by the panel scheduler.</i>",
+        ])
+
         await edit_send(update, msg, kb_backup_schedule(s))
         return
-    
+
     if data == "backup:schedule:toggle":
         s = _backup_schedule()
         payload = dict(s)
         payload["enabled"] = not bool(s.get("enabled", False))
         _set_backup_schedule(payload)
         s2 = _backup_schedule()
-        await edit_send(update, "● Saved.", kb_backup_schedule(s2))
+        await edit_send(
+            update,
+            (
+                "● <b>Backup schedule saved</b>\n\n"
+                "◇ The new automatic-backup policy is active."
+            ),
+            kb_backup_schedule(s2),
+        )
         return
     
     if data == "backup:schedule:test_2m":
@@ -4732,7 +5024,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wg = "1" if s.get("include_wg") else "0"
         tg = "1" if s.get("send_to_telegram") else "0"
         try:
-            await edit_send(update, "◷ Running backup and storing to disk…",
+            await edit_send(update, "◷ <b>Creating automatic backup</b>\n\n◇ Building and storing the protected archive…",
                             InlineKeyboardMarkup([[InlineKeyboardButton("← Back", callback_data="backup:schedule")]])
                             )
             chat_id = str(s.get("telegram_chat_id") or "").strip()
@@ -4744,17 +5036,40 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ok, info = await asyncio.to_thread(_store_backuppanel, url, dest, "api", 900)
             if ok:
                 _p_autobackups("full", s.get("keep", 7))
-                await edit_send(update, f"● Stored: <code>{html(dest.name)}</code>",
+                await edit_send(
+                    update,
+                    (
+                        "● <b>Automatic backup completed</b>\n\n"
+                        f"◇ File   <code>{html(dest.name)}</code>\n"
+                        f"◇ Size   <code>{html(_human_bytes(dest.stat().st_size if dest.exists() else 0))}</code>\n"
+                        f"◇ Path   <code>{html(str(dest))}</code>"
+                    ),
                                 InlineKeyboardMarkup([[InlineKeyboardButton("← Back", callback_data="backup:schedule")]])
                 )
             else:
-                await edit_send(update, f"⊘ Failed: <code>{html(info)}</code>",
+                await edit_send(
+                    update,
+                    (
+                        "⊘ <b>Automatic backup failed</b>\n\n"
+                        f"◇ Error  <code>{html(info)}</code>"
+                    ),
                                 InlineKeyboardMarkup([[InlineKeyboardButton("← Back", callback_data="backup:schedule")]])
                 )
         
         except Exception as e:
-            await edit_send(update, f"⊘ Failed: <code>{html(str(e))}</code>",
-                        InlineKeyboardMarkup([[InlineKeyboardButton("← Back", callback_data="backup:schedule")]]))
+            await edit_send(
+                update,
+                (
+                    "⊘ <b>Automatic backup failed</b>\n\n"
+                    f"◇ Error  <code>{html(str(e))}</code>"
+                ),
+                InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "← Back",
+                        callback_data="backup:schedule",
+                    )
+                ]]),
+            )
         return
 
     if data == "backup:restore":
@@ -4826,11 +5141,11 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if r.status_code == 404:
                r2 = _get(f"{PANEL}/api/backup/settings", session="api")
                content = _safe_zip(r2, "Settings backup")
-               await _send_zipfile(update, content, _backup_filename("settings"))
+               await _send_zipfile(update, content, _backup_filename("settings"), kind="settings")
                await edit_send(update, "ℹ️ DB-only backup isn’t available on this setup; sent settings-only instead.", KB.back("backup:menu"))
                return
             content = _safe_zip(r, "DB backup")
-            await _send_zipfile(update, content, _backup_filename("db"))
+            await _send_zipfile(update, content, _backup_filename("db"), kind="database")
             uid, uname = _admin_ident()
             fname = _headers_filename(r)
             _log_admin("backup_db", f"file={fname} size={len(content)}B")
@@ -4843,7 +5158,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             r = _get(f"{PANEL}/api/backup/settings", session="api")
             content = _safe_zip(r, "Settings backup")
-            await _send_zipfile(update, content, _backup_filename("settings"))
+            await _send_zipfile(update, content, _backup_filename("settings"), kind="settings")
             uid, uname = _admin_ident()
             fname = _headers_filename(r)
             _log_admin("backup_settings", f"file={fname} size={len(content)}B")
@@ -4874,7 +5189,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 r = _get(f"{PANEL}/api/backup/full?wg={wg}&tg=0", session="api")
                 content = _safe_zip(r, "Full backup")
-                await _send_zipfile(update, content, _backup_filename("full"))
+                await _send_zipfile(update, content, _backup_filename("full"), kind="full")
                 fname = _headers_filename(r)
                 _log_admin("backup_full", f"file={fname} size={len(content)}B wg={int(wg=='1')} tg=0")
 
@@ -6008,11 +6323,52 @@ def _read_json(path: Path, default):
     except Exception:
         return default
 
-def _notify_app() -> bool:
-    s = _read_json(TELEGRAM_SETTINGS_FILE, {})
-    if not bool(s.get("enabled", False)):
+def _notify_app(
+    event_key: str,
+) -> bool:
+    """
+    Return whether a panel availability notification is enabled.
+
+    Supported keys:
+        app_down
+        app_up
+    """
+    settings = _read_json(
+        TELEGRAM_SETTINGS_FILE,
+        {},
+    )
+
+    if not bool(
+        settings.get(
+            "enabled",
+            False,
+        )
+    ):
         return False
-    return bool((s.get("notify") or {}).get("app_down", True))
+
+    notify = (
+        settings.get("notify")
+        or {}
+    )
+
+    defaults = {
+        "app_down": True,
+        "app_up": True,
+    }
+
+    event_key = str(
+        event_key or ""
+    ).strip()
+
+    if event_key not in defaults:
+        return False
+
+    return bool(
+        notify.get(
+            event_key,
+            defaults[event_key],
+        )
+    )
 
 def _admin_unmuted() -> list[str]:
     admins = _read_json(TELEGRAM_ADMINS_FILE, [])
@@ -6208,7 +6564,7 @@ async def _panel_watchdog(
                     duration_text(outage),
                 )
 
-                if _notify_app():
+                if _notify_app("app_up"):
                     await broadcast(
                         "● <b>Panel is back online</b>\n\n"
                         "◇ <b>Status</b>  Healthy\n"
@@ -6224,7 +6580,7 @@ async def _panel_watchdog(
 
                 else:
                     logging.warning(
-                        "Panel recovery detected, but app_down "
+                        "Panel recovery detected, but app is up "
                         "notifications are disabled."
                     )
 
@@ -6265,7 +6621,7 @@ async def _panel_watchdog(
                     last_error,
                 )
 
-                if _notify_app():
+                if _notify_app("app_down"):
                     await broadcast(
                         "⊘ <b>Panel availability alert</b>\n\n"
                         "◇ <b>Status</b>  Unreachable\n"
