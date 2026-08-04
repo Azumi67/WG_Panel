@@ -658,156 +658,42 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 (() => {
-  const $q = (s, r = document) => r.querySelector(s);
-
-  function initDashLogsPopover() {
-    const pop = $q('#dash-logs-pop');
-    const list = $q('#dash-logs-list');
-    const empty = $q('#dash-logs-empty');
-    const autoBtn = $q('#dash-logs-auto');
-    const closeBtn = $q('#dash-logs-close');
-    if (!pop || !list) return;
-
-    const LIMIT = 30;
-    const POLL = 5000;
-    let timer = null;
-
-    function lvlClass(s) {
-      s = (s || '').toLowerCase();
-      if (s.includes('error') || s.includes('exception')) return 'error';
-      if (s.includes('warn')) return 'warn';
-      if (s.includes('debug')) return 'debug';
-      return 'info';
-    }
-    function toEpoch(v) {
-      if (v == null) return null;
-      if (typeof v === 'number') return v > 1e12 ? Math.floor(v / 1000) : v;
-      const d = new Date(v);
-      return isNaN(d) ? null : Math.floor(d.getTime() / 1000);
-    }
-    function fmtLocal(ts) {
-      const d = new Date(ts * 1000);
-      const pad = n => String(n).padStart(2, '0');
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-    }
-    function humanTime(raw) {
-      const e = toEpoch(raw);
-      return e ? fmtLocal(e) : (raw ?? '');
-    }
-    function escapeHtml(v) {
-      return String(v ?? '').replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
-    }
-    function render(items) {
-      list.innerHTML = '';
-      if (!items || !items.length) {
-        if (empty) empty.style.display = 'block';
-        return;
-      }
-      if (empty) empty.style.display = 'none';
-      for (const it of items.slice(-LIMIT)) {
-        const when = humanTime(it.time || it.ts || '');
-        const orig = it.time || it.ts || '';
-        const level = (it.level || it.lvl || it.sev || 'INFO').toUpperCase();
-        const row = document.createElement('div');
-        row.className = 'dlog';
-        row.innerHTML = `<div class="when" title="${escapeHtml(orig)}">${escapeHtml(when)}</div>
-          <div class="msg">${escapeHtml(it.msg || it.message || it.line || '')}</div>
-          <div class="lvl ${lvlClass(level)}">${escapeHtml(level)}</div>`;
-        list.append(row);
-      }
-    }
-    function textTail(text) {
-      const lines = (text || '').trim().split('\n').filter(Boolean).slice(-LIMIT);
-      return lines.map(line => {
-        const m = line.match(/^(\d{4}-\d{2}-\d{2}[\sT]\d{2}:\d{2}:\d{2}(?:[.,]\d{3})?)\s+([A-Z]+)\s+(.*)$/);
-        return { time: m ? m[1] : '', level: m ? m[2] : (line.includes('ERROR') ? 'ERROR' : line.includes('WARN') ? 'WARN' : 'INFO'), msg: m ? m[3] : line };
-      });
-    }
-    async function getLogs() {
-      if (window.WG_PANEL_RESTARTING) return;
-
-      try {
-        const r = await fetch('/api/app_logs?format=json&limit=' + LIMIT, { credentials: 'same-origin', cache: 'no-store' });
-        if (r.ok) {
-          const j = await r.json().catch(() => null);
-          const arr = j ? (Array.isArray(j) ? j : (j.items || j.logs || [])) : [];
-          if (arr.length) { render(arr); return; }
-        }
-        const r2 = await fetch('/api/app_logs', { credentials: 'same-origin', cache: 'no-store' });
-        const t = await r2.text();
-        render(textTail(t));
-      } catch (_) {}
-    }
-    function stopAuto() { if (timer) { clearInterval(timer); timer = null; } }
-    function startAuto() { stopAuto(); timer = setInterval(getLogs, POLL); }
-    function autoOn() { return autoBtn?.classList.contains('on'); }
-    function setAuto(on) {
-      if (!autoBtn) return;
-      autoBtn.classList.toggle('on', !!on);
-      autoBtn.setAttribute('aria-checked', on ? 'true' : 'false');
-      on ? startAuto() : stopAuto();
-    }
-    function openPop() {
-      pop.hidden = false;
-      pop.setAttribute('aria-hidden', 'false');
-      getLogs();
-      if (autoOn()) startAuto();
-    }
-    function closePop() {
-      pop.hidden = true;
-      pop.setAttribute('aria-hidden', 'true');
-      stopAuto();
-    }
-
-    autoBtn?.addEventListener('click', () => setAuto(!autoOn()));
-    closeBtn?.addEventListener('click', closePop);
-    document.addEventListener('keydown', e => { if (e.key === 'Escape' && !pop.hidden) closePop(); });
-    document.addEventListener('click', e => {
-      if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('[data-open="dash-logs"]')) closePop();
-    });
-    document.addEventListener('click', e => {
-      const trigger = e.target.closest('[data-open="dash-logs"]');
-      if (!trigger) return;
-
-      e.preventDefault();
-      openPop();
-    });
-    setAuto(true);
-  }
-
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initDashLogsPopover);
-  else initDashLogsPopover();
-})();
-
-
-(() => {
   'use strict';
 
   const $q = (selector, root = document) => root.querySelector(selector);
 
-  function initDashboardNodeLogs() {
-    const pop = $q('#dash-node-logs-pop');
-    const list = $q('#dash-node-logs-list');
-    const empty = $q('#dash-node-logs-empty');
+  function initDashboardLogCenter() {
+    const pop = $q('#dash-log-center-pop');
+    const triggerSelector = '[data-open="dash-log-center"]';
+    const tabs = Array.from(
+      document.querySelectorAll('[data-log-tab]')
+    );
+    const panes = Array.from(
+      document.querySelectorAll('[data-log-pane]')
+    );
+
+    const autoButton = $q('#dash-log-center-auto');
+    const refreshButton = $q('#dash-log-center-refresh');
+    const closeButton = $q('#dash-log-center-close');
+
+    const panelList = $q('#dash-panel-logs-list');
+    const panelEmpty = $q('#dash-panel-logs-empty');
+
+    const nodeList = $q('#dash-node-logs-list');
+    const nodeEmpty = $q('#dash-node-logs-empty');
     const nodeSelect = $q('#dash-node-select');
     const ifaceSelect = $q('#dash-node-iface-select');
-    const autoButton = $q('#dash-node-logs-auto');
-    const refreshButton = $q('#dash-node-logs-refresh');
-    const closeButton = $q('#dash-node-logs-close');
 
-    if (
-      !pop
-      || !list
-      || !nodeSelect
-      || !ifaceSelect
-    ) {
-      return;
-    }
+    if (!pop || !panelList) return;
 
     const POLL_MS = 5000;
-    const LIMIT = 80;
+    const PANEL_LIMIT = 40;
+    const NODE_LIMIT = 80;
+
+    let activeTab = 'panel';
     let timer = null;
     let loading = false;
+    let nodesLoaded = false;
 
     function escapeHtml(value) {
       return String(value ?? '').replace(
@@ -822,6 +708,36 @@ document.addEventListener('DOMContentLoaded', () => {
       );
     }
 
+    function normalizeLevel(value, text = '') {
+      const source = `${value || ''} ${text || ''}`.toLowerCase();
+
+      if (
+        source.includes('error')
+        || source.includes('failed')
+        || source.includes('exception')
+      ) return 'error';
+
+      if (source.includes('warn')) return 'warn';
+      if (source.includes('debug')) return 'debug';
+      return 'info';
+    }
+
+    function formatTime(raw) {
+      if (!raw) return '';
+
+      const value = typeof raw === 'number' && raw < 1e12
+        ? raw * 1000
+        : raw;
+
+      const date = new Date(value);
+
+      if (!Number.isNaN(date.getTime())) {
+        return date.toLocaleString();
+      }
+
+      return String(raw);
+    }
+
     function normalizeLogs(payload) {
       if (Array.isArray(payload)) return payload;
 
@@ -833,66 +749,58 @@ document.addEventListener('DOMContentLoaded', () => {
       return [];
     }
 
-    function normalizeLevel(value, text = '') {
-      const source = `${value || ''} ${text || ''}`.toLowerCase();
+    function renderLogs(list, empty, items, limit, emptyText) {
+      if (!list) return;
 
-      if (
-        source.includes('error')
-        || source.includes('failed')
-        || source.includes('exception')
-      ) {
-        return 'error';
-      }
-
-      if (source.includes('warn')) return 'warn';
-      if (source.includes('debug')) return 'debug';
-      return 'info';
-    }
-
-    function formatTime(raw) {
-      if (!raw) return '';
-
-      const date = new Date(raw);
-
-      if (!Number.isNaN(date.getTime())) {
-        return date.toLocaleString();
-      }
-
-      return String(raw);
-    }
-
-    function renderLogs(items) {
       list.innerHTML = '';
 
       if (!items.length) {
-        empty.style.display = 'block';
-        empty.textContent = 'No interface log entries were returned.';
+        if (empty) {
+          empty.hidden = false;
+          empty.style.display = 'block';
+          empty.textContent = emptyText;
+        }
         return;
       }
 
-      empty.style.display = 'none';
+      if (empty) {
+        empty.hidden = true;
+        empty.style.display = 'none';
+      }
 
-      for (const item of items.slice(-LIMIT)) {
+      for (const item of items.slice(-limit)) {
         const message = (
-          item.text
-          || item.msg
+          item.msg
+          || item.text
           || item.message
           || item.line
           || ''
         );
 
-        const level = normalizeLevel(
-          item.level || item.kind || item.severity,
-          message,
+        const rawLevel = (
+          item.level
+          || item.kind
+          || item.severity
+          || item.lvl
+          || 'info'
         );
+
+        const level = normalizeLevel(rawLevel, message);
+        const rawTime = item.ts || item.time || '';
 
         const row = document.createElement('div');
         row.className = 'dlog';
 
         row.innerHTML = `
-          <div class="when">${escapeHtml(formatTime(item.ts || item.time || ''))}</div>
-          <div class="msg" title="${escapeHtml(message)}">${escapeHtml(message)}</div>
-          <div class="lvl ${level}">${level.toUpperCase()}</div>
+          <div class="when" title="${escapeHtml(rawTime)}">
+            ${escapeHtml(formatTime(rawTime))}
+          </div>
+          <div class="msg" title="${escapeHtml(message)}">
+            ${escapeHtml(message)}
+          </div>
+          <div class="lvl ${level}">
+            ${escapeHtml(level.toUpperCase())}
+          </div>
         `;
 
         list.appendChild(row);
@@ -923,7 +831,23 @@ document.addEventListener('DOMContentLoaded', () => {
       return payload;
     }
 
+    async function loadPanelLogs() {
+      const payload = await apiJson(
+        `/api/app_logs?format=json&limit=${PANEL_LIMIT}`,
+      );
+
+      renderLogs(
+        panelList,
+        panelEmpty,
+        normalizeLogs(payload),
+        PANEL_LIMIT,
+        'No recent panel log entries.',
+      );
+    }
+
     async function loadNodes() {
+      if (!nodeSelect || !ifaceSelect) return;
+
       nodeSelect.disabled = true;
       nodeSelect.innerHTML = '<option value="">Loading nodes…</option>';
 
@@ -955,29 +879,38 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         nodeSelect.disabled = nodes.length === 0;
+        nodesLoaded = true;
 
-        if (!nodes.length) {
-          empty.style.display = 'block';
-          empty.textContent = 'No nodes are registered.';
+        if (!nodes.length && nodeEmpty) {
+          nodeEmpty.style.display = 'block';
+          nodeEmpty.textContent = 'No nodes are registered.';
         }
       } catch (error) {
         nodeSelect.innerHTML = '<option value="">Could not load nodes</option>';
-        empty.style.display = 'block';
-        empty.textContent = error.message;
+
+        if (nodeEmpty) {
+          nodeEmpty.style.display = 'block';
+          nodeEmpty.textContent = error.message;
+        }
       }
     }
 
     async function loadInterfaces() {
+      if (!nodeSelect || !ifaceSelect || !nodeList) return;
+
       const nodeId = nodeSelect.value;
 
       ifaceSelect.disabled = true;
       ifaceSelect.innerHTML = '<option value="">Loading interfaces…</option>';
-      list.innerHTML = '';
+      nodeList.innerHTML = '';
 
       if (!nodeId) {
         ifaceSelect.innerHTML = '<option value="">Select a node first</option>';
-        empty.style.display = 'block';
-        empty.textContent = 'Select a node and interface to view logs.';
+
+        if (nodeEmpty) {
+          nodeEmpty.style.display = 'block';
+          nodeEmpty.textContent = 'Select a node and interface to view logs.';
+        }
         return;
       }
 
@@ -1012,49 +945,91 @@ document.addEventListener('DOMContentLoaded', () => {
 
         ifaceSelect.disabled = interfaces.length === 0;
 
-        empty.style.display = 'block';
-        empty.textContent = interfaces.length
-          ? 'Select an interface to view logs.'
-          : 'This node has no WireGuard interfaces.';
+        if (nodeEmpty) {
+          nodeEmpty.style.display = 'block';
+          nodeEmpty.textContent = interfaces.length
+            ? 'Select an interface to view logs.'
+            : 'This node has no WireGuard interfaces.';
+        }
       } catch (error) {
         ifaceSelect.innerHTML = '<option value="">Could not load interfaces</option>';
-        empty.style.display = 'block';
-        empty.textContent = error.message;
+
+        if (nodeEmpty) {
+          nodeEmpty.style.display = 'block';
+          nodeEmpty.textContent = error.message;
+        }
       }
     }
 
-    async function loadLogs() {
-      if (loading) return;
+    async function loadNodeLogs() {
+      if (
+        !nodeSelect
+        || !ifaceSelect
+        || !nodeList
+      ) return;
 
       const nodeId = nodeSelect.value;
       const iface = ifaceSelect.value;
 
       if (!nodeId || !iface) {
-        empty.style.display = 'block';
-        empty.textContent = 'Select a node and interface to view logs.';
+        if (nodeEmpty) {
+          nodeEmpty.style.display = 'block';
+          nodeEmpty.textContent = 'Select a node and interface to view logs.';
+        }
         return;
       }
+
+      const payload = await apiJson(
+        `/api/nodes/${encodeURIComponent(nodeId)}`
+        + `/iface/${encodeURIComponent(iface)}/logs`,
+      );
+
+      renderLogs(
+        nodeList,
+        nodeEmpty,
+        normalizeLogs(payload),
+        NODE_LIMIT,
+        'No interface log entries were returned.',
+      );
+    }
+
+    async function refreshActive() {
+      if (loading || window.WG_PANEL_RESTARTING) return;
 
       loading = true;
       refreshButton?.classList.add('is-loading');
 
       try {
-        const payload = await apiJson(
-          `/api/nodes/${encodeURIComponent(nodeId)}`
-          + `/iface/${encodeURIComponent(iface)}/logs`,
-        );
-
-        renderLogs(
-          normalizeLogs(payload),
-        );
+        if (activeTab === 'node') {
+          if (!nodesLoaded) await loadNodes();
+          await loadNodeLogs();
+        } else {
+          await loadPanelLogs();
+        }
       } catch (error) {
-        list.innerHTML = '';
-        empty.style.display = 'block';
-        empty.textContent = error.message;
+        const empty = activeTab === 'node'
+          ? nodeEmpty
+          : panelEmpty;
+
+        const list = activeTab === 'node'
+          ? nodeList
+          : panelList;
+
+        if (list) list.innerHTML = '';
+
+        if (empty) {
+          empty.hidden = false;
+          empty.style.display = 'block';
+          empty.textContent = error.message;
+        }
       } finally {
         loading = false;
         refreshButton?.classList.remove('is-loading');
       }
+    }
+
+    function autoEnabled() {
+      return autoButton?.classList.contains('on');
     }
 
     function stopAuto() {
@@ -1064,15 +1039,11 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    function autoEnabled() {
-      return autoButton?.classList.contains('on');
-    }
-
     function startAuto() {
       stopAuto();
 
-      if (autoEnabled()) {
-        timer = setInterval(loadLogs, POLL_MS);
+      if (autoEnabled() && !pop.hidden) {
+        timer = setInterval(refreshActive, POLL_MS);
       }
     }
 
@@ -1090,21 +1061,39 @@ document.addEventListener('DOMContentLoaded', () => {
         : stopAuto();
     }
 
+    async function setTab(tabName) {
+      if (!['panel', 'node'].includes(tabName)) return;
+
+      activeTab = tabName;
+
+      tabs.forEach(tab => {
+        const active = tab.dataset.logTab === tabName;
+        tab.classList.toggle('active', active);
+        tab.setAttribute(
+          'aria-selected',
+          active ? 'true' : 'false',
+        );
+      });
+
+      panes.forEach(pane => {
+        const active = pane.dataset.logPane === tabName;
+        pane.classList.toggle('active', active);
+        pane.hidden = !active;
+      });
+
+      if (tabName === 'node' && !nodesLoaded) {
+        await loadNodes();
+      }
+
+      await refreshActive();
+      startAuto();
+    }
+
     async function openPop() {
       pop.hidden = false;
       pop.setAttribute('aria-hidden', 'false');
 
-      if (nodeSelect.options.length <= 1) {
-        await loadNodes();
-      }
-
-      if (
-        nodeSelect.value
-        && ifaceSelect.value
-      ) {
-        loadLogs();
-      }
-
+      await setTab(activeTab);
       startAuto();
     }
 
@@ -1114,22 +1103,55 @@ document.addEventListener('DOMContentLoaded', () => {
       stopAuto();
     }
 
-    document.addEventListener('click', event => {
-      const trigger = event.target.closest(
-        '[data-open="dash-node-logs"]',
-      );
-
-      if (!trigger) return;
-
-      event.preventDefault();
-      openPop();
+    tabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        setTab(tab.dataset.logTab);
+      });
     });
 
+    nodeSelect?.addEventListener(
+      'change',
+      async () => {
+        await loadInterfaces();
+        startAuto();
+      },
+    );
+
+    ifaceSelect?.addEventListener(
+      'change',
+      () => {
+        refreshActive();
+        startAuto();
+      },
+    );
+
+    autoButton?.addEventListener(
+      'click',
+      () => setAuto(!autoEnabled()),
+    );
+
+    refreshButton?.addEventListener(
+      'click',
+      refreshActive,
+    );
+
+    closeButton?.addEventListener(
+      'click',
+      closePop,
+    );
+
     document.addEventListener('click', event => {
+      const trigger = event.target.closest(triggerSelector);
+
+      if (trigger) {
+        event.preventDefault();
+        openPop();
+        return;
+      }
+
       if (
         !pop.hidden
         && !pop.contains(event.target)
-        && !event.target.closest('[data-open="dash-node-logs"]')
       ) {
         closePop();
       }
@@ -1144,40 +1166,15 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-    nodeSelect.addEventListener(
-      'change',
-      loadInterfaces,
-    );
-
-    ifaceSelect.addEventListener(
-      'change',
-      loadLogs,
-    );
-
-    autoButton?.addEventListener(
-      'click',
-      () => setAuto(!autoEnabled()),
-    );
-
-    refreshButton?.addEventListener(
-      'click',
-      loadLogs,
-    );
-
-    closeButton?.addEventListener(
-      'click',
-      closePop,
-    );
-
     setAuto(true);
   }
 
   if (document.readyState === 'loading') {
     document.addEventListener(
       'DOMContentLoaded',
-      initDashboardNodeLogs,
+      initDashboardLogCenter,
     );
   } else {
-    initDashboardNodeLogs();
+    initDashboardLogCenter();
   }
 })();
