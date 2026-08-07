@@ -1,63 +1,274 @@
-- اضافه شدن subscription و امکانات مربوطه
-- تعییرات در قسمت backup و peer
-- فیکس کردن چندین باگ از جمله ترافیک مصرفی و ریست شدن 
-- تغییر short link ار json به db و migration tools
-- در صورت وجود مشکل در issues بیان کنید تا بررسی و fix شود
-
 ![R (2)](https://github.com/Azumi67/PrivateIP-Tunnel/assets/119934376/a064577c-9302-4f43-b3bf-3d4f84245a6f)
 نام پروژه : پنل وایرگارد
----------------------------------------------------------------
+
+---
 
 ![check](https://github.com/Azumi67/PrivateIP-Tunnel/assets/119934376/13de8d36-dcfe-498b-9d99-440049c0cf14)
 **امکانات**
-- دارای dashboard با نمایش جزییات سرور و پنل
-- دارای subscription با امکان اضافه کردن location های node های مختلف برای user
-- مدیریت peers در پنل که شامل edit, reset time, reset usage, template & short links, more information میشود
-- ایجاد node و مدیریت ان در پنل اصلی که شامل تمام گزینه های پنل اصلی برای node میشود
-- اسکریپت جداگانه برای کانفیگ پنل اصلی و node
-- بک اپ از سرور اصلی در پنل و بک اپ node به وسیله اسکریپت در node server مربوطه
-- قسمت مخصوص برای بگ اپ گیری به صورت manual و auto و ریستور ان به چندین صورت
-- نمایش اخرین بک اپ در backup tab
-- نمایش لاگ برای پنل و بات و ادمین بات
-- قسمت settings که شامل فعال کردن https,hsts,redirect http>https و تنشطیمات بات و اضافه کردن ادمین، بات توکن است
-- قسمت settings هم چنین شامل تنظیمات interface است
-- در قسمت settings هم چنین میتوانید برای short link ها از template هایی که موجود است انتخاب نمایید
-- دارای بات که همچنین میتوانید peer های پنل و node را از ان طریق مدیریت کنید.
-- امکان auto backup از طریق بات و ریستور ان از همان طریق
-- امکان backup از طریق پنل و دانلود بر روی سیستم
-- فعلا برای نود نمایش لاگ و بک اپ گیری و ریستور ان تنها از طریق اسکریپت موجود است تا بعدا در پنل اضافه شود
-- امکان اضافه کردن شماره تلفن و ایدی تلگرام به هر Peer در پنل و Node
-- امکان استفاده از پنل و shortlink ها و node در سرور های دیگر ( باید بک اپ هر سرور و node چداگانه به سرور های جدید copy شود و دوباره با اسکریپت اقدام به نصب پنل و node ها بکنید 
 
-**endpoint پیش‌فرض برای هر interface**
+<div dir="rtl" align="right">
 
-آدرس endpoint سرور که در کانفیگ client نوشته می‌شود، به صورت خودکار از روی دامنه یا IP عمومی پنل تشخیص داده می‌شود. اگر پنل پشت NAT یا load balancer باشد یا بیش از یک آدرس عمومی داشته باشد، این تشخیص خودکار درست نخواهد بود. در این حالت می‌توانید برای هر interface یک endpoint پیش‌فرض تعیین کنید.
 
-- تنظیم آن در قسمت settings و تب interface انجام می‌شود، هم برای interface های local و هم interface های node
-- با خالی کردن هر دو فیلد host و port، دوباره تشخیص خودکار فعال می‌شود
-- ذخیره کردن فقط روی کانفیگ هایی که از آن به بعد export می‌شوند اثر دارد و peer های قبلی همان endpoint قبلی خود را نگه می‌دارند
-- برای اعمال مقدار جدید روی peer های موجود، از دکمه apply to existing peers استفاده کنید
-- مثال: host برابر `vpn.example.com` (یا یک IP مانند `203.0.113.9`) و port برابر `51820`
+<p dir="rtl" align="right">▪&nbsp; <b><bdi dir="ltr">Dashboard</bdi> کامل</b> برای نمایش وضعیت سرور و پنل، مصرف <bdi dir="ltr">CPU</bdi>، <bdi dir="ltr">RAM</bdi>، <bdi dir="ltr">Disk</bdi>، <bdi dir="ltr">Network</bdi> و اطلاعات <bdi dir="ltr">WireGuard</bdi></p>
 
-------------
+<p dir="rtl" align="right">▪&nbsp; <b>مدیریت کامل Peerها</b> در سرور اصلی و Nodeها شامل <bdi dir="ltr">Create</bdi>، <bdi dir="ltr">Bulk create</bdi>، <bdi dir="ltr">Edit</bdi>، <bdi dir="ltr">Enable</bdi>، <bdi dir="ltr">Disable</bdi>، <bdi dir="ltr">Reset usage</bdi>، <bdi dir="ltr">Reset timer</bdi>، <bdi dir="ltr">QR Code</bdi>، <bdi dir="ltr">Config</bdi>، <bdi dir="ltr">Short Link</bdi>، <bdi dir="ltr">Logs</bdi> و نمایش اطلاعات کامل <bdi dir="ltr">Peer</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; <b>مدیریت Interfaceها</b> در سرور اصلی و Nodeها شامل ساخت <bdi dir="ltr">Interface</bdi> جدید، فعال/غیرفعال کردن، حذف، تنظیم <bdi dir="ltr">DNS</bdi>، <bdi dir="ltr">MTU</bdi>، <bdi dir="ltr">Listen <bdi dir="ltr">Port</bdi></bdi> و <bdi dir="ltr">Start after creation</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; هنگام ساخت <bdi dir="ltr">Interface</bdi> جدید، تنظیمات مورد نیاز <bdi dir="ltr">WireGuard</bdi> و Ruleهای مربوط به <bdi dir="ltr">Forward</bdi> و <bdi dir="ltr">NAT</bdi> به صورت خودکار ساخته میشود</p>
+
+<p dir="rtl" align="right">▪&nbsp; <b><bdi dir="ltr">Subscription</bdi> چند <bdi dir="ltr">Location</bdi></b> برای ساخت یک <bdi dir="ltr">Client</bdi> با چند <bdi dir="ltr">Config</bdi> از Interfaceهای <bdi dir="ltr">Local</bdi>، <bdi dir="ltr">Node</bdi> یا ترکیبی از هر دو</p>
+
+<p dir="rtl" align="right">▪&nbsp; در <bdi dir="ltr">Subscription</bdi> میتوان از Peerهای موجود استفاده کرد یا برای Interfaceهای انتخاب‌شده <bdi dir="ltr">Peer</bdi> جدید ساخت</p>
+
+<p dir="rtl" align="right">▪&nbsp; پشتیبانی از <bdi dir="ltr">Data Limit</bdi>، <bdi dir="ltr">Time Limit</bdi>، <bdi dir="ltr">Start timer on first use</bdi> و Clientهای Unlimited برای <bdi dir="ltr">Peer</bdi> و <bdi dir="ltr">Subscription</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; نمایش <bdi dir="ltr">Data remaining</bdi>، <bdi dir="ltr">Time remaining</bdi> و وضعیت <bdi dir="ltr">Client</bdi> در <bdi dir="ltr">Subscription</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; امکان اضافه کردن شماره تلفن و <bdi dir="ltr">Telegram</bdi> ID برای Peerهای <bdi dir="ltr">Local</bdi> و <bdi dir="ltr">Node</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; <b><bdi dir="ltr">Advanced <bdi dir="ltr">WireGuard</bdi> options</bdi></b> شامل <bdi dir="ltr">DNS</bdi>، <bdi dir="ltr">MTU</bdi>، Keepalive، <bdi dir="ltr">Allowed IPs</bdi>، <bdi dir="ltr">Server Endpoint</bdi> و <bdi dir="ltr">Fixed <bdi dir="ltr">Client</bdi> Endpoint</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; <bdi dir="ltr">Allowed IPs</bdi> به صورت قابل مدیریت است و میتوان Networkها را اضافه یا حذف کرد؛ همچنین Networkهای <bdi dir="ltr">Local</bdi> و <bdi dir="ltr">Node</bdi> میتوانند به صورت خودکار شناسایی و اضافه شوند</p>
+
+<p dir="rtl" align="right">▪&nbsp; <b><bdi dir="ltr">Profile</bdi> برای <bdi dir="ltr">Peer</bdi> و <bdi dir="ltr">Subscription</bdi></b> جهت ذخیره و استفاده مجدد از تنظیمات؛ امکان انتخاب <bdi dir="ltr">Profile</bdi> پیش‌فرض، <bdi dir="ltr">Apply</bdi>، <bdi dir="ltr">Edit</bdi> و <bdi dir="ltr">Delete</bdi> نیز وجود دارد</p>
+
+<p dir="rtl" align="right">▪&nbsp; <b><bdi dir="ltr"><bdi dir="ltr">Public <bdi dir="ltr">Subscription</bdi></bdi> Page</bdi></b> برای هر <bdi dir="ltr">Client</bdi> شامل وضعیت، حجم باقی‌مانده، زمان باقی‌مانده، Configها، <bdi dir="ltr">QR Code</bdi>، <bdi dir="ltr">Download</bdi> و <bdi dir="ltr">Support</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; امکان دانلود <bdi dir="ltr">Config</bdi> هر <bdi dir="ltr">Location</bdi> به صورت جداگانه یا دانلود تمام Configهای <bdi dir="ltr">Subscription</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; <b><bdi dir="ltr"><bdi dir="ltr">Subscription</bdi> Template Studio</bdi></b> برای طراحی صفحه <bdi dir="ltr">Public <bdi dir="ltr">Subscription</bdi></bdi> با <bdi dir="ltr">Live Preview</bdi> واقعی در حالت Desktop و Mobile</p>
+
+<p dir="rtl" align="right">▪&nbsp; امکان تغییر <bdi dir="ltr">Layout</bdi>، <bdi dir="ltr">Background</bdi>، <bdi dir="ltr">Live <bdi dir="ltr">Background</bdi></bdi>، <bdi dir="ltr">Animation</bdi>، <bdi dir="ltr">Motion</bdi>، <bdi dir="ltr">Statistics</bdi>، <bdi dir="ltr">Colors</bdi>، <bdi dir="ltr">Surface</bdi>، <bdi dir="ltr">Radius</bdi>، <bdi dir="ltr">Shadow</bdi>، <bdi dir="ltr">Density</bdi>، <bdi dir="ltr">Font scale</bdi> و <bdi dir="ltr">Page width</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; امکان تغییر نحوه نمایش Configها، تعداد ستون‌ها، ترتیب Sectionها و نمایش یا مخفی کردن بخش‌هایی مانند Usage، Configs، Install <bdi dir="ltr">WireGuard</bdi> و <bdi dir="ltr">Support</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; امکان تغییر <bdi dir="ltr">Header</bdi>، <bdi dir="ltr">Title</bdi>، <bdi dir="ltr">Subtitle</bdi>، <bdi dir="ltr">Header</bdi> icon، <bdi dir="ltr">Logo</bdi> size و <bdi dir="ltr">Alignment</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; پشتیبانی از <bdi dir="ltr">Dark Mode</bdi>، <bdi dir="ltr">Light Mode</bdi> و <bdi dir="ltr"><bdi dir="ltr">Auto</bdi> Mode</bdi> در <bdi dir="ltr">Public <bdi dir="ltr">Subscription</bdi></bdi> و خود پنل</p>
+
+<p dir="rtl" align="right">▪&nbsp; امکان اضافه کردن <bdi dir="ltr">Support</bdi> link شامل <bdi dir="ltr">Telegram</bdi>، <bdi dir="ltr">WhatsApp</bdi>، <bdi dir="ltr">Phone</bdi>، <bdi dir="ltr">Email</bdi>، <bdi dir="ltr">Website</bdi> و <bdi dir="ltr">Instagram</bdi>؛ فقط مواردی که مقدار داشته باشند در صفحه Public نمایش داده میشوند</p>
+
+<p dir="rtl" align="right">▪&nbsp; <b>مدیریت Nodeها از پنل اصلی</b> با <bdi dir="ltr">API Key</bdi> جداگانه، نمایش وضعیت <bdi dir="ltr">Online</bdi>/<bdi dir="ltr">Offline</bdi>/<bdi dir="ltr">Disabled</bdi>، تعداد <bdi dir="ltr">Peer</bdi> و <bdi dir="ltr">Interface</bdi>، <bdi dir="ltr">Search</bdi>، <bdi dir="ltr">Filter</bdi>، <bdi dir="ltr">Refresh</bdi> و <bdi dir="ltr">Test connection</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; Peerها و Interfaceهای <bdi dir="ltr">Node</bdi> بدون نیاز به ورود مستقیم به سرور <bdi dir="ltr">Node</bdi> از پنل اصلی قابل مدیریت هستند</p>
+
+<p dir="rtl" align="right">▪&nbsp; دارای <b>اسکریپت جداگانه برای نصب و تنظیم Panel و <bdi dir="ltr">Node</bdi></b> شامل <bdi dir="ltr">Virtual Environment</bdi>، <bdi dir="ltr">Requirements</bdi>، <bdi dir="ltr">WireGuard</bdi>، تنظیمات <code>.env</code>، <bdi dir="ltr">Runtime</bdi> و <bdi dir="ltr">Telegram</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; <b>Backup و <bdi dir="ltr">Restore</bdi> کامل</b> از <bdi dir="ltr">Database</bdi>، <bdi dir="ltr">Settings</bdi>، Subscriptionها، Short Links، Profileها، Interfaceها، Peerها و Configهای <bdi dir="ltr">WireGuard</bdi> مربوط به <bdi dir="ltr">Local</bdi> و <bdi dir="ltr">Node</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; پشتیبانی از <bdi dir="ltr">Manual Backup</bdi> و <bdi dir="ltr"><bdi dir="ltr">Auto</bdi> Backup</bdi>، دانلود Backup، ارسال به <bdi dir="ltr">Telegram</bdi>، مشاهده آخرین Backup و <bdi dir="ltr">Inspect</bdi> قبل از <bdi dir="ltr">Restore</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; <bdi dir="ltr">Restore</bdi> با حالت‌های مختلف مانند <bdi dir="ltr">Auto</bdi>، <bdi dir="ltr">Full</bdi> و <bdi dir="ltr">Database</bdi> و امکان انتخاب اینکه تنظیمات فعلی سرور حفظ شوند یا از Backup استفاده شود</p>
+
+<p dir="rtl" align="right">▪&nbsp; امکان استفاده از <bdi dir="ltr"><bdi dir="ltr">Full</bdi> Backup</bdi> برای انتقال Panel و Nodeها به سرور جدید</p>
+
+<p dir="rtl" align="right">▪&nbsp; <b><bdi dir="ltr">Logs</bdi> کامل</b> برای Panel، <bdi dir="ltr"><bdi dir="ltr">Telegram</bdi> Bot</bdi>، <bdi dir="ltr"><bdi dir="ltr">Telegram</bdi> <bdi dir="ltr">Admin</bdi></bdi> و Interfaceها با <bdi dir="ltr">Search</bdi>، <bdi dir="ltr">Filter</bdi>، <bdi dir="ltr">Level</bdi>، <bdi dir="ltr"><bdi dir="ltr">Auto</bdi> <bdi dir="ltr">Refresh</bdi></bdi>، <bdi dir="ltr"><bdi dir="ltr">Local</bdi> Time</bdi>، <bdi dir="ltr">Humanize</bdi> و <bdi dir="ltr">Export</bdi> به <bdi dir="ltr">CSV</bdi> یا <bdi dir="ltr">NDJSON</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; <b><bdi dir="ltr"><bdi dir="ltr">Telegram</bdi> Bot</bdi></b> برای مدیریت Peerهای <bdi dir="ltr">Local</bdi> و <bdi dir="ltr">Node</bdi>، <bdi dir="ltr">Search</bdi>، <bdi dir="ltr">Create</bdi>، <bdi dir="ltr">Edit</bdi>، <bdi dir="ltr">Enable</bdi>، <bdi dir="ltr">Disable</bdi>، Reset، <bdi dir="ltr">Delete</bdi>، دریافت <bdi dir="ltr">Config</bdi> و <bdi dir="ltr">QR Code</bdi>، مدیریت Profileها، Backup و <bdi dir="ltr">Restore</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; امکان دریافت Notificationهای مربوط به Panel و <bdi dir="ltr">Node</bdi> از طریق <bdi dir="ltr">Telegram</bdi> و پشتیبانی از چند <bdi dir="ltr">Admin</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; <b><bdi dir="ltr">Settings</bdi> کامل</b> برای <bdi dir="ltr"><bdi dir="ltr">Telegram</bdi> Bot</bdi>، Bot Token، Adminها، <bdi dir="ltr">Panel <bdi dir="ltr">Runtime</bdi></bdi>، Interfaceها و سایر تنظیمات پنل</p>
+
+<p dir="rtl" align="right">▪&nbsp; امکان تغییر <bdi dir="ltr">Port</bdi>، <bdi dir="ltr">Worker</bdi>، <bdi dir="ltr">Thread</bdi>، <bdi dir="ltr">Timeout</bdi> و <bdi dir="ltr">Restart</bdi> کردن Panel از داخل پنل</p>
+
+<p dir="rtl" align="right">▪&nbsp; <b>تنظیمات امنیتی</b> شامل HTTPS، <bdi dir="ltr">Domain</bdi>، <bdi dir="ltr">HTTPS <bdi dir="ltr">Port</bdi></bdi>، <bdi dir="ltr">Certificate</bdi>، <bdi dir="ltr">Private Key</bdi>، <bdi dir="ltr">HTTP → HTTPS Redirect</bdi> و <bdi dir="ltr">HSTS</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; دارای سیستم <bdi dir="ltr">Login</bdi> برای <bdi dir="ltr">Admin</bdi>، تغییر <bdi dir="ltr">Username</bdi> و <bdi dir="ltr">Password</bdi> و پشتیبانی از <b><bdi dir="ltr">2FA</bdi> با <bdi dir="ltr">TOTP</bdi></b> همراه <bdi dir="ltr">QR Code</bdi>، <bdi dir="ltr">Manual Key</bdi> و <bdi dir="ltr">Recovery Code</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; دارای <b><bdi dir="ltr">Short Link</bdi></b> برای <bdi dir="ltr">Peer</bdi> و <bdi dir="ltr">Subscription</bdi> و امکان انتخاب Templateهای مختلف برای صفحات <bdi dir="ltr">Client</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; <b><bdi dir="ltr">Update</bdi> از داخل پنل</b> با دریافت نسخه جدید از <bdi dir="ltr">Repository</bdi>، <bdi dir="ltr">Validation</bdi> فایل‌ها و <bdi dir="ltr">Rollback</bdi> خودکار در صورت ناموفق بودن <bdi dir="ltr">Update</bdi></p>
+
+<p dir="rtl" align="right">▪&nbsp; امکان انتقال کامل Panel، Subscriptionها، Short Linkها و Nodeها به سرور جدید با استفاده از <bdi dir="ltr"><bdi dir="ltr">Full</bdi> Backup</bdi> و نصب مجدد Panel/<bdi dir="ltr">Node</bdi></p>
+
+
+</div>
+
+---
+
+<div dir="rtl" align="right">
+
+<h2>🌐 Endpoint پیش‌فرض برای هر Interface</h2>
+
+آدرس Endpoint سرور که داخل Config مربوط به Client نوشته میشود به صورت خودکار از روی Domain یا Public IP پنل تشخیص داده میشود.
+
+اگر پنل پشت NAT، Reverse Proxy یا Load Balancer باشد، یا سرور بیش از یک Public IP یا Domain داشته باشد، ممکن است تشخیص خودکار Endpoint مقدار مورد نظر شما را انتخاب نکند. در این حالت میتوان برای هر Interface یک Endpoint پیش‌فرض مشخص کرد.
+
+<ul>
+<li>این تنظیم برای Interfaceهای Local و Interfaceهای Node قابل استفاده است</li>
+<li>تنظیم Endpoint پیش‌فرض از قسمت Settings و بخش Interface انجام میشود</li>
+<li>Host میتواند Domain یا IP باشد</li>
+<li>Port میتواند Port واقعی WireGuard مربوط به همان Interface باشد</li>
+<li>با خالی کردن Host و Port، دوباره Automatic Endpoint Detection فعال میشود</li>
+<li>Endpoint پیش‌فرض روی Configهایی که از آن Interface Export میشوند استفاده میشود</li>
+<li>Peerهایی که Endpoint اختصاصی برای آنها تعیین شده است میتوانند مقدار جداگانه خود را داشته باشند</li>
+<li>تغییر Endpoint پیش‌فرض به صورت عادی Peerهای قبلی را تغییر نمیدهد</li>
+<li>برای اعمال Endpoint جدید روی Peerهای موجود میتوان از گزینه <code>Apply to existing peers</code> استفاده کرد</li>
+<li>قبل از Apply میتوان مشخص کرد فقط Peerهایی که Endpoint اختصاصی ندارند تغییر کنند یا Endpointهای قبلی نیز Overwrite شوند</li>
+<li>این قابلیت برای زمانی که Domain یا Public IP سرور تغییر میکند بسیار کاربردی است</li>
+</ul>
+
+<p><b>مثال Host:</b></p>
+
+<div dir="ltr" align="left">
+
+</div>
+
+<div dir="ltr" align="left">
+
+```text
+vpn.example.com
+```
+
+</div>
+
+<div dir="rtl" align="right">
+
+یا:
+
+</div>
+
+<div dir="ltr" align="left">
+
+```text
+203.0.113.9
+```
+
+</div>
+
+<div dir="rtl" align="right">
+
+</div>
+
+<p><b>مثال Port:</b></p>
+
+<div dir="ltr" align="left">
+
+</div>
+
+<div dir="ltr" align="left">
+
+```text
+51820
+```
+
+</div>
+
+<div dir="rtl" align="right">
+
+</div>
+
+---
+
+<h2>Fixed Client Endpoint</h2>
+
+در حالت عادی بهتر است این قسمت خالی بماند و Client از Endpoint نرمال Interface استفاده کند.
+
+<ul>
+<li>این گزینه برای استفاده معمولی کاربران لازم نیست</li>
+<li>برای موبایل، لپ‌تاپ، اینترنت سیم‌کارت، CGNAT و Clientهایی که IP آنها تغییر میکند بهتر است خالی بماند</li>
+<li>میتوان برای Clientهایی که Public IP یا DNS ثابت دارند از آن استفاده کرد</li>
+<li>میتوان از آن در بعضی طراحی‌های Site-to-Site استفاده کرد</li>
+<li>اگر سمت Client پشت یک Load Balancer یا Gateway با آدرس ثابت قرار داشته باشد و UDP مورد نیاز به همان Client Forward شود نیز میتوان از Fixed Client Endpoint استفاده کرد</li>
+<li>مقدار آن میتواند به صورت Domain یا IP همراه با UDP Port باشد</li>
+<li>اگر این قسمت خالی باشد، اینترفیس اتوماتیک سرور انتخاب میشود</li>
+<li>استفاده اشتباه از Fixed Client Endpoint میتواند باعث قطع اتصال Client شود، به همین دلیل بهتر است فقط در مواردی که Client دارای Endpoint ثابت است استفاده شود</li>
+</ul>
+
+<p><b>مثال:</b></p>
+
+<div dir="ltr" align="left">
+
+</div>
+
+<div dir="ltr" align="left">
+
+```text
+client.example.com:51820
+```
+
+</div>
+
+<div dir="rtl" align="right">
+
+یا:
+
+</div>
+
+<div dir="ltr" align="left">
+
+```text
+203.0.113.20:51820
+```
+
+</div>
+
+<div dir="rtl" align="right">
+
+</div>
+
+---
+
 نصب پنل با اسکریپت :
+
+</div>
+
+<div dir="ltr" align="left">
 
 ```
 sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main/wg.sh)"'
 ```
+
+</div>
+
+<div dir="rtl" align="right">
+
 - سپس با کامند wgpanel میتوانید اسکریپت را اجرا کنید
+
+</div>
+
+<div dir="ltr" align="left">
+
 ```
 wgpanel
 ```
+
+</div>
+
+<div dir="rtl" align="right">
+
 نصب node بر روی سرور با اسکریپت:
+
+</div>
+
+<div dir="ltr" align="left">
 
 ```
 sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main/agent/node.sh)"'
 ```
+
+</div>
+
+<div dir="rtl" align="right">
+
 - سپس با کامند node میتوانید اسکریپت را اجرا کنید
+
+</div>
+
+<div dir="ltr" align="left">
+
 ```
 node
 ```
+
+</div>
+
+<div dir="rtl" align="right">
+
+</div>
+
 ------------------------------------ 
 
   ![6348248](https://github.com/Azumi67/PrivateIP-Tunnel/assets/119934376/398f8b07-65be-472e-9821-631f7b70f783)
@@ -102,15 +313,14 @@ node
   <summary align="right">داشبورد پنل</summary>
 
   <p align="right">
-    <img src="https://github.com/user-attachments/assets/47ce2474-5fa4-4512-a4ca-fe175d0fe119" alt="menu screen" />
+    <img src="https://github.com/user-attachments/assets/db92ea88-3b63-4bab-a2f6-5705200799d4" alt="menu screen" />
   </p>
 </details>
 
 <details>
   <summary align="right">peers</summary>
-
-  <p align="right">
-    <img src="https://github.com/user-attachments/assets/5f01d460-8870-48d2-bf50-6f892d483cce" alt="menu screen" />
+   <p align="right">
+    <img src="https://github.com/user-attachments/assets/903ace8d-88a6-4e88-be49-4c30d7a82f98" alt="menu screen" />
   </p>
 </details>
 
@@ -118,7 +328,7 @@ node
   <summary align="right">Subscription</summary>
 
   <p align="right">
-    <img src="https://github.com/user-attachments/assets/039973fe-fa9b-4cbe-975a-13bbcbdfadf7" alt="menu screen" />
+    <img src="https://github.com/user-attachments/assets/e0a23cda-d94a-4c66-a47a-a20f043b8f0f" alt="menu screen" />
   </p>
 </details>
 
@@ -150,7 +360,7 @@ node
   <summary align="right">Settings>telegram bot</summary>
 
   <p align="right">
-    <img src="https://github.com/user-attachments/assets/5671ed52-9135-4184-b3e6-7f18e80ea059" alt="menu screen" />
+    <img src="https://github.com/user-attachments/assets/a87617da-18e0-4065-b2ed-d38d4322958b" alt="menu screen" />
   </p>
 </details>
 
