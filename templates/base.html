@@ -79,19 +79,19 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/panel-version.css') }}?v=20260730-sidebar-two-row" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}?v=20260810-v23" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/sidebar-compact.css') }}?v=20260730-v50" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/panel-update.css') }}?v=20260730-v50" />
 
     {% block head_extras %}{% endblock %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/dark-dashboard-peers.css') }}?v=20260727-1" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dark-dashboard-peers.css') }}?v=20260810-v23" />
 
     {% if request.endpoint == 'index' %}
     <script defer src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js', v='4.4.4') }}"></script>
     {% endif %}
     <script defer src="{{ url_for('static', filename='js/toast.js') }}"></script>
     <script defer src="{{ url_for('static', filename='js/csrf.js') }}"></script>
-    <script defer src="{{ url_for('static', filename='js/base.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/base.js') }}?v=20260810-v23"></script>
 </head>
 
 <body data-preview="{{ '1' if preview|default(false) else '0' }}">
@@ -236,9 +236,6 @@
         {% block content %}{% endblock %}
     </main>
 
-    {% if request.endpoint == 'users' %}
-    <script defer src="{{ url_for('static', filename='js/peers.js') }}"></script>
-    {% endif %}
     <script defer src="{{ url_for('static', filename='js/panel-version.js') }}?v=20260730-dashboard-version-chip"></script>
     <script defer src="{{ url_for('static', filename='js/panel-update.js') }}?v=20260730-v50"></script>
     <script defer src="{{ url_for('static', filename='js/theme.js') }}?v=20260730-v50"></script>
