@@ -4,6 +4,7 @@ import asyncio
 import io
 import math
 import re
+from urllib.parse import quote
 from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
@@ -25,7 +26,8 @@ CREATE_FIELDS = [
     ("unlimited", "Unlimited client? yes/no", "no"),
     ("allowed_ips", "Allowed IPs", "0.0.0.0/0, ::/0"),
     ("include_internal_network", "Include detected local/private networks? yes/no", "no"),
-    ("endpoint", "Endpoint override, or - for automatic", ""),
+    ("endpoint", "Server endpoint override, or - for automatic", ""),
+    ("peer_endpoint", "Fixed client endpoint (stable host:UDP port), or - for normal clients", ""),
     ("persistent_keepalive", "Persistent keepalive in seconds", "25"),
     ("mtu", "MTU", "1280"),
     ("dns", "DNS servers", "1.1.1.1, 1.0.0.1"),
@@ -49,7 +51,8 @@ ADVANCED_CREATE_FIELDS = CREATE_FIELDS
 ADVANCED_WG_FIELDS = [
     ("allowed_ips", "Allowed IPs", "0.0.0.0/0, ::/0"),
     ("include_internal_network", "Include detected local/private networks?", "no"),
-    ("endpoint", "Endpoint override, or - for automatic", ""),
+    ("endpoint", "Server endpoint override, or - for automatic", ""),
+    ("peer_endpoint", "Fixed client endpoint (stable host:UDP port), or - for normal clients", ""),
     ("persistent_keepalive", "Persistent keepalive in seconds", "25"),
     ("mtu", "MTU", "1280"),
     ("dns", "DNS servers", "1.1.1.1, 1.0.0.1"),
@@ -86,16 +89,49 @@ def _clear_client_input_state(context):
 
 
 def _subscription_profiles(g):
-    loader = g.get("_profiles_load")
-    if not callable(loader):
-        return []
+    """Load the same subscription profiles used by the web panel.
+
+    The current panel stores subscription profiles behind /api/subscription_profiles
+    with separate client/advanced/interfaces/template sections.  Telegram only
+    needs the client and advanced values for its create wizard, so those sections
+    are flattened while leaving interface/template data untouched in the panel.
+    """
     try:
-        base = loader() or {}
+        listing = _api(g, "GET", "/api/subscription_profiles", timeout=15)
+        if not isinstance(listing, dict) or listing.get("ok") is False:
+            return []
+
         rows = []
-        for name, values in (base.get("profiles") or {}).items():
-            scope = str((values or {}).get("use_for") or "both").lower()
-            if scope in {"subscription", "all", "both"}:
-                rows.append((str(name), dict(values or {})))
+        for meta in listing.get("profiles") or []:
+            name = str((meta or {}).get("name") or "").strip()
+            if not name:
+                continue
+            detail = _api(
+                g,
+                "GET",
+                f"/api/subscription_profiles/{quote(name, safe='')}",
+                timeout=15,
+            )
+            profile = detail.get("profile") if isinstance(detail, dict) else None
+            if not isinstance(profile, dict):
+                continue
+
+            include = profile.get("include") if isinstance(profile.get("include"), dict) else {}
+            values = {}
+            client_values = profile.get("client")
+            advanced_values = profile.get("advanced")
+
+            if isinstance(client_values, dict) and (include.get("client", True)):
+                values.update(client_values)
+            if isinstance(advanced_values, dict) and (include.get("advanced", True)):
+                values.update(advanced_values)
+
+            if isinstance(profile.get("interfaces"), list):
+                values["_saved_interfaces"] = profile.get("interfaces")
+            if isinstance(profile.get("template"), dict):
+                values["_saved_template"] = profile.get("template")
+
+            rows.append((name, values))
         return rows
     except Exception:
         return []
@@ -284,6 +320,7 @@ def _client_field_icon(key: str) -> str:
         "allowed_ips": "◎",
         "include_internal_network": "⌘",
         "endpoint": "⌁",
+        "peer_endpoint": "◎",
         "persistent_keepalive": "⋄",
         "mtu": "↔",
         "dns": "◉",
@@ -747,6 +784,7 @@ async def _show_subscription_source_menu(g, update, context):
         "⌘ <b>Configs for this client</b>\n\nChoose where the client should work. Optional WireGuard values can be changed before selecting configs.",
         InlineKeyboardMarkup([
             [InlineKeyboardButton("⌁ Advanced WireGuard options", callback_data="client:create:advanced")],
+            [InlineKeyboardButton("ⓘ Fixed client endpoint guide", callback_data="client:create:fixedhelp")],
             [InlineKeyboardButton("⊕ Create new configs", callback_data="client:create:source:new")],
             [InlineKeyboardButton("◇ Use existing configs", callback_data="client:create:source:existing")],
             [InlineKeyboardButton("✕ Cancel", callback_data="client:list:1")],
@@ -1022,6 +1060,7 @@ async def handle_callback(g, update, context):
                 "mtu": 1280,
                 "dns": "1.1.1.1, 1.0.0.1",
                 "endpoint": "",
+                "peer_endpoint": "",
                 "include_internal_network": False,
             },
             "mode": "subscription",
@@ -1109,6 +1148,22 @@ async def handle_callback(g, update, context):
             f"{_client_field_icon(nkey)} <b>{_html(g, prompt)}</b>"
             + (f"\n◇ <b>Default</b>: <code>{_html(g, ndefault)}</code>" if ndefault else ""),
             _client_create_keyboard(nkey, ndefault),
+        )
+        return True
+
+    if data == "client:create:fixedhelp":
+        await edit(
+            update,
+            (
+                "ⓘ <b>Fixed client endpoint</b>\n\n"
+                "Use this only when the client itself always has a stable public host/IP "
+                "and a reachable forwarded UDP port. It is stored on the server-side peer.\n\n"
+                "Typical cases include a site-to-site peer or a stable client behind a "
+                "load balancer/NAT rule that always forwards the same UDP port.\n\n"
+                "Leave it empty for phones, laptops, roaming clients, carrier NAT, and "
+                "changing addresses. The normal server endpoint is used automatically."
+            ),
+            InlineKeyboardMarkup([[InlineKeyboardButton("◀ Back", callback_data="client:create:source")]]),
         )
         return True
 
