@@ -181,7 +181,7 @@ function _fmtAgo(d){
       if (pct > 0) rafId = requestAnimationFrame(tick); else hide();
     });
     el.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
-    window.toast = window.showToast;        // expose
+    window.toast = window.showToast;        
     window.toastSafe = (m, t='info') => window.showToast(m, t);
     return { hide };
   };
