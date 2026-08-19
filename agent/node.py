@@ -433,32 +433,26 @@ def _wg_conf(
     dns: str = "",
     mtu: str = "",
 ) -> str:
-    network = _wireguard_ipv4_network(address)
+
+    network = (
+        _wireguard_ipv4_network(
+            address
+        )
+    )
+
     if not network:
         raise ValueError(
-            "Automatic NAT requires a private IPv4 WireGuard address."
+            "Automatic NAT requires a private "
+            "IPv4 WireGuard address."
         )
 
-    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,32}", egress or ""):
-        raise ValueError("Invalid outbound interface name.")
-
-    post_up = (
-        "sysctl -w net.ipv4.ip_forward=1 >/dev/null; "
-        "iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null "
-        "|| iptables -A FORWARD -i %i -j ACCEPT; "
-        "iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null "
-        "|| iptables -A FORWARD -o %i -j ACCEPT; "
-        f"iptables -t nat -C POSTROUTING -s {network} -o {egress} "
-        "-j MASQUERADE 2>/dev/null "
-        f"|| iptables -t nat -A POSTROUTING -s {network} -o {egress} "
-        "-j MASQUERADE"
-    )
-    post_down = (
-        "iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; "
-        "iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; "
-        f"iptables -t nat -D POSTROUTING -s {network} -o {egress} "
-        "-j MASQUERADE 2>/dev/null || true"
-    )
+    if not re.fullmatch(
+        r"[A-Za-z0-9_.:-]{1,32}",
+        egress or "",
+    ):
+        raise ValueError(
+            "Invalid outbound interface name."
+        )
 
     lines = [
         "[Interface]",
@@ -468,17 +462,77 @@ def _wg_conf(
     ]
 
     if mtu.strip():
-        lines.append(f"MTU = {mtu.strip()}")
+        lines.append(
+            f"MTU = {mtu.strip()}"
+        )
 
     if dns.strip():
-        lines.append(f"# Client DNS default: {dns.strip()}")
+        lines.append(
+            f"# Client DNS default: "
+            f"{dns.strip()}"
+        )
 
     lines.extend([
-        f"PostUp = {post_up}",
-        f"PostDown = {post_down}",
+        (
+            "PostUp = "
+            "sysctl -w "
+            "net.ipv4.ip_forward=1"
+        ),
+
+        (
+            "PostUp = "
+            "iptables -A FORWARD "
+            "-i %i -j ACCEPT"
+        ),
+
+        (
+            "PostUp = "
+            "iptables -A FORWARD "
+            "-o %i "
+            "-m conntrack "
+            "--ctstate RELATED,ESTABLISHED "
+            "-j ACCEPT"
+        ),
+
+        (
+            "PostUp = "
+            "iptables -t nat "
+            "-A POSTROUTING "
+            f"-s {network} "
+            f"-o {egress} "
+            "-j MASQUERADE"
+        ),
+
+        (
+            "PostDown = "
+            "iptables -D FORWARD "
+            "-i %i -j ACCEPT"
+        ),
+
+        (
+            "PostDown = "
+            "iptables -D FORWARD "
+            "-o %i "
+            "-m conntrack "
+            "--ctstate RELATED,ESTABLISHED "
+            "-j ACCEPT"
+        ),
+
+        (
+            "PostDown = "
+            "iptables -t nat "
+            "-D POSTROUTING "
+            f"-s {network} "
+            f"-o {egress} "
+            "-j MASQUERADE"
+        ),
+
         "",
     ])
-    return "\n".join(lines)
+
+    return "\n".join(
+        lines
+    )
 
 def wg_flow():
     if not _wireguard_installed():
