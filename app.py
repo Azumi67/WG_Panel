@@ -6,6 +6,7 @@ from flask import (
     Flask, render_template, redirect, url_for, flash, request,
     jsonify, abort, current_app, make_response, send_file, session, g
 )
+
 from sqlalchemy.exc import OperationalError, IntegrityError
 from cryptography.fernet import Fernet, InvalidToken
 from pathlib import Path
@@ -273,7 +274,7 @@ def _peer_schema():
     if insp.has_table('subscription_peer'):
         link_cols = {c['name'] for c in insp.get_columns('subscription_peer')}
         if 'owned' not in link_cols:
-            # Legacy links get owned=0 on purpose: we cannot tell whether the
+            # Legacy links get owned=0 on purpose: i cannot tell whether the
             # subscription created the peer, and deleting someone else's peer
             # is not recoverable.
             statements.append(
@@ -290,17 +291,7 @@ def _peer_schema():
 
 
 def _backfill_peer_address_hosts():
-    """Fill `address_host` for legacy rows, then enforce per-interface uniqueness.
 
-    The rest of the code assumes the ``(iface_id, address_host)`` unique index
-    exists as the backstop for :func:`allocate_peer_address` (see the
-    ``interface_allocation_lock`` docstring). Silently skipping it on a
-    migrated DB with historical duplicates would remove that invariant, so
-    duplicates are *resolved* here, not just logged: the lowest-``id`` peer in
-    each duplicate group keeps its host, and the others are blanked to
-    ``address_host`` (NULL), which drops them out of the index while leaving
-    the row itself and its ``address`` untouched for manual recovery.
-    """
     pending = (
         db.session.query(Peer)
         .filter(or_(Peer.address_host.is_(None), Peer.address_host == ''))
@@ -323,8 +314,6 @@ def _backfill_peer_address_hosts():
     if duplicates:
         resolved = 0
         for iface_id, host, _count in duplicates:
-            # Keep the oldest peer (lowest id) on its host; detach the rest by
-            # blanking address_host. Their `address` column is unchanged.
             dup_peers = (
                 db.session.query(Peer.id)
                 .filter(Peer.iface_id == iface_id, Peer.address_host == host)
@@ -359,17 +348,11 @@ def _backfill_peer_address_hosts():
                 'ON peer (iface_id, address_host)'
             ))
     except Exception:
-        # Already present as a table-level constraint on a fresh database.
         app.logger.debug("Peer address uniqueness index not created", exc_info=True)
 
 
 def _interface_schema():
-    """Add the client endpoint override columns to older databases.
 
-    Both columns stay NULL on upgrade, so endpoint behaviour is unchanged until
-    an operator saves an override. `db.create_all()` does not alter existing
-    tables, which is why this exists.
-    """
     insp = inspect(db.engine)
 
     if not insp.has_table('interface_config'):
@@ -405,12 +388,14 @@ _DEF_PROFILE = {
     'persistent_keepalive': None,
     'mtu': None,
     'endpoint': '',
+    'peer_endpoint': '',
     'data_limit_value': 0,
     'data_limit_unit': 'Gi',
     'start_on_first_use': False,
     'unlimited': False,
     'time_limit_days': 0,
     'time_limit_hours': 0,
+    'time_limit_minutes': 0,
 }
 
 def _migrate_single_profile():
@@ -425,8 +410,6 @@ def _migrate_single_profile():
         data = {"active": "Default", "profiles": {"Default": base}}
         with open(PEER_PROFILES_FILE, 'w') as f:
             json.dump(data, f, indent=2)
-        # try: os.remove(PEER_PROFILE_FILE)
-        # except Exception: pass
 
 def _load_profiles():
     os.makedirs(app.instance_path, exist_ok=True)
@@ -502,20 +485,66 @@ def list_apipeer_profiles():
 @login_required
 def rename_apipeer_profile():
     data = request.get_json(force=True, silent=True) or {}
-    old = (data.get('old') or '').strip()
-    new = (data.get('new') or '').strip()
+
+    raw_old = data.get('old')
+    raw_new = data.get('new')
+
+    if not isinstance(raw_old, str) or not isinstance(raw_new, str):
+        return jsonify(
+            ok=False,
+            error='invalid_name',
+            message='The old and new profile names must be text.',
+        ), 400
+
+    old = raw_old.strip()
+    new = raw_new.strip()
+
     if not old or not new:
-        return jsonify(error="old_and_new_required"), 400
-    d = _load_profiles()
-    if old not in d['profiles']:
-        return jsonify(error="not_found"), 404
-    if new in d['profiles']:
-        return jsonify(error="exists"), 409
-    d['profiles'][new] = d['profiles'].pop(old)
-    if d.get('active') == old:
-        d['active'] = new
-    _save_profiles(d)
-    return jsonify(ok=True, active=d['active'])
+        return jsonify(
+            ok=False,
+            error='old_and_new_required',
+            message='Both the current name and new name are required.',
+        ), 400
+
+    if len(new) > 80:
+        return jsonify(
+            ok=False,
+            error='name_too_long',
+            message='Profile names cannot exceed 80 characters.',
+        ), 400
+
+    data_store = _load_profiles()
+    profiles = data_store.get('profiles') or {}
+
+    if old not in profiles:
+        return jsonify(
+            ok=False,
+            error='not_found',
+            message='The selected profile was not found.',
+        ), 404
+
+    if new != old and new in profiles:
+        return jsonify(
+            ok=False,
+            error='exists',
+            message='A profile with that name already exists.',
+        ), 409
+
+    if new != old:
+        profiles[new] = profiles.pop(old)
+
+    if data_store.get('active') == old:
+        data_store['active'] = new
+
+    _save_profiles(data_store)
+
+    return jsonify(
+        ok=True,
+        old_name=old,
+        name=new,
+        active=data_store.get('active') or 'Default',
+        profiles=sorted(profiles.keys()),
+    )
 
 @app.route('/api/peer_profile', methods=['GET'])
 @login_required
@@ -527,19 +556,718 @@ def get_apipeer_profile():
 @login_required
 def save_apipeer_profile():
     data = request.get_json(force=True, silent=True) or {}
-    name = (data.get('name') or 'Default').strip() or 'Default'
-    payload = {k: v for k, v in data.items() if k != 'name'}
+
+    raw_name = data.get('name')
+
+    if raw_name is None:
+        raw_name = 'Default'
+
+    if not isinstance(raw_name, str):
+        return jsonify(
+            ok=False,
+            error='invalid_name',
+            message='Profile name must be text.',
+        ), 400
+
+    name = raw_name.strip() or 'Default'
+
+    if len(name) > 80:
+        return jsonify(
+            ok=False,
+            error='name_too_long',
+            message='Profile names cannot exceed 80 characters.',
+        ), 400
+
+    payload = {
+        key: value
+        for key, value in data.items()
+        if key != 'name'
+    }
+
     _set_profile(name, payload)
-    return jsonify(ok=True, saved_name=name, saved=_get_profile(name))
+
+    return jsonify(
+        ok=True,
+        name=name,
+        saved_name=name,
+        saved=_get_profile(name),
+    )
 
 @app.route('/api/peer_profile/activate', methods=['POST'])
 @login_required
 def activate_apipeer_profile():
     data = request.get_json(force=True, silent=True) or {}
-    name = (data.get('name') or 'Default').strip() or 'Default'
-    _set_active_profile(name)
-    return jsonify(ok=True, active=name)
 
+    raw_name = data.get('name')
+
+    if raw_name is None:
+        raw_name = 'Default'
+
+    if not isinstance(raw_name, str):
+        return jsonify(
+            ok=False,
+            error='invalid_name',
+            message='Profile name must be text.',
+        ), 400
+
+    name = raw_name.strip() or 'Default'
+
+    profiles_data = _load_profiles()
+
+    if name not in (profiles_data.get('profiles') or {}):
+        return jsonify(
+            ok=False,
+            error='not_found',
+            message='The selected profile was not found.',
+        ), 404
+
+    _set_active_profile(name)
+
+    return jsonify(
+        ok=True,
+        active=name,
+    )
+
+# ============================================================
+# Subscription profiles
+# Reusable profiles for the subscription create-client workflow
+# ============================================================
+
+SUBSCRIPTION_PROFILES_FILE = os.path.join(
+    app.instance_path,
+    'subscription_profiles.json',
+)
+
+
+def _load_subscription_profiles():
+
+    os.makedirs(
+        app.instance_path,
+        exist_ok=True,
+    )
+
+    try:
+        with open(
+            SUBSCRIPTION_PROFILES_FILE,
+            'r',
+            encoding='utf-8',
+        ) as profile_file:
+            data = json.load(
+                profile_file
+            )
+
+    except FileNotFoundError:
+        data = {}
+
+    except Exception:
+        current_app.logger.warning(
+            'Could not read subscription profiles.',
+            exc_info=True,
+        )
+        data = {}
+
+    if not isinstance(
+        data,
+        dict,
+    ):
+        data = {}
+
+    profiles = data.get(
+        'profiles'
+    )
+
+    if not isinstance(
+        profiles,
+        dict,
+    ):
+        profiles = {}
+
+    cleaned_profiles = {}
+
+    for profile_name, profile_data in profiles.items():
+        clean_name = str(
+            profile_name or ''
+        ).strip()
+
+        if not clean_name:
+            continue
+
+        cleaned_profiles[
+            clean_name
+        ] = (
+            profile_data
+            if isinstance(
+                profile_data,
+                dict,
+            )
+            else {}
+        )
+
+    active_name = str(
+        data.get('active')
+        or ''
+    ).strip()
+
+    if (
+        active_name
+        and active_name
+        not in cleaned_profiles
+    ):
+        active_name = ''
+
+    if (
+        not active_name
+        and cleaned_profiles
+    ):
+        active_name = next(
+            iter(
+                sorted(
+                    cleaned_profiles.keys(),
+                    key=str.lower,
+                )
+            )
+        )
+
+    return {
+        'active': active_name,
+        'profiles': cleaned_profiles,
+    }
+
+
+def _save_subscription_profiles(data):
+    """
+    Save subscription profiles atomically.
+    """
+    os.makedirs(
+        app.instance_path,
+        exist_ok=True,
+    )
+
+    profiles = (
+        data.get('profiles')
+        if isinstance(data, dict)
+        else {}
+    )
+
+    if not isinstance(
+        profiles,
+        dict,
+    ):
+        profiles = {}
+
+    active_name = str(
+        (
+            data.get('active')
+            if isinstance(data, dict)
+            else ''
+        )
+        or ''
+    ).strip()
+
+    payload = {
+        'active': active_name,
+        'profiles': profiles,
+    }
+
+    temporary_path = (
+        SUBSCRIPTION_PROFILES_FILE
+        + '.tmp'
+    )
+
+    with open(
+        temporary_path,
+        'w',
+        encoding='utf-8',
+    ) as profile_file:
+        json.dump(
+            payload,
+            profile_file,
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    os.replace(
+        temporary_path,
+        SUBSCRIPTION_PROFILES_FILE,
+    )
+
+    try:
+        os.chmod(
+            SUBSCRIPTION_PROFILES_FILE,
+            0o600,
+        )
+    except Exception:
+        pass
+
+
+def _subscription_profile_rows(data=None):
+    """
+    Return profile metadata for the profile dropdown.
+    """
+    data = (
+        data
+        or _load_subscription_profiles()
+    )
+
+    active_name = str(
+        data.get('active')
+        or ''
+    ).strip()
+
+    profiles = (
+        data.get('profiles')
+        or {}
+    )
+
+    return [
+        {
+            'name': profile_name,
+            'default': (
+                profile_name
+                == active_name
+            ),
+            'active': (
+                profile_name
+                == active_name
+            ),
+        }
+        for profile_name in sorted(
+            profiles.keys(),
+            key=str.lower,
+        )
+    ]
+
+
+def _sanitize_subscription_profile(profile):
+
+    if not isinstance(
+        profile,
+        dict,
+    ):
+        profile = {}
+
+    include = profile.get(
+        'include'
+    )
+
+    if not isinstance(
+        include,
+        dict,
+    ):
+        include = {}
+
+    cleaned = {
+        'include': {
+            'client': bool(
+                include.get('client')
+            ),
+            'advanced': bool(
+                include.get('advanced')
+            ),
+            'interfaces': bool(
+                include.get('interfaces')
+            ),
+            'template': bool(
+                include.get('template')
+            ),
+        }
+    }
+
+    for section_name in (
+    'client',
+    'advanced',
+    'template',
+    ):
+        section = profile.get(section_name)
+
+        if isinstance(section, dict):
+            cleaned[section_name] = section
+
+
+    interfaces = profile.get('interfaces')
+
+    if isinstance(interfaces, list):
+        cleaned['interfaces'] = [
+            item
+            for item in interfaces[:200]
+            if isinstance(item, dict)
+        ]
+
+    return cleaned
+
+
+@app.get('/api/subscription_profiles')
+@login_required
+def subscription_profiles_list():
+    store = (
+        _load_subscription_profiles()
+    )
+
+    return jsonify(
+        ok=True,
+        active=(
+            store.get('active')
+            or ''
+        ),
+        profiles=(
+            _subscription_profile_rows(
+                store
+            )
+        ),
+    )
+
+
+@app.post('/api/subscription_profiles')
+@login_required
+def subscription_profile_save():
+    payload = (
+        request.get_json(
+            silent=True,
+        )
+        or {}
+    )
+
+    profile_name = str(
+        payload.get('name')
+        or ''
+    ).strip()
+
+    if not profile_name:
+        return jsonify(
+            ok=False,
+            error='name_required',
+            message='Enter a profile name.',
+        ), 400
+
+    if len(profile_name) > 80:
+        return jsonify(
+            ok=False,
+            error='name_too_long',
+            message=(
+                'Profile names cannot exceed '
+                '80 characters.'
+            ),
+        ), 400
+
+    profile_payload = (
+        payload.get('profile')
+    )
+
+    if not isinstance(
+        profile_payload,
+        dict,
+    ):
+
+        profile_payload = {
+            key: value
+            for key, value in payload.items()
+            if key not in {
+                'name',
+                'activate',
+                'set_active',
+            }
+        }
+
+    cleaned_profile = (
+        _sanitize_subscription_profile(
+            profile_payload
+        )
+    )
+
+    store = (
+        _load_subscription_profiles()
+    )
+
+    profiles = store.setdefault(
+        'profiles',
+        {},
+    )
+
+    profiles[
+        profile_name
+    ] = cleaned_profile
+
+    should_activate = bool(
+        payload.get('activate')
+        or payload.get('set_active')
+        or not store.get('active')
+    )
+
+    if should_activate:
+        store[
+            'active'
+        ] = profile_name
+
+    _save_subscription_profiles(
+        store
+    )
+
+    return jsonify(
+        ok=True,
+        name=profile_name,
+        saved_name=profile_name,
+        active=(
+            store.get('active')
+            or ''
+        ),
+        profiles=(
+            _subscription_profile_rows(
+                store
+            )
+        ),
+    )
+
+
+@app.get('/api/subscription_profiles/<path:profile_name>')
+@login_required
+def subscription_profile_get(profile_name):
+    clean_name = str(
+        profile_name or ''
+    ).strip()
+
+    store = (
+        _load_subscription_profiles()
+    )
+
+    profile = (
+        store.get('profiles')
+        or {}
+    ).get(
+        clean_name
+    )
+
+    if not isinstance(
+        profile,
+        dict,
+    ):
+        return jsonify(
+            ok=False,
+            error='not_found',
+            message='Subscription profile was not found.',
+        ), 404
+
+    return jsonify(
+        ok=True,
+        name=clean_name,
+        active=(
+            store.get('active')
+            == clean_name
+        ),
+        profile=profile,
+    )
+
+
+@app.post(
+    '/api/subscription_profiles/<path:profile_name>/activate'
+)
+@login_required
+def subscription_profile_activate(profile_name):
+    clean_name = str(
+        profile_name or ''
+    ).strip()
+
+    store = (
+        _load_subscription_profiles()
+    )
+
+    profiles = (
+        store.get('profiles')
+        or {}
+    )
+
+    if clean_name not in profiles:
+        return jsonify(
+            ok=False,
+            error='not_found',
+            message='Subscription profile was not found.',
+        ), 404
+
+    store[
+        'active'
+    ] = clean_name
+
+    _save_subscription_profiles(
+        store
+    )
+
+    return jsonify(
+        ok=True,
+        active=clean_name,
+        profiles=(
+            _subscription_profile_rows(
+                store
+            )
+        ),
+    )
+
+
+@app.post(
+    '/api/subscription_profiles/<path:profile_name>/rename'
+)
+@login_required
+def subscription_profile_rename(profile_name):
+    old_name = str(
+        profile_name or ''
+    ).strip()
+
+    payload = (
+        request.get_json(
+            silent=True,
+        )
+        or {}
+    )
+
+    new_name = str(
+        payload.get('name')
+        or payload.get('new')
+        or ''
+    ).strip()
+
+    if not new_name:
+        return jsonify(
+            ok=False,
+            error='name_required',
+            message='Enter the new profile name.',
+        ), 400
+
+    if len(new_name) > 80:
+        return jsonify(
+            ok=False,
+            error='name_too_long',
+            message=(
+                'Profile names cannot exceed '
+                '80 characters.'
+            ),
+        ), 400
+
+    store = (
+        _load_subscription_profiles()
+    )
+
+    profiles = (
+        store.get('profiles')
+        or {}
+    )
+
+    if old_name not in profiles:
+        return jsonify(
+            ok=False,
+            error='not_found',
+            message='Subscription profile was not found.',
+        ), 404
+
+    if (
+        new_name != old_name
+        and new_name in profiles
+    ):
+        return jsonify(
+            ok=False,
+            error='exists',
+            message=(
+                'A subscription profile with that '
+                'name already exists.'
+            ),
+        ), 409
+
+    if new_name != old_name:
+        profiles[
+            new_name
+        ] = profiles.pop(
+            old_name
+        )
+
+    if (
+        store.get('active')
+        == old_name
+    ):
+        store[
+            'active'
+        ] = new_name
+
+    _save_subscription_profiles(
+        store
+    )
+
+    return jsonify(
+        ok=True,
+        old_name=old_name,
+        name=new_name,
+        active=(
+            store.get('active')
+            or ''
+        ),
+        profiles=(
+            _subscription_profile_rows(
+                store
+            )
+        ),
+    )
+
+
+@app.delete(
+    '/api/subscription_profiles/<path:profile_name>'
+)
+@login_required
+def subscription_profile_delete(profile_name):
+    clean_name = str(
+        profile_name or ''
+    ).strip()
+
+    store = (
+        _load_subscription_profiles()
+    )
+
+    profiles = (
+        store.get('profiles')
+        or {}
+    )
+
+    if clean_name not in profiles:
+        return jsonify(
+            ok=False,
+            error='not_found',
+            message='Subscription profile was not found.',
+        ), 404
+
+    profiles.pop(
+        clean_name,
+        None,
+    )
+
+    if (
+        store.get('active')
+        == clean_name
+    ):
+        remaining_names = sorted(
+            profiles.keys(),
+            key=str.lower,
+        )
+
+        store[
+            'active'
+        ] = (
+            remaining_names[0]
+            if remaining_names
+            else ''
+        )
+
+    _save_subscription_profiles(
+        store
+    )
+
+    return jsonify(
+        ok=True,
+        deleted=clean_name,
+        active=(
+            store.get('active')
+            or ''
+        ),
+        profiles=(
+            _subscription_profile_rows(
+                store
+            )
+        ),
+    )
 def _effective_dns(peer):
     return (peer.dns or getattr(peer.iface, 'dns', None) or _panel_default_dns())
 
@@ -1923,6 +2651,204 @@ def _load_tg_settings():
 _TG_EVENT_LOCK = threading.Lock()
 _TG_EVENT_LAST = {}
 
+def _tg_human_bytes(value) -> str:
+    try:
+        value = max(
+            0,
+            int(value or 0),
+        )
+    except Exception:
+        return '0 B'
+
+    units = (
+        'B',
+        'KiB',
+        'MiB',
+        'GiB',
+        'TiB',
+    )
+
+    amount = float(value)
+
+    for unit in units:
+        if (
+            amount < 1024
+            or unit == units[-1]
+        ):
+            if unit == 'B':
+                return f'{int(amount)} B'
+
+            if amount >= 100:
+                return f'{amount:.0f} {unit}'
+
+            if amount >= 10:
+                return f'{amount:.1f} {unit}'
+
+            return f'{amount:.2f} {unit}'
+
+        amount /= 1024.0
+
+    return f'{value} B'
+
+def _tg_human_duration(value) -> str:
+
+    try:
+        seconds = max(
+            0,
+            int(float(value or 0)),
+        )
+    except Exception:
+        return ''
+
+    days, rem = divmod(
+        seconds,
+        86400,
+    )
+
+    hours, rem = divmod(
+        rem,
+        3600,
+    )
+
+    minutes, secs = divmod(
+        rem,
+        60,
+    )
+
+    parts = []
+
+    if days:
+        parts.append(
+            f"{days} day"
+            + (
+                ""
+                if days == 1
+                else "s"
+            )
+        )
+
+    if hours:
+        parts.append(
+            f"{hours} hour"
+            + (
+                ""
+                if hours == 1
+                else "s"
+            )
+        )
+
+    if minutes:
+        parts.append(
+            f"{minutes} minute"
+            + (
+                ""
+                if minutes == 1
+                else "s"
+            )
+        )
+
+    if (
+        secs
+        and not days
+        and not hours
+    ):
+        parts.append(
+            f"{secs} second"
+            + (
+                ""
+                if secs == 1
+                else "s"
+            )
+        )
+
+    if not parts:
+        return "0 seconds"
+
+    return " ".join(
+        parts[:3]
+    )
+
+
+def _tg_human_datetime(value) -> str:
+ 
+    if value in (
+        None,
+        '',
+    ):
+        return ''
+
+    parsed = None
+
+    if isinstance(
+        value,
+        datetime,
+    ):
+        parsed = value
+
+    elif isinstance(
+        value,
+        (int, float),
+    ):
+        try:
+            parsed = datetime.fromtimestamp(
+                float(value),
+                tz=timezone.utc,
+            )
+        except Exception:
+            return str(value)
+
+    else:
+        raw = str(
+            value
+        ).strip()
+
+        if not raw:
+            return ''
+
+        try:
+            if re.fullmatch(
+                r'\d+(?:\.\d+)?',
+                raw,
+            ):
+                parsed = datetime.fromtimestamp(
+                    float(raw),
+                    tz=timezone.utc,
+                )
+
+            else:
+                normalized = raw
+
+                if normalized.endswith(
+                    'Z'
+                ):
+                    normalized = (
+                        normalized[:-1]
+                        + '+00:00'
+                    )
+
+                parsed = datetime.fromisoformat(
+                    normalized
+                )
+
+        except Exception:
+            return raw
+
+    if parsed is None:
+        return str(value)
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(
+            tzinfo=timezone.utc
+        )
+
+    else:
+        parsed = parsed.astimezone(
+            timezone.utc
+        )
+
+    return parsed.strftime(
+        '%d %b %Y, %H:%M UTC'
+    )
 
 def _tg_event_escape(value) -> str:
     import html
@@ -1958,13 +2884,7 @@ def _send_telegram_event(
     dedupe_key: str = '',
     dedupe_seconds: int = 60,
 ) -> None:
-    """
-    Send one operational Telegram event.
 
-    Telegram credentials remain on the panel. This function never sends
-    credentials to a remote node.
-
-    """
     event_key = str(
         event_key or ''
     ).strip()
@@ -1972,10 +2892,15 @@ def _send_telegram_event(
     if not event_key:
         return
 
-    if not _tg_event_enabled(event_key):
+    if not _tg_event_enabled(
+        event_key
+    ):
         return
 
-    settings = _load_tg_settings() or {}
+    settings = (
+        _load_tg_settings()
+        or {}
+    )
 
     bot_token = (
         settings.get('bot_token')
@@ -2012,7 +2937,9 @@ def _send_telegram_event(
         ).strip(),
     )
 
-    monotonic_now = time.monotonic()
+    monotonic_now = (
+        time.monotonic()
+    )
 
     with _TG_EVENT_LOCK:
         previous_time = float(
@@ -2024,8 +2951,12 @@ def _send_telegram_event(
 
         if (
             dedupe_seconds > 0
-            and monotonic_now - previous_time
-            < dedupe_seconds
+            and previous_time
+            and (
+                monotonic_now
+                - previous_time
+                < dedupe_seconds
+            )
         ):
             return
 
@@ -2042,30 +2973,77 @@ def _send_telegram_event(
             for old_key, old_time in list(
                 _TG_EVENT_LAST.items()
             ):
-                if float(
-                    old_time or 0
-                ) < expiry_time:
+                if (
+                    float(
+                        old_time
+                        or 0
+                    )
+                    < expiry_time
+                ):
                     _TG_EVENT_LAST.pop(
                         old_key,
                         None,
                     )
 
-    timestamp = datetime.now(
-        timezone.utc
-    ).strftime(
-        '%Y-%m-%d %H:%M:%S UTC'
+    # -----------------
+    # Monochrome icons
+    # -----------------
+
+    icon_map = {
+        'app_down': '⊘',
+        'app_up': '●',
+
+        'node_down': '○',
+        'node_up': '●',
+
+        'iface_down': '○',
+        'iface_up': '●',
+
+        'peer_expired': '◇',
+        'peer_limit': '◆',
+
+        'login_success': '●',
+        'login_fail': '⊘',
+        'suspicious_4xx': '◆',
+
+        'backup_success': '●',
+        'backup_failed': '⊘',
+
+        'update_success': '●',
+        'update_failed': '⊘',
+    }
+
+    icon = icon_map.get(
+        event_key,
+        '◇',
     )
 
-    message_lines = [
-        f'<b>{_tg_event_escape(title)}</b>',
+    clean_title = re.sub(
+        r'^[●○◆◇◷⌂⊘✦↥↻]+\s*',
         '',
-    ]
+        str(
+            title or ''
+        ).strip(),
+    )
 
-    if status:
-        message_lines.append(
-            '◆ <b>Status</b>  '
-            f'{_tg_event_escape(status)}'
+    clean_status = str(
+        status or ''
+    ).strip()
+
+    timestamp = (
+        _tg_human_datetime(
+            datetime.now(
+                timezone.utc
+            )
         )
+    )
+
+    hostname = str(
+        socket.gethostname()
+        or 'panel'
+    ).strip()
+
+    rows = []
 
     for label, value in (
         details or []
@@ -2076,19 +3054,64 @@ def _send_telegram_event(
         ):
             continue
 
+        clean_label = str(
+            label or ''
+        ).strip()
+
+        clean_value = str(
+            value
+        ).strip()
+
+        if not clean_label or not clean_value:
+            continue
+
+        rows.append(
+            (
+                clean_label,
+                clean_value,
+            )
+        )
+
+    # -------------------------
+    # mobile-friendly layout
+    # -------------------------
+
+    message_lines = [
+        (
+            f'{icon} '
+            f'<b>{_tg_event_escape(clean_title)}</b>'
+        )
+    ]
+
+    if (
+        clean_status
+        or rows
+    ):
+        message_lines.append('')
+
+    if clean_status:
         message_lines.append(
-            f'◇ <b>{_tg_event_escape(label)}</b>  '
-            f'<code>{_tg_event_escape(value)}</code>'
+            (
+                '<b>Status</b> · '
+                f'{_tg_event_escape(clean_status)}'
+            )
+        )
+
+    for label, value in rows:
+        message_lines.append(
+            (
+                f'<b>{_tg_event_escape(label)}</b> · '
+                f'{_tg_event_escape(value)}'
+            )
         )
 
     message_lines.extend([
+        '',
         (
-            '◷ <b>Time</b>  '
-            f'<code>{_tg_event_escape(timestamp)}</code>'
-        ),
-        (
-            '⌂ <b>Panel host</b>  '
-            f'<code>{_tg_event_escape(socket.gethostname())}</code>'
+            '◷ '
+            f'{_tg_event_escape(timestamp)}'
+            ' · '
+            f'{_tg_event_escape(hostname)}'
         ),
     ])
 
@@ -2122,8 +3145,10 @@ def _send_telegram_event(
                     if not response.ok:
                         flask_app.logger.warning(
                             'Telegram event failed: '
-                            'event=%s chat_id=%s '
-                            'status=%s response=%s',
+                            'event=%s '
+                            'chat_id=%s '
+                            'status=%s '
+                            'response=%s',
                             event_key,
                             chat_id,
                             response.status_code,
@@ -2133,7 +3158,8 @@ def _send_telegram_event(
                 except Exception:
                     flask_app.logger.debug(
                         'Telegram event failed: '
-                        'event=%s chat_id=%s',
+                        'event=%s '
+                        'chat_id=%s',
                         event_key,
                         chat_id,
                         exc_info=True,
@@ -2537,8 +3563,10 @@ def _record_suspicious_4xx(
                 request_count,
             ),
             (
-                "Window seconds",
-                _HTTP_4XX_WINDOW_SEC,
+            "Window",
+            _tg_human_duration(
+            _HTTP_4XX_WINDOW_SEC
+            ),
             ),
             (
                 "Statuses",
@@ -2723,10 +3751,15 @@ def _local_notification_states() -> dict:
 def _check_local_notifications(
     state: dict,
 ) -> None:
-    local_key = '__local_interfaces__'
+
+    local_key = (
+        '__local_interfaces__'
+    )
 
     previous_interfaces = (
-        state.get(local_key)
+        state.get(
+            local_key
+        )
         or {}
     )
 
@@ -2734,75 +3767,213 @@ def _check_local_notifications(
         _local_notification_states()
     )
 
+    next_interfaces = {}
+
+    # Two consecutive monitor readings must agree before
+    # a state transition becomes official.
+    confirmation_checks = 2
+
     for interface_name, current in (
         current_interfaces.items()
     ):
-        current_up = bool(
-            current.get('is_up')
+        observed_up = bool(
+            current.get(
+                'is_up'
+            )
         )
 
-        old_record = (
+        previous = (
             previous_interfaces.get(
                 interface_name
             )
         )
 
-        if not isinstance(old_record, dict):
+        # First observation:
+        # establish state silently.
+        if not isinstance(
+            previous,
+            dict,
+        ):
+            next_interfaces[
+                interface_name
+            ] = {
+                'is_up': observed_up,
+                'pending_state': None,
+                'pending_checks': 0,
+                'address': (
+                    current.get(
+                        'address'
+                    )
+                    or ''
+                ),
+                'listen_port': (
+                    current.get(
+                        'listen_port'
+                    )
+                ),
+            }
+
             continue
 
-        previous_up = bool(
-            old_record.get('is_up')
+        confirmed_up = bool(
+            previous.get(
+                'is_up'
+            )
         )
 
-        if previous_up and not current_up:
-            _send_telegram_event(
-                'iface_down',
-                '● WireGuard interface went down',
-                status='Down',
-                details=[
-                    ('Location', 'Local panel'),
-                    ('Interface', interface_name),
-                    (
-                        'Address',
-                        current.get('address'),
-                    ),
-                    (
-                        'Listen port',
-                        current.get('listen_port'),
-                    ),
-                ],
-                dedupe_key=(
-                    f'local-interface-down:'
-                    f'{interface_name}'
-                ),
-                dedupe_seconds=180,
+        pending_state = (
+            previous.get(
+                'pending_state'
             )
+        )
 
-        elif not previous_up and current_up:
-            _send_telegram_event(
-                'iface_up',
-                '● WireGuard interface came up',
-                status='Up',
-                details=[
-                    ('Location', 'Local panel'),
-                    ('Interface', interface_name),
-                    (
-                        'Address',
-                        current.get('address'),
-                    ),
-                    (
-                        'Listen port',
-                        current.get('listen_port'),
-                    ),
-                ],
-                dedupe_key=(
-                    f'local-interface-up:'
-                    f'{interface_name}'
-                ),
-                dedupe_seconds=60,
+        try:
+            pending_checks = int(
+                previous.get(
+                    'pending_checks'
+                )
+                or 0
             )
+        except Exception:
+            pending_checks = 0
 
-    state[local_key] = current_interfaces
+        if observed_up == confirmed_up:
+            pending_state = None
+            pending_checks = 0
+
+        else:
+            if (
+                pending_state
+                == observed_up
+            ):
+                pending_checks += 1
+
+            else:
+                pending_state = (
+                    observed_up
+                )
+
+                pending_checks = 1
+
+            if (
+                pending_checks
+                >= confirmation_checks
+            ):
+                old_up = confirmed_up
+
+                confirmed_up = (
+                    observed_up
+                )
+
+                pending_state = None
+                pending_checks = 0
+
+                if (
+                    old_up
+                    and not confirmed_up
+                ):
+                    _send_telegram_event(
+                        'iface_down',
+                        (
+                            'WireGuard interface '
+                            'went offline'
+                        ),
+                        status='Offline',
+                        details=[
+                            (
+                                'Location',
+                                'Local panel',
+                            ),
+                            (
+                                'Interface',
+                                interface_name,
+                            ),
+                            (
+                                'Address',
+                                current.get(
+                                    'address'
+                                ),
+                            ),
+                            (
+                                'Listen port',
+                                current.get(
+                                    'listen_port'
+                                ),
+                            ),
+                        ],
+                        dedupe_key=(
+                            'local-interface-down:'
+                            f'{interface_name}'
+                        ),
+                        dedupe_seconds=300,
+                    )
+
+                elif (
+                    not old_up
+                    and confirmed_up
+                ):
+                    _send_telegram_event(
+                        'iface_up',
+                        (
+                            'WireGuard interface '
+                            'came online'
+                        ),
+                        status='Online',
+                        details=[
+                            (
+                                'Location',
+                                'Local panel',
+                            ),
+                            (
+                                'Interface',
+                                interface_name,
+                            ),
+                            (
+                                'Address',
+                                current.get(
+                                    'address'
+                                ),
+                            ),
+                            (
+                                'Listen port',
+                                current.get(
+                                    'listen_port'
+                                ),
+                            ),
+                        ],
+                        dedupe_key=(
+                            'local-interface-up:'
+                            f'{interface_name}'
+                        ),
+                        dedupe_seconds=120,
+                    )
+
+        next_interfaces[
+            interface_name
+        ] = {
+            'is_up': confirmed_up,
+            'pending_state': (
+                pending_state
+            ),
+            'pending_checks': (
+                pending_checks
+            ),
+            'address': (
+                current.get(
+                    'address'
+                )
+                or ''
+            ),
+            'listen_port': (
+                current.get(
+                    'listen_port'
+                )
+            ),
+        }
+
+    state[
+        local_key
+    ] = next_interfaces
 
 
 def _check_node_notifications(
@@ -2871,7 +4042,6 @@ def _check_node_notifications(
                 )
 
                 if online_now:
-               # New node agents include interface state directly
                # in /api/health. avoid response
                     if isinstance(health,dict,):
                         health_interfaces = (health.get("interfaces"))
@@ -2879,7 +4049,7 @@ def _check_node_notifications(
                         if isinstance(health_interfaces,list,):
                             interfaces = (health_interfaces)
 
-                    # Compatibility fallback for older node agents
+                    # fallback for older node agents
                     if not interfaces:
                         try:
                             interface_response = (node_get(node,"/api/interfaces?fast=1",timeout=10,)or {})
@@ -2979,9 +4149,7 @@ def _check_node_notifications(
                         node.base_url,
                     ),
                     (
-                        'Outage seconds',
-                        outage_seconds,
-                    ),
+                    'Outage',_tg_human_duration(outage_seconds),),
                     (
                         'Remote host',
                         (
@@ -3703,60 +4871,37 @@ def _send_security_notification(
     username: str = '',
     reason: str = '',
 ) -> None:
+    """
+    Send panel login / 2FA security notifications
+
+    Supported event types:
+        login_success
+        login_failed
+        twofa_failed
+        - Telegram bot token
+        - Admin recipients
+        - Muted admins
+        - HTML escaping
+        - notification timestamp
+        - Background sending
+        - Deduplication
+
+    """
 
     if not _security_notify_enabled(
         event_type
     ):
         return
 
-    settings = _load_tg_settings()
-
-    bot_token = (
-        settings.get('bot_token')
-        or ''
-    ).strip()
-
-    recipients = [
-        str(admin.get('id') or '').strip()
-        for admin in (
-            _load_tg_admins()
-            or []
-        )
-        if (
-            str(
-                admin.get('id')
-                or ''
-            ).strip()
-            and not admin.get('muted')
-        )
-    ]
-
-    if not bot_token or not recipients:
-        return
-
+    # ----------------------------
+    # Request/client information
+    # ----------------------------
     client_ip, proxy_chain = (
         _request_client_ip()
     )
 
     device_summary, raw_user_agent = (
         _request_device_summary()
-    )
-
-    timestamp = datetime.now(
-        timezone.utc
-    ).strftime(
-        '%Y-%m-%d %H:%M:%S UTC'
-    )
-
-    panel_host = (
-        request.host
-        or 'unknown'
-    ).strip()
-
-    scheme = (
-        'HTTPS'
-        if _is_https()
-        else 'HTTP'
     )
 
     username = (
@@ -3769,172 +4914,159 @@ def _send_security_notification(
         or ''
     ).strip()[:300]
 
-    if event_type != 'login_success':
-        deduplication_key = (
-            event_type,
-            client_ip,
-            username,
-            reason,
-        )
+    client_ip = (
+        client_ip
+        or 'unknown'
+    ).strip()[:128]
 
-        current_time = time.monotonic()
+    proxy_chain = (
+        proxy_chain
+        or ''
+    ).strip()[:400]
 
-        with _SECURITY_NOTIFY_LOCK:
-            previous_time = float(
-                _SECURITY_NOTIFY_LAST.get(
-                    deduplication_key
-                )
-                or 0
-            )
+    device_summary = (
+        device_summary
+        or 'Unknown device'
+    ).strip()[:200]
 
-            if (
-                current_time
-                - previous_time
-                < 10
-            ):
-                return
+    raw_user_agent = (
+        raw_user_agent
+        or ''
+    ).strip()[:500]
 
-            _SECURITY_NOTIFY_LAST[
-                deduplication_key
-            ] = current_time
+    panel_host = (
+        request.host
+        or 'unknown'
+    ).strip()[:255]
 
-            if len(
-                _SECURITY_NOTIFY_LAST
-            ) > 500:
-                expiry = (
-                    current_time
-                    - 3600
-                )
-
-                for key, value in list(
-                    _SECURITY_NOTIFY_LAST.items()
-                ):
-                    if float(
-                        value or 0
-                    ) < expiry:
-                        _SECURITY_NOTIFY_LAST.pop(
-                            key,
-                            None,
-                        )
+    scheme = (
+        'HTTPS'
+        if _is_https()
+        else 'HTTP'
+    )
 
     if event_type == 'login_success':
-        title = '● Panel login accepted'
-        status = 'Authenticated'
+        event_key = (
+            'login_success'
+        )
+
+        title = (
+            'Panel login accepted'
+        )
+
+        status = (
+            'Authenticated'
+        )
+
+        dedupe_seconds = 0
 
     elif event_type == 'twofa_failed':
-        title = (
-            '⊘ Two-factor verification rejected'
+        event_key = (
+            'login_fail'
         )
-        status = 'Access denied'
+
+        title = (
+            'Two-factor verification rejected'
+        )
+
+        status = (
+            'Access denied'
+        )
+
+        dedupe_seconds = 10
+
+    elif event_type == 'login_failed':
+        event_key = (
+            'login_fail'
+        )
+
+        title = (
+            'Panel login rejected'
+        )
+
+        status = (
+            'Access denied'
+        )
+
+        dedupe_seconds = 10
 
     else:
-        title = '⊘ Panel login rejected'
-        status = 'Access denied'
 
-    message_lines = [
-        f'<b>{title}</b>',
-        '',
+        current_app.logger.debug(
+            'Unknown security notification event: %s',
+            event_type,
+        )
+
+        return
+
+    # ---------------------
+    # Notification details
+    # ---------------------
+    details = [
         (
-            '◇ <b>Account</b>  '
-            f'<code>{_security_html_escape(username)}</code>'
+            'Account',
+            username,
         ),
         (
-            '⌁ <b>Client IP</b>  '
-            f'<code>{_security_html_escape(client_ip)}</code>'
+            'Client IP',
+            client_ip,
         ),
         (
-            '▦ <b>Device</b>  '
-            f'{_security_html_escape(device_summary)}'
+            'Device',
+            device_summary,
         ),
         (
-            '◷ <b>Time</b>  '
-            f'<code>{_security_html_escape(timestamp)}</code>'
-        ),
-        (
-            '◆ <b>Status</b>  '
-            f'{_security_html_escape(status)}'
-        ),
-        (
-            '⌂ <b>Panel</b>  '
-            f'<code>{_security_html_escape(panel_host)}</code>'
-            f' · {scheme}'
+            'Panel address',
+            (
+                f'{panel_host} · {scheme}'
+            ),
         ),
     ]
 
     if reason:
-        message_lines.append(
-            '✦ <b>Reason</b>  '
-            f'{_security_html_escape(reason)}'
+        details.append(
+            (
+                'Reason',
+                reason,
+            )
         )
 
     if (
         proxy_chain
         and proxy_chain != client_ip
     ):
-        message_lines.append(
-            '↪ <b>Proxy chain</b>  '
-            f'<code>{_security_html_escape(proxy_chain[:400])}</code>'
+        details.append(
+            (
+                'Proxy chain',
+                proxy_chain,
+            )
         )
 
-    message_lines.extend([
-        '',
-        (
-            '<code>'
-            f'{_security_html_escape(raw_user_agent)}'
-            '</code>'
+    if raw_user_agent:
+        details.append(
+            (
+                'User agent',
+                raw_user_agent,
+            )
+        )
+
+    _send_telegram_event(
+        event_key,
+        title,
+        status=status,
+        details=details,
+
+        dedupe_key=(
+            f'{event_type}:'
+            f'{client_ip}:'
+            f'{username}:'
+            f'{reason}'
         ),
-    ])
 
-    message = '\n'.join(
-        message_lines
+        dedupe_seconds=(
+            dedupe_seconds
+        ),
     )
-
-    flask_app = (
-        current_app
-        ._get_current_object()
-    )
-
-    def notification_worker():
-        with flask_app.app_context():
-            for chat_id in recipients:
-                try:
-                    response = requests.post(
-                        (
-                            'https://api.telegram.org/'
-                            f'bot{bot_token}/sendMessage'
-                        ),
-                        json={
-                            'chat_id': chat_id,
-                            'text': message,
-                            'parse_mode': 'HTML',
-                            'disable_web_page_preview': True,
-                        },
-                        timeout=8,
-                    )
-
-                    if not response.ok:
-                        flask_app.logger.warning(
-                            'Telegram security notification '
-                            'failed: chat_id=%s status=%s '
-                            'response=%s',
-                            chat_id,
-                            response.status_code,
-                            response.text[:300],
-                        )
-
-                except Exception:
-                    flask_app.logger.debug(
-                        'Telegram security notification '
-                        'failed for chat_id=%s',
-                        chat_id,
-                        exc_info=True,
-                    )
-
-    threading.Thread(
-        target=notification_worker,
-        name='telegram-security-alert',
-        daemon=True,
-    ).start()
 
 @app.route('/api/telegram/test', methods=['POST'])
 @login_required
@@ -7195,9 +8327,6 @@ def backup_schedule_post():
     s["next_run"] = _next_run(s)
     return jsonify(ok=True, **s)
 
-# ------------------------------------------------------------------
-# Real auto-backup scheduler
-# ------------------------------------------------------------------
 
 _BACKUP_SCHEDULER_STARTED = False
 _BACKUP_SCHEDULER_INTERVAL_SEC = 30
@@ -8463,56 +9592,182 @@ def _wg_handshake(peer):
         return 0
 
 def _wireguard_endpoint(value: str) -> str:
+    """
+    Accepted:
+        1.2.3.4:51820
+        example.com:51820
+        [2001:db8::1]:51820
+        DNS resolution belongs to the runtime
+    """
 
-    raw = (value or "").strip()
+    raw = str(value or '').strip()
 
     if not raw:
-        return ""
+        return ''
 
     try:
         host, port = _host_port(raw)
 
+        host = str(host or '').strip()
+        port = str(port or '').strip()
+
         if not host or not port:
             raise ValueError(
-                "Fixed client endpoint must use host:port format."
-            )
-
-        port = int(port)
-
-        if not 1 <= port <= 65535:
-            raise ValueError(
-                "Fixed client endpoint port must be between 1 and 65535."
+                'Fixed client endpoint must use host:port format.'
             )
 
         try:
-            address = ipaddress.ip_address(host).compressed
-            return _norm_hostport(address, port)
+            port = int(port)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                'Fixed client endpoint port must be a number.'
+            ) from exc
+
+        if not 1 <= port <= 65535:
+            raise ValueError(
+                'Fixed client endpoint port must be between 1 and 65535.'
+            )
+
+
+        try:
+            address = ipaddress.ip_address(
+                host.strip('[]')
+            )
+
+            return _norm_hostport(
+                address.compressed,
+                port,
+            )
+
         except ValueError:
             pass
 
+        # -----------------------------------------------------
+        # Hostname
+        #
+        # Validate the hostname syntax only.
+        # DO NOT require it to resolve while saving the peer.
+        # -----------------------------------------------------
+        hostname = host.rstrip('.')
+
+        if (
+            not hostname
+            or len(hostname) > 253
+        ):
+            raise ValueError(
+                'Fixed client endpoint hostname is invalid.'
+            )
+
+        labels = hostname.split('.')
+
+        for label in labels:
+            if (
+                not label
+                or len(label) > 63
+                or not re.fullmatch(
+                    r'[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?',
+                    label,
+                )
+            ):
+                raise ValueError(
+                    'Fixed client endpoint hostname is invalid.'
+                )
+
+        # Preserve hostname instead of converting it to an IP.
+        return _norm_hostport(
+            hostname,
+            port,
+        )
+
+    except Exception as exc:
+        raise RuntimeError(
+            f'Invalid fixed client endpoint: {raw}. {exc}'
+        ) from exc
+
+def _wireguard_runtime_endpoint(value: str) -> str:
+    """
+    Resolve a fixed WG endpoint
+
+    Persistent/database value remains the original hostname.
+
+    Example:
+        stored:
+            vpn.example.com:51820
+
+        runtime:
+            203.0.113.20:51820
+    """
+
+    endpoint = _wireguard_endpoint(
+        value
+    )
+
+    if not endpoint:
+        return ''
+
+    host, port = _host_port(
+        endpoint
+    )
+
+    host = str(
+        host or ''
+    ).strip().strip('[]')
+
+    port = int(port)
+
+    # Already an IP address.
+    try:
+        address = ipaddress.ip_address(
+            host
+        )
+
+        return _norm_hostport(
+            address.compressed,
+            port,
+        )
+
+    except ValueError:
+        pass
+
+    try:
         results = socket.getaddrinfo(
             host,
             port,
             type=socket.SOCK_DGRAM,
         )
 
-        if not results:
-            raise ValueError(
-                f"Could not resolve fixed client endpoint domain: {host}"
+    except socket.gaierror as exc:
+        raise RuntimeError(
+            (
+                'Fixed client endpoint DNS lookup failed: '
+                f'{host}. {exc}'
             )
+        ) from exc
 
-        resolved_ip = results[0][4][0]
-
-        return _norm_hostport(
-            resolved_ip,
-            port,
+    if not results:
+        raise RuntimeError(
+            f'Fixed client endpoint DNS lookup returned no addresses: {host}'
         )
 
-    except Exception as exc:
-        raise RuntimeError(
-            f"Fixed client endpoint could not be resolved: {raw}. {exc}"
-        ) from exc
-    
+    ipv4 = next(
+        (
+            result[4][0]
+            for result in results
+            if result[0] == socket.AF_INET
+        ),
+        None,
+    )
+
+    resolved = (
+        ipv4
+        or results[0][4][0]
+    )
+
+    return _norm_hostport(
+        resolved,
+        port,
+    )
+
 def _wg_enable(peer):
 
     dev = iface_devname(peer.iface)
@@ -8540,7 +9795,12 @@ def _wg_enable(peer):
     fixed_endpoint = (getattr(peer, "peer_endpoint", None)or "").strip()
 
     if fixed_endpoint:
-        cmd += ["endpoint",_wireguard_endpoint(fixed_endpoint),]
+        cmd += [
+        'endpoint',
+        _wireguard_runtime_endpoint(
+            fixed_endpoint
+        ),
+    ]
 
     if peer.persistent_keepalive:
         cmd += [
@@ -9752,19 +11012,9 @@ def _read_iface_conf(conf_path: str | None) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Address allocation contract
-# ---------------------------------------------------------------------------
-# One allocator, used by every path that can create a peer: the /users form,
-# /api/peers, /api/peers/bulk, subscription inbound creation and node create.
-#
-# Vocabulary (see wg-quick(8)): `Address` belongs to the INTERFACE, a peer's
-# `AllowedIPs` selects traffic for that peer. The interface host address is
-# therefore never a client address, and no placeholder peer is required at
-# interface creation.
-# ---------------------------------------------------------------------------
-
-# Upper bound on host enumeration so a /64 cannot hang a request.
+# ---------------------------
+# Address allocation
+# ---------------------------
 MAX_ENUMERATED_HOSTS = 8192
 
 
@@ -9776,21 +11026,18 @@ class AddressAllocationError(Exception):
 
 
 class AddressInvalid(AddressAllocationError):
-    """The requested address can never be used on this interface."""
 
     http_status = 400
     error_code = 'invalid_address'
 
 
 class AddressConflict(AddressAllocationError):
-    """The requested address is well formed but already reserved."""
 
     http_status = 409
     error_code = 'address_conflict'
 
 
 class AddressPoolExhausted(AddressConflict):
-    """The interface network has no free client address left."""
 
     error_code = 'address_pool_exhausted'
 
@@ -9801,11 +11048,7 @@ def _iface_is_node(iface) -> bool:
 
 
 def interface_ip_interface(iface):
-    """Return the interface's own ``ip_interface`` (host address + network).
 
-    For local interfaces the on-disk ``Address=`` wins over the database copy,
-    because the file is what ``wg-quick`` actually applies.
-    """
     if not iface:
         return None
 
@@ -9835,11 +11078,7 @@ def interface_ip_interface(iface):
 
 
 def _usable_hosts(net):
-    """Yield client-usable hosts of ``net``, bounded to keep requests cheap.
 
-    ``network.hosts()`` already handles the /31 and /32 (and /127, /128) edge
-    cases documented in the ``ipaddress`` module.
-    """
     for index, host in enumerate(net.hosts()):
         if index >= MAX_ENUMERATED_HOSTS:
             return
@@ -9847,11 +11086,7 @@ def _usable_hosts(net):
 
 
 def _db_peer_hosts(iface, exclude_peer_id=None):
-    """Canonical hosts recorded in the database for this interface.
 
-    Queried directly rather than through ``iface.peers`` so that peers added
-    earlier in the same transaction (autoflushed) are taken into account.
-    """
     hosts = set()
     iface_id = getattr(iface, 'id', None)
     if not iface_id:
@@ -9869,11 +11104,7 @@ def _db_peer_hosts(iface, exclude_peer_id=None):
 
 
 def _reserved_hosts(iface, ip_iface, *, exclude_peer_id=None, exclude_address=None, extra=()):
-    """Every host address that must not be handed to a new peer.
 
-    ``exclude_address`` releases a peer's own current host so that re-saving it
-    unchanged is not reported as a conflict with itself.
-    """
     net = ip_iface.network
     reserved = {ip_iface.ip}
 
@@ -9902,7 +11133,6 @@ def _reserved_hosts(iface, ip_iface, *, exclude_peer_id=None, exclude_address=No
 
 
 def _validate_requested_host(ip_iface, requested):
-    """Parse an explicitly requested client address, or return ``None``."""
     text = str(requested or '').strip()
     if not text:
         return None
@@ -9935,12 +11165,7 @@ def _validate_requested_host(ip_iface, requested):
 
 def allocate_peer_address(iface, requested=None, *, exclude_peer_id=None,
                           exclude_address=None, extra_reserved=()):
-    """Return the client address (``host/prefix``) to give a peer.
 
-    ``AddressInvalid`` (400) means the input can never work on this interface;
-    ``AddressConflict`` / ``AddressPoolExhausted`` (409) mean it is well formed
-    but unavailable. Nothing is mutated - callers install the peer themselves.
-    """
     ip_iface = interface_ip_interface(iface)
     if ip_iface is None:
         raise AddressInvalid(
@@ -9971,16 +11196,11 @@ def allocate_peer_address(iface, requested=None, *, exclude_peer_id=None,
 
 
 def address_error_response(exc: AddressAllocationError):
-    """Turn an allocation failure into the documented 400/409 JSON response."""
     return jsonify(error=exc.error_code, detail=str(exc)), exc.http_status
 
 
 def client_address_on(iface, value):
-    """Re-express a host address with the interface's own prefix length.
 
-    A node reports a peer as ``10.77.77.2/32`` (its ``AllowedIPs``), but the
-    client's ``Address=`` must carry the interface prefix.
-    """
     host = _safe_ip(value)
     if host is None:
         return None
@@ -9993,12 +11213,7 @@ def client_address_on(iface, value):
 
 
 class NodePeerInstallError(Exception):
-    """The node refused or failed to install the peer.
 
-    ``code`` is the stable API error code surfaced in the JSON response; it is
-    used instead of ``str(exc)`` so a future message change cannot turn a
-    machine-readable code into prose (see finding #15).
-    """
 
     def __init__(self, code, status=502, detail='', message=None):
         super().__init__(message or code)
@@ -10010,30 +11225,7 @@ class NodePeerInstallError(Exception):
 def node_install_peer(node, iface_name, mirror, *, public_key, requested_address=None,
                       peer_endpoint='', keepalive=0, mtu=None, dns=None,
                       allowed_ips='0.0.0.0/0, ::/0', attempts=3):
-    """Install a peer on a node and return the address the node assigned.
 
-    The node agent allocates under its own per-interface lock, which is the
-    only place that can see that node's live runtime and config, so we let it
-    choose unless the caller supplied an address. A validated explicit address
-    is still honoured for backward compatibility, and a host conflict is
-    retried a bounded number of times against fresh data.
-
-    Two distinct 409s come back from the agent and must not be conflated:
-
-    * ``address_pool_exhausted`` -- the network has no free host. Not retryable;
-      mapped to the documented ``409 address_pool_exhausted`` so the client
-      does not see a misleading ``node_create_failed``.
-    * ``host_cidr_already_used`` -- someone took this exact host between our
-      pick and the install. Retryable when the caller did not pin an address.
-
-    When the caller *did* pin an address, a 409 collision is surfaced as-is
-    rather than papered over with a different address: returning a different
-    address with HTTP 200 would violate the "supply ``address`` to pin one"
-    contract documented in api_docs.html (finding #8).
-
-    ``peer_endpoint`` is a fixed remote-client endpoint. The node's own public
-    endpoint must never be sent here: that is client-facing data.
-    """
     host_cidr = None
     if requested_address:
         # Raises AddressInvalid / AddressConflict, which the caller maps to 400/409.
@@ -10061,10 +11253,6 @@ def node_install_peer(node, iface_name, mirror, *, public_key, requested_address
             body = getattr(getattr(e, 'response', None), 'text', '') or ''
             agent_code = _node_agent_error_code(getattr(e, 'response', None))
 
-            # The pool is genuinely empty. Never retry; let the caller surface
-            # the documented address_pool_exhausted code. The second clause is
-            # the fallback for an older agent that has no structured `error`
-            # code and only says "pool" in prose.
             if (
                 agent_code == 'address_pool_exhausted'
                 or (status == 409 and not host_cidr and 'pool' in body)
@@ -10074,20 +11262,15 @@ def node_install_peer(node, iface_name, mirror, *, public_key, requested_address
                     f'The node interface {iface_name} has no free client address.',
                 )
 
-            # An explicit address collided: surface it instead of substituting.
             if requested_address and status in (400, 409):
                 raise NodePeerInstallError(
                     'address_conflict', 409,
                     f'The requested address is not available on {iface_name}.',
                 )
 
-            # Older agent that still needs host_cidr in the payload: supply one
-            # and retry. Only when the caller did not pin an address.
             needs_panel_side_address = (
                 status == 400 and not host_cidr and 'host_cidr' in body
             )
-            # A peer took our auto-picked host between pick and install: re-pick
-            # and retry. Bounded by `attempts`; not done for explicit requests.
             retryable_conflict = (
                 agent_code == 'host_cidr_already_used'
                 and not requested_address
@@ -10103,8 +11286,6 @@ def node_install_peer(node, iface_name, mirror, *, public_key, requested_address
         except NodePeerInstallError:
             raise
         except AddressAllocationError:
-            # _node_pick_available_ip / allocate_peer_address can raise these;
-            # let them propagate so the caller maps them via address_error_response.
             raise
         except Exception as e:
             raise NodePeerInstallError('node_create_failed', 502, str(e))
@@ -10134,7 +11315,6 @@ def node_install_peer(node, iface_name, mirror, *, public_key, requested_address
 
 
 def node_reapply_peer(peer):
-    """Upsert a panel peer into its node's runtime and durable config."""
     iface = getattr(peer, 'iface', None)
     node = getattr(iface, 'node', None)
     if iface is None or node is None:
@@ -10176,12 +11356,7 @@ def node_reapply_peer(peer):
 
 
 def _node_agent_error_code(response):
-    """Best-effort parse of the agent's structured ``error`` code from a 4xx/5xx body.
 
-    The agent returns ``{"error": "...", "detail": "..."}``. Older agents or
-    proxies may return plain text, in which case ``''`` is returned and callers
-    fall back to substring matching.
-    """
     if response is None:
         return ''
     try:
@@ -10194,7 +11369,6 @@ def _node_agent_error_code(response):
 
 
 def _node_pick_available_ip(node, iface_name, mirror):
-    """Ask a node for a free address, falling back to the panel's mirror view."""
     try:
         available = node_get(node, f'/api/iface/{iface_name}/available_ips')
         if isinstance(available, dict):
@@ -10215,7 +11389,6 @@ def _node_pick_available_ip(node, iface_name, mirror):
 
 def ensure_node_mirror_iface(node, iface_name, remote_iface=None, *, mtu=None, dns=None,
                              listen_port=None, server_cidr=None):
-    """Return (creating or refreshing) the panel's mirror row for a node interface."""
     remote_iface = remote_iface or {}
     db_iface_name = f'n{node.id}:{iface_name}'
     iface = InterfaceConfig.query.filter_by(name=db_iface_name).first()
@@ -10266,13 +11439,7 @@ def ensure_node_mirror_iface(node, iface_name, remote_iface=None, *, mtu=None, d
 
 
 def resolve_requested_peer_address(iface, value, *, allow_legacy_interface_address=False):
-    """Validate a requested peer address without silently reinterpreting it.
 
-    Only the legacy generic ``address`` field may contain the interface's own
-    ``Address`` value; callers opt into ignoring that exact value. The explicit
-    ``peer_address`` field is always strict, so malformed or reserved input is
-    returned as a structured 400 instead of unexpectedly auto-allocating.
-    """
     text = str(value or '').strip()
     if not text:
         return None
@@ -10294,7 +11461,6 @@ def resolve_requested_peer_address(iface, value, *, allow_legacy_interface_addre
 
 
 def requested_peer_address_from_target(iface, target):
-    """Resolve strict ``peer_address`` before the legacy ``address`` alias."""
     explicit = str((target or {}).get('peer_address') or '').strip()
     if explicit:
         return resolve_requested_peer_address(iface, explicit)
@@ -10307,7 +11473,6 @@ def requested_peer_address_from_target(iface, target):
 
 
 def peer_address_host(address):
-    """Canonical host string stored in ``Peer.address_host`` (``None`` if unparseable)."""
     host = _safe_ip(address)
     return str(host) if host is not None else None
 
@@ -10315,17 +11480,7 @@ def peer_address_host(address):
 @event.listens_for(Peer, 'before_insert')
 @event.listens_for(Peer, 'before_update')
 def _keep_peer_address_host_in_sync(mapper, connection, target):
-    """Derive the canonical host from ``address`` on every write.
-
-    Doing it here means the uniqueness invariant holds for every code path,
-    including direct edits through /api/peer/<id>.
-
-    Note: ``address_host`` is a derived, system-owned column. It must never be
-    hand-edited: this listener unconditionally re-derives it from ``address``,
-    so a manual fix to ``address_host`` alone is reverted on the next unrelated
-    edit of the row (review finding #5). Recover from duplicate hosts via the
-    migration in ``_backfill_peer_address_hosts``, which blanks the losers.
-    """
+  
     target.address_host = peer_address_host(target.address)
 
 
@@ -10334,12 +11489,7 @@ _ALLOC_LOCK_DIR = os.path.join(app.instance_path, 'locks')
 
 @contextmanager
 def interface_allocation_lock(iface):
-    """Serialise allocate-then-install for one interface across workers.
-
-    A plain database read cannot prevent two gunicorn workers from picking the
-    same free host, so the whole critical section is guarded by a per-interface
-    ``flock``. The database unique constraint is the backstop.
-    """
+ 
     name = re.sub(r'[^A-Za-z0-9_.:-]+', '_', str(getattr(iface, 'name', '') or 'iface'))
     handle = None
     try:
@@ -10347,8 +11497,6 @@ def interface_allocation_lock(iface):
         handle = open(os.path.join(_ALLOC_LOCK_DIR, f'{name}.alloc.lock'), 'w')
         fcntl.flock(handle, fcntl.LOCK_EX)
     except Exception:
-        # A missing lock file must not stop peer creation; the unique
-        # constraint still rejects a duplicate host.
         current_app.logger.warning('Could not take allocation lock for %s', name, exc_info=True)
         handle = None
 
@@ -10364,11 +11512,7 @@ def interface_allocation_lock(iface):
 
 
 def _available_ips(iface, limit=MAX_ENUMERATED_HOSTS):
-    """Free client addresses on ``iface``, in ascending order.
 
-    Same reservation rules as :func:`allocate_peer_address`, so the picker in
-    the UI and the server-side allocator can never disagree.
-    """
     if not iface:
         return []
 
@@ -10444,7 +11588,6 @@ def _norm_conftext(txt: str) -> str:
 
 
 def _write_conf_atomic(conf_path: str, text_body: str):
-    """Replace ``conf_path`` atomically, preserving its mode (default 0600)."""
     directory = os.path.dirname(conf_path) or '.'
     os.makedirs(directory, exist_ok=True)
 
@@ -10472,16 +11615,7 @@ def _write_conf_atomic(conf_path: str, text_body: str):
 
 
 def _peer_to_conf(peer: Peer):
-    """Write ``peer``'s ``[Peer]`` block into the SERVER's interface config.
-
-    The block deliberately carries no ``Endpoint`` unless the operator set an
-    explicit ``peer_endpoint``: ``Peer.endpoint`` is the *server's* address as
-    exported to the client, and writing it here would make the server send the
-    client's traffic to itself. See wg(8): ``Endpoint`` is the remote peer's
-    address, and WireGuard learns a roaming client's endpoint on its own.
-
-    Raises on failure so callers can compensate.
-    """
+=
     conf_path = getattr(peer.iface, 'path', None)
     if not conf_path:
         raise RuntimeError('The interface has no configuration file path.')
@@ -10518,11 +11652,7 @@ def _peer_to_conf(peer: Peer):
 
 
 def _remove_peer(peer: Peer):
-    """Drop ``peer``'s ``[Peer]`` block from the server's interface config.
 
-    Raises if the block is still present afterwards, so a caller never reports
-    success on a peer that a later ``wg-quick up`` would bring back.
-    """
     conf_path = getattr(peer.iface, 'path', None)
     if not conf_path:
         return
@@ -10564,7 +11694,6 @@ def _sync_peer(peer: Peer):
 
 
 def _wg_disable_quiet(peer: Peer):
-    """Best-effort runtime removal used to undo a half-finished create."""
     try:
         _wg_disable(peer)
     except Exception:
@@ -10577,7 +11706,6 @@ def _wg_disable_quiet(peer: Peer):
 
 
 def _remove_peer_quiet(peer: Peer):
-    """Best-effort config removal used to undo a half-finished create."""
     try:
         _remove_peer(peer)
     except Exception:
@@ -10589,7 +11717,6 @@ def _remove_peer_quiet(peer: Peer):
 
 
 def _rollback_local_created_peer(peer: Peer):
-    """Remove both local side effects created before a database commit."""
     errors = []
     dev = iface_devname(peer.iface) if getattr(peer, 'iface', None) else ''
     if dev and _iface_up(dev):
@@ -10610,7 +11737,6 @@ def _rollback_local_created_peer(peer: Peer):
 
 
 def _rollback_node_created_peer(node, public_key):
-    """Convergently remove a node peer created before a database commit."""
     response = node_delete(node, f'/api/peer/{public_key}') or {}
     if isinstance(response, dict) and response.get('ok') is False:
         raise RuntimeError(
@@ -10619,7 +11745,6 @@ def _rollback_node_created_peer(node, public_key):
 
 
 class PeerCreateCompensation:
-    """Reverse external peer installs when a surrounding transaction fails."""
 
     def __init__(self):
         self._actions = []
@@ -10653,11 +11778,6 @@ class PeerCreateCompensation:
 
 
 class PeerRemovalError(Exception):
-    """A peer could not be fully removed; the database row was kept.
-
-    ``phase`` says which layer failed ('runtime', 'config' or 'node') so an
-    operator - or a retry - knows what still needs cleaning up.
-    """
 
     def __init__(self, phase, message, status=500):
         super().__init__(message)
@@ -10673,7 +11793,6 @@ def _peer_is_on_node(peer: Peer) -> bool:
 
 
 def reapply_peer_external(peer: Peer):
-    """Make runtime and durable config match the current in-memory peer row."""
     if _peer_is_on_node(peer):
         node_reapply_peer(peer)
         return
@@ -10683,17 +11802,7 @@ def reapply_peer_external(peer: Peer):
 
 
 def remove_peer_everywhere(peer: Peer):
-    """Remove a peer from runtime, durable config and the database.
 
-    Order matters: runtime first (so no traffic keeps flowing while the rest
-    happens), then the durable config (so a later `wg-quick up` cannot bring
-    the peer back), then the database rows in one transaction. If either
-    WireGuard layer cannot be verified the database row is deliberately kept
-    and ``PeerRemovalError`` is raised, because the row is the only handle
-    left for retrying.
-
-    Returns the number of shortlinks that were removed with the peer.
-    """
     if _peer_is_on_node(peer):
         _remove_node_peer(peer)
     else:
@@ -10705,7 +11814,6 @@ def remove_peer_everywhere(peer: Peer):
 def _remove_local_peer_runtime_and_config(peer: Peer):
     dev = iface_devname(peer.iface) if getattr(peer, 'iface', None) else ''
 
-    # A down interface has no runtime peer to remove, and that is not a failure.
     if dev and _iface_up(dev):
         try:
             _wg_disable(peer)
@@ -10743,7 +11851,6 @@ def _remove_node_peer(peer: Peer):
             'node', str(response.get('error') or 'The node reported a failure.'), 502
         )
 
-    # Newer agents report each layer; older ones only report ok=True.
     for key, phase in (('runtime_removed', 'runtime'), ('config_removed', 'config')):
         if key in response and not response.get(key):
             raise PeerRemovalError(
@@ -10754,7 +11861,6 @@ def _remove_node_peer(peer: Peer):
 
 
 def _wg_peer_keys(dev: str) -> set:
-    """Public keys currently configured on a running interface."""
     keys = set()
     try:
         out = subprocess.check_output(
@@ -10772,11 +11878,7 @@ def _wg_peer_keys(dev: str) -> set:
 
 
 def _delete_peer_rows(peer: Peer):
-    """Drop the peer and everything that points at it, in one transaction.
 
-    Returns the number of shortlinks removed, so callers can report the real
-    count instead of assuming one.
-    """
     try:
         removed_shortlinks = _delete_shortlinks_for_peer_ids([peer.id])
         SubscriptionPeer.query.filter_by(peer_id=peer.id).delete(synchronize_session=False)
@@ -10790,7 +11892,6 @@ def _delete_peer_rows(peer: Peer):
 
 
 def peer_removal_response(exc: PeerRemovalError, peer_id=None):
-    """Structured error for a removal that left recoverable state behind."""
     return jsonify(
         ok=False,
         error='peer_removal_failed',
@@ -10802,12 +11903,7 @@ def peer_removal_response(exc: PeerRemovalError, peer_id=None):
 
 
 def install_local_peer(peer: Peer):
-    """Install a peer into the running interface and its durable config.
 
-    Runtime first, because ``wg set`` validates the device and the address;
-    durable config second. If either step fails, both are undone so a failed
-    create cannot leave an invisible peer behind. Raises on failure.
-    """
     _check_iface_up(peer.iface)
     _wg_enable(peer)
 
@@ -11120,7 +12216,6 @@ def _parse_endpoint_host(value):
     candidate = value[1:-1] if bracketed else value
 
     try:
-        # Stored bare and compressed so one host has one spelling.
         return ipaddress.ip_address(candidate).compressed
     except ValueError:
         pass
@@ -11132,7 +12227,6 @@ def _parse_endpoint_host(value):
         )
 
     if ':' in candidate:
-        # Not an IP and still has a colon: an embedded port, not a guess.
         raise EndpointValidationError(
             'endpoint_host_has_port',
             'Put the port in the port field; the host must not contain one.',
@@ -11180,13 +12274,7 @@ def _parse_endpoint_port(value):
 
 
 def parse_endpoint_override(host, port):
-    """Validate an interface endpoint override.
 
-    Returns ``(host, port)`` normalised, or ``(None, None)`` when both inputs
-    are empty, which means "clear the override". A partial pair is rejected:
-    merge semantics would let two edits made at different times silently
-    combine into a working endpoint nobody reviewed.
-    """
     host_raw = '' if host is None else str(host).strip()
     port_raw = '' if port is None else str(port).strip()
 
@@ -11203,13 +12291,7 @@ def parse_endpoint_override(host, port):
 
 
 def parse_endpoint_string(value):
-    """Validate an explicit ``host:port`` endpoint and return it normalised.
 
-    Returns '' for an empty value. Not applied to the existing create routes -
-    they accept free-form endpoints today and tightening that without a
-    compatibility review would be an unguarded behaviour change. Available for
-    a later spec.
-    """
     text_value = (value or '').strip()
     if not text_value:
         return ''
@@ -11241,8 +12323,7 @@ def iface_endpoint_override(iface):
 
     if not host or not port:
         if host or port:
-            # A hand-edited row degrades to auto-detection instead of
-            # producing a malformed endpoint.
+
             current_app.logger.warning(
                 'Interface %s has an incomplete endpoint override '
                 '(host=%r port=%r); ignoring it.',
@@ -11254,15 +12335,7 @@ def iface_endpoint_override(iface):
 
 
 def resolve_client_endpoint(iface, explicit=None, *, node=None, remote_iface=None):
-    """The server address written into a CLIENT's [Peer] block.
 
-    Precedence: explicit value, then the interface's saved override, then
-    auto-detection, then ''. This is the only place that rule lives; every
-    create and export path must come through here.
-
-    Never pass the result to `wg set ... peer ... endpoint` or into a server or
-    node [Peer] block - see `_peer_to_conf`.
-    """
     explicit = (explicit or '').strip()
     if explicit:
         return explicit
@@ -11272,8 +12345,7 @@ def resolve_client_endpoint(iface, explicit=None, *, node=None, remote_iface=Non
 
     override = iface_endpoint_override(iface)
     if override:
-        # Returning here also skips the node round-trips below, so exporting a
-        # config for a peer on an unreachable node still works.
+
         return override
 
     try:
@@ -11295,16 +12367,7 @@ def resolve_client_endpoint(iface, explicit=None, *, node=None, remote_iface=Non
 
 
 def resolve_client_endpoint_cheap(iface, explicit=None):
-    """`resolve_client_endpoint`, minus any per-call network round-trip.
 
-    Precedence: explicit value, then the interface's saved override, then -
-    for a local interface only - cheap local auto-detection. A node
-    interface with no override returns '': node auto-detection
-    (`_node_endpoint_fallback`) makes up to two HTTP calls to the node, and
-    doing that per row would turn a peer listing into a multi-minute stall
-    whenever a node is slow or unreachable. The full value still resolves at
-    export time via `resolve_client_endpoint`; this is display-only.
-    """
     explicit = (explicit or '').strip()
     if explicit:
         return explicit
@@ -11567,11 +12630,7 @@ def node_peer_delete(nid, pub):
     return jsonify(ok=True, shortlinks_removed=removed_shortlinks)
 
 def _effective_client_endpoint(peer: Peer) -> str:
-    """The server/node ``host:port`` that goes into the CLIENT's [Peer] block.
 
-    This is the client-facing server endpoint, not the server-side peer
-    endpoint - see :func:`_peer_to_conf`.
-    """
     return resolve_client_endpoint(
         getattr(peer, 'iface', None),
         explicit=getattr(peer, 'endpoint', None),
@@ -12007,47 +13066,21 @@ def _expire():
                     )
 
                 pending_notifications.append({
-                    'event_key': 'peer_expired',
-                    'title': '● Peer expired',
-                    'status': 'Disabled',
-                    'details': [
-                        (
-                            'Peer',
-                            peer_name,
-                        ),
-                        (
-                            'Location',
-                            (
-                                node_name
-                                or 'Local panel'
-                            ),
-                        ),
-                        (
-                            'Interface',
-                            interface_name,
-                        ),
-                        (
-                            'Address',
-                            getattr(
-                                peer,
-                                'address',
-                                '',
-                            ),
-                        ),
-                        (
-                            'Expired at',
-                            isoz(
-                                from_ts(
-                                    expiry_ts
-                                )
-                            ),
-                        ),
-                    ],
-                    'dedupe_key': (
-                        f'peer-expired:{peer.id}'
-                    ),
-                    'dedupe_seconds': 0,
-                })
+                'event_key': 'peer_expired',
+                'title': 'Peer expired',
+                'status': 'Disabled',
+ 
+                'details': [('Peer',f'{peer_name} · ID {peer.id}',),
+                ('Location',node_name or 'Local panel',),
+                ('Interface',interface_name,),
+                ('Address',getattr(peer,'address','',) or '',),
+                ('Phone',getattr(peer,'phone_number','',) or '',),
+                ('Telegram',getattr(peer,'telegram_id','',) or '',),
+                ('Active since',_tg_human_datetime(getattr(peer,'first_used_at',None,)),),
+                ('Expired at',_tg_human_datetime(from_ts(expiry_ts)),),],
+
+                'dedupe_key': (f'peer-expired:{peer.id}'),
+                'dedupe_seconds': 0,})
 
             changed = True
 
@@ -12137,50 +13170,22 @@ def _expire():
                     )
 
                 pending_notifications.append({
-                    'event_key': 'peer_limit',
-                    'title': (
-                        '● Peer traffic limit reached'
-                    ),
-                    'status': 'Disabled',
-                    'details': [
-                        (
-                            'Peer',
-                            peer_name,
-                        ),
-                        (
-                            'Location',
-                            (
-                                node_name
-                                or 'Local panel'
-                            ),
-                        ),
-                        (
-                            'Interface',
-                            interface_name,
-                        ),
-                        (
-                            'Address',
-                            getattr(
-                                peer,
-                                'address',
-                                '',
-                            ),
-                        ),
-                        (
-                            'Used bytes',
-                            used_effective,
-                        ),
-                        (
-                            'Limit bytes',
-                            limit_bytes,
-                        ),
-                    ],
-                    'dedupe_key': (
-                        f'peer-limit:{peer.id}'
-                    ),
-                    'dedupe_seconds': 0,
-                })
+                'event_key': 'peer_limit',
+                'title': 'Peer traffic limit reached',
+                'status': 'Disabled',
 
+                'details': [('Peer',f'{peer_name} · ID {peer.id}',),
+                ('Location',node_name or 'Local panel',),
+                ('Interface',interface_name,),
+                ('Address',getattr(peer,'address','',) or '',),
+                ('Phone',getattr(peer,'phone_number','',) or '',),
+                ('Telegram',getattr(peer,'telegram_id','',) or '',),
+                ('Usage',_tg_human_bytes(used_effective),),
+                ('Data limit',_tg_human_bytes(limit_bytes),),
+                ('Active since',_tg_human_datetime(getattr(peer,'first_used_at',None,)),),],
+
+                'dedupe_key': (f'peer-limit:{peer.id}'),
+                'dedupe_seconds': 0,})
             changed = True
 
     if not changed:
@@ -12400,9 +13405,7 @@ def repoint_endpoints():
 
     changed = 0
     for p in Peer.query.all():
-        # An interface override is an operator decision. A public IP change
-        # must not drag peers off it, even when the override happens to be the
-        # old public IP.
+
         override = iface_endpoint_override(getattr(p, 'iface', None))
         if override and (p.endpoint or '').strip() == override:
             continue
@@ -12421,20 +13424,6 @@ def repoint_endpoints():
 # Bootstrap
 # ___________
 def _migrate_schema():
-    """Bring the database up to the schema this build maps, or raise.
-
-    Order matters. Everything here that loads a model through the ORM selects
-    every mapped column, so each ALTER TABLE has to run before the first query
-    that depends on it. In particular `_shortlink_schema()` ->
-    `_migrate_shortlinks_json_to_db()` loads `Peer`, which now maps
-    `address_host` and `peer_endpoint`; running it ahead of `_peer_schema()`
-    fails with "no such column" on any database created before those columns
-    existed.
-
-    Raises `SchemaMigrationError` on any failure. Serving traffic against a
-    half-migrated database is worse than not starting: every peer query would
-    fail, and the panel would keep answering as though it were healthy.
-    """
     try:
         db.create_all()
         _admin_columns()
@@ -12451,19 +13440,49 @@ def bootstrap():
     with app.app_context():
         _migrate_schema()
         from models import InterfaceConfig
+        firewall_summary = (
+            local_firewall_rules()
+        )
+        app.logger.info("Legacy local firewall migration: %s",firewall_summary,)
+        p = (
+            app.config.get("WG_CONF_PATH")
+            or app.config.get(
+                "WIREGUARD_CONF_PATH"
+            )
+            or "/etc/wireguard")
 
-        p = (app.config.get('WG_CONF_PATH')
-             or app.config.get('WIREGUARD_CONF_PATH')
-             or '/etc/wireguard')
-        paths = glob.glob(os.path.join(p, '*.conf')) if os.path.isdir(p) \
-              else ([p] if os.path.isfile(p) else [])
+        paths = (
+            glob.glob(os.path.join(p,"*.conf",))
+            if os.path.isdir(p)
+            else (
+                [p]
+                if os.path.isfile(p)
+                else []
+            )
+        )
         for conf in paths:
+            parsed = find_iface(conf)
+            if not parsed:
+                continue
             name = os.path.splitext(os.path.basename(conf))[0]
-            if not InterfaceConfig.query.filter_by(name=name).first():
-                iface = find_iface(conf)
-                if iface:
-                    db.session.add(iface)
+            existing = (InterfaceConfig.query.filter_by(name=name).first())
+            if not existing:
+                db.session.add(parsed)
+                continue
+            existing.path = parsed.path
+            existing.address = parsed.address
+            existing.listen_port = (
+                parsed.listen_port
+            )
+            existing.private_key = (
+                parsed.private_key
+            )
+            existing.mtu = parsed.mtu
+            existing.dns = parsed.dns
+            existing.post_up = parsed.post_up
+            existing.post_down = parsed.post_down
         db.session.commit()
+
 
         _on_boot()
         _run_expiry_once('boot')
@@ -12616,10 +13635,7 @@ def _peer_ip_plain(peer) -> str:
 
 
 def _peer_ping_ok(peer, timeout_sec: float = 0.8) -> bool:
-    """
-    Active reachability check over the WireGuard interface.
-    This detects peers that are reachable through a tunnel even when the public endpoint/handshake is misleading.
-    """
+
     ip = _peer_ip_plain(peer)
     if not ip:
         return False
@@ -13397,18 +14413,7 @@ def node_ifaces(nid):
         mirror = InterfaceConfig.query.filter_by(name=f'n{nid}:{name}').first()
 
         if mirror is not None:
-            # Built by hand rather than via `_endpoint_default_payload`: that
-            # helper always calls `_node_endpoint_fallback` for its auto
-            # value, which costs up to two node HTTP calls. This loop already
-            # runs one `node_get` per interface below (available_ips), so a
-            # second per-row round-trip would make the whole listing stall
-            # whenever the node is slow or down. Auto-detection is left to
-            # export time, same as `resolve_client_endpoint_cheap`.
-            #
-            # Keep in sync with `_endpoint_default_payload`: the only
-            # intentional difference is `auto_endpoint` staying `''` here,
-            # because the probe that would fill it in is deliberately
-            # skipped rather than run per row.
+
             override = iface_endpoint_override(mirror)
             host = (getattr(mirror, 'endpoint_host', None) or '').strip() or None
             port = getattr(mirror, 'endpoint_port', None)
@@ -13419,18 +14424,10 @@ def node_ifaces(nid):
                 'endpoint_override': override,
                 'auto_endpoint': '',
                 'effective_endpoint': override,
-                # 'auto' (not 'none') when there is no override: detection
-                # was never attempted here, so nothing has been established
-                # about what auto-detection would return. 'none' would
-                # assert a negative the panel hasn't checked; export time
-                # may still resolve an endpoint. See the module-level rule
-                # in `_endpoint_default_payload`'s docstring neighbourhood.
                 'endpoint_source': 'override' if override else 'auto',
             })
         else:
-            # Not mirrored yet: no override is possible, and the probe is
-            # skipped for the same reason as above. 'auto': export time
-            # decides.
+
             item.update({
                 'endpoint_host': None,
                 'endpoint_port': None,
@@ -13937,8 +14934,7 @@ def iface_settings(iid):
 
                 if stripped.startswith('[') and stripped.endswith(']'):
                     if in_interface:
-                        if 'dns' in updates and updates['dns']:
-                            output.append(f"DNS = {updates['dns']}\n")
+                    
                         if 'mtu' in updates and updates['mtu'] is not None:
                             output.append(f"MTU = {updates['mtu']}\n")
                         if 'listen_port' in updates:
@@ -13972,8 +14968,7 @@ def iface_settings(iid):
                 output.append(raw)
 
             if in_interface:
-                if 'dns' in updates and updates['dns']:
-                    output.append(f"DNS = {updates['dns']}\n")
+            
                 if 'mtu' in updates and updates['mtu'] is not None:
                     output.append(f"MTU = {updates['mtu']}\n")
                 if 'listen_port' in updates:
@@ -14107,12 +15102,7 @@ def iface_settings(iid):
 
 
 def _endpoint_default_payload(iface, *, scope=None, node=None, remote_iface=None):
-    """One shape for every response reporting an interface's endpoint default.
 
-    `endpoint_override` is what the operator saved; `auto_endpoint` is what
-    detection would return. They are reported separately and never collapsed,
-    so "I set this" stays distinguishable from "the panel guessed this".
-    """
     if scope is None:
         scope = 'node' if getattr(iface, 'node_id', None) is not None else 'local'
 
@@ -14131,7 +15121,6 @@ def _endpoint_default_payload(iface, *, scope=None, node=None, remote_iface=None
         else:
             auto = (_endpoint_fallback(iface) or '').strip()
     except Exception:
-        # A node that is down must never stop an operator reading the override.
         current_app.logger.debug(
             'Endpoint auto-detection unavailable for %s',
             getattr(iface, 'name', '?'), exc_info=True,
@@ -14230,13 +15219,7 @@ class NodeIfaceLookupError(Exception):
 
 
 def _node_mirror_for_endpoint_default(node, name):
-    """Return (mirror row, remote interface dict) for a node interface.
 
-    Creates the mirror when the panel has not seen this interface yet, but only
-    from data the node actually reported: `ensure_node_mirror_iface` otherwise
-    defaults the address to 10.0.0.1/24, and persisting that invented value
-    would corrupt later allocation.
-    """
     db_name = f'n{node.id}:{name}'
     iface = InterfaceConfig.query.filter_by(name=db_name).first()
 
@@ -14292,9 +15275,6 @@ def api_node_iface_endpoint_default_get(nid, name):
             **_endpoint_default_payload(iface, scope='node', node=node),
         )
 
-    # Not mirrored yet, so there is no override to report. Auto-detection still
-    # tells the operator what peers would get today. A GET must not create rows
-    # and must not fail because a node is down.
     try:
         auto = (_node_endpoint_fallback(node, name) or '').strip()
     except Exception:
@@ -14375,12 +15355,7 @@ class EndpointApplyError(Exception):
 
 def _apply_endpoint_default(iface, *, dry_run, overwrite_explicit,
                             scope='local', node=None, remote_iface=None):
-    """Stamp the interface's effective endpoint onto its existing peers.
 
-    This writes only `Peer.endpoint`. It touches no runtime, no server config
-    and no node, so there is no per-peer failure mode: either the single
-    transaction commits or nothing changes.
-    """
     effective = resolve_client_endpoint(iface, node=node, remote_iface=remote_iface)
 
     if not effective:
@@ -14392,16 +15367,10 @@ def _apply_endpoint_default(iface, *, dry_run, overwrite_explicit,
 
     peers = Peer.query.filter_by(iface_id=iface.id).all()
     explicit = [p for p in peers if (p.endpoint or '').strip()]
-
-    # Candidates before the no-op filter: every peer when overwriting
-    # explicit values, otherwise only peers with no endpoint of their own.
     candidates = peers if overwrite_explicit else [
         p for p in peers if not (p.endpoint or '').strip()
     ]
 
-    # Drop peers whose endpoint already equals the value we would write, so
-    # `updated`/`would_update` count actual changes rather than rows that
-    # merely get dirtied and re-flushed (review finding #6).
     targets = [p for p in candidates if (p.endpoint or '').strip() != effective]
 
     result = {
@@ -14433,7 +15402,6 @@ def _apply_endpoint_default(iface, *, dry_run, overwrite_explicit,
 
 
 def _apply_request_flags(data):
-    """(dry_run, overwrite_explicit) from an apply request body."""
     data = data if isinstance(data, dict) else {}
     return (
         _sub_bool(data.get('dry_run')),
@@ -14489,9 +15457,7 @@ def api_node_iface_endpoint_default_apply(nid, name):
     remote = None
 
     if dry_run:
-        # A dry run must never create the mirror row - the same rule the
-        # sibling GET route follows (api_node_iface_endpoint_default_get):
-        # look it up read-only and do not fail just because the node is down.
+
         iface = InterfaceConfig.query.filter_by(name=f'n{nid}:{name}').first()
 
         if iface is None:
@@ -14911,9 +15877,6 @@ def node_peers(nid):
                 'server_public_ip': node_pub_ip,
                 'address': p.address,
                 'endpoint': resolve_client_endpoint_cheap(p_iface, explicit=p.endpoint),
-                # The resolved value above is for display. Editors must round-trip
-                # the stored column instead, or saving an unrelated field would
-                # freeze a derived endpoint onto the peer.
                 'endpoint_saved': p.endpoint or '',
                 'peer_endpoint': getattr(p, 'peer_endpoint', None) or '',
                 'allowed_ips': p.allowed_ips or '',
@@ -15002,8 +15965,7 @@ def node_peers(nid):
         db.session.rollback()
         return address_error_response(exc)
     except NodePeerInstallError as exc:
-        # The request may have reached the node before a timeout/proxy failure.
-        # Delete by the newly generated key; the node endpoint is convergent.
+
         try:
             _rollback_node_created_peer(n, pub)
         except Exception:
@@ -15054,7 +16016,6 @@ def node_peers(nid):
     )
 
 
-##############################################
 @app.delete('/api/peer/<int:pid>/logs')
 @login_required
 def clear_peer_logs(pid):
@@ -15333,10 +16294,7 @@ def node_enable_peer(nid, pub):
 
 
 def _node_peer_live_total_bytes(node, peer):
-    """
-    Read current RX+TX from the node agent.
-    Returns bytes. Falls back to 0 if unavailable.
-    """
+
     try:
         iface_raw = peer.iface.name if peer.iface else ''
         iface_name = iface_raw.split(':', 1)[1] if ':' in iface_raw else iface_raw
@@ -16099,9 +17057,6 @@ def users():
                 )
                 return render_template('users.html', form=form)
 
-        # The shortlink row is created here so it exists; its URL is rendered
-        # by the listing the redirect lands on, so the returned tuple is not
-        # captured (review finding #12 - confirmed unused, not a regression).
         try:
             _shortlink_for_peer(peer)
         except Exception:
@@ -16119,7 +17074,7 @@ def endpoint_presets():
         return jsonify(presets=_load_presets(), public_ipv4=_public_ipv4())
 
     if request.method == 'POST':
-        data = request.get_json() or {}
+        data = request.get_json(silent=True) or {}
         host = (data.get('host') or '').strip()
         port = int(data.get('port') or 0)
         label = (data.get('label') or '').strip() or f"{host}:{port}"
@@ -16135,7 +17090,7 @@ def endpoint_presets():
         _save_presets(presets)
         return jsonify(success=True, presets=presets)
 
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     host = (data.get('host') or '').strip()
     port = int(data.get('port') or 0)
     presets = [p for p in _load_presets() if not (p.get('host') == host and int(p.get('port') or 0) == port)]
@@ -16749,8 +17704,6 @@ def peers_create():
         n = Node.query.get_or_404(nid)
 
         name = (data.get('name') or '').strip() or 'peer'
-        # Explicit value only. An unset endpoint resolves through the interface
-        # override at export time; see `resolve_client_endpoint`.
         endpoint = (data.get('endpoint') or '').strip()
         allowed_ips = (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip()
         keepalive = _clean_keepalive(data.get('persistent_keepalive'))
@@ -16809,13 +17762,11 @@ def peers_create():
             node_ifaces = {}
             remote_iface = {}
 
-        # Make sure remote interface is up. it should making sure that it is up otherwise pass.
         try:
             node_post(n, f"/api/iface/{iface_name}/up", {})
         except Exception:
             pass
 
-        # Generate keys on panel, then install public key on node.
         try:
             priv = subprocess.check_output(
                 ['wg', 'genkey'],
@@ -16833,8 +17784,6 @@ def peers_create():
             current_app.logger.exception("key generation failed")
             return jsonify(error="key_generation_failed", detail=str(e)), 500
 
-        # The mirror row has to exist before allocation so a requested address
-        # can be validated against the node interface's real network.
         iface = ensure_node_mirror_iface(
             n, iface_name, remote_iface,
             mtu=mtu, dns=dns,
@@ -17059,8 +18008,6 @@ def peers_create():
     short_url = None
     installed = False
 
-    # Allocate and install under one per-interface lock so two workers cannot
-    # claim the same host.
     with interface_allocation_lock(iface):
         try:
             peer.address = allocate_peer_address(iface, requested=data.get('address'))
@@ -17103,8 +18050,6 @@ def peers_create():
             current_app.logger.exception("local peer create failed: %s", e)
             return jsonify(error="local_create_failed", detail=str(e)), 500
 
-    # The shortlink is convenience data: it commits separately and its failure
-    # must not undo a peer that is already live.
     try:
         short_token, short_url = _shortlink_for_peer(peer)
     except Exception:
@@ -17330,9 +18275,6 @@ def panel_peers():
 
                 'address': peer.address,
                 'endpoint': resolve_client_endpoint_cheap(interface, explicit=peer.endpoint),
-                # The resolved value above is for display. Editors must round-trip
-                # the stored column instead, or saving an unrelated field would
-                # freeze a derived endpoint onto the peer.
                 'endpoint_saved': peer.endpoint or '',
                 'peer_endpoint': getattr(peer, 'peer_endpoint', None) or '',
                 'allowed_ips': peer.allowed_ips or '',
@@ -17533,7 +18475,6 @@ def panel_peers_bulk():
         })
 
         allowed_ips = (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip()
-        # Explicit value only; the interface override resolves at export time.
         endpoint = (data.get('endpoint') or '').strip()
 
         try:
@@ -17635,14 +18576,6 @@ def panel_peers_bulk():
         if not avail_ips:
             return jsonify(error="No available IPs for this node interface"), 409
 
-        # `avail_ips` is only a "the pool is not empty" probe. It is NOT a
-        # capacity limit: the agent bounds that list (MAX_AVAILABLE_IPS, 512)
-        # and allocates each address itself under its own lock, since
-        # `node_install_peer` below is called without `requested_address`.
-        # Clamping `count` to len(avail_ips) would silently truncate any batch
-        # larger than the agent's preview window and report it as a full
-        # success. The loop instead stops on `address_pool_exhausted`, exactly
-        # like the local bulk path.
         requested_count = count
 
         try:
@@ -17707,8 +18640,7 @@ def panel_peers_bulk():
                     )
                 except NodePeerInstallError as e:
                     if e.code == 'address_pool_exhausted':
-                        # The pool ran out mid-batch: stop, keep what worked,
-                        # and tell the caller how many we actually got.
+
                         pool_exhausted = True
                         break
                     raise
@@ -17770,9 +18702,7 @@ def panel_peers_bulk():
                 created.append(peer)
 
             except requests.HTTPError as e:
-                # Now rare: node_install_peer wraps HTTP errors as
-                # NodePeerInstallError. Kept as a safety net for any direct
-                # node_* call that might raise HTTPError in future.
+
                 body = getattr(e.response, 'text', '') if getattr(e, 'response', None) else ''
                 current_app.logger.exception(
                     "node bulk create failed node_id=%s iface=%s index=%s",
@@ -17793,8 +18723,7 @@ def panel_peers_bulk():
                         pass
 
             except NodePeerInstallError as e:
-                # Surface the agent's structured error code + detail rather
-                # than the bare class name (review finding #15).
+
                 current_app.logger.exception(
                     "node bulk create failed node_id=%s iface=%s index=%s code=%s",
                     nid, iface_name, i, e.code
@@ -17959,7 +18888,6 @@ def panel_peers_bulk():
             peer = None
             installed = False
             try:
-                # Allocate one at a time so each peer sees the ones before it.
                 addr = allocate_peer_address(iface)
 
                 priv = subprocess.check_output(['wg', 'genkey']).strip().decode()
@@ -18006,7 +18934,6 @@ def panel_peers_bulk():
                 created.append(peer)
 
             except AddressPoolExhausted:
-                # The pool ran out mid-batch: stop, keep what already worked.
                 db.session.rollback()
                 pool_exhausted = True
                 break
@@ -18171,13 +19098,7 @@ def get_interfaces():
             'available_ips': _available_ips(i),
             'is_up': _iface_up(i.name),
         }
-        # Endpoint default, built WITHOUT a per-row `_endpoint_fallback`
-        # subprocess probe: this list is polled frequently by the UI, and a
-        # probe per interface per request would multiply subprocess fanout.
-        # Auto-detection still runs at export time via `resolve_client_endpoint`
-        # (see `resolve_client_endpoint_cheap`); the listing only needs the
-        # saved override and a source flag the UI can show. Built by hand for
-        # the same reason and with the same shape as the `node_ifaces` loop.
+
         override = iface_endpoint_override(i)
         row.update({
             'endpoint_host': (getattr(i, 'endpoint_host', None) or '').strip() or None,
@@ -18205,37 +19126,111 @@ def _iface_down(name: str):
         )
 
 def _egress_interface() -> str:
+    """
+    Detect the server's real outbound IPv4 interface.
+
+    Avoid selecting WireGuard/tunnel/container interfaces as
+    the MASQUERADE egress device.
+    """
 
     try:
         output = subprocess.check_output(
             [
-                "ip",
-                "-4",
-                "route",
-                "get",
-                "1.1.1.1",
+                'ip',
+                '-4',
+                'route',
+                'get',
+                '1.1.1.1',
             ],
             stderr=subprocess.DEVNULL,
             timeout=4,
         ).decode(
-            "utf-8",
-            "replace",
+            'utf-8',
+            'replace',
         )
 
-        match = re.search(
-            r"\bdev\s+([A-Za-z0-9_.:-]+)",
+        matches = re.findall(
+            r'\bdev\s+([A-Za-z0-9_.:-]+)',
             output,
         )
 
-        if match:
-            return match.group(1).strip()
+        for candidate in matches:
+            candidate = (
+                candidate
+                or ''
+            ).strip()
+
+            if not candidate:
+                continue
+
+            if candidate == 'lo':
+                continue
+
+            if re.match(
+                r'^(wg|tun|tap|docker|br-|veth)',
+                candidate,
+                re.IGNORECASE,
+            ):
+                continue
+
+            return candidate
 
     except Exception:
         current_app.logger.exception(
-            "Could not detect the default IPv4 egress interface"
+            'Could not detect the default '
+            'IPv4 egress interface'
         )
 
-    return ""
+    # Fallback: inspect the IPv4 default route.
+    try:
+        output = subprocess.check_output(
+            [
+                'ip',
+                '-4',
+                'route',
+                'show',
+                'default',
+            ],
+            stderr=subprocess.DEVNULL,
+            timeout=4,
+        ).decode(
+            'utf-8',
+            'replace',
+        )
+
+        matches = re.findall(
+            r'\bdev\s+([A-Za-z0-9_.:-]+)',
+            output,
+        )
+
+        for candidate in matches:
+            candidate = (
+                candidate
+                or ''
+            ).strip()
+
+            if not candidate:
+                continue
+
+            if candidate == 'lo':
+                continue
+
+            if re.match(
+                r'^(wg|tun|tap|docker|br-|veth)',
+                candidate,
+                re.IGNORECASE,
+            ):
+                continue
+
+            return candidate
+
+    except Exception:
+        current_app.logger.exception(
+            'Could not detect IPv4 egress '
+            'from the default route'
+        )
+
+    return ''
 
 
 def _wireguard_network(address_field: str) -> str:
@@ -18268,18 +19263,22 @@ def _wg_firewall_rules(
     address_field: str,
 ) -> tuple[str, str]:
 
-    network = _wireguard_network(address_field)
+    network = _wireguard_network(
+        address_field
+    )
 
     if not network:
         raise ValueError(
-            "Automatic forwarding requires a private IPv4 WireGuard subnet."
+            "Automatic forwarding requires a private IPv4 "
+            "WireGuard subnet."
         )
 
     egress = _egress_interface()
 
     if not egress:
         raise ValueError(
-            "The server's default IPv4 network interface could not be detected."
+            "The default IPv4 network interface "
+            "could not be detected."
         )
 
     if not re.fullmatch(
@@ -18290,88 +19289,275 @@ def _wg_firewall_rules(
             "The detected outbound interface name is invalid."
         )
 
-    post_up = (
-        "sysctl -w net.ipv4.ip_forward=1 >/dev/null; "
-        "iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null "
-        "|| iptables -A FORWARD -i %i -j ACCEPT; "
-        "iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null "
-        "|| iptables -A FORWARD -o %i -j ACCEPT; "
-        f"iptables -t nat -C POSTROUTING -s {network} "
-        f"-o {egress} -j MASQUERADE 2>/dev/null "
-        f"|| iptables -t nat -A POSTROUTING -s {network} "
-        f"-o {egress} -j MASQUERADE"
-    )
+    post_up = "\n".join([
+        "sysctl -w net.ipv4.ip_forward=1",
+        "iptables -A FORWARD -i %i -j ACCEPT",
+        (
+            "iptables -A FORWARD -o %i "
+            "-m conntrack --ctstate "
+            "RELATED,ESTABLISHED -j ACCEPT"
+        ),
+        (
+            f"iptables -t nat -A POSTROUTING "
+            f"-s {network} "
+            f"-o {egress} "
+            "-j MASQUERADE"
+        ),
+    ])
 
-    post_down = (
-        "iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; "
-        "iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; "
-        f"iptables -t nat -D POSTROUTING -s {network} "
-        f"-o {egress} -j MASQUERADE 2>/dev/null || true"
-    )
+    post_down = "\n".join([
+        "iptables -D FORWARD -i %i -j ACCEPT",
+        (
+            "iptables -D FORWARD -o %i "
+            "-m conntrack --ctstate "
+            "RELATED,ESTABLISHED -j ACCEPT"
+        ),
+        (
+            f"iptables -t nat -D POSTROUTING "
+            f"-s {network} "
+            f"-o {egress} "
+            "-j MASQUERADE"
+        ),
+    ])
 
     return post_up, post_down
 
 @app.post("/api/interfaces")
 @login_required
 def create_local_interface():
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
 
-    name = (data.get("name") or "").strip()
-    address = (data.get("address") or "").strip()
-    dns = (data.get("dns") or "").strip() or None
-    auto_up = bool(data.get("auto_up"))
+    if not isinstance(data, dict):
+        try:
+            raw = request.get_data(cache=True, as_text=True).strip()
+            data = json.loads(raw) if raw else None
+        except (TypeError, ValueError, json.JSONDecodeError):
+            data = None
+
+    if not isinstance(data, dict):
+        current_app.logger.warning(
+            "Invalid interface-create payload: "
+            "content_type=%r mimetype=%r body=%r",
+            request.content_type,
+            request.mimetype,
+            request.get_data(cache=True, as_text=True)[:500],
+        )
+
+        return jsonify(
+            ok=False,
+            error="invalid_payload",
+            detail="The request body must be a JSON object.",
+        ), 400
+
+    name = str(
+        data.get("name")
+        or data.get("iface")
+        or data.get("interface_name")
+        or ""
+    ).strip()
+
+    address = str(
+        data.get("address")
+        or ""
+    ).strip()
+
+    dns = str(
+        data.get("dns")
+        or ""
+    ).strip() or None
+
+    auto_up = bool(
+        data.get("auto_up", True)
+    )
+
     auto_firewall = bool(
-    data.get("auto_firewall", True)
+        data.get("auto_firewall", True)
+    )
+
+    if not name:
+        return jsonify(
+            ok=False,
+            error="interface_name_required",
+            detail="Interface name is required.",
+        ), 400
+
+    if not re.fullmatch(
+        r"[A-Za-z0-9_.-]{1,32}",
+        name,
+    ):
+        return jsonify(
+            ok=False,
+            error="invalid_name",
+            detail=(
+                f"Invalid interface name {name!r}. "
+                "Use 1-32 characters: letters, numbers, "
+                "underscore, dot, or dash."
+            ),
+        ), 400
+
+    if not address:
+        return jsonify(
+            ok=False,
+            error="address_required",
+            detail=(
+                "WireGuard interface address is required. "
+                "Example: 10.77.0.1/24"
+            ),
+        ), 400
+
+    address_parts = [
+        value.strip()
+        for value in re.split(r"[\s,]+", address)
+        if value.strip()
+    ]
+
+    if not address_parts:
+        return jsonify(
+            ok=False,
+            error="invalid_address",
+            detail="No valid WireGuard address was supplied.",
+        ), 400
+
+    parsed_addresses = []
+
+    for value in address_parts:
+        try:
+            parsed_addresses.append(
+                ipaddress.ip_interface(value)
+            )
+        except ValueError:
+            return jsonify(
+                ok=False,
+                error="invalid_address",
+                detail=(
+                    f"{value!r} is not a valid CIDR. "
+                    "Example: 10.77.0.1/24"
+                ),
+            ), 400
+
+    address = ", ".join(
+        str(value)
+        for value in parsed_addresses
     )
 
     try:
-        listen_port = int(data.get("listen_port") or 0)
-    except Exception:
-        return jsonify(error="invalid_listen_port"), 400
+        listen_port = int(
+            data.get("listen_port")
+        )
+    except (TypeError, ValueError):
+        return jsonify(
+            ok=False,
+            error="invalid_listen_port",
+            detail="Listen port must be a number between 1 and 65535.",
+        ), 400
 
-    mtu = data.get("mtu")
+    if not 1 <= listen_port <= 65535:
+        return jsonify(
+            ok=False,
+            error="invalid_listen_port",
+            detail="Listen port must be between 1 and 65535.",
+        ), 400
+
+    raw_mtu = data.get("mtu")
+
     try:
-        mtu = int(mtu) if str(mtu or "").strip() else None
-    except Exception:
-        return jsonify(error="invalid_mtu"), 400
+        mtu = (
+            int(raw_mtu)
+            if raw_mtu not in (None, "")
+            and str(raw_mtu).strip()
+            else None
+        )
+    except (TypeError, ValueError):
+        return jsonify(
+            ok=False,
+            error="invalid_mtu",
+            detail="MTU must be a number between 576 and 9000.",
+        ), 400
 
-    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,32}", name):
-        return jsonify(error="invalid_name", detail="Use 1-32 characters: letters, numbers, underscore, dot, or dash."), 400
+    if mtu is not None and not 576 <= mtu <= 9000:
+        return jsonify(
+            ok=False,
+            error="invalid_mtu",
+            detail="MTU must be between 576 and 9000.",
+        ), 400
 
-    if not address:
-        return jsonify(error="address_required"), 400
+    existing = (
+        InterfaceConfig.query
+        .filter_by(name=name)
+        .first()
+    )
 
-    try:
-        ipaddress.ip_interface(address)
-    except Exception:
-        return jsonify(error="invalid_address", detail="Use CIDR format, for example 10.77.0.1/24."), 400
+    if existing:
+        return jsonify(
+            ok=False,
+            error="interface_exists",
+            detail=f"Interface {name} already exists in the panel.",
+        ), 409
 
-    if not (1 <= listen_port <= 65535):
-        return jsonify(error="invalid_listen_port", detail="Listen port must be between 1 and 65535."), 400
+    wg_dir = (
+        app.config.get("WG_CONF_PATH")
+        or "/etc/wireguard"
+    )
 
-    if mtu is not None and not (576 <= mtu <= 9000):
-        return jsonify(error="invalid_mtu", detail="MTU must be between 576 and 9000."), 400
-
-    if InterfaceConfig.query.filter_by(name=name).first():
-        return jsonify(error="interface_exists", detail=f"Interface {name} already exists."), 409
-
-    wg_dir = app.config.get("WG_CONF_PATH") or "/etc/wireguard"
     if os.path.isfile(wg_dir):
         wg_dir = os.path.dirname(wg_dir)
 
-    os.makedirs(wg_dir, exist_ok=True)
-    conf_path = os.path.join(wg_dir, f"{name}.conf")
+    try:
+        os.makedirs(
+            wg_dir,
+            exist_ok=True,
+        )
+    except Exception as exc:
+        return jsonify(
+            ok=False,
+            error="wireguard_directory_failed",
+            detail=str(exc),
+        ), 500
+
+    conf_path = os.path.join(
+        wg_dir,
+        f"{name}.conf",
+    )
 
     if os.path.exists(conf_path):
-        return jsonify(error="config_exists", detail=f"{conf_path} already exists."), 409
+        return jsonify(
+            ok=False,
+            error="config_exists",
+            detail=f"{conf_path} already exists.",
+        ), 409
+
+    if _iface_up(name):
+        return jsonify(
+            ok=False,
+            error="interface_exists_system",
+            detail=(
+                f"Interface {name} already exists "
+                "on the operating system."
+            ),
+        ), 409
 
     try:
-        private_key = subprocess.check_output(["wg", "genkey"], timeout=5).decode().strip()
-    except Exception as e:
-        return jsonify(error="wg_genkey_failed", detail=str(e)), 500
+        for iface in InterfaceConfig.query.all():
+            if (
+                int(iface.listen_port or 0)
+                == listen_port
+            ):
+                return jsonify(
+                    ok=False,
+                    error="listen_port_in_use",
+                    detail=(
+                        f"Listen port {listen_port} is already "
+                        f"used by {iface.name}."
+                    ),
+                ), 409
+    except Exception:
+        current_app.logger.exception(
+            "Could not validate existing interface ports"
+        )
 
     post_up = ""
     post_down = ""
+    egress_interface = ""
 
     if auto_firewall:
         try:
@@ -18379,12 +19565,54 @@ def create_local_interface():
                 name,
                 address,
             )
-        except ValueError as e:
+
+            egress_interface = _egress_interface()
+
+        except ValueError as exc:
             return jsonify(
-               error="firewall_detection_failed",
-               detail=str(e),
+                ok=False,
+                error="auto_firewall_failed",
+                detail=str(exc),
+                hint=(
+                    "Disable automatic firewall rules if you "
+                    "want to create the interface without "
+                    "PostUp/PostDown forwarding rules."
+                ),
             ), 400
 
+        except Exception as exc:
+            current_app.logger.exception(
+                "Automatic firewall generation failed for %s",
+                name,
+            )
+
+            return jsonify(
+                ok=False,
+                error="auto_firewall_failed",
+                detail=str(exc),
+            ), 500
+
+    try:
+        private_key = (
+            subprocess.check_output(
+                ["wg", "genkey"],
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            .decode()
+            .strip()
+        )
+
+    except Exception as exc:
+        current_app.logger.exception(
+            "wg genkey failed"
+        )
+
+        return jsonify(
+            ok=False,
+            error="wg_genkey_failed",
+            detail=str(exc),
+        ), 500
 
     lines = [
         "[Interface]",
@@ -18393,23 +19621,74 @@ def create_local_interface():
         f"ListenPort = {listen_port}",
     ]
 
-    if mtu:
-        lines.append(f"MTU = {mtu}")
+    if mtu is not None:
+        lines.append(
+            f"MTU = {mtu}"
+        )
 
-    if post_up:
-        lines.append(f"PostUp = {post_up}")
+    for command in str(
+        post_up or "").splitlines():
 
-    if post_down:
-        lines.append(f"PostDown = {post_down}")
+        command = command.strip()
 
-    conf_text = "\n".join(lines) + "\n"
+        if command:
+            lines.append(f"PostUp = {command}")
+
+
+    for command in str(
+        post_down or "").splitlines():
+
+        command = command.strip()
+
+        if command:
+            lines.append(f"PostDown = {command}")
+
+    lines.append("")
+
+    config_text = "\n".join(lines)
+
+    temp_path = (
+        conf_path
+        + ".tmp"
+    )
 
     try:
-        with open(conf_path, "w", encoding="utf-8") as f:
-            f.write(conf_text)
-        os.chmod(conf_path, 0o600)
-    except Exception as e:
-        return jsonify(error="write_config_failed", detail=str(e)), 500
+        with open(
+            temp_path,
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            handle.write(
+                config_text
+            )
+
+            handle.flush()
+            os.fsync(
+                handle.fileno()
+            )
+
+        os.chmod(
+            temp_path,
+            0o600,
+        )
+
+        os.replace(
+            temp_path,
+            conf_path,
+        )
+
+    except Exception as exc:
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except Exception:
+            pass
+
+        return jsonify(
+            ok=False,
+            error="write_config_failed",
+            detail=str(exc),
+        ), 500
 
     iface = InterfaceConfig(
         name=name,
@@ -18423,20 +19702,79 @@ def create_local_interface():
         post_down=post_down or None,
     )
 
-    db.session.add(iface)
-    db.session.commit()
+    try:
+        db.session.add(iface)
+        db.session.commit()
+
+    except Exception as exc:
+        db.session.rollback()
+
+        try:
+            os.remove(conf_path)
+        except Exception:
+            pass
+
+        current_app.logger.exception(
+            "Could not save interface %s",
+            name,
+        )
+
+        return jsonify(
+            ok=False,
+            error="database_save_failed",
+            detail=str(exc),
+        ), 500
 
     up_error = None
+
     if auto_up:
         try:
-            _check_iface_up(iface)
-            subprocess.run(["systemctl","enable",f"wg-quick@{name}.service",],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10,check=False,)
+            proc = subprocess.run(
+                [
+                    "wg-quick",
+                    "up",
+                    name,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=20,
+                check=False,
+            )
 
-        except Exception as e:
-            up_error = str(e)
+            if proc.returncode != 0:
+                up_error = (
+                    proc.stderr
+                    or proc.stdout
+                    or f"wg-quick up {name} failed"
+                ).strip()
+
+            else:
+                try:
+                    subprocess.run(
+                        [
+                            "systemctl",
+                            "enable",
+                            f"wg-quick@{name}.service",
+                        ],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                        check=False,
+                    )
+                except Exception:
+                    current_app.logger.warning(
+                        "Could not enable wg-quick@%s",
+                        name,
+                        exc_info=True,
+                    )
+
+        except Exception as exc:
+            up_error = str(exc)
 
     return jsonify(
         ok=True,
+
         interface={
             "id": iface.id,
             "name": iface.name,
@@ -18446,10 +19784,412 @@ def create_local_interface():
             "dns": iface.dns,
             "mtu": iface.mtu,
             "available_ips": _available_ips(iface),
-            "is_up": _iface_up(iface.name),
+            "is_up": _iface_up(name),
+            "post_up": post_up,
+            "post_down": post_down,
+            "auto_firewall": auto_firewall,
+            "egress_interface": egress_interface,
         },
+
         up_error=up_error,
     ), 201
+
+def _inject_firewall_rules(
+    config_path: str,
+    interface_name: str,
+    address_field: str,
+) -> dict:
+
+
+    if not os.path.isfile(config_path):
+        return {
+            "changed": False,
+            "reason": "config_missing",
+        }
+
+    try:
+        with open(
+            config_path,
+            "r",
+            encoding="utf-8",
+            errors="replace",
+        ) as handle:
+            original = handle.read()
+
+    except OSError as exc:
+        return {
+            "changed": False,
+            "reason": "read_failed",
+            "detail": str(exc),
+        }
+
+    in_interface = False
+    has_post_up = False
+    has_post_down = False
+
+    for raw_line in original.splitlines():
+        line = raw_line.strip()
+
+        if not line or line.startswith("#"):
+            continue
+
+        if line.startswith("[") and line.endswith("]"):
+            in_interface = (
+                line[1:-1].strip().lower()
+                == "interface"
+            )
+            continue
+
+        if not in_interface or "=" not in line:
+            continue
+
+        key = (
+            line.split("=", 1)[0]
+            .strip()
+            .lower()
+        )
+
+        if key == "postup":
+            has_post_up = True
+
+        elif key == "postdown":
+            has_post_down = True
+
+    if has_post_up or has_post_down:
+        return {
+            "changed": False,
+            "reason": "custom_rules_present",
+            "has_post_up": has_post_up,
+            "has_post_down": has_post_down,
+        }
+
+    try:
+        post_up, post_down = _wg_firewall_rules(
+            interface_name,
+            address_field,
+        )
+
+    except ValueError as exc:
+        return {
+            "changed": False,
+            "reason": "rule_generation_failed",
+            "detail": str(exc),
+        }
+
+    lines = original.splitlines()
+
+    insert_at = None
+    inside_interface = False
+    found_interface = False
+
+    for index, raw_line in enumerate(lines):
+        line = raw_line.strip()
+
+        if not (
+            line.startswith("[")
+            and line.endswith("]")
+        ):
+            continue
+
+        section = (
+            line[1:-1]
+            .strip()
+            .lower()
+        )
+
+        if section == "interface":
+            inside_interface = True
+            found_interface = True
+            continue
+
+        if inside_interface:
+            insert_at = index
+            break
+
+    if not found_interface:
+        return {
+            "changed": False,
+            "reason": "interface_section_missing",
+        }
+
+    if insert_at is None:
+        insert_at = len(lines)
+
+    additions = [
+    *[
+        f"PostUp = {command.strip()}"
+        for command
+        in str(
+            post_up or ""
+        ).splitlines()
+        if command.strip()
+    ],
+
+    *[
+        f"PostDown = {command.strip()}"
+        for command
+        in str(
+            post_down or ""
+        ).splitlines()
+        if command.strip()
+    ],
+
+    "",
+    ]
+
+    new_lines = (
+        lines[:insert_at]
+        + additions
+        + lines[insert_at:]
+    )
+
+    updated = (
+        "\n".join(new_lines)
+        .rstrip()
+        + "\n"
+    )
+
+    directory = (
+        os.path.dirname(config_path)
+        or "."
+    )
+
+    fd, temporary_path = tempfile.mkstemp(
+        prefix=".wg-panel-firewall.",
+        dir=directory,
+    )
+
+    try:
+        try:
+            original_mode = (
+                os.stat(config_path).st_mode
+                & 0o777
+            )
+        except OSError:
+            original_mode = 0o600
+
+        with os.fdopen(
+            fd,
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            handle.write(updated)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        os.chmod(
+            temporary_path,
+            original_mode,
+        )
+
+        os.replace(
+            temporary_path,
+            config_path,
+        )
+
+        temporary_path = ""
+
+    finally:
+        if (
+            temporary_path
+            and os.path.exists(temporary_path)
+        ):
+            try:
+                os.unlink(
+                    temporary_path
+                )
+            except OSError:
+                pass
+
+    runtime_applied = False
+    runtime_error = ""
+
+    if _iface_up(interface_name):
+        runtime_applied = False
+        runtime_error = ""
+
+    if _iface_up(
+        interface_name
+    ):
+        try:
+            errors = []
+
+            for raw_command in str(
+                post_up or "").splitlines():
+
+                raw_command = (raw_command.strip())
+
+                if not raw_command:
+                    continue
+
+                command = (
+                    raw_command.replace(
+                        "%i",
+                        shlex.quote(
+                            interface_name
+                        ),
+                    )
+                )
+
+                result = subprocess.run(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        command,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                ) 
+
+                if result.returncode != 0:
+                    errors.append(
+                        (
+                            result.stdout
+                            or command
+                        ).strip()
+                    )
+
+            runtime_applied = (
+                len(errors) == 0
+            )
+
+            if errors:
+                runtime_error = (
+                    "\n".join(
+                        errors
+                    )[-2000:]
+                )
+
+        except Exception as exc:
+            runtime_error = str(
+                exc
+            )
+
+        try:
+            result = subprocess.run(
+                [
+                    "/bin/sh",
+                    "-c",
+                    command,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+
+            runtime_applied = (
+                result.returncode == 0
+            )
+
+            if result.returncode != 0:
+                runtime_error = (
+                    result.stdout
+                    or ""
+                ).strip()[-2000:]
+
+        except Exception as exc:
+            runtime_error = str(exc)
+
+    return {
+        "changed": True,
+        "reason": "managed_rules_added",
+        "post_up": post_up,
+        "post_down": post_down,
+        "runtime_applied": runtime_applied,
+        "runtime_error": runtime_error,
+    }
+
+
+def local_firewall_rules() -> dict:
+    """
+    upgrade old local Wg configs postup/down
+
+    """
+    configured_path = (
+        app.config.get("WG_CONF_PATH")
+        or app.config.get(
+            "WIREGUARD_CONF_PATH"
+        )
+        or "/etc/wireguard"
+    )
+
+    if os.path.isdir(configured_path):
+        paths = sorted(
+            glob.glob(
+                os.path.join(
+                    configured_path,
+                    "*.conf",
+                )
+            )
+        )
+    elif os.path.isfile(configured_path):
+        paths = [configured_path]
+    else:
+        paths = []
+
+    summary = {
+        "checked": 0,
+        "updated": 0,
+        "skipped": 0,
+        "failed": 0,
+    }
+
+    for config_path in paths:
+        parsed = find_iface(config_path)
+
+        if not parsed:
+            summary["skipped"] += 1
+            continue
+
+        summary["checked"] += 1
+
+        result = _inject_firewall_rules(
+            config_path,
+            parsed.name,
+            parsed.address,
+        )
+
+        if result.get("changed"):
+            summary["updated"] += 1
+
+            app.logger.info(
+                "Added automatic firewall rules to "
+                "legacy interface %s; runtime_applied=%s",
+                parsed.name,
+                result.get("runtime_applied"),
+            )
+
+            if result.get("runtime_error"):
+                app.logger.warning(
+                    "Legacy interface %s was updated, "
+                    "but its runtime firewall rules "
+                    "could not be applied immediately: %s",
+                    parsed.name,
+                    result["runtime_error"],
+                )
+
+        elif result.get("reason") in {
+            "custom_rules_present",
+            "config_missing",
+        }:
+            summary["skipped"] += 1
+
+        else:
+            summary["failed"] += 1
+
+            app.logger.warning(
+                "Could not add firewall rules to "
+                "legacy interface %s: %s",
+                parsed.name,
+                result,
+            )
+
+    return summary
 
 @app.route('/api/iface/<int:iface_id>/enable', methods=['POST'])
 @csrf.exempt
@@ -18531,12 +20271,6 @@ def iface_delete(iface_id):
         except Exception:
             current_app.logger.exception("Failed to bring interface down before delete: %s", dev)
 
-        # `_iface_down` swallows its own failures (it falls back to `ip link
-        # del` with check=False), so it cannot be trusted to report that the
-        # device is gone. Verify, because deleting the rows below is what
-        # removes the operator's last handle on these peers: if the device is
-        # still up, every peer stays live in the kernel with nothing left to
-        # manage it.
         if _iface_up(dev):
             current_app.logger.warning(
                 "%s is still up after bringing it down; removing its peers individually",
@@ -18569,9 +20303,6 @@ def iface_delete(iface_id):
 
         deleted_peers = 0
         if delete_peers:
-            # The interface is verified down and its config file is removed
-            # below, so every peer's runtime and durable state goes with the
-            # interface.
             for peer in peers:
                 SubscriptionPeer.query.filter_by(peer_id=peer.id).delete(
                     synchronize_session=False
@@ -19105,82 +20836,434 @@ def api_disable(pid):
 @csrf.exempt
 @require_api_key_or_login
 def api_edit(pid):
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
+
+    if not isinstance(data, dict):
+        return jsonify(
+            success=False,
+            ok=False,
+            error='invalid_payload',
+            detail='The request body must be a JSON object.',
+        ), 400
+
     p = db.session.get(Peer, pid) or abort(404)
 
-    if 'time_limit_days' in data or 'time_limit_hours' in data:
-        data['time_limit_days'] = _conv_time_limit(data)
-        data.pop('time_limit_hours', None)
+    original = {
+        'name': p.name,
+        'address': p.address,
+        'allowed_ips': p.allowed_ips,
+        'endpoint': p.endpoint,
+        'peer_endpoint': p.peer_endpoint,
+        'persistent_keepalive': p.persistent_keepalive,
+        'mtu': p.mtu,
+        'dns': p.dns,
+        'data_limit_value': p.data_limit_value,
+        'data_limit_unit': p.data_limit_unit,
+        'time_limit_days': p.time_limit_days,
+        'start_on_first_use': p.start_on_first_use,
+        'unlimited': p.unlimited,
+        'phone_number': p.phone_number,
+        'telegram_id': p.telegram_id,
+    }
 
-    if 'address' in data:
-        # Re-addressing a peer must go through the same validation as creating one.
-        #
-        # An empty value is rejected rather than passed through: on create,
-        # `allocate_peer_address` reads a blank `requested` as "pick any free
-        # host", which on edit would silently move an existing peer to an
-        # arbitrary address and reinstall it, breaking every config already
-        # handed out for it. Omit the field to leave the address alone.
-        if not str(data.get('address') or '').strip():
-            return jsonify(
-                error='invalid_address',
-                detail='address may not be empty; omit the field to leave it unchanged.',
-            ), 400
+
+    if (
+        'time_limit_days' in data
+        or 'time_limit_hours' in data
+    ):
+        data['time_limit_days'] = _conv_time_limit(
+            data
+        )
+
+        data.pop(
+            'time_limit_hours',
+            None,
+        )
+
+    for field in (
+        'name',
+        'allowed_ips',
+        'endpoint',
+        'peer_endpoint',
+        'dns',
+        'phone_number',
+        'telegram_id',
+    ):
+        if field in data:
+            value = data.get(field)
+
+            data[field] = (
+                str(value).strip()
+                if value is not None
+                else ''
+            )
+
+    for field in (
+        'persistent_keepalive',
+        'mtu',
+    ):
+        if field in data:
+            raw = data.get(field)
+
+            if raw in (
+                '',
+                None,
+            ):
+                data[field] = None
+
+            else:
+                try:
+                    data[field] = int(raw)
+
+                except Exception:
+                    return jsonify(
+                        success=False,
+                        ok=False,
+                        error='invalid_number',
+                        detail=(
+                            f'{field} must be a number.'
+                        ),
+                    ), 400
+
+    # Data limit
+    if 'data_limit_value' in data:
+        raw = data.get(
+            'data_limit_value'
+        )
 
         try:
-            data['address'] = allocate_peer_address(
-                p.iface,
-                requested=data['address'],
-                exclude_peer_id=p.id,
-                exclude_address=p.address,
+            data[
+                'data_limit_value'
+            ] = (
+                int(float(raw))
+                if str(raw or '').strip()
+                else 0
             )
-        except AddressAllocationError as e:
-            return address_error_response(e)
 
-    updated = []
-    for f in ('name','address','allowed_ips','endpoint','peer_endpoint','persistent_keepalive','mtu','dns',
-              'data_limit_value','data_limit_unit','time_limit_days','start_on_first_use','unlimited',
-              'phone_number','telegram_id'):
-        if f in data:
-            setattr(p, f, data[f]); updated.append(f)
+        except Exception:
+            return jsonify(
+                success=False,
+                ok=False,
+                error='invalid_data_limit',
+                detail='Traffic limit must be numeric.',
+            ), 400
 
-    if any(k in data for k in ('time_limit_days', 'start_on_first_use', 'unlimited')):
-        if getattr(p, 'unlimited', False):
-            p.expires_at = None
-        elif getattr(p, 'time_limit_days', None):
-            if getattr(p, 'start_on_first_use', False) and not getattr(p, 'first_used_at', None):
-                p.expires_at = None
+    for field in (
+        'start_on_first_use',
+        'unlimited',
+    ):
+        if field in data:
+            value = data.get(field)
+
+            if isinstance(
+                value,
+                bool,
+            ):
+                data[field] = value
+
             else:
-                anchor_ts = to_ts(getattr(p, 'first_used_at', None)) or now_ts()
-                p.expires_at = from_ts(add_days_ts(anchor_ts, float(p.time_limit_days)))
+                data[field] = (
+                    str(value)
+                    .strip()
+                    .lower()
+                    in (
+                        '1',
+                        'true',
+                        'yes',
+                        'on',
+                    )
+                )
+
+    if 'address' in data:
+        requested_address = str(
+            data.get('address')
+            or ''
+        ).strip()
+
+        if not requested_address:
+            return jsonify(
+                success=False,
+                ok=False,
+                error='invalid_address',
+                detail=(
+                    'address may not be empty; '
+                    'omit the field to leave it unchanged.'
+                ),
+            ), 400
+
+        if (
+            requested_address
+            != str(
+                original.get('address')
+                or ''
+            ).strip()
+        ):
+            try:
+                data['address'] = (
+                    allocate_peer_address(
+                        p.iface,
+                        requested=requested_address,
+                        exclude_peer_id=p.id,
+                        exclude_address=p.address,
+                    )
+                )
+
+            except AddressAllocationError as exc:
+                return address_error_response(
+                    exc
+                )
+
+        else:
+            data['address'] = (
+                original.get('address')
+            )
+
+    if 'peer_endpoint' in data:
+        submitted_peer_endpoint = str(
+            data.get('peer_endpoint')
+            or ''
+        ).strip()
+
+        original_peer_endpoint = str(
+            original.get('peer_endpoint')
+            or ''
+        ).strip()
+
+        if (
+            submitted_peer_endpoint
+            and submitted_peer_endpoint
+            != original_peer_endpoint
+        ):
+            try:
+                data['peer_endpoint'] = _wireguard_endpoint(
+                    submitted_peer_endpoint
+                )
+
+            except Exception as exc:
+                return jsonify(
+                success=False,
+                ok=False,
+                error='invalid_fixed_endpoint',
+                detail=str(exc),
+                field='peer_endpoint',
+            ), 400
+
+        else:
+            data['peer_endpoint'] = (
+            submitted_peer_endpoint
+            if submitted_peer_endpoint != original_peer_endpoint
+            else original_peer_endpoint
+        )
+
+    supported_fields = (
+        'name',
+        'address',
+        'allowed_ips',
+        'endpoint',
+        'peer_endpoint',
+        'persistent_keepalive',
+        'mtu',
+        'dns',
+        'data_limit_value',
+        'data_limit_unit',
+        'time_limit_days',
+        'start_on_first_use',
+        'unlimited',
+        'phone_number',
+        'telegram_id',
+    )
+
+    changed = []
+
+    for field in supported_fields:
+        if field not in data:
+            continue
+
+        new_value = data[field]
+        old_value = original.get(
+            field
+        )
+
+        if field in (
+            'endpoint',
+            'peer_endpoint',
+            'dns',
+            'phone_number',
+            'telegram_id',
+            'allowed_ips',
+            'name',
+        ):
+            old_cmp = str(
+                old_value or ''
+            ).strip()
+
+            new_cmp = str(
+                new_value or ''
+            ).strip()
+
+        elif field in (
+            'persistent_keepalive',
+            'mtu',
+        ):
+            old_cmp = (
+                int(old_value)
+                if old_value not in (
+                    None,
+                    '',
+                )
+                else None
+            )
+
+            new_cmp = (
+                int(new_value)
+                if new_value not in (
+                    None,
+                    '',
+                )
+                else None
+            )
+
+        else:
+            old_cmp = old_value
+            new_cmp = new_value
+
+        if old_cmp == new_cmp:
+            continue
+
+        setattr(
+            p,
+            field,
+            new_value,
+        )
+
+        changed.append(
+            field
+        )
+
+    if not changed:
+        return jsonify(
+            success=True,
+            ok=True,
+            changed=[],
+            message='No changes were necessary.',
+        ), 200
+
+    if any(
+        field in changed
+        for field in (
+            'time_limit_days',
+            'start_on_first_use',
+            'unlimited',
+        )
+    ):
+        if getattr(
+            p,
+            'unlimited',
+            False,
+        ):
+            p.expires_at = None
+
+        elif getattr(
+            p,
+            'time_limit_days',
+            None,
+        ):
+            if (
+                getattr(
+                    p,
+                    'start_on_first_use',
+                    False,
+                )
+                and not getattr(
+                    p,
+                    'first_used_at',
+                    None,
+                )
+            ):
+                p.expires_at = None
+
+            else:
+                anchor_ts = (
+                    to_ts(
+                        getattr(
+                            p,
+                            'first_used_at',
+                            None,
+                        )
+                    )
+                    or now_ts()
+                )
+
+                p.expires_at = from_ts(
+                    add_days_ts(
+                        anchor_ts,
+                        float(
+                            p.time_limit_days
+                        ),
+                    )
+                )
+
         else:
             p.expires_at = None
 
-    external_fields = {'address', 'peer_endpoint', 'persistent_keepalive'}
-    needs_external_apply = bool(external_fields.intersection(updated))
+    external_fields = {
+        'address',
+        'peer_endpoint',
+        'persistent_keepalive',
+    }
+
+    external_changed = bool(
+        external_fields.intersection(
+            changed
+        )
+    )
+
     external_attempted = False
+
     try:
-        # Flush first so uniqueness/type failures occur before touching
-        # WireGuard. Commit only after runtime and durable config both accept
-        # the candidate state.
         db.session.flush()
-        if needs_external_apply:
+
+        if external_changed:
             external_attempted = True
-            reapply_peer_external(p)
+
+            reapply_peer_external(
+                p
+            )
+
         db.session.commit()
+
     except Exception as exc:
         db.session.rollback()
-        current_app.logger.exception('Peer %s edit failed; restoring previous state', pid)
+
+        current_app.logger.exception(
+            'Peer %s edit failed; '
+            'restoring previous state',
+            pid,
+        )
 
         recovery_error = None
+
         if external_attempted:
-            previous = db.session.get(Peer, pid)
+            previous = db.session.get(
+                Peer,
+                pid,
+            )
+
             if previous is not None:
                 try:
-                    reapply_peer_external(previous)
+                    reapply_peer_external(
+                        previous
+                    )
+
                 except Exception as restore_exc:
-                    recovery_error = str(restore_exc)
+                    recovery_error = str(
+                        restore_exc
+                    )
+
                     current_app.logger.exception(
-                        'Could not restore peer %s after failed edit', pid
+                        'Could not restore peer %s '
+                        'after failed edit',
+                        pid,
                     )
 
         if recovery_error:
@@ -19194,24 +21277,69 @@ def api_edit(pid):
                 recoverable=True,
             ), 502
 
-        status = 409 if isinstance(exc, IntegrityError) else 502 if external_attempted else 500
+        if isinstance(
+            exc,
+            IntegrityError,
+        ):
+            status = 409
+
+        elif external_attempted:
+            status = 502
+
+        else:
+            status = 500
+
         return jsonify(
             success=False,
             ok=False,
-            error='peer_reapply_failed' if external_attempted else 'peer_edit_failed',
+            error=(
+                'peer_reapply_failed'
+                if external_attempted
+                else 'peer_edit_failed'
+            ),
             detail=str(exc),
             saved_fields=[],
             rolled_back=True,
         ), status
 
     try:
-        log_event(p, 'edited', f"Fields: {', '.join(updated)}")
-        logpanel_action("peer_edit", f"pid={p.id}; fields={', '.join(updated)}")
-    except Exception:
-        db.session.rollback()
-        current_app.logger.warning('Peer %s was edited but audit logging failed', pid, exc_info=True)
+        log_event(
+            p,
+            'edited',
+            (
+                'Fields: '
+                + ', '.join(
+                    changed
+                )
+            ),
+        )
 
-    return jsonify(success=True, ok=True)
+        logpanel_action(
+            'peer_edit',
+            (
+                f'pid={p.id}; fields='
+                + ', '.join(
+                    changed
+                )
+            ),
+        )
+
+    except Exception:
+        current_app.logger.warning(
+            'Peer %s was edited but '
+            'audit logging failed',
+            pid,
+            exc_info=True,
+        )
+
+    return jsonify(
+        success=True,
+        ok=True,
+        changed=changed,
+        runtime_reapplied=(
+            external_changed
+        ),
+    )
 
 
 @app.route('/api/peer/<int:pid>', methods=['DELETE'])
@@ -19235,18 +21363,235 @@ def api_delete(pid):
 @login_required
 def peer_logs(pid):
     p = db.session.get(Peer, pid) or abort(404)
-    rows = (PeerEvent.query
+
+    rows = (
+        PeerEvent.query
         .filter_by(peer_id=pid)
         .order_by(PeerEvent.timestamp.desc())
         .limit(500)
-        .all())
+        .all()
+    )
 
-    return jsonify(logs=[{'time': isoz(e.timestamp), 'event': e.event, 'details': e.details}
-                     for e in rows])
+    def event_level(event_name):
+        name = str(event_name or '').strip().lower()
 
+        if any(word in name for word in (
+            'error',
+            'failed',
+            'failure',
+        )):
+            return 'error'
 
-# Subscriptions: one client policy shared across local/node peers
-# =========================================================
+        if any(word in name for word in (
+            'blocked',
+            'expired',
+            'limit',
+            'disabled',
+            'warning',
+        )):
+            return 'warning'
+
+        return 'info'
+
+    logs = []
+
+    for event in rows:
+        timestamp = isoz(
+            getattr(
+                event,
+                'timestamp',
+                None,
+            )
+        )
+
+        event_name = str(
+            getattr(
+                event,
+                'event',
+                '',
+            )
+            or ''
+        ).strip()
+
+        details = str(
+            getattr(
+                event,
+                'details',
+                '',
+            )
+            or ''
+        ).strip()
+
+        logs.append({
+            'time': timestamp,
+            'ts': timestamp,
+            'timestamp': timestamp,
+
+            'event': event_name,
+            'details': details,
+
+            'level': event_level(
+                event_name
+            ),
+
+            'text': (
+                details
+                or event_name
+                or 'Peer event'
+            ),
+        })
+
+    try:
+        runtime = _subscription_peer_runtime(
+            p
+        )
+    except Exception:
+        current_app.logger.debug(
+            'Could not load live runtime for peer log pid=%s',
+            pid,
+            exc_info=True,
+        )
+
+        runtime = {
+            'connected': False,
+            'conn_status': 'offline',
+            'connection_status': 'disconnected',
+            'connection_label': 'Disconnected',
+            'latest_handshake': 0,
+            'latest_handshake_age': None,
+            'last_activity_at': None,
+            'runtime_available': False,
+        }
+
+    iface = getattr(
+        p,
+        'iface',
+        None,
+    )
+
+    iface_raw = str(
+        getattr(
+            iface,
+            'name',
+            '',
+        )
+        or ''
+    ).strip()
+
+    node = (
+        getattr(
+            iface,
+            'node',
+            None,
+        )
+        if iface
+        else None
+    )
+
+    is_node = bool(
+        iface
+        and (
+            getattr(
+                iface,
+                'node_id',
+                None,
+            )
+            is not None
+            or re.match(
+                r'^n\d+:',
+                iface_raw,
+            )
+        )
+    )
+
+    interface_name = (
+        iface_raw.split(
+            ':',
+            1,
+        )[1]
+        if (
+            is_node
+            and ':' in iface_raw
+        )
+        else iface_raw
+    )
+
+    return jsonify(
+        ok=True,
+
+        peer={
+            'id': p.id,
+            'name': p.name or '',
+            'panel_status': (
+                p.status
+                or 'offline'
+            ),
+
+            'scope': (
+                'node'
+                if is_node
+                else 'local'
+            ),
+
+            'node_id': (
+                getattr(
+                    iface,
+                    'node_id',
+                    None,
+                )
+                if iface
+                else None
+            ),
+
+            'node_name': (
+                getattr(
+                    node,
+                    'name',
+                    '',
+                )
+                or ''
+            ),
+
+            'iface': interface_name,
+
+            'connected': bool(
+                runtime.get(
+                    'connected'
+                )
+            ),
+
+            'connection_label': (
+                runtime.get(
+                    'connection_label'
+                )
+                or 'Disconnected'
+            ),
+
+            'latest_handshake': int(
+                runtime.get(
+                    'latest_handshake'
+                )
+                or 0
+            ),
+
+            'latest_handshake_age': (
+                runtime.get(
+                    'latest_handshake_age'
+                )
+            ),
+
+            'last_activity_at': (
+                runtime.get(
+                    'last_activity_at'
+                )
+            ),
+        },
+
+        runtime=runtime,
+
+        logs=logs,
+    )
+
 SUBSCRIPTION_SETTINGS_FILE = os.path.join(app.instance_path, 'subscription_settings.json')
 
 def _sub_bool(v):
@@ -19643,6 +21988,657 @@ def _block_subscription_runtime(sub, reason='subscription_blocked'):
 
     return changed
 
+def _subscription_peer_runtime(peer):
+    """
+    Return actual WireGuard activity for one subscription peer.
+
+    This is intentionally separate from Peer.status:
+
+        Peer.status
+            = administrative state
+              online / offline / blocked
+
+        connected
+            = recent WireGuard handshake
+
+    Local peers are read directly from the local WireGuard runtime.
+
+    Node peers are read from the node agent's /api/peers endpoint.
+
+    Runtime data is cached on Flask ``g`` for the current HTTP request so:
+        - each local WireGuard interface is inspected once
+        - each remote node is contacted once
+    """
+
+    iface = getattr(
+        peer,
+        'iface',
+        None,
+    )
+
+    raw_iface_name = str(
+        getattr(
+            iface,
+            'name',
+            '',
+        )
+        or ''
+    ).strip()
+
+    public_key = str(
+        getattr(
+            peer,
+            'public_key',
+            '',
+        )
+        or ''
+    ).strip()
+
+    current_epoch = now_ts()
+
+    try:
+        handshake_window = max(
+            30,
+            int(
+                os.environ.get(
+                    'WG_SUBSCRIPTION_CONNECTED_WINDOW',
+                    '180',
+                )
+                or 180
+            ),
+        )
+
+    except Exception:
+        handshake_window = 180
+
+    result = {
+        'connected': False,
+
+        'conn_status': 'offline',
+
+        'connection_status': (
+            'disconnected'
+        ),
+
+        'connection_label': (
+            'Disconnected'
+        ),
+
+        'conn_reason': (
+            'no_recent_activity'
+        ),
+
+        'latest_handshake': 0,
+
+        'latest_handshake_age': None,
+
+        'last_activity_at': None,
+
+        'runtime_available': True,
+
+        'handshake_window': (
+            handshake_window
+        ),
+    }
+
+    if (
+        not iface
+        or not public_key
+    ):
+        result[
+            'runtime_available'
+        ] = False
+
+        result[
+            'conn_reason'
+        ] = 'peer_runtime_missing'
+
+        return result
+
+    node_id = getattr(
+        iface,
+        'node_id',
+        None,
+    )
+
+    legacy_node_match = (
+        re.match(
+            r'^n(\d+):(.+)$',
+            raw_iface_name,
+        )
+    )
+
+    if (
+        node_id is None
+        and legacy_node_match
+    ):
+        try:
+            node_id = int(
+                legacy_node_match.group(
+                    1
+                )
+            )
+        except Exception:
+            node_id = None
+
+    is_node = bool(
+        node_id is not None
+        or legacy_node_match
+    )
+
+    if is_node:
+        node = getattr(
+            iface,
+            'node',
+            None,
+        )
+
+        if (
+            node is None
+            and node_id is not None
+        ):
+            node = db.session.get(
+                Node,
+                int(node_id),
+            )
+
+        if node is None:
+            result[
+                'runtime_available'
+            ] = False
+
+            result[
+                'conn_reason'
+            ] = 'node_missing'
+
+            return result
+
+        cache = getattr(
+            g,
+            '_subscription_node_runtime_cache',
+            None,
+        )
+
+        if cache is None:
+            cache = {}
+
+            g._subscription_node_runtime_cache = (
+                cache
+            )
+
+        cache_key = int(
+            node.id
+        )
+
+        if cache_key not in cache:
+            try:
+                payload = (
+                    node_get(
+                        node,
+                        '/api/peers',
+                        timeout=8,
+                    )
+                    or {}
+                )
+
+                rows = (
+                    payload.get(
+                        'peers'
+                    )
+                    if isinstance(
+                        payload,
+                        dict,
+                    )
+                    else []
+                )
+
+                runtime_by_key = {}
+
+                for row in (
+                    rows or []
+                ):
+                    if not isinstance(
+                        row,
+                        dict,
+                    ):
+                        continue
+
+                    row_public_key = str(
+                        row.get(
+                            'public_key'
+                        )
+                        or row.get(
+                            'id'
+                        )
+                        or ''
+                    ).strip()
+
+                    if row_public_key:
+                        runtime_by_key[
+                            row_public_key
+                        ] = row
+
+                cache[
+                    cache_key
+                ] = {
+                    'ok': True,
+                    'rows': runtime_by_key,
+                }
+
+            except Exception as exc:
+                current_app.logger.debug(
+                    'Subscription runtime: node %s unavailable: %s',
+                    getattr(
+                        node,
+                        'id',
+                        '?',
+                    ),
+                    exc,
+                )
+
+                cache[
+                    cache_key
+                ] = {
+                    'ok': False,
+                    'rows': {},
+                }
+
+        node_cache = (
+            cache.get(
+                cache_key
+            )
+            or {}
+        )
+
+        if not node_cache.get(
+            'ok'
+        ):
+            result[
+                'runtime_available'
+            ] = False
+
+            result[
+                'conn_reason'
+            ] = 'node_unavailable'
+
+            return result
+
+        row = (
+            node_cache.get(
+                'rows'
+            )
+            or {}
+        ).get(
+            public_key
+        )
+
+        if not isinstance(
+            row,
+            dict,
+        ):
+            result[
+                'conn_reason'
+            ] = 'peer_not_in_runtime'
+
+            return result
+
+        try:
+            latest_handshake = max(
+                0,
+                int(
+                    row.get(
+                        'latest_handshake'
+                    )
+                    or 0
+                ),
+            )
+
+        except Exception:
+            latest_handshake = 0
+
+        try:
+            handshake_age = (
+                row.get(
+                    'latest_handshake_age'
+                )
+            )
+
+            if handshake_age is not None:
+                handshake_age = max(
+                    0,
+                    int(
+                        handshake_age
+                    ),
+                )
+
+            elif latest_handshake > 0:
+                handshake_age = max(
+                    0,
+                    current_epoch
+                    - latest_handshake,
+                )
+
+            else:
+                handshake_age = None
+
+        except Exception:
+            handshake_age = (
+                max(
+                    0,
+                    current_epoch
+                    - latest_handshake,
+                )
+                if latest_handshake > 0
+                else None
+            )
+
+        connected = bool(
+            latest_handshake > 0
+            and handshake_age is not None
+            and handshake_age
+            <= handshake_window
+        )
+
+        try:
+            rx_mib = float(
+                row.get(
+                    'rx_mib'
+                )
+                or 0
+            )
+
+        except Exception:
+            rx_mib = 0.0
+
+        try:
+            tx_mib = float(
+                row.get(
+                    'tx_mib'
+                )
+                or 0
+            )
+
+        except Exception:
+            tx_mib = 0.0
+
+        result.update({
+            'connected': connected,
+
+            'conn_status': (
+                'online'
+                if connected
+                else 'offline'
+            ),
+
+            'connection_status': (
+                'connected'
+                if connected
+                else 'disconnected'
+            ),
+
+            'connection_label': (
+                'Connected'
+                if connected
+                else 'Disconnected'
+            ),
+
+            'conn_reason': (
+                'handshake'
+                if connected
+                else (
+                    'stale_handshake'
+                    if latest_handshake > 0
+                    else 'no_handshake'
+                )
+            ),
+
+            'latest_handshake': (
+                latest_handshake
+            ),
+
+            'latest_handshake_age': (
+                handshake_age
+            ),
+
+            'last_activity_at': (
+                datetime.utcfromtimestamp(
+                    latest_handshake
+                ).isoformat()
+                + 'Z'
+                if latest_handshake > 0
+                else None
+            ),
+
+            'rx_bytes': int(
+                rx_mib
+                * 1024
+                * 1024
+            ),
+
+            'tx_bytes': int(
+                tx_mib
+                * 1024
+                * 1024
+            ),
+
+            'node_reported_conn_status': (
+                row.get(
+                    'conn_status'
+                )
+                or row.get(
+                    'connection_status'
+                )
+                or row.get(
+                    'status'
+                )
+                or ''
+            ),
+
+            'node_reported_conn_reason': (
+                row.get(
+                    'conn_reason'
+                )
+                or ''
+            ),
+        })
+
+        return result
+
+    interface_name = raw_iface_name
+
+    if not interface_name:
+        result[
+            'runtime_available'
+        ] = False
+
+        result[
+            'conn_reason'
+        ] = 'interface_missing'
+
+        return result
+
+    cache = getattr(
+        g,
+        '_subscription_local_runtime_cache',
+        None,
+    )
+
+    if cache is None:
+        cache = {}
+
+        g._subscription_local_runtime_cache = (
+            cache
+        )
+
+    if interface_name not in cache:
+        try:
+            transfers, handshakes = (
+                _wg_runtime_snapshot(
+                    [
+                        interface_name
+                    ]
+                )
+            )
+
+            cache[
+                interface_name
+            ] = {
+                'ok': True,
+                'transfers': transfers,
+                'handshakes': handshakes,
+            }
+
+        except Exception as exc:
+            current_app.logger.debug(
+                'Subscription runtime: local interface %s unavailable: %s',
+                interface_name,
+                exc,
+            )
+
+            cache[
+                interface_name
+            ] = {
+                'ok': False,
+                'transfers': {},
+                'handshakes': {},
+            }
+
+    local_cache = (
+        cache.get(
+            interface_name
+        )
+        or {}
+    )
+
+    if not local_cache.get(
+        'ok'
+    ):
+        result[
+            'runtime_available'
+        ] = False
+
+        result[
+            'conn_reason'
+        ] = 'wireguard_unavailable'
+
+        return result
+
+    transfers = (
+        local_cache.get(
+            'transfers'
+        )
+        or {}
+    )
+
+    handshakes = (
+        local_cache.get(
+            'handshakes'
+        )
+        or {}
+    )
+
+    latest_handshake = int(
+        handshakes.get(
+            (
+                interface_name,
+                public_key,
+            ),
+            0,
+        )
+        or 0
+    )
+
+    handshake_age = (
+        max(
+            0,
+            current_epoch
+            - latest_handshake,
+        )
+        if latest_handshake > 0
+        else None
+    )
+
+    connected = bool(
+        latest_handshake > 0
+        and handshake_age is not None
+        and handshake_age
+        <= handshake_window
+    )
+
+    rx_bytes, tx_bytes = (
+        transfers.get(
+            (
+                interface_name,
+                public_key,
+            ),
+            (
+                0,
+                0,
+            ),
+        )
+    )
+
+    result.update({
+        'connected': connected,
+
+        'conn_status': (
+            'online'
+            if connected
+            else 'offline'
+        ),
+
+        'connection_status': (
+            'connected'
+            if connected
+            else 'disconnected'
+        ),
+
+        'connection_label': (
+            'Connected'
+            if connected
+            else 'Disconnected'
+        ),
+
+        'conn_reason': (
+            'handshake'
+            if connected
+            else (
+                'stale_handshake'
+                if latest_handshake > 0
+                else 'no_handshake'
+            )
+        ),
+
+        'latest_handshake': (
+            latest_handshake
+        ),
+
+        'latest_handshake_age': (
+            handshake_age
+        ),
+
+        'last_activity_at': (
+            datetime.utcfromtimestamp(
+                latest_handshake
+            ).isoformat()
+            + 'Z'
+            if latest_handshake > 0
+            else None
+        ),
+
+        'rx_bytes': int(
+            rx_bytes
+            or 0
+        ),
+
+        'tx_bytes': int(
+            tx_bytes
+            or 0
+        ),
+    })
+
+    return result
+
 def _subscription_row(sub):
 
     used = int(
@@ -19661,9 +22657,6 @@ def _subscription_row(sub):
     subscription_changed = False
     linked_first_use = []
 
-    # ----------------------------
-    # subscription start time
-    # ----------------------------
     for link in (
         getattr(
             sub,
@@ -19726,9 +22719,6 @@ def _subscription_row(sub):
 
         subscription_changed = True
 
-    # ---------------------------------------------------------
-    # Timer handling
-    # ---------------------------------------------------------
     if subscription_changed:
         if unlimited:
             try:
@@ -19764,9 +22754,6 @@ def _subscription_row(sub):
                 ),
             )
 
-    # ---------------------------------------------------------
-    # Shared data and timer state
-    # ---------------------------------------------------------
     limit = _sub_limit_bytes(
         sub
     )
@@ -19803,9 +22790,6 @@ def _subscription_row(sub):
             'subscription_expired',
         )
 
-    # ---------------------------------------------------------
-    # Attached locations/configs
-    # ---------------------------------------------------------
     locs = []
 
     links = sorted(
@@ -19933,6 +22917,42 @@ def _subscription_row(sub):
             if iface
             else None
         )
+        try:
+            live = _subscription_peer_runtime(
+                peer
+            )
+
+        except Exception:
+            current_app.logger.debug(
+                (
+                    'Could not read subscription runtime '
+                    'for peer_id=%s'
+                ),
+                getattr(
+                    peer,
+                    'id',
+                    '?',
+                ),
+                exc_info=True,
+            )
+
+            live = {
+                'connected': False,
+                'conn_status': 'offline',
+                'connection_status': (
+                    'disconnected'
+                ),
+                'connection_label': (
+                    'Disconnected'
+                ),
+                'conn_reason': (
+                    'runtime_error'
+                ),
+                'latest_handshake': 0,
+                'latest_handshake_age': None,
+                'last_activity_at': None,
+                'runtime_available': False,
+            }
 
         locs.append({
             'link_id': getattr(
@@ -20006,7 +23026,71 @@ def _subscription_row(sub):
                 or ''
             ),
 
-            'status': peer_status,
+                        'status': peer_status,
+
+            'panel_status': (
+                peer_status
+            ),
+
+            'connected': bool(
+                live.get(
+                    'connected'
+                )
+            ),
+
+            'conn_status': (
+                live.get(
+                    'conn_status'
+                )
+                or 'offline'
+            ),
+
+            'connection_status': (
+                live.get(
+                    'connection_status'
+                )
+                or 'disconnected'
+            ),
+
+            'connection_label': (
+                live.get(
+                    'connection_label'
+                )
+                or 'Disconnected'
+            ),
+
+            'conn_reason': (
+                live.get(
+                    'conn_reason'
+                )
+                or 'no_recent_activity'
+            ),
+
+            'latest_handshake': int(
+                live.get(
+                    'latest_handshake'
+                )
+                or 0
+            ),
+
+            'latest_handshake_age': (
+                live.get(
+                    'latest_handshake_age'
+                )
+            ),
+
+            'last_activity_at': (
+                live.get(
+                    'last_activity_at'
+                )
+            ),
+
+            'runtime_available': bool(
+                live.get(
+                    'runtime_available',
+                    True,
+                )
+            ),
 
             'used_bytes': int(
                 getattr(
@@ -20053,9 +23137,181 @@ def _subscription_row(sub):
             ),
         })
 
-    # ---------------------------------------------------------
-    # Final API row
-    # ---------------------------------------------------------
+
+    connected_locations = [
+        location
+        for location in locs
+        if bool(
+            location.get(
+                'connected'
+            )
+        )
+    ]
+
+    runtime_locations = [
+        location
+        for location in locs
+        if bool(
+            location.get(
+                'runtime_available',
+                True,
+            )
+        )
+    ]
+
+    activity_locations = [
+        location
+        for location in locs
+        if int(
+            location.get(
+                'latest_handshake'
+            )
+            or 0
+        ) > 0
+    ]
+
+    active_location = None
+
+    if connected_locations:
+        active_location = max(
+            connected_locations,
+            key=lambda location: int(
+                location.get(
+                    'latest_handshake'
+                )
+                or 0
+            ),
+        )
+
+    elif activity_locations:
+        active_location = max(
+            activity_locations,
+            key=lambda location: int(
+                location.get(
+                    'latest_handshake'
+                )
+                or 0
+            ),
+        )
+
+    connection = {
+        'connected': bool(
+            connected_locations
+        ),
+
+        'status': (
+            'connected'
+            if connected_locations
+            else 'disconnected'
+        ),
+
+        'label': (
+            'Connected'
+            if connected_locations
+            else 'Disconnected'
+        ),
+
+        'connected_count': len(
+            connected_locations
+        ),
+
+        'runtime_count': len(
+            runtime_locations
+        ),
+
+        'total_count': len(
+            locs
+        ),
+
+        'active_peer_id': (
+            (
+                active_location
+                or {}
+            ).get(
+                'peer_id'
+            )
+        ),
+
+        'active_peer_name': (
+            (
+                active_location
+                or {}
+            ).get(
+                'name'
+            )
+            or ''
+        ),
+
+        'active_scope': (
+            (
+                active_location
+                or {}
+            ).get(
+                'scope'
+            )
+            or ''
+        ),
+
+        'active_node_id': (
+            (
+                active_location
+                or {}
+            ).get(
+                'node_id'
+            )
+        ),
+
+        'active_node_name': (
+            (
+                active_location
+                or {}
+            ).get(
+                'node_name'
+            )
+            or ''
+        ),
+
+        'active_iface': (
+            (
+                active_location
+                or {}
+            ).get(
+                'iface'
+            )
+            or ''
+        ),
+
+        'latest_handshake': int(
+            (
+                (
+                    active_location
+                    or {}
+                ).get(
+                    'latest_handshake'
+                )
+                or 0
+            )
+        ),
+
+        'last_activity_at': (
+            (
+                active_location
+                or {}
+            ).get(
+                'last_activity_at'
+            )
+        ),
+
+        'last_activity_age': (
+            (
+                active_location
+                or {}
+            ).get(
+                'latest_handshake_age'
+            )
+        ),
+    }
+
     first_used_at = getattr(
         sub,
         'first_used_at',
@@ -20197,7 +23453,29 @@ def _subscription_row(sub):
             )
         ),
 
-        'runtime_counts': runtime_counts,
+                'runtime_counts': runtime_counts,
+
+        'connection': connection,
+
+        'connected': bool(
+            connection.get(
+                'connected'
+            )
+        ),
+
+        'connection_status': (
+            connection.get(
+                'status'
+            )
+            or 'disconnected'
+        ),
+
+        'connection_label': (
+            connection.get(
+                'label'
+            )
+            or 'Disconnected'
+        ),
 
         'public_url': _sub_public_url(
             sub
@@ -20272,9 +23550,7 @@ def _peer_payload_subscription(sub,target,data,idx=0,total=1,):
     return {
         'name': name,
         'allowed_ips': allowed_ips,
-        # Client-facing server endpoint (exported in the client's [Peer] block).
         'endpoint': (data.get('endpoint')or '').strip(),
-        # Optional fixed remote-client endpoint for the server's [Peer] block.
         'peer_endpoint': (data.get('peer_endpoint')or '').strip(),
         'persistent_keepalive':data.get('persistent_keepalive') or None,
         'mtu':data.get('mtu') or None,
@@ -20298,8 +23574,6 @@ def _create_subscription_peer(target, payload, compensation=None):
     scope = (target.get('scope') or 'local').lower()
     priv = subprocess.check_output(['wg', 'genkey']).strip().decode()
     pub = subprocess.check_output(['wg', 'pubkey'], input=priv.encode()).strip().decode()
-
-    # The server endpoint exported to the client; never the server-side peer endpoint.
     payload = dict(payload)
     peer_endpoint = (payload.pop('peer_endpoint', '') or '').strip()
 
@@ -20319,8 +23593,6 @@ def _create_subscription_peer(target, payload, compensation=None):
             dns=payload.get('dns'),
         )
 
-        # Register before the request: a timeout can be ambiguous even when the
-        # node installed the peer and the panel never received the response.
         if compensation is not None:
             compensation.register_node(node, pub)
 
@@ -20361,9 +23633,6 @@ def _create_subscription_peer(target, payload, compensation=None):
         )
         db.session.add(peer)
         db.session.flush()
-
-        # Installation failures must surface: the caller rolls the whole
-        # subscription transaction back rather than leaving a dead inbound.
         install_local_peer(peer)
         if compensation is not None:
             compensation.register_local(peer)
@@ -20372,7 +23641,6 @@ def _create_subscription_peer(target, payload, compensation=None):
 
 def _attach_subscription_target(sub, target, data, idx=0, total=1, compensation=None):
     if target.get('peer_id'):
-        # Attaching an existing peer: never rekey, readdress or reinstall it.
         peer = db.session.get(Peer, int(target.get('peer_id'))) or abort(404)
         existing = SubscriptionPeer.query.filter_by(peer_id=peer.id).first()
         if existing and existing.subscription_id != sub.id:
@@ -20889,17 +24157,10 @@ def api_subscriptions_locations():
             'iface_id': iface.id,
             'iface': iface_name,
             'label': iface_name,
-            # The interface's own Address=. It is NOT a client address, so it
-            # is never published under a generic `address` key any more.
             'interface_address': interface_address,
             'server_cidr': interface_address,
             'endpoint': endpoint_value,
             'endpoint_override': endpoint_override,
-            # Same rule as `_endpoint_default_payload`: 'override' when the
-            # operator set one; otherwise 'auto' only if auto-detection (run
-            # above, not deferred) actually produced a value, else 'none' --
-            # detection was attempted and came back empty, which is not the
-            # same claim as "auto-detection will provide it".
             'endpoint_source': (
                 'override' if endpoint_override
                 else ('auto' if endpoint_value else 'none')
@@ -21037,19 +24298,8 @@ def api_subscriptions_locations():
                     ),
 
                     'mtu': item.get('mtu'),
-
-                    # No `_node_endpoint_fallback` call here: that helper can
-                    # make up to two node HTTP calls, and this loop already
-                    # runs once per node interface. An empty 'endpoint' means
-                    # auto-detection decides at export time, same as
-                    # `resolve_client_endpoint_cheap`.
                     'endpoint': endpoint_override,
                     'endpoint_override': endpoint_override,
-                    # Same rule as `_endpoint_default_payload` and the local
-                    # locations above: 'override' when set, else 'auto'.
-                    # Never 'none' here -- detection is deliberately never
-                    # attempted in this loop, so nothing has been
-                    # established that would justify asserting a negative.
                     'endpoint_source': 'override' if endpoint_override else 'auto',
 
                     'available': len(
@@ -21118,11 +24368,6 @@ def api_subscriptions_locations():
 
                     'endpoint': endpoint_override,
                     'endpoint_override': endpoint_override,
-                    # Same rule as the live path above and
-                    # `_endpoint_default_payload`: 'override' when set, else
-                    # 'auto' -- detection is never attempted on this
-                    # (node-unreachable) fallback path either, so 'none'
-                    # would assert a negative that was never checked.
                     'endpoint_source': 'override' if endpoint_override else 'auto',
 
                     'available': len(
@@ -21338,7 +24583,6 @@ def api_subscription_remove_inbound(sid, link_id):
                 ),
             ), 409
 
-        # remove_peer_everywhere also drops the link row in the same transaction.
         try:
             remove_peer_everywhere(peer)
         except PeerRemovalError as e:
@@ -21380,10 +24624,6 @@ def api_subscription_delete(sid):
     deleted, failures = 0, []
 
     for peer in owned:
-        # Capture identifying fields up front: remove_peer_everywhere commits
-        # the row deletion itself, after which `peer` is detached/expired and
-        # reading peer.id / peer.name in the failure branch can raise
-        # DetachedInstanceError (review finding #7).
         peer_id = peer.id
         peer_name = peer.name
         try:
@@ -21398,7 +24638,6 @@ def api_subscription_delete(sid):
                              'detail': str(e)})
 
     if failures:
-        # Keep the subscription so the remaining peers stay reachable for a retry.
         db.session.rollback()
         return jsonify(
             ok=False,
@@ -22087,9 +25326,6 @@ def _subscription_public_payload(sub) -> dict:
     locs = []
     dirty = False
 
-    # Usage is needed to decide access. Do that before resolving any public
-    # host or endpoint so a revoked token never triggers or receives topology
-    # discovery as a side effect of rendering its explanatory status page.
     for link in links:
         peer = getattr(link, 'peer', None)
         if not peer:
@@ -22132,10 +25368,6 @@ def _subscription_public_payload(sub) -> dict:
                 link.location_label = label
                 dirty = True
 
-
-        # Go through the shared resolver rather than the local-only fallback:
-        # a node peer stores no endpoint of its own, and `_endpoint_fallback`
-        # would hand out the panel's host with the node interface's listen port.
         endpoint = ''
         if may_disclose_topology and getattr(peer, 'iface', None):
             endpoint = resolve_client_endpoint_cheap(
@@ -22386,10 +25618,6 @@ def subscription_public_inbound_qr(token, link_id):
 @app.get('/s/<token>/inbound/<int:link_id>/geo')
 def subscription_public_inbound_geo(token, link_id):
     sub = Subscription.query.filter_by(token=token).first() or abort(404)
-
-    # Geo reveals the public host of an active inbound; gate it behind the
-    # same access check as the config/QR endpoints so a revoked subscription
-    # cannot be probed for live topology (review finding #11).
     revoked = _subscription_access_or_403(sub)
     if revoked:
         return revoked
@@ -22619,16 +25847,11 @@ if __name__ == "__main__":
     try:
         bootstrap()
     except SchemaMigrationError as e:
-        # A half-migrated database must not serve traffic: peer queries would
-        # fail against the missing columns while the panel still answered as
-        # though it were healthy.
         app.logger.critical(
             "Refusing to start: the database schema could not be migrated: %s", e
         )
         raise SystemExit(1)
     except Exception as e:
-        # Interface discovery and the boot-time housekeeping below the schema
-        # step are best-effort; the panel is still usable without them.
         app.logger.exception("bootstrap failed: %s", e)
 
     _Guni(app, options).run()
