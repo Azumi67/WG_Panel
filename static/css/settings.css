@@ -2198,3 +2198,87 @@ button.ui-btn.primary {
     width: 100%;
   }
 }
+
+#tg-save,
+#tg-add-admin,
+#tpl-save,
+#soc-save,
+#admin-rename,
+#pw-save,
+#twofa-begin,
+#twofa-confirm {
+  background: linear-gradient(180deg, #168267 0%, #106b55 100%) !important;
+  border: 1px solid #218f72 !important;
+  color: #ffffff !important;
+  box-shadow: 0 6px 16px rgba(16, 107, 85, .16) !important;
+}
+
+#tg-save:hover:not(:disabled),
+#tg-add-admin:hover:not(:disabled),
+#tpl-save:hover:not(:disabled),
+#soc-save:hover:not(:disabled),
+#admin-rename:hover:not(:disabled),
+#pw-save:hover:not(:disabled),
+#twofa-begin:hover:not(:disabled),
+#twofa-confirm:hover:not(:disabled) {
+  background: linear-gradient(180deg, #1a9274 0%, #11755c 100%) !important;
+  border-color: #2ca080 !important;
+  filter: none !important;
+  transform: translateY(-1px);
+}
+
+#tg-save:focus-visible,
+#tg-add-admin:focus-visible,
+#tpl-save:focus-visible,
+#soc-save:focus-visible,
+#admin-rename:focus-visible,
+#pw-save:focus-visible,
+#twofa-begin:focus-visible,
+#twofa-confirm:focus-visible {
+  outline: none !important;
+  box-shadow: 0 0 0 3px rgba(22, 130, 103, .18), 0 6px 16px rgba(16, 107, 85, .14) !important;
+}
+
+.panel[data-panel="template"] .savebar {
+  background: #f8fafc !important;
+  border: 1px solid #dce5ed !important;
+  border-radius: 13px !important;
+  box-shadow: none !important;
+  margin-top: 12px !important;
+}
+
+.panel[data-panel="admin"] #admin-rename,
+.panel[data-panel="admin"] #pw-save,
+.panel[data-panel="admin"] #twofa-begin,
+.panel[data-panel="admin"] #twofa-confirm {
+  white-space: nowrap;
+}
+
+.panel[data-panel="admin"] #twofa-disable {
+  background: #fff4f5 !important;
+  border-color: #f2c7cd !important;
+  color: #ae3548 !important;
+}
+.panel[data-panel="admin"] #twofa-disable:hover:not(:disabled) {
+  background: #ffe9ec !important;
+  border-color: #ebaab4 !important;
+  filter: none !important;
+}
+
+.panel[data-panel="admin"] #twofa-setup.open {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid #dce5ed;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+@media (max-width: 760px) {
+  .panel[data-panel="template"] .savebar {
+    align-items: stretch;
+  }
+  .panel[data-panel="template"] .savebar .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
