@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block head_extras %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/subscriptions.css') }}?v=20260729-v25">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/subscription-dark.css') }}?v=20260729-v25">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/subscriptions.css') }}?v=subscription-theme-layout-v2">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/subscription-dark.css') }}?v=subscription-theme-layout-v2">
 {% endblock %}
 {% block content %}
 <script defer src="{{ url_for('static', filename='js/csrf.js') }}"></script>
@@ -204,7 +204,7 @@
   </div>
 </div>
 
-<div id="sub-modal" class="modal" aria-hidden="true" role="dialog" aria-labelledby="sub-modal-title">
+<div id="sub-modal" class="modal" aria-hidden="true" role="dialog" aria-labelledby="sub-modal-title" data-inbound-mode="new">
   <div class="modal-backdrop" data-close="1"></div>
   <div class="subx-modal">
     <form id="sub-form" autocomplete="off">
@@ -216,6 +216,19 @@
         </div>
         <button class="subx-close" id="sub-close" type="button" aria-label="Close"><i class="fas fa-times"></i></button>
       </div>
+
+      <section class="profile8-bar" id="subscription-profile-bar">
+        <div class="profile8-copy"><i class="fas fa-bookmark"></i><span><b>Subscription profile</b><small>Reuse client defaults, advanced values, selected interfaces, and portal design.</small></span></div>
+        <div class="profile8-controls">
+          <select class="input" id="sub-profile-select"><option value="">Choose profile…</option></select>
+          <button type="button" id="sub-profile-apply"><i class="fas fa-play"></i><span>Apply</span></button>
+          <button type="button" id="sub-profile-save"><i class="fas fa-plus"></i><span>Save profile</span></button>
+          <button type="button" id="sub-profile-update" title="Update selected profile"><i class="fas fa-rotate"></i></button>
+          <button type="button" id="sub-profile-default" title="Set selected profile as default"><i class="fas fa-star"></i></button>
+          <button type="button" id="sub-profile-rename" title="Rename selected profile"><i class="fas fa-pen"></i></button>
+          <button type="button" id="sub-profile-delete" title="Delete selected profile"><i class="fas fa-trash"></i></button>
+        </div>
+      </section>
 
       <div class="subx-modal-body">
         <section class="subx-client-card">
@@ -272,22 +285,120 @@
               </span>
             </label>
           </div>
+          <details class="adv8" id="new-defaults">
+            <summary class="adv8-launcher">
+              <span class="adv8-mark" aria-hidden="true"></span>
+              <span class="adv8-chevron"><i class="fas fa-chevron-down"></i></span>
+              <span class="adv8-icon"><i class="fas fa-sliders"></i></span>
+              <span class="adv8-copy">
+                <span class="advanced-inline-title">
+                  <span class="advanced-optional-badge"><i class="fas fa-sparkles"></i> Optional</span>
+                  <b>Advanced WireGuard options</b>
+                  <small>Routes, endpoints, DNS, MTU, and keepalive</small>
+                </span>
+              </span>
+              <span class="adv8-summary" id="adv8-summary">Using interface defaults</span>
+            </summary>
 
-          <details class="subx-new-defaults" id="new-defaults">
-            <summary><span class="adv-title"><i class="fas fa-sliders"></i><b>Advanced options</b><small>Optional WireGuard values</small></span><span class="adv-arrow" aria-hidden="true"><i class="fas fa-chevron-down"></i></span></summary>
-            <div class="subx-section-subtitle">Optional WireGuard values. Most users can leave these unchanged.</div>
-            <div class="subx-form-grid compact">
-              <label class="subx-name-prefix-field"><span>Name prefix</span><input class="input" name="peer_name_prefix" placeholder="empty = client-name-1, 2, 3"></label>
-              <label class="subx-allowed-routes"><span>Allowed IPs</span><input class="input" name="allowed_ips" value="0.0.0.0/0, ::/0"><div class="subx-auto-network-row"><label class="subx-auto-network-toggle"><input type="checkbox" id="sub-include-internal-network" name="include_internal_network" value="1"><span class="subx-auto-network-switch"></span><span class="subx-auto-network-copy"><b>Include local networks</b><small>Add detected local and selected-node private networks to the current Allowed IPs.</small></span></label></div><input id="sub-internal-networks" type="hidden" value=""></label>
-              <label><span>Endpoint override</span><input class="input" name="endpoint" placeholder="optional host:port"></label>
-              <div class="two">
-                <label><span>Keepalive</span><input class="input" name="persistent_keepalive" type="number" min="0" placeholder="25"></label>
-                <label><span>MTU</span><input class="input" name="mtu" type="number" min="576" max="65535" placeholder="1280"></label>
-              </div>
-              <label><span>DNS</span><input class="input" name="dns" placeholder="1.1.1.1, 1.0.0.1"></label>
+            <div class="adv8-body">
+              <section class="adv8-section routing">
+                <header>
+                  <span><i class="fas fa-route"></i></span>
+                  <div><b>Routing</b><small>Build the Allowed IPs list using removable route chips.</small></div>
+                </header>
+
+                <div class="adv124-routing-top">
+  <label class="adv124-name-prefix">
+    <span>Name prefix</span>
+    <input class="input" name="peer_name_prefix" placeholder="Empty = client-name-1, 2, 3">
+    <small>Optional prefix when creating configs on multiple interfaces.</small>
+  </label>
+  <label class="adv124-auto-inline">
+
+                  <input type="checkbox" id="sub-include-internal-network" name="include_internal_network" value="1">
+                  <span class="adv8-switch"></span>
+                  <span class="adv8-auto-copy">
+                    <b>Auto-add interface networks</b>
+                    <small id="sub-auto-network-note">Turn this on to append detected local and selected-node networks as removable chips.</small>
+                  </span>
+                  <span class="adv8-auto-count" id="sub-auto-network-count">0 found</span>
+
+  </label>
+</div>
+<div class="adv8-route-field adv124-route-wide">
+
+                    <div class="adv8-route-label">
+                      <span><b>Allowed IPs</b><small>Each chip is written to the client config.</small></span>
+                      <button type="button" id="sub-route-reset" title="Restore full-tunnel defaults"><i class="fas fa-rotate-left"></i><span>Default</span></button>
+                    </div>
+                    <input type="hidden" name="allowed_ips" id="sub-allowed-ips-value" value="0.0.0.0/0, ::/0">
+                    <input type="hidden" id="sub-internal-networks" value="">
+                    <input type="hidden" id="sub-selected-internal-networks" value="">
+                    <div class="adv8-route-editor" id="sub-route-editor">
+                      <div class="adv8-route-chips" id="sub-route-chips"></div>
+                      <div class="adv8-route-entry-row">
+                        <i class="fas fa-plus"></i>
+                        <input id="sub-route-entry" autocomplete="off" spellcheck="false" placeholder="Add route, e.g. 192.168.1.0/24">
+                        <button type="button" id="sub-route-add">Add</button>
+                      </div>
+                    </div>
+                    <div class="adv8-route-hint"><i class="fas fa-circle-info"></i><span>Detected local and node private networks can be added as normal chips. Remove any chip with its small × button.</span></div>
+                    <div class="adv11-detected-tray" id="sub-detected-network-tray" aria-live="polite"></div>
+                    <div class="adv8-route-error" id="sub-route-error" role="alert" hidden></div>
+
+</div>
+              </section>
+
+              <section class="adv8-section connection subx-new-peer-only">
+                <header>
+                  <span><i class="fas fa-link"></i></span>
+                  <div><b>Connection</b><small>Leave these blank for automatic interface behavior.</small></div>
+                </header>
+                <div class="adv8-endpoint-stack">
+                  <label class="adv8-endpoint-card server-endpoint-card">
+                    <span class="adv8-endpoint-label"><b>Server endpoint</b><em>Client connects here</em></span>
+                    <input class="input" name="endpoint" inputmode="url" autocomplete="off" placeholder="Use interface endpoint automatically">
+                    <small>Written into the exported client configuration. Leave blank to use the selected interface endpoint.</small>
+                  </label>
+                  <div class="adv11-fixed-wrap fixed-endpoint-card">
+  <div class="adv11-fixed-card">
+    <div class="adv11-fixed-head">
+      <div class="adv11-fixed-title"><span class="adv11-fixed-icon"><i class="fas fa-link"></i></span><span><b>Fixed client endpoint</b><small>Optional server-side destination override for advanced cases only.</small></span></div>
+      <button type="button" class="adv123-info-trigger" id="sub-fixed-client-info-trigger" title="Read fixed endpoint guidance" aria-label="Read fixed endpoint guidance"><i class="fas fa-circle-info"></i></button>
+    </div>
+    <label class="adv11-fixed-input">
+      <span class="adv11-fixed-label">Stable public host and UDP port</span>
+      <span class="adv123-fixed-input-row"><input class="input" id="sub-peer-endpoint" name="peer_endpoint" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Example: client.example.com:51820"><button type="button" id="sub-fixed-client-clear" class="adv123-fixed-clear" title="Clear fixed endpoint" aria-label="Clear fixed endpoint"><i class="fas fa-xmark"></i></button></span>
+      <small>Suitable for a stable public client endpoint, or a UDP load-balancer / HA frontend that keeps a consistent WireGuard flow and reachable UDP port.</small>
+    </label>
+  </div>
+  <details class="adv11-fixed-guide adv123-fixed-guide" id="sub-fixed-client-info">
+    <summary>
+      <span class="adv11-guide-main"><span class="adv11-guide-pulse"><i class="fas fa-circle-info"></i></span><span><b>Fixed endpoint guidance</b><small id="sub-fixed-client-summary">Most clients should leave this field empty and use automatic endpoint behavior.</small></span></span>
+      <i class="fas fa-chevron-down adv11-guide-chevron"></i>
+    </summary>
+    <div class="adv11-guide-body">
+      <article class="adv11-guide-point ok"><i class="fas fa-check"></i><span><b>Good fit</b><small>Office gateways, branch routers, dedicated servers, or a stable UDP load-balancer / HA frontend that preserves the peer flow and return path.</small></span></article>
+      <article class="adv11-guide-point warn"><i class="fas fa-triangle-exclamation"></i><span><b>Leave blank</b><small>Phones, roaming laptops, CGNAT users, changing home addresses, or ordinary HTTP/TCP load balancers. WireGuard requires a reachable UDP endpoint.</small></span></article>
+      <article class="adv11-guide-point note"><i class="fas fa-arrow-right-arrow-left"></i><span><b>What happens</b><small>The panel stores this value on the server-side peer. WireGuard sends encrypted UDP traffic to that exact host and port until the endpoint is changed.</small></span></article>
+    </div>
+  </details>
+</div>
+              </section>
+
+              <section class="adv8-section client">
+                <header>
+                  <span><i class="fas fa-laptop-code"></i></span>
+                  <div><b>Client behavior</b><small>Blank fields inherit values from the selected interface.</small></div>
+                </header>
+                <div class="adv8-grid client-grid">
+                  <label><span>Keepalive</span><input class="input" name="persistent_keepalive" type="number" min="0" placeholder="25"><small>Seconds; 0 disables it.</small></label>
+                  <label><span>MTU</span><input class="input" name="mtu" type="number" min="576" max="65535" placeholder="1280"><small>Leave empty for interface default.</small></label>
+                  <label class="dns"><span>DNS resolvers</span><input class="input" name="dns" placeholder="1.1.1.1, 1.0.0.1"><small>Comma-separated resolver addresses.</small></label>
+                </div>
+              </section>
             </div>
           </details>
-
           <div class="subx-filter-tools">
             <div class="subx-filters">
               <button type="button" class="active" data-scope="all">All</button>
@@ -298,9 +409,9 @@
               <i class="fas fa-search"></i>
               <input id="inbound-search" class="input" placeholder="Search peer name, IP, phone, Telegram, endpoint…">
             </div>
-            <div class="subx-bulkpick">
-              
-              
+            <div class="subx-bulkpick" aria-label="Interface selection tools">
+              <button type="button" class="subx-tool-btn" data-picker-select-visible title="Select all visible interfaces"><i class="fas fa-check-double"></i><span>Select visible</span></button>
+              <button type="button" class="subx-tool-btn" data-picker-clear title="Clear selected interfaces"><i class="fas fa-eraser"></i><span>Clear</span></button>
             </div>
           </div>
 
@@ -326,85 +437,269 @@
 </div>
 
 
+
 <div id="sub-settings-modal" class="modal" aria-hidden="true" role="dialog" aria-labelledby="sub-settings-title">
   <div class="modal-backdrop" data-close-settings="1"></div>
-  <div class="subx-settings-modal template-studio">
-    <div class="subx-modal-head">
-      <div>
-        <h2 id="sub-settings-title"><i class="fas fa-wand-magic-sparkles"></i> Subscription template studio</h2>
-        <p>Choose the public page style, stat visualization, subscription label, icon, and support links.</p>
+  <div class="studio8-modal">
+    <header class="studio8-head">
+      <div class="studio8-title">
+        <span class="studio8-title-icon"><i class="fas fa-wand-magic-sparkles"></i></span>
+        <span><h2 id="sub-settings-title">Subscription template studio</h2><p>Customize the real public portal and inspect the complete desktop or mobile result.</p></span>
       </div>
-      <button class="subx-close" id="settings-close" type="button" aria-label="Close"><i class="fas fa-times"></i></button>
-    </div>
+      <div class="studio8-head-actions"><button class="subx-close" id="settings-close" type="button" aria-label="Close"><i class="fas fa-times"></i></button></div>
+    </header>
 
-    <div class="subx-settings-body studio-grid">
-      <section class="settings-panel studio-panel">
-        <div class="subx-section-title"><i class="fas fa-palette"></i> Public template</div>
-        <div class="layout-options studio-options">
-          <label class="layout-option"><input type="radio" name="sub-layout" value="aurora"><span><b>Aurora</b><small>Glass, particles, premium hero</small></span></label>
-          <label class="layout-option"><input type="radio" name="sub-layout" value="compact"><span><b>Compact</b><small>Best for many configs on mobile</small></span></label>
-          <label class="layout-option"><input type="radio" name="sub-layout" value="cards"><span><b>Cards</b><small>Wide location cards and strong stats</small></span></label>
-          <label class="layout-option"><input type="radio" name="sub-layout" value="minimal"><span><b>Minimal</b><small>Low motion, clean and light</small></span></label>
-        </div>
+    <section class="profile8-bar studio-profile8-bar" id="studio-profile-bar" aria-label="Template profiles">
+      <div class="profile8-copy">
+        <i class="fas fa-bookmark"></i>
+        <span><b>Template profile</b><small>Save or apply the complete public-page design.</small></span>
+      </div>
+      <div class="profile8-controls">
+        <select class="input" id="studio-profile-select"><option value="">Choose profile…</option></select>
+        <button type="button" id="studio-profile-apply"><i class="fas fa-play"></i><span>Apply</span></button>
+        <button type="button" id="studio-profile-save"><i class="fas fa-plus"></i><span>Save</span></button>
+        <button type="button" id="studio-profile-update" title="Update selected profile"><i class="fas fa-rotate"></i></button>
+        <button type="button" id="studio-profile-default" title="Set selected profile as default"><i class="fas fa-star"></i></button>
+        <button type="button" id="studio-profile-rename" title="Rename selected profile"><i class="fas fa-pen"></i></button>
+        <button type="button" id="studio-profile-delete" title="Delete selected profile"><i class="fas fa-trash"></i></button>
+      </div>
+    </section>
 
-        <div class="subx-section-title mt"><i class="fas fa-chart-simple"></i> Stats style</div>
-        <div class="subx-choice-row" role="radiogroup" aria-label="Public stats style">
-          <label><input type="radio" name="sub-display-mode" value="bars"><span><i class="fas fa-bars-progress"></i><b>Bars</b></span></label>
-          <label><input type="radio" name="sub-display-mode" value="rings"><span><i class="fas fa-circle-notch"></i><b>Circles</b></span></label>
-          <label><input type="radio" name="sub-display-mode" value="hybrid"><span><i class="fas fa-gauge-high"></i><b>Hybrid</b></span></label>
-        </div>
+    <div class="studio8-body">
+      <aside class="studio8-editor">
+        <nav class="studio8-nav" aria-label="Template customization sections">
+          <button type="button" class="active" data-studio8-tab="layout"><i class="fas fa-layer-group"></i><span><b>Layout</b><small>Structure</small></span></button>
+          <button type="button" data-studio8-tab="appearance"><i class="fas fa-palette"></i><span><b>Appearance</b><small>Colors & surfaces</small></span></button>
+          <button type="button" data-studio8-tab="statistics"><i class="fas fa-chart-pie"></i><span><b>Statistics</b><small>Usage display</small></span></button>
+          <button type="button" data-studio8-tab="motion"><i class="fas fa-wind"></i><span><b>Motion</b><small>Animation</small></span></button>
+          <button type="button" data-studio8-tab="content"><i class="fas fa-eye"></i><span><b>Content</b><small>Visible sections</small></span></button>
+          <button type="button" data-studio8-tab="actions"><i class="fas fa-arrow-pointer"></i><span><b>Actions</b><small>Buttons & links</small></span></button>
+          <button type="button" data-studio8-tab="identity"><i class="fas fa-id-badge"></i><span><b>Identity</b><small>Text & icon</small></span></button>
+          <button type="button" data-studio8-tab="support"><i class="fas fa-headset"></i><span><b>Support</b><small>Contact links</small></span></button>
+        </nav>
 
-        <div class="subx-section-title mt"><i class="fas fa-id-badge"></i> Subscription identity</div>
-        <div class="support-form identity-form">
-          <label><span>Header label</span><input class="input" id="portal-label" placeholder="Premium WireGuard access"></label>
-          <label><span>Custom title</span><input class="input" id="portal-title" placeholder="Empty = client name"></label>
-          <label class="wide"><span>Subtitle</span><input class="input" id="portal-subtitle" placeholder="Install WireGuard, then scan QR or import config."></label>
-          <label><span>Header icon</span><select class="input" id="portal-icon">
-            <option value="fas fa-bolt">Bolt</option><option value="fas fa-shield-halved">Shield</option><option value="fas fa-crown">Crown</option><option value="fas fa-rocket">Rocket</option><option value="fas fa-globe">Globe</option><option value="fas fa-headset">Headset</option><option value="fas fa-wifi">Wi‑Fi</option><option value="fas fa-gamepad">Gamepad</option><option value="fas fa-server">Server</option><option value="fas fa-lock">Lock</option><option value="fas fa-star">Star</option>
-          </select></label>
-          <label><span>Animation</span><select class="input" id="portal-animation"><option value="rich">Rich</option><option value="soft">Soft</option><option value="minimal">Minimal</option></select></label>
-        </div>
+        <div class="studio8-panels">
+          <section class="studio8-panel active" data-studio8-panel="layout">
+            <div class="studio8-section-head"><div><b>Page layout</b><small>Choose the information hierarchy. Selection is shown by the highlighted card—no checkmark is used.</small></div><em id="studio-layout-summary">Modern</em></div>
+            <div class="studio8-choice-grid layouts">
+              <label><input type="radio" name="sub-layout" value="aurora"><span class="studio8-choice"><i class="layout-demo modern"><b></b><b></b><b></b></i><span><b>Modern</b><small>Balanced and versatile</small></span></span></label>
+              <label><input type="radio" name="sub-layout" value="cards"><span class="studio8-choice"><i class="layout-demo dashboard"><b></b><b></b><b></b></i><span><b>Dashboard</b><small>Structured panels</small></span></span></label>
+              <label><input type="radio" name="sub-layout" value="compact"><span class="studio8-choice"><i class="layout-demo compact"><b></b><b></b><b></b></i><span><b>Compact</b><small>High information density</small></span></span></label>
+              <label><input type="radio" name="sub-layout" value="minimal"><span class="studio8-choice"><i class="layout-demo minimal"><b></b><b></b><b></b></i><span><b>Minimal</b><small>Quiet and simple</small></span></span></label>
+              <label><input type="radio" name="sub-layout" value="split"><span class="studio8-choice"><i class="layout-demo split"><b></b><b></b><b></b></i><span><b>Split</b><small>Usage beside configs</small></span></span></label>
+              <label><input type="radio" name="sub-layout" value="profile"><span class="studio8-choice"><i class="layout-demo profile"><b></b><b></b><b></b></i><span><b>Profile</b><small>Identity-led portal</small></span></span></label>
+            </div>
+            <div class="studio8-field-grid two">
+              <fieldset><legend>Hero style</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-hero-style" value="panel"><span>Panel</span></label><label><input type="radio" name="sub-hero-style" value="banner"><span>Banner</span></label><label><input type="radio" name="sub-hero-style" value="minimal"><span>Minimal</span></label></div></fieldset>
+              <fieldset><legend>Page width</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-page-width" value="narrow"><span>Narrow</span></label><label><input type="radio" name="sub-page-width" value="standard"><span>Standard</span></label><label><input type="radio" name="sub-page-width" value="wide"><span>Wide</span></label></div></fieldset>
+              <fieldset><legend>Content density</legend><div class="studio8-segmented"><label><input type="radio" name="sub-density" value="comfortable"><span>Comfortable</span></label><label><input type="radio" name="sub-density" value="compact"><span>Compact</span></label></div></fieldset>
+              <fieldset><legend>Config presentation</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-config-style" value="cards"><span>Cards</span></label><label><input type="radio" name="sub-config-style" value="list"><span>List</span></label><label><input type="radio" name="sub-config-style" value="compact"><span>Compact</span></label></div></fieldset>
+              <fieldset><legend>Config columns</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-config-columns" value="auto"><span>Auto</span></label><label><input type="radio" name="sub-config-columns" value="one"><span>One</span></label><label><input type="radio" name="sub-config-columns" value="two"><span>Two</span></label></div></fieldset>
+              <fieldset><legend>Section order</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-section-order" value="standard"><span>Standard</span></label><label><input type="radio" name="sub-section-order" value="configs_first"><span>Configs first</span></label><label><input type="radio" name="sub-section-order" value="usage_first"><span>Usage first</span></label></div></fieldset>
+            </div>
+          </section>
 
-        <div class="subx-section-title mt"><i class="fas fa-headset"></i> Support links</div>
-        <div class="support-form">
-          <label><span>Telegram</span><input class="input" id="sup-telegram" placeholder="@channel or https://t.me/..."></label>
-          <label><span>WhatsApp</span><input class="input" id="sup-whatsapp" placeholder="+123... or https://wa.me/..."></label>
-          <label><span>Phone</span><input class="input" id="sup-phone" placeholder="+123456789"></label>
-          <label><span>Email</span><input class="input" id="sup-email" placeholder="support@example.com"></label>
-          <label><span>Website</span><input class="input" id="sup-website" placeholder="https://example.com"></label>
-          <label><span>Instagram</span><input class="input" id="sup-instagram" placeholder="@profile or URL"></label>
+          <section class="studio8-panel" data-studio8-panel="appearance" hidden>
+            <div class="studio8-section-head"><div><b>Appearance</b><small>Background, palette, surfaces, typography, corners, and buttons.</small></div><em id="studio-background-summary">Aurora</em></div>
+            <h3>Live background</h3>
+            <div class="studio8-choice-grid backgrounds">
+              <label><input type="radio" name="sub-background" value="aurora"><span class="studio8-bg-choice"><i class="bgdemo aurora"></i><span><b>Aurora</b><small>Soft moving lights</small></span></span></label>
+              <label><input type="radio" name="sub-background" value="waves"><span class="studio8-bg-choice"><i class="bgdemo waves"></i><span><b>Waves</b><small>Flowing ribbons</small></span></span></label>
+              <label><input type="radio" name="sub-background" value="network"><span class="studio8-bg-choice"><i class="bgdemo network"></i><span><b>Network</b><small>Nodes and grid</small></span></span></label>
+              <label><input type="radio" name="sub-background" value="orbits"><span class="studio8-bg-choice"><i class="bgdemo orbits"></i><span><b>Orbits</b><small>Rings and points</small></span></span></label>
+              <label><input type="radio" name="sub-background" value="mesh"><span class="studio8-bg-choice"><i class="bgdemo mesh"></i><span><b>Mesh</b><small>Ambient gradient field</small></span></span></label>
+              <label><input type="radio" name="sub-background" value="nebula"><span class="studio8-bg-choice"><i class="bgdemo nebula"></i><span><b>Nebula</b><small>Layered clouds and depth</small></span></span></label>
+              <label><input type="radio" name="sub-background" value="lines"><span class="studio8-bg-choice"><i class="bgdemo lines"></i><span><b>Lines</b><small>Technical light paths</small></span></span></label>
+              <label><input type="radio" name="sub-background" value="constellation"><span class="studio8-bg-choice"><i class="bgdemo constellation"></i><span><b>Constellation</b><small>Connected stars and motion</small></span></span></label>
+              <label><input type="radio" name="sub-background" value="prism"><span class="studio8-bg-choice"><i class="bgdemo prism"></i><span><b>Prism</b><small>Layered ribbons and light streaks</small></span></span></label>
+              <label><input type="radio" name="sub-background" value="circuit"><span class="studio8-bg-choice"><i class="bgdemo circuit"></i><span><b>Circuit</b><small>Technical grid with animated paths</small></span></span></label>
+              <label><input type="radio" name="sub-background" value="pulse"><span class="studio8-bg-choice"><i class="bgdemo pulse"></i><span><b>Pulse</b><small>Orbital glow and pulses</small></span></span></label>
+              <label><input type="radio" name="sub-background" value="none"><span class="studio8-bg-choice"><i class="bgdemo none"></i><span><b>None</b><small>Static background</small></span></span></label>
+            </div>
+            <h3>Accent palette</h3>
+            <div class="studio8-swatches">
+              <label title="Mint"><input type="radio" name="sub-accent" value="mint"><span class="mint"></span></label><label title="Blue"><input type="radio" name="sub-accent" value="blue"><span class="blue"></span></label><label title="Violet"><input type="radio" name="sub-accent" value="violet"><span class="violet"></span></label><label title="Coral"><input type="radio" name="sub-accent" value="coral"><span class="coral"></span></label><label title="Amber"><input type="radio" name="sub-accent" value="amber"><span class="amber"></span></label><label title="Monochrome"><input type="radio" name="sub-accent" value="mono"><span class="mono"></span></label><label title="Custom"><input type="radio" name="sub-accent" value="custom"><span class="custom"></span></label>
+            </div>
+            <div class="studio8-field-grid two">
+              <label class="studio8-color-field"><span>Primary color</span><input type="color" id="portal-primary-color" value="#3addaa"><input class="input" id="portal-primary-text" value="#3addaa" maxlength="7"></label>
+              <label class="studio8-color-field"><span>Secondary color</span><input type="color" id="portal-secondary-color" value="#63a5ff"><input class="input" id="portal-secondary-text" value="#63a5ff" maxlength="7"></label>
+              <fieldset><legend>Default theme</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-theme-default" value="auto"><span>Auto</span></label><label><input type="radio" name="sub-theme-default" value="light"><span>Light</span></label><label><input type="radio" name="sub-theme-default" value="dark"><span>Dark</span></label></div></fieldset>
+              <fieldset><legend>Surface style</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-surface" value="glass"><span>Glass</span></label><label><input type="radio" name="sub-surface" value="solid"><span>Solid</span></label><label><input type="radio" name="sub-surface" value="soft"><span>Soft</span></label></div></fieldset>
+              <fieldset><legend>Corner style</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-radius" value="rounded"><span>Rounded</span></label><label><input type="radio" name="sub-radius" value="medium"><span>Medium</span></label><label><input type="radio" name="sub-radius" value="square"><span>Square</span></label></div></fieldset>
+              <fieldset><legend>Shadow</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-shadow" value="none"><span>None</span></label><label><input type="radio" name="sub-shadow" value="soft"><span>Soft</span></label><label><input type="radio" name="sub-shadow" value="deep"><span>Deep</span></label></div></fieldset>
+              <fieldset><legend>Button style</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-button-style" value="solid"><span>Solid</span></label><label><input type="radio" name="sub-button-style" value="outline"><span>Outline</span></label><label><input type="radio" name="sub-button-style" value="soft"><span>Soft</span></label></div></fieldset>
+              <fieldset><legend>Font scale</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-font-scale" value="small"><span>Small</span></label><label><input type="radio" name="sub-font-scale" value="standard"><span>Standard</span></label><label><input type="radio" name="sub-font-scale" value="large"><span>Large</span></label></div></fieldset>
+              <label class="studio8-range"><span>Background intensity <em id="background-intensity-value">70%</em></span><input type="range" id="portal-background-intensity" min="0" max="100" value="70"></label>
+              <label class="studio8-range"><span>Card opacity <em id="card-opacity-value">82%</em></span><input type="range" id="portal-card-opacity" min="50" max="100" value="82"></label>
+            </div>
+          </section>
+
+          <section class="studio8-panel" data-studio8-panel="statistics" hidden>
+            <div class="studio8-section-head"><div><b>Statistics</b><small>Choose how remaining data and time are presented.</small></div><em id="studio-stats-summary">Hybrid</em></div>
+            <div class="studio8-choice-grid stats">
+              <label><input type="radio" name="sub-display-mode" value="bars"><span class="studio8-stat-choice"><i class="statdemo bars"><b></b><b></b></i><span><b>Progress bars</b><small>Clear horizontal meters</small></span></span></label>
+              <label><input type="radio" name="sub-display-mode" value="rings"><span class="studio8-stat-choice"><i class="statdemo rings"><b></b><b></b></i><span><b>Circles</b><small>Circular indicators</small></span></span></label>
+              <label><input type="radio" name="sub-display-mode" value="hybrid"><span class="studio8-stat-choice"><i class="statdemo hybrid"><b></b><b></b></i><span><b>Hybrid</b><small>Rings and bars together</small></span></span></label>
+              <label><input type="radio" name="sub-display-mode" value="focus"><span class="studio8-stat-choice"><i class="statdemo focus"><b>8.4</b></i><span><b>Large values</b><small>Emphasize remaining amounts</small></span></span></label>
+              <label><input type="radio" name="sub-display-mode" value="minimal"><span class="studio8-stat-choice"><i class="statdemo minimal"><b></b><b></b></i><span><b>Compact rows</b><small>No charts</small></span></span></label>
+              <label><input type="radio" name="sub-display-mode" value="segments"><span class="studio8-stat-choice"><i class="statdemo segments"><b></b><b></b><b></b><b></b></i><span><b>Segments</b><small>Discrete capacity blocks</small></span></span></label>
+            </div>
+            <div class="studio8-field-grid two">
+              <fieldset><legend>Statistics size</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-stat-size" value="compact"><span>Compact</span></label><label><input type="radio" name="sub-stat-size" value="standard"><span>Standard</span></label><label><input type="radio" name="sub-stat-size" value="large"><span>Large</span></label></div></fieldset>
+              <div class="studio8-toggle-stack">
+                <label class="studio8-toggle-card"><input type="checkbox" id="show-quick-stats"><span class="studio8-toggle"></span><span><b>Summary strip</b><small>Status, data and time above usage.</small></span></label>
+                <label class="studio8-toggle-card"><input type="checkbox" id="show-percentage"><span class="studio8-toggle"></span><span><b>Percentages</b><small>Show percentages inside circles and labels.</small></span></label>
+                <label class="studio8-toggle-card"><input type="checkbox" id="show-used-detail"><span class="studio8-toggle"></span><span><b>Used details</b><small>Show used and total amounts below values.</small></span></label>
+              </div>
+            </div>
+          </section>
+
+          <section class="studio8-panel" data-studio8-panel="motion" hidden>
+            <div class="studio8-section-head"><div><b>Motion</b><small>Control animation intensity and performance.</small></div><em id="studio-motion-summary">Balanced</em></div>
+            <div class="studio8-motion-grid">
+              <label><input type="radio" name="portal-animation-choice" value="cinematic"><span class="studio8-motion-choice"><i class="motiondemo cinematic"><b></b><b></b><b></b></i><span><b>Cinematic</b><small>High-energy parallax and glow</small></span></span></label>
+              <label><input type="radio" name="portal-animation-choice" value="immersive"><span class="studio8-motion-choice"><i class="motiondemo immersive"><b></b><b></b><b></b></i><span><b>Immersive</b><small>Maximum atmosphere and motion</small></span></span></label>
+              <label><input type="radio" name="portal-animation-choice" value="rich"><span class="studio8-motion-choice"><i class="motiondemo rich"><b></b><b></b><b></b></i><span><b>Rich</b><small>Full ambient movement and particles</small></span></span></label>
+              <label><input type="radio" name="portal-animation-choice" value="balanced"><span class="studio8-motion-choice"><i class="motiondemo balanced"><b></b><b></b></i><span><b>Balanced</b><small>Visible motion without excess</small></span></span></label>
+              <label><input type="radio" name="portal-animation-choice" value="soft"><span class="studio8-motion-choice"><i class="motiondemo soft"><b></b><b></b></i><span><b>Soft</b><small>Slower movement and fewer effects</small></span></span></label>
+              <label><input type="radio" name="portal-animation-choice" value="drift"><span class="studio8-motion-choice"><i class="motiondemo drift"><b></b><b></b></i><span><b>Drift</b><small>Very calm decorative movement</small></span></span></label>
+              <label><input type="radio" name="portal-animation-choice" value="minimal"><span class="studio8-motion-choice"><i class="motiondemo minimal"><b></b></i><span><b>Minimal</b><small>Almost static and battery friendly</small></span></span></label>
+              <label><input type="radio" name="portal-animation-choice" value="off"><span class="studio8-motion-choice"><i class="motiondemo off"><b></b></i><span><b>Off</b><small>No decorative animation</small></span></span></label>
+            </div>
+            <select class="studio8-hidden" id="portal-animation" aria-hidden="true" tabindex="-1"><option value="cinematic">Cinematic</option><option value="immersive">Immersive</option><option value="rich">Rich</option><option value="balanced">Balanced</option><option value="soft">Soft</option><option value="drift">Drift</option><option value="minimal">Minimal</option><option value="off">Off</option></select>
+            <div class="studio8-field-grid two">
+              <label class="studio8-range"><span>Motion speed <em id="motion-speed-value">100%</em></span><input type="range" id="portal-motion-speed" min="50" max="150" value="100"></label>
+              <label class="studio8-range"><span>Particle density <em id="particle-density-value">60%</em></span><input type="range" id="portal-particle-density" min="0" max="100" value="60"></label>
+            </div>
+            <div class="studio8-note"><i class="fas fa-universal-access"></i><span>Visitors using reduced-motion accessibility settings automatically receive a calmer page.</span></div>
+          </section>
+
+          <section class="studio8-panel" data-studio8-panel="content" hidden>
+            <div class="studio8-section-head"><div><b>Content</b><small>Choose which sections and supporting details are visible.</small></div></div>
+            <div class="studio8-toggle-grid">
+              <label class="studio8-toggle-card"><input type="checkbox" id="show-install"><span class="studio8-toggle"></span><span><b>Install section</b><small>Official WireGuard app links.</small></span></label>
+              <label class="studio8-toggle-card"><input type="checkbox" id="show-support"><span class="studio8-toggle"></span><span><b>Support section</b><small>Configured contact channels.</small></span></label>
+              <label class="studio8-toggle-card"><input type="checkbox" id="show-live-badge"><span class="studio8-toggle"></span><span><b>Live badge</b><small>Live indicator in the hero.</small></span></label>
+              <label class="studio8-toggle-card"><input type="checkbox" id="show-status-badge"><span class="studio8-toggle"></span><span><b>Config status</b><small>Online state on location cards.</small></span></label>
+              <label class="studio8-toggle-card"><input type="checkbox" id="show-location-country"><span class="studio8-toggle"></span><span><b>Country labels</b><small>Country below each location.</small></span></label>
+              <label class="studio8-toggle-card"><input type="checkbox" id="show-section-descriptions"><span class="studio8-toggle"></span><span><b>Section descriptions</b><small>Explanatory text under section headings.</small></span></label>
+            </div>
+            <div class="studio8-field-grid two content-heading-grid">
+              <label class="content-heading-field"><span><b>Usage heading</b><small>Shown above data and time information.</small></span><input class="input" id="portal-usage-title" placeholder="Usage overview"></label>
+              <label class="content-heading-field"><span><b>Configurations heading</b><small>Shown above available locations and configs.</small></span><input class="input" id="portal-configs-title" placeholder="Configs"></label>
+              <label class="content-heading-field"><span><b>Installation heading</b><small>Shown above WireGuard application links.</small></span><input class="input" id="portal-install-title" placeholder="Install WireGuard"></label>
+              <label class="content-heading-field"><span><b>Support heading</b><small>Shown above configured contact methods.</small></span><input class="input" id="portal-support-title" placeholder="Support"></label>
+            </div>
+          </section>
+
+          <section class="studio8-panel" data-studio8-panel="actions" hidden>
+            <div class="studio8-section-head"><div><b>Actions</b><small>Control which public buttons are available and how they look.</small></div></div>
+            <div class="studio8-toggle-grid">
+              <label class="studio8-toggle-card"><input type="checkbox" id="show-download-action"><span class="studio8-toggle"></span><span><b>Download actions</b><small>ZIP and individual config downloads.</small></span></label>
+              <label class="studio8-toggle-card"><input type="checkbox" id="show-copy-action"><span class="studio8-toggle"></span><span><b>Copy actions</b><small>Copy subscription and config links.</small></span></label>
+              <label class="studio8-toggle-card"><input type="checkbox" id="show-theme-action"><span class="studio8-toggle"></span><span><b>Theme action</b><small>Allow visitors to switch light and dark.</small></span></label>
+            </div>
+            <div class="studio8-field-grid two">
+              <fieldset><legend>Support presentation</legend><div class="studio8-segmented"><label><input type="radio" name="sub-support-style" value="buttons"><span>Buttons</span></label><label><input type="radio" name="sub-support-style" value="icons"><span>Icons</span></label></div></fieldset>
+            </div>
+          </section>
+
+          <section class="studio8-panel studio92-panel studio10-panel" data-studio8-panel="identity" hidden>
+  <div class="studio8-section-head studio92-section-head"><div><b>Portal identity</b><small>Edit the public header text, icon, and alignment.</small></div><em id="studio92-identity-status">Live</em></div>
+  <div class="studio10-identity-stack">
+<section class="studio92-card studio92-copy-card">
+      <header><span><i class="fas fa-font"></i></span><div><b>Header copy</b><small>Public header text.</small></div></header>
+      <div class="studio92-field-grid two studio10-copy-grid">
+        <label><span>Header label <em id="studio92-label-count">0/40</em></span><input class="input" id="portal-label" maxlength="40" placeholder="Secure WireGuard portal"></label>
+        <label><span>Custom title <em id="studio92-title-count">0/48</em></span><input class="input" id="portal-title" maxlength="48" placeholder="Empty = client name"></label>
+        <label class="wide"><span>Subtitle <em id="studio92-subtitle-count">0/150</em></span><textarea class="input" id="portal-subtitle" maxlength="150" rows="3" placeholder="Install WireGuard, then scan QR or import a config."></textarea></label>
+      </div>
+      <div class="studio92-copy-actions"><button type="button" id="studio92-copy-default"><i class="fas fa-wand-magic-sparkles"></i><span>Use recommended copy</span></button><button type="button" id="studio92-title-client"><i class="fas fa-user"></i><span>Use client name</span></button></div>
+    </section>
+
+    <section class="studio92-card studio92-brand-card">
+      <header><span><i class="fas fa-shapes"></i></span><div><b>Brand presentation</b><small>Icon and placement.</small></div></header>
+      <div class="studio10-brand-grid">
+        <div class="studio92-icon-area">
+          <span class="studio92-control-label">Header icon</span>
+          <div class="studio92-icon-picker">
+            <button type="button" data-studio-icon="fas fa-bolt" class="active"><i class="fas fa-bolt"></i></button>
+            <button type="button" data-studio-icon="fas fa-shield-halved"><i class="fas fa-shield-halved"></i></button>
+            <button type="button" data-studio-icon="fas fa-rocket"><i class="fas fa-rocket"></i></button>
+            <button type="button" data-studio-icon="fas fa-globe"><i class="fas fa-globe"></i></button>
+            <button type="button" data-studio-icon="fas fa-server"><i class="fas fa-server"></i></button>
+            <button type="button" data-studio-icon="fas fa-gem"><i class="fas fa-gem"></i></button>
+            <button type="button" data-studio-icon="fas fa-cloud"><i class="fas fa-cloud"></i></button>
+            <button type="button" data-studio-icon="fas fa-network-wired"><i class="fas fa-network-wired"></i></button>
+          </div>
+          <label class="studio92-select-label"><span>All icon classes</span><select class="input" id="portal-icon"><option value="fas fa-bolt">Bolt</option><option value="fas fa-shield-halved">Shield</option><option value="fas fa-rocket">Rocket</option><option value="fas fa-globe">Globe</option><option value="fas fa-server">Server</option><option value="fas fa-gem">Gem</option><option value="fas fa-cloud">Cloud</option><option value="fas fa-network-wired">Network</option></select></label>
         </div>
+        <div class="studio92-choice-area">
+          <div class="studio92-control-card"><div><b>Header alignment</b><small>Controls identity and action placement.</small></div><div class="studio8-segmented three"><label><input type="radio" name="sub-title-align" value="left"><span>Left</span></label><label><input type="radio" name="sub-title-align" value="center"><span>Center</span></label><label><input type="radio" name="sub-title-align" value="split"><span>Split</span></label></div></div>
+          <div class="studio92-control-card"><div><b>Logo size</b><small>Scale the identity mark without affecting the text.</small></div><div class="studio8-segmented three"><label><input type="radio" name="sub-logo-size" value="small"><span>Small</span></label><label><input type="radio" name="sub-logo-size" value="medium"><span>Medium</span></label><label><input type="radio" name="sub-logo-size" value="large"><span>Large</span></label></div></div>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="studio8-note studio92-note"><i class="fas fa-circle-info"></i><span>When Custom title is empty, every public page automatically uses its subscription name.</span></div>
+</section>
+
+<section class="studio8-panel studio92-panel studio10-panel" data-studio8-panel="support" hidden>
+  <div class="studio8-section-head studio92-section-head"><div><b>Support channels</b><small>Only completed contact methods appear on the public page.</small></div><em id="studio-support-summary">0 active</em></div>
+  <div class="studio10-support-stack compact-only">
+<section class="studio92-card studio10-support-fields">
+      <header><span><i class="fas fa-headset"></i></span><div><b>Public contact methods</b><small>Add only the public contact methods you monitor.</small></div></header>
+      <div class="studio10-channel-grid">
+        <label class="studio10-channel" data-support-channel="telegram"><div class="studio10-channel-top"><span class="studio92-channel-icon"><i class="fab fa-telegram"></i></span><span class="studio92-channel-copy"><b>Telegram</b><small>Username or t.me link</small></span><span class="studio92-channel-state">Empty</span></div><span class="studio10-channel-input"><input class="input" id="sup-telegram" placeholder="@channel or t.me link"><button type="button" data-clear-support="telegram" aria-label="Clear Telegram"><i class="fas fa-xmark"></i></button></span></label>
+        <label class="studio10-channel" data-support-channel="whatsapp"><div class="studio10-channel-top"><span class="studio92-channel-icon"><i class="fab fa-whatsapp"></i></span><span class="studio92-channel-copy"><b>WhatsApp</b><small>Number or wa.me link</small></span><span class="studio92-channel-state">Empty</span></div><span class="studio10-channel-input"><input class="input" id="sup-whatsapp" placeholder="+123... or wa.me link"><button type="button" data-clear-support="whatsapp" aria-label="Clear WhatsApp"><i class="fas fa-xmark"></i></button></span></label>
+        <label class="studio10-channel" data-support-channel="phone"><div class="studio10-channel-top"><span class="studio92-channel-icon"><i class="fas fa-phone"></i></span><span class="studio92-channel-copy"><b>Phone</b><small>International number</small></span><span class="studio92-channel-state">Empty</span></div><span class="studio10-channel-input"><input class="input" id="sup-phone" placeholder="+123456789"><button type="button" data-clear-support="phone" aria-label="Clear phone"><i class="fas fa-xmark"></i></button></span></label>
+        <label class="studio10-channel" data-support-channel="email"><div class="studio10-channel-top"><span class="studio92-channel-icon"><i class="fas fa-envelope"></i></span><span class="studio92-channel-copy"><b>Email</b><small>Public support address</small></span><span class="studio92-channel-state">Empty</span></div><span class="studio10-channel-input"><input class="input" id="sup-email" placeholder="support@example.com"><button type="button" data-clear-support="email" aria-label="Clear email"><i class="fas fa-xmark"></i></button></span></label>
+        <label class="studio10-channel" data-support-channel="website"><div class="studio10-channel-top"><span class="studio92-channel-icon"><i class="fas fa-globe"></i></span><span class="studio92-channel-copy"><b>Website</b><small>Help page or homepage</small></span><span class="studio92-channel-state">Empty</span></div><span class="studio10-channel-input"><input class="input" id="sup-website" placeholder="https://example.com"><button type="button" data-clear-support="website" aria-label="Clear website"><i class="fas fa-xmark"></i></button></span></label>
+        <label class="studio10-channel" data-support-channel="instagram"><div class="studio10-channel-top"><span class="studio92-channel-icon"><i class="fab fa-instagram"></i></span><span class="studio92-channel-copy"><b>Instagram</b><small>Profile name or URL</small></span><span class="studio92-channel-state">Empty</span></div><span class="studio10-channel-input"><input class="input" id="sup-instagram" placeholder="@profile or URL"><button type="button" data-clear-support="instagram" aria-label="Clear Instagram"><i class="fas fa-xmark"></i></button></span></label>
+      </div>
+      <div class="studio125-support-note"><i class="fas fa-circle-info"></i><span>Empty fields stay hidden. The real preview on the right shows the final result.</span></div>
+    </section>
+</div>
+</section>
+</div>
+      </aside>
+
+      <section class="studio8-preview">
+        <div class="studio8-preview-head">
+          <div class="studio121-preview-title"><b><i class="fas fa-eye"></i> Real public-page preview</b><small>Uses the actual public-page structure, responsive CSS, backgrounds, and animation engine.</small></div>
+          <div class="studio8-preview-controls">
+            <div><button type="button" class="active" data-preview-theme="auto"><i class="fas fa-circle-half-stroke"></i><span>Auto</span></button><button type="button" data-preview-theme="light"><i class="fas fa-sun"></i><span>Light</span></button><button type="button" data-preview-theme="dark"><i class="fas fa-moon"></i><span>Dark</span></button></div>
+            <div><button type="button" class="active" data-preview-device="desktop"><i class="fas fa-desktop"></i><span>Desktop</span></button><button type="button" data-preview-device="mobile"><i class="fas fa-mobile-screen"></i><span>Mobile</span></button></div>
+            <div><button type="button" data-preview-fit="page"><i class="fas fa-down-left-and-up-right-to-center"></i><span>Overview</span></button><button type="button" class="active" data-preview-fit="width"><i class="fas fa-arrows-left-right"></i><span>Fit width</span></button><button type="button" data-preview-fit="actual"><i class="fas fa-magnifying-glass"></i><span>100%</span></button></div>
+            <div class="studio8-preview-playback"><button type="button" id="studio-preview-motion-toggle" class="active" aria-pressed="true" title="Pause or resume the animated preview"><i class="fas fa-pause"></i><span>Pause motion</span></button></div>
+          </div>
+        </div>
+        <div class="studio8-frame-stage" data-preview-device="desktop" data-preview-fit="width"><div class="studio8-frame-canvas"><iframe id="studio-preview-frame" title="Public subscription preview" scrolling="no"></iframe></div></div>
+        <div class="studio8-preview-summary"><span id="preview-layout-name">Modern</span><span id="preview-accent-name">Mint</span><span id="preview-stats-name">Hybrid</span><span id="preview-motion-name">Balanced</span></div>
       </section>
-
-      <section class="settings-preview studio-preview">
-        <div class="subx-section-title"><i class="fas fa-eye"></i> Live preview</div>
-        <div id="layout-preview" class="preview-card layout-aurora mode-hybrid">
-          <div class="preview-bg"></div>
-          <div class="preview-hero">
-            <div class="preview-icon"><i class="fas fa-bolt"></i></div>
-            <div><small id="preview-label">Secure WireGuard portal</small><b id="preview-title">premium-user</b><span id="preview-subtitle">Your WireGuard access is ready.</span></div>
-          </div>
-          <div class="preview-stats">
-            <div><small>Data remaining</small><b>8.4 GiB</b><i></i></div>
-            <div><small>Time remaining</small><b>12d 4h</b><i></i></div>
-          </div>
-          <div class="preview-rings"><span>78%</span><span>42%</span></div>
-          <div class="preview-configs">
-            <div><span>🇳🇱 Amsterdam</span><button><i class="fas fa-qrcode"></i></button><button><i class="fas fa-download"></i></button></div>
-            <div><span>🇩🇪 Frankfurt</span><button><i class="fas fa-qrcode"></i></button><button><i class="fas fa-download"></i></button></div>
-          </div>
-          <div class="preview-support"><i class="fab fa-telegram"></i><i class="fab fa-whatsapp"></i><i class="fas fa-envelope"></i></div>
-        </div>
-      </section>
     </div>
 
-    <div class="subx-modal-foot">
-      <button type="button" class="btn secondary" id="settings-cancel">Cancel</button>
-      <button type="button" class="btn" id="settings-save"><i class="fas fa-save"></i> Save settings</button>
-    </div>
+    <footer class="studio8-foot"><button type="button" class="btn secondary" id="settings-cancel">Cancel</button><button type="button" class="btn" id="settings-save"><i class="fas fa-save"></i> Save settings</button></footer>
   </div>
 </div>
 
+<div id="subscription-profile-modal" class="modal" aria-hidden="true" role="dialog" aria-labelledby="subscription-profile-title">
+  <div class="modal-backdrop" data-close-sub-profile="1"></div>
+  <div class="profile8-modal">
+    <header><div><span><i class="fas fa-bookmark"></i></span><div><h2 id="subscription-profile-title">Save subscription profile</h2><p>Choose which parts of the current setup should be reusable.</p></div></div><button type="button" id="subscription-profile-close"><i class="fas fa-times"></i></button></header>
+    <div class="profile8-modal-body">
+      <label><span>Profile name</span><input class="input" id="subscription-profile-name" maxlength="80" placeholder="Example: Premium mobile client"></label>
+      <div class="profile8-groups">
+        <label><input type="checkbox" id="profile-include-client" checked><span><i class="fas fa-id-card"></i><b>Client defaults</b><small>Name, limits, timer, contacts, and policies.</small></span></label>
+        <label><input type="checkbox" id="profile-include-advanced" checked><span><i class="fas fa-sliders"></i><b>Advanced options</b><small>Routes, endpoints, DNS, MTU, and keepalive.</small></span></label>
+        <label><input type="checkbox" id="profile-include-interfaces" checked><span><i class="fas fa-network-wired"></i><b>Selected interfaces</b><small>Best-effort matching of local and node interfaces.</small></span></label>
+        <label><input type="checkbox" id="profile-include-template" checked><span><i class="fas fa-wand-magic-sparkles"></i><b>Public template</b><small>Every Template Studio customization and support link.</small></span></label>
+      </div>
+      <div class="profile8-note"><i class="fas fa-circle-info"></i><span>The existing peer profiles contain only basic WireGuard defaults. Subscription profiles are separate because they also preserve subscription limits, interfaces, and the complete public-page design.</span></div>
+    </div>
+    <footer><button type="button" class="btn secondary" id="subscription-profile-cancel">Cancel</button><button type="button" class="btn" id="subscription-profile-confirm"><i class="fas fa-save"></i> Save profile</button></footer>
+  </div>
+</div>
 <div id="details-modal" class="modal" aria-hidden="true" role="dialog">
   <div class="modal-backdrop" data-close-details="1"></div>
   <div class="subx-details">
@@ -445,5 +740,5 @@
 
 
 
-<script defer src="{{ url_for('static', filename='js/subscriptions.js') }}?v=20260729-v25"></script>
+<script defer src="{{ url_for('static', filename='js/subscriptions.js') }}?v=subscription-theme-layout-v2"></script>
 {% endblock %}
