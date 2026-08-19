@@ -1,0 +1,142 @@
+.peer-context-interface{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;grid-template-areas:"selector active"!important;align-items:center!important;gap:10px!important;min-width:0!important;overflow:visible!important}
+.peer-interface-selector-row{grid-area:selector!important;display:flex!important;align-items:center!important;gap:8px!important;min-width:0!important}
+.peer-interface-selector-row>.peer-context-key{grid-area:unset!important;width:auto!important;min-width:108px!important;max-width:108px!important;height:40px!important;min-height:40px!important;margin:0!important;padding:0 11px!important;flex:0 0 108px!important}
+.peer-context-interface>.iface-bar-legacy{display:none!important}
+.peer-context-interface>#iface-active-row.iface-active-row{grid-area:active!important;width:auto!important;max-width:none!important;min-width:0!important;min-height:40px!important;margin:0!important;padding:0!important;border:0!important;background:transparent!important;display:flex!important;align-items:center!important;justify-content:flex-end!important;gap:6px!important}
+
+.iface-status-picker{position:relative!important;width:210px!important;min-width:210px!important;max-width:210px!important;flex:0 0 210px!important;margin:0!important;z-index:120!important}
+.iface-status-trigger{width:100%!important;height:40px!important;min-height:40px!important;padding:0 11px!important;border:1px solid #dbe3ee!important;border-radius:12px!important;background:#fff!important;color:#0f172a!important;display:flex!important;align-items:center!important;justify-content:space-between!important;gap:9px!important;font:inherit!important;font-size:13px!important;font-weight:900!important;cursor:pointer!important;box-shadow:0 4px 12px rgba(15,23,42,.045)!important}
+.iface-status-trigger:hover,.iface-status-picker.is-open .iface-status-trigger{background:#f8fafc!important;border-color:#b8c4d2!important}
+.iface-status-trigger-main{display:flex!important;align-items:center!important;gap:8px!important;min-width:0!important}
+#iface-status-label{overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+.iface-status-trigger[aria-expanded="true"]>.iface-picker-chevron{transform:rotate(180deg)!important}
+.iface-status-menu{position:absolute!important;top:calc(100% + 6px)!important;left:0!important;width:310px!important;max-width:calc(100vw - 30px)!important;z-index:500!important;padding:6px!important;border:1px solid #dbe3ee!important;border-radius:13px!important;background:#fff!important;box-shadow:0 18px 42px rgba(15,23,42,.16)!important}
+.iface-status-menu[hidden]{display:none!important}
+.iface-status-option{width:100%!important;min-height:54px!important;padding:7px 9px!important;border:1px solid transparent!important;border-radius:10px!important;background:transparent!important;color:#0f172a!important;display:flex!important;align-items:center!important;justify-content:space-between!important;gap:8px!important;text-align:left!important;font:inherit!important;cursor:pointer!important}
+.iface-status-option+.iface-status-option{margin-top:3px!important}
+.iface-status-option:hover{background:#f8fafc!important;border-color:#e2e8f0!important}
+.iface-status-option.is-active{background:#eefbf6!important;border-color:#b9ead9!important;color:#08785d!important}
+.iface-status-option-main{display:flex!important;align-items:center!important;gap:9px!important;min-width:0!important;flex:1 1 auto!important}
+.iface-status-copy{display:grid!important;gap:2px!important;min-width:0!important;flex:1 1 auto!important}
+.iface-status-top{display:flex!important;align-items:center!important;gap:7px!important;min-width:0!important}
+.iface-status-top strong{min-width:0!important;flex:1 1 auto!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;font-size:12.5px!important;font-weight:900!important}
+.iface-status-copy small{overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;color:#64748b!important;font-size:10px!important;font-weight:700!important}
+.iface-status-badge{flex:0 0 auto!important;padding:2px 6px!important;border-radius:999px!important;background:#eef2f6!important;color:#64748b!important;font-size:9px!important;font-weight:900!important;text-transform:uppercase!important;letter-spacing:.035em!important}
+.iface-status-badge.up{background:#dcf8ee!important;color:#08765a!important}
+.iface-status-badge.down{background:#fff0f1!important;color:#b44b57!important}
+.iface-status-check{flex:0 0 auto!important;font-size:10px!important}
+.iface-picker-compat-dot,.iface-picker-compat-trigger{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0 0 0 0)!important;clip-path:inset(50%)!important;opacity:0!important;pointer-events:none!important}
+.iface-picker-compat-menu{position:absolute!important;left:-10000px!important;top:0!important;width:1px!important;height:1px!important;overflow:hidden!important;opacity:0!important;pointer-events:none!important}
+
+html[data-theme="dark"] .iface-status-trigger,html[data-theme="dark"] .iface-status-menu{background:#141d25!important;color:#e5e7eb!important;border-color:#31404c!important;box-shadow:none!important}
+html[data-theme="dark"] .iface-status-trigger:hover,html[data-theme="dark"] .iface-status-picker.is-open .iface-status-trigger{background:#1a252f!important;border-color:#43525f!important}
+html[data-theme="dark"] .iface-status-option{color:#d1d8de!important}
+html[data-theme="dark"] .iface-status-option:hover{background:#1a252f!important;border-color:#354752!important}
+html[data-theme="dark"] .iface-status-option.is-active{background:#17362d!important;border-color:#2d6d58!important;color:#9ae3c9!important}
+html[data-theme="dark"] .iface-status-copy small{color:#8d9aa5!important}
+html[data-theme="dark"] .iface-status-badge{background:#202d37!important;color:#aab5bd!important}
+html[data-theme="dark"] .iface-status-badge.up{background:#173a30!important;color:#91dfc3!important}
+html[data-theme="dark"] .iface-status-badge.down{background:#3b2227!important;color:#f0a3aa!important}
+
+@media(max-width:900px){
+  .peer-context-interface{grid-template-columns:1fr!important;grid-template-areas:"selector" "active"!important}
+  .peer-context-interface>#iface-active-row.iface-active-row{justify-content:flex-start!important}
+}
+@media(max-width:520px){
+  .peer-interface-selector-row{display:grid!important;grid-template-columns:auto minmax(0,1fr)!important}
+  .peer-interface-selector-row>.peer-context-key{min-width:96px!important;max-width:96px!important;flex-basis:96px!important}
+  .iface-status-picker{width:100%!important;min-width:0!important;max-width:none!important;flex-basis:auto!important}
+  .iface-status-menu{width:100%!important}
+}
+
+#iface-picker-dot.iface-picker-compat-dot{
+  display:none!important;
+  width:0!important;
+  height:0!important;
+  min-width:0!important;
+  flex:0 0 0!important;
+  margin:0!important;
+  padding:0!important;
+  border:0!important;
+  box-shadow:none!important;
+  background:transparent!important;
+  opacity:0!important;
+  visibility:hidden!important;
+  pointer-events:none!important;
+}
+
+#iface-picker-trigger.iface-picker-compat-trigger{
+  display:none!important;
+}
+
+#iface-picker-menu.iface-picker-compat-menu{
+  display:none!important;
+}
+
+#iface-status-dot{
+  display:inline-block!important;
+  width:9px!important;
+  height:9px!important;
+  min-width:9px!important;
+  flex:0 0 9px!important;
+  margin:0!important;
+}
+
+.iface-status-picker{
+  overflow:visible!important;
+}
+
+.iface-status-menu{
+  top:calc(100% + 7px)!important;
+  left:0!important;
+  margin:0!important;
+}
+
+.iface-status-option{
+  overflow:hidden!important;
+}
+
+.iface-status-option .iface-dot{
+  width:9px!important;
+  height:9px!important;
+  min-width:9px!important;
+  flex:0 0 9px!important;
+  margin:0!important;
+}
+
+.iface-status-menu .iface-status-option,
+.iface-status-menu .iface-status-option:hover,
+.iface-status-menu .iface-status-option.is-active{
+  transform:none!important;
+}
+
+.iface-status-trigger>.iface-picker-chevron{
+  position:static!important;
+  transform:none!important;
+  margin-left:auto!important;
+  flex:0 0 auto!important;
+}
+
+.iface-status-trigger[aria-expanded="true"]>.iface-picker-chevron{
+  transform:rotate(180deg)!important;
+}
+
+.iface-status-picker > .iface-dot:not(#iface-status-dot){
+  display:none!important;
+  visibility:hidden!important;
+  opacity:0!important;
+  width:0!important;
+  height:0!important;
+  min-width:0!important;
+  flex:0 0 0!important;
+  margin:0!important;
+  padding:0!important;
+  border:0!important;
+  box-shadow:none!important;
+}
+
+#iface-status-dot{
+  display:inline-block!important;
+  visibility:visible!important;
+  opacity:1!important;
+}
