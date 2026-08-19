@@ -201,12 +201,6 @@ MAX_AVAILABLE_IPS = 512
 
 def available_ips(iface_name: str, iface_addr_field: str, conf_dir: str,
                   limit: int = MAX_AVAILABLE_IPS) -> list[str]:
-    """Return a bounded preview of free addresses without enumerating a subnet.
-
-    Allocation only needs the first free host. Bounding the public preview also
-    keeps IPv4 /8 and IPv6 /64 interfaces from allocating enormous lists while
-    still supporting them normally.
-    """
 
     ii = _primary_iface(iface_addr_field)
     if ii is None:
@@ -233,7 +227,6 @@ def available_ips(iface_name: str, iface_addr_field: str, conf_dir: str,
 
 
 def validate_requested_host_cidr(host_cidr: str, iface_addr_field: str) -> str:
-    """Validate an explicit client host against the interface network."""
     iface = _primary_iface(iface_addr_field)
     if iface is None:
         raise ValueError('The interface has no usable Address setting.')
@@ -257,31 +250,99 @@ def validate_requested_host_cidr(host_cidr: str, iface_addr_field: str) -> str:
     return f"{host}/{32 if host.version == 4 else 128}"
 
 def _read_iface(path):
-    address = listen_port = private_key = mtu = dns = None
+    address = None
+    listen_port = None
+    private_key = None
+    mtu = None
+    dns = None
+
+    post_up = []
+    post_down = []
+
     in_iface = False
-    with open(path,'r') as f:
+
+    with open(
+        path,
+        'r',
+        encoding='utf-8',
+        errors='replace',
+    ) as f:
         for raw in f:
             s = raw.strip()
-            if not s or s.startswith('#'): continue
+
+            if not s or s.startswith('#'):
+                continue
+
             if s.startswith('[') and s.endswith(']'):
-                in_iface = (s[1:-1].lower()=='interface'); continue
-            if not in_iface or '=' not in s: continue
-            k,v = [x.strip() for x in s.split('=',1)]
+                in_iface = (
+                    s[1:-1]
+                    .strip()
+                    .lower()
+                    == 'interface'
+                )
+                continue
+
+            if not in_iface or '=' not in s:
+                continue
+
+            k, v = [
+                x.strip()
+                for x in s.split('=', 1)
+            ]
+
             lk = k.lower()
-            if lk=='address': address=v
-            elif lk=='listenport':
-                try: listen_port=int(v)
-                except: pass
-            elif lk=='privatekey': private_key=v
-            elif lk=='mtu': 
-                try: mtu=int(v)
-                except: pass
-            elif lk=='dns': dns=v
-    if not (address and listen_port and private_key): return None
+
+            if lk == 'address':
+                address = v
+
+            elif lk == 'listenport':
+                try:
+                    listen_port = int(v)
+                except Exception:
+                    pass
+
+            elif lk == 'privatekey':
+                private_key = v
+
+            elif lk == 'mtu':
+                try:
+                    mtu = int(v)
+                except Exception:
+                    pass
+
+            elif lk == 'dns':
+                dns = v
+
+            elif lk == 'postup':
+                post_up.append(v)
+
+            elif lk == 'postdown':
+                post_down.append(v)
+
+    if not (
+        address
+        and listen_port
+        and private_key
+    ):
+        return None
+
     return {
-        'name': os.path.splitext(os.path.basename(path))[0],
-        'path': path, 'address': address, 'listen_port': listen_port,
-        'mtu': mtu, 'dns': dns
+        'name': os.path.splitext(
+            os.path.basename(path)
+        )[0],
+
+        'path': path,
+        'address': address,
+        'listen_port': listen_port,
+        'mtu': mtu,
+        'dns': dns,
+
+        'post_up': '\n'.join(post_up),
+        'post_down': '\n'.join(post_down),
+
+        'has_custom_hooks': bool(
+            post_up or post_down
+        ),
     }
 
 def hostPrefix(host_cidr):
@@ -397,12 +458,44 @@ def health():
     )
 
 
-def _safe_iface_name(name: str) -> str:
-    name = (name or '').strip()
-    if not re.match(r'^[A-Za-z0-9_.-]{1,32}$', name):
-        raise ValueError('Interface name may contain only letters, numbers, dot, dash, and underscore, max 32 characters')
-    if name in ('.', '..') or ':' in name or '/' in name:
-        raise ValueError('Invalid interface name')
+def _safe_iface_name(
+    name: str,
+) -> str:
+
+    name = str(
+        name or ''
+    ).strip()
+
+    if not name:
+        raise ValueError(
+            'Interface name is required.'
+        )
+
+    if len(name) > 32:
+        raise ValueError(
+            'Interface name must be 32 '
+            'characters or fewer.'
+        )
+
+    if not re.fullmatch(
+        r'[A-Za-z0-9_.-]+',
+        name,
+    ):
+        raise ValueError(
+            'Invalid interface name '
+            f'{name!r}. '
+            'Use only letters, numbers, '
+            'underscore, dot, or dash.'
+        )
+
+    if name in {
+        '.',
+        '..',
+    }:
+        raise ValueError(
+            'Invalid interface name.'
+        )
+
     return name
 
 
@@ -415,11 +508,7 @@ def _iface_conf_path(name: str) -> str:
 
 
 def _write_conf_atomic(path: str, text: str):
-    """Replace an interface config atomically, preserving its mode (0600).
 
-    A partial write here would corrupt the interface the next time wg-quick
-    reads it, so the new content always lands via a temp file plus rename.
-    """
     import tempfile
 
     directory = os.path.dirname(path) or '.'
@@ -448,7 +537,6 @@ def _write_conf_atomic(path: str, text: str):
 
 
 def _conf_has_peer(path: str, pub: str) -> bool:
-    """True when `path` still contains a [Peer] block for `pub`."""
     if not os.path.isfile(path):
         return False
 
@@ -470,7 +558,6 @@ def _conf_has_peer(path: str, pub: str) -> bool:
 
 
 def _upsert_peer_block_text(existing: str, pub: str, block_lines: list[str]) -> str:
-    """Replace ``pub``'s block once, or append it when this is a new peer."""
     lines = (existing or '').splitlines(keepends=True)
     out = []
     replaced = False
@@ -512,7 +599,6 @@ def _upsert_peer_block_text(existing: str, pub: str, block_lines: list[str]) -> 
 
 
 def _runtime_has_peer(iface: str, pub: str) -> bool:
-    """True when `pub` is still a live peer on `iface`."""
     try:
         out = subprocess.check_output(
             ['wg', 'show', iface, 'allowed-ips'],
@@ -523,9 +609,6 @@ def _runtime_has_peer(iface: str, pub: str) -> bool:
 
     return any(line.split('\t', 1)[0].strip() == pub for line in out.splitlines())
 
-# ------------------------------------------------------------
-# Node WireGuard .conf backup / restore
-# ------------------------------------------------------------
 def _safe_conf_filename(filename: str) -> str:
     filename = os.path.basename((filename or '').strip())
 
@@ -668,7 +751,6 @@ def node_restore_wg():
         '%Y%m%d_%H%M%S'
     )
 
-    # Restore WireGuard interface configurations
     for raw_name, content in files.items():
         try:
             filename = _safe_conf_filename(
@@ -699,7 +781,6 @@ def node_restore_wg():
                 filename,
             )
 
-            # Preserve the existing config before replacement
             if os.path.isfile(destination):
                 safety_copy = (
                     f'{destination}.restorebak.'
@@ -787,7 +868,6 @@ def node_restore_wg():
                 'error': str(exc),
             })
 
-    # Restore node-agent .env
     env_restored = False
 
     if env_file not in (None, ''):
@@ -802,7 +882,6 @@ def node_restore_wg():
                 )
             )
 
-            # Preserve the current .env
             if os.path.isfile(env_path):
                 safety_env = (
                     f'{env_path}.restorebak.'
@@ -854,31 +933,158 @@ def node_restore_wg():
 
 
 
-def _validate_new_interface(name: str, address: str, listen_port: int):
-    name = _safe_iface_name(name)
-    path = _iface_conf_path(name)
-    if os.path.exists(path):
-        raise ValueError(f'{path} already exists')
-    if _iface_up(name):
-        raise ValueError(f'Interface {name} already exists on the system')
-    try:
-        new_net = ipa.ip_interface((address or '').strip()).network
-    except Exception:
-        raise ValueError('Server address must be a valid CIDR, for example 10.77.0.1/24')
-    if not (1 <= int(listen_port) <= 65535):
-        raise ValueError('Listen port must be between 1 and 65535')
+def _validate_new_interface(
+    name: str,
+    address: str,
+    listen_port: int,
+):
+    name = _safe_iface_name(
+        name
+    )
 
-    for fn in os.listdir(_wg_conf_dir()):
-        if not fn.endswith('.conf'):
+    path = _iface_conf_path(
+        name
+    )
+
+    if os.path.exists(path):
+        raise ValueError(
+            f'{path} already exists'
+        )
+
+    if _iface_up(name):
+        raise ValueError(
+            f'Interface {name} already exists on the system'
+        )
+
+    address_parts = [
+        value.strip()
+        for value in re.split(
+            r'[\s,]+',
+            str(address or '').strip(),
+        )
+        if value.strip()
+    ]
+
+    if not address_parts:
+        raise ValueError(
+            'Server address is required.'
+        )
+
+    new_interfaces = []
+
+    for value in address_parts:
+        try:
+            new_interfaces.append(
+                ipa.ip_interface(value)
+            )
+
+        except ValueError as exc:
+            raise ValueError(
+                f'{value!r} is not a valid CIDR. '
+                'Example: 10.77.0.1/24'
+            ) from exc
+
+    if not (
+        1
+        <= int(listen_port)
+        <= 65535
+    ):
+        raise ValueError(
+            'Listen port must be between 1 and 65535'
+        )
+
+    config_dir = _wg_conf_dir()
+
+    os.makedirs(
+        config_dir,
+        exist_ok=True,
+    )
+
+    for filename in os.listdir(
+        config_dir
+    ):
+        if not filename.endswith(
+            '.conf'
+        ):
             continue
-        meta = _read_iface(os.path.join(_wg_conf_dir(), fn))
+
+        meta = _read_iface(
+            os.path.join(
+                config_dir,
+                filename,
+            )
+        )
+
         if not meta:
             continue
-        if int(meta.get('listen_port') or 0) == int(listen_port):
-            raise ValueError(f'Listen port {listen_port} is already used by {meta.get("name")}')
-        old = _primary_iface(meta.get('address') or '')
-        if old and old.network.version == new_net.version and old.network.overlaps(new_net):
-            raise ValueError(f'Subnet overlaps with existing interface {meta.get("name")} ({old.network})')
+
+        existing_name = (
+            meta.get('name')
+            or filename[:-5]
+        )
+
+        try:
+            existing_port = int(
+                meta.get('listen_port')
+                or 0
+            )
+        except Exception:
+            existing_port = 0
+
+        if (
+            existing_port
+            and existing_port
+            == int(listen_port)
+        ):
+            raise ValueError(
+                f'Listen port {listen_port} is already '
+                f'used by {existing_name}'
+            )
+
+        existing_addresses = [
+            value.strip()
+            for value in re.split(
+                r'[\s,]+',
+                str(
+                    meta.get('address')
+                    or ''
+                ),
+            )
+            if value.strip()
+        ]
+
+        for existing_value in existing_addresses:
+            try:
+                existing_interface = (
+                    ipa.ip_interface(
+                        existing_value
+                    )
+                )
+            except ValueError:
+                continue
+
+            for new_interface in (
+                new_interfaces
+            ):
+                if (
+                    existing_interface.version
+                    != new_interface.version
+                ):
+                    continue
+
+                if (
+                    existing_interface.network
+                    .overlaps(
+                        new_interface.network
+                    )
+                ):
+                    raise ValueError(
+                        f'Subnet {new_interface.network} '
+                        f'overlaps with existing interface '
+                        f'{existing_name} '
+                        f'({existing_interface.network})'
+                    )
+
     return name
 
 def _egress_interface() -> str:
@@ -956,20 +1162,23 @@ def _wg_rules(
     interface_name: str,
     address_field: str,
 ) -> tuple[str, str]:
+
     network = _wireguard_network(
         address_field
     )
 
     if not network:
         raise ValueError(
-            "Automatic forwarding requires a private IPv4 WireGuard subnet."
+            "Automatic forwarding requires a private IPv4 "
+            "WireGuard subnet."
         )
 
     egress = _egress_interface()
 
     if not egress:
         raise ValueError(
-            "The node's default IPv4 network interface could not be detected."
+            "The node's default IPv4 network interface "
+            "could not be detected."
         )
 
     if not re.fullmatch(
@@ -980,26 +1189,475 @@ def _wg_rules(
             "The detected outbound interface name is invalid."
         )
 
-    post_up = (
-        "sysctl -w net.ipv4.ip_forward=1 >/dev/null; "
-        "iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null "
-        "|| iptables -A FORWARD -i %i -j ACCEPT; "
-        "iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null "
-        "|| iptables -A FORWARD -o %i -j ACCEPT; "
-        f"iptables -t nat -C POSTROUTING -s {network} "
-        f"-o {egress} -j MASQUERADE 2>/dev/null "
-        f"|| iptables -t nat -A POSTROUTING -s {network} "
-        f"-o {egress} -j MASQUERADE"
-    )
+    post_up = "\n".join([
+        "sysctl -w net.ipv4.ip_forward=1",
+        "iptables -A FORWARD -i %i -j ACCEPT",
+        (
+            "iptables -A FORWARD -o %i "
+            "-m conntrack --ctstate "
+            "RELATED,ESTABLISHED -j ACCEPT"
+        ),
+        (
+            f"iptables -t nat -A POSTROUTING "
+            f"-s {network} "
+            f"-o {egress} "
+            "-j MASQUERADE"
+        ),
+    ])
 
-    post_down = (
-        "iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; "
-        "iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; "
-        f"iptables -t nat -D POSTROUTING -s {network} "
-        f"-o {egress} -j MASQUERADE 2>/dev/null || true"
-    )
+    post_down = "\n".join([
+        "iptables -D FORWARD -i %i -j ACCEPT",
+        (
+            "iptables -D FORWARD -o %i "
+            "-m conntrack --ctstate "
+            "RELATED,ESTABLISHED -j ACCEPT"
+        ),
+        (
+            f"iptables -t nat -D POSTROUTING "
+            f"-s {network} "
+            f"-o {egress} "
+            "-j MASQUERADE"
+        ),
+    ])
 
     return post_up, post_down
+
+def _interface_hook_state(
+    config_path: str,
+) -> dict:
+
+    state = {
+        "has_post_up": False,
+        "has_post_down": False,
+    }
+
+    if not os.path.isfile(config_path):
+        return state
+
+    try:
+        with open(
+            config_path,
+            "r",
+            encoding="utf-8",
+            errors="replace",
+        ) as handle:
+            in_interface = False
+
+            for raw_line in handle:
+                line = raw_line.strip()
+
+                if not line or line.startswith("#"):
+                    continue
+
+                if (
+                    line.startswith("[")
+                    and line.endswith("]")
+                ):
+                    in_interface = (
+                        line[1:-1]
+                        .strip()
+                        .lower()
+                        == "interface"
+                    )
+                    continue
+
+                if (
+                    not in_interface
+                    or "=" not in line
+                ):
+                    continue
+
+                key = (
+                    line.split("=", 1)[0]
+                    .strip()
+                    .lower()
+                )
+
+                if key == "postup":
+                    state["has_post_up"] = True
+
+                elif key == "postdown":
+                    state["has_post_down"] = True
+
+    except Exception:
+        app.logger.exception(
+            "Could not inspect WireGuard hooks in %s",
+            config_path,
+        )
+
+    return state
+
+
+def _config_custom_firewall(
+    config_path: str,
+) -> bool:
+    state = _interface_hook_state(
+        config_path
+    )
+
+    return bool(
+        state["has_post_up"]
+        or state["has_post_down"]
+    )
+
+def _existing_firewall_rules(
+    config_path: str,
+) -> dict:
+
+
+    if not os.path.isfile(
+        config_path
+    ):
+        return {
+            'changed': False,
+            'reason': 'config_missing',
+        }
+
+    metadata = _read_iface(
+        config_path
+    )
+
+    if not metadata:
+        return {
+            'changed': False,
+            'reason': 'invalid_config',
+        }
+
+    interface_name = (
+        _safe_iface_name(
+            metadata.get(
+                'name'
+            )
+            or ''
+        )
+    )
+
+    address = (
+        metadata.get(
+            'address'
+        )
+        or ''
+    ).strip()
+
+    hook_state = (
+        _interface_hook_state(
+            config_path
+        )
+    )
+
+    if (
+        hook_state.get(
+            'has_post_up'
+        )
+        or hook_state.get(
+            'has_post_down'
+        )
+    ):
+        return {
+            'changed': False,
+            'reason': (
+                'custom_rules_present'
+            ),
+            **hook_state,
+        }
+
+    post_up, post_down = (
+        _wg_rules(
+            interface_name,
+            address,
+        )
+    )
+
+    with open(
+        config_path,
+        'r',
+        encoding='utf-8',
+        errors='replace',
+    ) as handle:
+        original = handle.read()
+
+    source_lines = (
+        original.splitlines()
+    )
+
+    found_interface = False
+    inside_interface = False
+    insert_at = None
+
+    for index, raw_line in enumerate(
+        source_lines
+    ):
+        stripped = raw_line.strip()
+
+        if not (
+            stripped.startswith(
+                '['
+            )
+            and stripped.endswith(
+                ']'
+            )
+        ):
+            continue
+
+        section = (
+            stripped[1:-1]
+            .strip()
+            .lower()
+        )
+
+        if section == 'interface':
+            found_interface = True
+            inside_interface = True
+            continue
+
+        if inside_interface:
+            insert_at = index
+            break
+
+    if not found_interface:
+        return {
+            'changed': False,
+            'reason': (
+                'interface_section_missing'
+            ),
+        }
+
+    if insert_at is None:
+        insert_at = len(
+            source_lines
+        )
+
+    additions = [
+    *[
+        f'PostUp = {command.strip()}'
+        for command
+        in str(
+            post_up or ''
+        ).splitlines()
+        if command.strip()
+    ],
+
+    *[
+        f'PostDown = {command.strip()}'
+        for command
+        in str(
+            post_down or ''
+        ).splitlines()
+        if command.strip()
+    ],
+
+    '',
+    ]
+
+    updated = (
+        '\n'.join(
+            source_lines[:insert_at]
+            + additions
+            + source_lines[insert_at:]
+        ).rstrip()
+        + '\n'
+    )
+
+    _write_conf_atomic(
+        config_path,
+        updated,
+    )
+
+    runtime_applied = False
+    runtime_error = ''
+
+    if _iface_up(
+        interface_name
+    ):
+        try:
+            errors = []
+
+            for raw_command in str(
+                post_up or ''
+            ).splitlines():
+
+                raw_command = (
+                    raw_command.strip()
+                )
+
+                if not raw_command:
+                    continue
+
+                command = (
+                    raw_command.replace(
+                        '%i',
+                        interface_name,
+                    )
+                )
+
+                result = subprocess.run(
+                    [
+                        '/bin/sh',
+                        '-c',
+                        command,
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    timeout=20,
+                    check=False,
+                )
+
+                if result.returncode != 0:
+                    errors.append(
+                        (
+                            result.stdout
+                            or command
+                        ).strip()
+                    )
+
+            runtime_applied = (
+                len(errors) == 0
+            )
+
+            if errors:
+                runtime_error = (
+                    '\n'.join(
+                        errors
+                    )[-2000:]
+                )
+
+        except Exception as exc:
+            runtime_error = str(
+                exc
+            )
+
+    return {
+        'changed': True,
+        'reason': (
+            'managed_rules_added'
+        ),
+        'interface': (
+            interface_name
+        ),
+        'post_up': post_up,
+        'post_down': post_down,
+        'runtime_applied': (
+            runtime_applied
+        ),
+        'runtime_error': (
+            runtime_error
+        ),
+    }
+
+
+def _migrate_existing_rules() -> dict:
+
+    root = _wg_conf_dir()
+
+    summary = {
+        'checked': 0,
+        'updated': 0,
+        'skipped': 0,
+        'failed': 0,
+    }
+
+    if not os.path.isdir(
+        root
+    ):
+        return summary
+
+    for filename in sorted(
+        os.listdir(
+            root
+        )
+    ):
+        if not filename.endswith(
+            '.conf'
+        ):
+            continue
+
+        config_path = os.path.join(
+            root,
+            filename,
+        )
+
+        summary[
+            'checked'
+        ] += 1
+
+        try:
+            result = (
+                _existing_firewall_rules(
+                    config_path
+                )
+            )
+
+        except Exception as exc:
+            summary[
+                'failed'
+            ] += 1
+
+            app.logger.exception(
+                'Could not generate '
+                'firewall rules for %s: %s',
+                filename,
+                exc,
+            )
+
+            continue
+
+        if result.get(
+            'changed'
+        ):
+            summary[
+                'updated'
+            ] += 1
+
+            app.logger.info(
+                'Generated firewall rules '
+                'for existing node '
+                'interface %s',
+                result.get(
+                    'interface'
+                )
+                or filename,
+            )
+
+            if result.get(
+                'runtime_error'
+            ):
+                app.logger.warning(
+                    'Rules were saved for %s '
+                    'but could not be applied '
+                    'immediately: %s',
+                    result.get(
+                        'interface'
+                    )
+                    or filename,
+                    result.get(
+                        'runtime_error'
+                    ),
+                )
+
+        elif result.get(
+            'reason'
+        ) in {
+            'custom_rules_present',
+            'config_missing',
+        }:
+            summary[
+                'skipped'
+            ] += 1
+
+        else:
+            summary[
+                'failed'
+            ] += 1
+
+            app.logger.warning(
+                'Firewall migration '
+                'did not update %s: %s',
+                filename,
+                result,
+            )
+
+    return summary
 
 def _write_interface_conf(
     path: str,
@@ -1007,7 +1665,6 @@ def _write_interface_conf(
     address: str,
     listen_port: int,
     private_key: str,
-    dns: str = '',
     mtu=None,
     post_up: str = '',
     post_down: str = '',
@@ -1027,36 +1684,33 @@ def _write_interface_conf(
         f'PrivateKey = {private_key.strip()}',
     ]
 
-    dns = (
-        dns
-        or ''
-    ).strip()
-
-    if dns:
-        lines.append(
-            f'DNS = {dns}'
-        )
-
     if str(mtu or '').strip():
         lines.append(
             f'MTU = {int(mtu)}'
         )
 
-    if (
-        post_up
-        or ''
-    ).strip():
-        lines.append(
-            f'PostUp = {post_up.strip()}'
-        )
+    for command in str(
+        post_up or ''
+    ).splitlines():
 
-    if (
-        post_down
-        or ''
-    ).strip():
-        lines.append(
-            f'PostDown = {post_down.strip()}'
-        )
+        command = command.strip()
+
+        if command:
+            lines.append(
+                f'PostUp = {command}'
+            )
+
+
+    for command in str(
+        post_down or ''
+    ).splitlines():
+
+        command = command.strip()
+
+        if command:
+            lines.append(
+                f'PostDown = {command}'
+            )
 
     lines.append('')
 
@@ -1187,7 +1841,6 @@ def create_interface():
             address=address,
             listen_port=listen_port,
             private_key=private_key,
-            dns='',
             mtu=mtu,
             post_up=post_up,
             post_down=post_down,
@@ -1391,6 +2044,137 @@ def _node_ping_peer(iface: str, allowed: str) -> bool:
     except Exception:
         return False
 
+def _wg_runtime_endpoint_host(
+    endpoint: str,
+) -> str:
+    """
+    Extract the IP address from a WireGuard runtime endpoint.
+
+    Examples:
+        1.2.3.4:51820
+        [2001:db8::1]:51820
+    """
+
+    endpoint = str(
+        endpoint or ''
+    ).strip()
+
+    if not endpoint or endpoint == '(none)':
+        return ''
+
+    if endpoint.startswith('['):
+        match = re.match(
+            r'^\[([^\]]+)\](?::\d+)?$',
+            endpoint,
+        )
+
+        host = (
+            match.group(1)
+            if match
+            else ''
+        )
+
+    else:
+        host = endpoint
+
+        if ':' in endpoint:
+            candidate, port = (
+                endpoint.rsplit(
+                    ':',
+                    1,
+                )
+            )
+
+            if port.isdigit():
+                host = candidate
+
+    try:
+        return str(
+            ipa.ip_address(
+                host
+            )
+        )
+
+    except Exception:
+        return ''
+
+
+def _wg_transport_path(
+    endpoint: str,
+) -> dict:
+
+
+    host = _wg_runtime_endpoint_host(
+        endpoint
+    )
+
+    result = {
+        'transport_dev': '',
+        'via_tunnel': False,
+    }
+
+    if not host:
+        return result
+
+    try:
+        ip_obj = ipa.ip_address(
+            host
+        )
+
+        command = [
+            'ip',
+            '-6' if ip_obj.version == 6 else '-4',
+            'route',
+            'get',
+            host,
+        ]
+
+        output = subprocess.check_output(
+            command,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        ).decode(
+            'utf-8',
+            'replace',
+        )
+
+        match = re.search(
+            r'\bdev\s+([A-Za-z0-9_.:@-]+)',
+            output,
+        )
+
+        if not match:
+            return result
+
+        device = (
+            match.group(1)
+            .split('@', 1)[0]
+            .strip()
+        )
+
+        result[
+            'transport_dev'
+        ] = device
+
+        result[
+            'via_tunnel'
+        ] = bool(
+            re.match(
+                (
+                    r'^(?:'
+                    r'tun|tap|wg|gre|gretap|'
+                    r'ipip|sit|ppp'
+                    r')'
+                ),
+                device,
+                re.IGNORECASE,
+            )
+        )
+
+    except Exception:
+        pass
+
+    return result
 
 @app.route('/api/peers')
 @require_api_key
@@ -2242,17 +3026,8 @@ def node_system_update_start():
     ), 202
 
 def _runtime_endpoint(value: str | None) -> str:
-    """
-    Resolve a fixed client endpoint for a live `wg set` operation.
 
-    Wg's live runtime requires an endpoint it can resolve and accept.
-    The original hostname remains stored in the persistent .conf file.
 
-    Accepted formats:
-        client.example.com:51820
-        203.0.113.10:51820
-        [2001:db8::10]:51820
-    """
     raw = str(
         value or ''
     ).strip()
@@ -2260,34 +3035,50 @@ def _runtime_endpoint(value: str | None) -> str:
     if not raw:
         return ''
 
-    # Bracketed IPv6:
-    # [2001:db8::10]:51820
-    match = re.fullmatch(
+    endpoint_host = ''
+    port = 0
+
+    ipv6_match = re.fullmatch(
         r'\[([^]]+)\]:(\d+)',
         raw,
     )
 
-    if match:
+    if ipv6_match:
         endpoint_host = (
-            match.group(1)
+            ipv6_match.group(1)
             or ''
         ).strip()
 
-        port = int(
-            match.group(2)
-        )
+        try:
+            port = int(
+                ipv6_match.group(2)
+            )
+        except Exception as exc:
+            raise ValueError(
+                'Fixed client endpoint has '
+                'an invalid port.'
+            ) from exc
 
     else:
+
         endpoint_host, separator, port_text = (
             raw.rpartition(':')
         )
 
-        endpoint_host = endpoint_host.strip()
-        port_text = port_text.strip()
+        endpoint_host = (
+            endpoint_host
+            or ''
+        ).strip()
+
+        port_text = (
+            port_text
+            or ''
+        ).strip()
 
         if (
             not separator
             or not endpoint_host
+            or not port_text
             or not port_text.isdigit()
         ):
             raise ValueError(
@@ -2295,9 +3086,15 @@ def _runtime_endpoint(value: str | None) -> str:
                 'host:port format.'
             )
 
-        port = int(
-            port_text
-        )
+        try:
+            port = int(
+                port_text
+            )
+        except Exception as exc:
+            raise ValueError(
+                'Fixed client endpoint has '
+                'an invalid port.'
+            ) from exc
 
     if not 1 <= port <= 65535:
         raise ValueError(
@@ -2311,6 +3108,7 @@ def _runtime_endpoint(value: str | None) -> str:
         ).compressed
 
     except ValueError:
+
         try:
             results = socket.getaddrinfo(
                 endpoint_host,
@@ -2331,9 +3129,41 @@ def _runtime_endpoint(value: str | None) -> str:
                 f'endpoint domain: {endpoint_host}'
             )
 
-        resolved_ip = str(
-            results[0][4][0]
-        ).strip()
+        resolved_ip = ''
+
+        for family, _socktype, _proto, _canonname, sockaddr in results:
+            if family != socket.AF_INET:
+                continue
+
+            if not sockaddr:
+                continue
+
+            candidate = str(
+                sockaddr[0]
+            ).strip()
+
+            if candidate:
+                resolved_ip = candidate
+                break
+
+        if not resolved_ip:
+            for _family, _socktype, _proto, _canonname, sockaddr in results:
+                if not sockaddr:
+                    continue
+
+                candidate = str(
+                    sockaddr[0]
+                ).strip()
+
+                if candidate:
+                    resolved_ip = candidate
+                    break
+
+        if not resolved_ip:
+            raise ValueError(
+                'Fixed client endpoint domain '
+                'did not resolve to a usable IP address.'
+            )
 
     try:
         normalized_ip = ipa.ip_address(
@@ -2347,316 +3177,818 @@ def _runtime_endpoint(value: str | None) -> str:
         ) from exc
 
     if ':' in normalized_ip:
-        return f'[{normalized_ip}]:{port}'
+        return (
+            f'[{normalized_ip}]:{port}'
+        )
 
-    return f'{normalized_ip}:{port}'
+    return (
+        f'{normalized_ip}:{port}'
+    )
 
-@app.route('/api/peers/add', methods=['POST'])
+@app.route(
+    '/api/peers/add',
+    methods=['POST'],
+)
 @require_api_key
 def add_peer():
     try:
         import fcntl
 
-        j = request.get_json(silent=True) or {}
+        payload = (
+            request.get_json(
+                silent=True
+            )
+            or {}
+        )
 
         try:
-            iface = _safe_iface_name(j.get('iface') or '')
-        except Exception as e:
-            return jsonify(error="invalid_iface", detail=str(e)), 400
+            iface = _safe_iface_name(
+                payload.get('iface')
+                or ''
+            )
 
-        pub = (j.get('public_key') or '').strip()
-        host_cidr = (j.get('host_cidr') or '').strip()
+        except Exception as exc:
+            return jsonify(
+                ok=False,
+                error='invalid_iface',
+                detail=str(exc),
+            ), 400
 
-        if not iface or not pub:
-            return jsonify(error="iface and public_key are required"), 400
+        public_key = (
+            payload.get('public_key')
+            or ''
+        ).strip()
 
-        # host_cidr is optional: validation/allocation happens under the same
-        # lock that installs the peer so config and runtime cannot race it.
+        requested_host_cidr = (
+            payload.get('host_cidr')
+            or ''
+        ).strip()
+
+        if not iface or not public_key:
+            return jsonify(
+                ok=False,
+                error='iface_and_public_key_required',
+                detail=(
+                    'iface and public_key '
+                    'are required.'
+                ),
+            ), 400
+
         host = None
 
-        conf = os.path.join(WG_CONF_PATH, f'{iface}.conf')
-        lock_path = conf + '.lock'
-        os.makedirs(os.path.dirname(conf), exist_ok=True)
+        conf = os.path.join(
+            WG_CONF_PATH,
+            f'{iface}.conf',
+        )
+
+        lock_path = (
+            conf
+            + '.lock'
+        )
+
+        os.makedirs(
+            os.path.dirname(conf),
+            exist_ok=True,
+        )
+
 
         def _peer_blocks_from_conf(path):
             blocks = []
-            if not os.path.isfile(path):
+
+            if not os.path.isfile(
+                path
+            ):
                 return blocks
 
             try:
-                with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                    lines = f.readlines()
+                with open(
+                    path,
+                    'r',
+                    encoding='utf-8',
+                    errors='ignore',
+                ) as handle:
+                    lines = handle.readlines()
+
             except Exception:
                 return blocks
 
-            i = 0
-            while i < len(lines):
-                if lines[i].strip().lower() == '[peer]':
-                    block = [lines[i]]
-                    i += 1
-                    while i < len(lines) and not lines[i].strip().startswith('['):
-                        block.append(lines[i])
-                        i += 1
-                    blocks.append(block)
+            index = 0
+
+            while index < len(lines):
+                if (
+                    lines[index]
+                    .strip()
+                    .lower()
+                    == '[peer]'
+                ):
+                    block = [
+                        lines[index]
+                    ]
+
+                    index += 1
+
+                    while (
+                        index < len(lines)
+                        and not lines[index]
+                        .strip()
+                        .startswith('[')
+                    ):
+                        block.append(
+                            lines[index]
+                        )
+
+                        index += 1
+
+                    blocks.append(
+                        block
+                    )
+
                 else:
-                    i += 1
+                    index += 1
 
             return blocks
 
+
         def _block_public_key(block):
-            for line in block:
-                s = line.strip()
-                if s.lower().startswith('publickey') and '=' in s:
-                    return s.split('=', 1)[1].strip()
+            for raw_line in (
+                block or []
+            ):
+                line = raw_line.strip()
+
+                if (
+                    line.lower()
+                    .startswith('publickey')
+                    and '=' in line
+                ):
+                    return (
+                        line.split(
+                            '=',
+                            1,
+                        )[1]
+                        .strip()
+                    )
+
             return ''
+
 
         def _block_allowed_ips(block):
-            vals = []
-            for line in block:
-                s = line.strip()
-                if s.lower().startswith('allowedips') and '=' in s:
-                    raw = s.split('=', 1)[1].strip()
-                    vals.extend([x.strip() for x in raw.split(',') if x.strip()])
-            return vals
+            values = []
 
-        def _host_matches_any(allowed_values, wanted_host):
-            for val in allowed_values or []:
+            for raw_line in (
+                block or []
+            ):
+                line = raw_line.strip()
+
+                if (
+                    line.lower()
+                    .startswith('allowedips')
+                    and '=' in line
+                ):
+                    raw_value = (
+                        line.split(
+                            '=',
+                            1,
+                        )[1]
+                        .strip()
+                    )
+
+                    values.extend(
+                        item.strip()
+                        for item in raw_value.split(',')
+                        if item.strip()
+                    )
+
+            return values
+
+
+        def _host_matches_any(
+            allowed_values,
+            wanted_host,
+        ):
+            for value in (
+                allowed_values
+                or []
+            ):
                 try:
-                    if hostPrefix(val) == wanted_host:
+                    if (
+                        hostPrefix(value)
+                        == wanted_host
+                    ):
                         return True
+
                 except Exception:
                     pass
+
             return False
 
-        def _block_value(block, key):
-            wanted = key.lower()
-            for line in block or []:
-                text = line.strip()
-                if text.lower().startswith(wanted) and '=' in text:
-                    return text.split('=', 1)[1].strip()
+
+        def _block_value(
+            block,
+            key,
+        ):
+            wanted = (
+                str(key or '')
+                .strip()
+                .lower()
+            )
+
+            for raw_line in (
+                block or []
+            ):
+                line = raw_line.strip()
+
+                if (
+                    line.lower()
+                    .startswith(wanted)
+                    and '=' in line
+                ):
+                    return (
+                        line.split(
+                            '=',
+                            1,
+                        )[1]
+                        .strip()
+                    )
+
             return ''
 
-        def _runtime_set(wanted_host, wanted_endpoint='', wanted_keepalive=0):
-            cmd = ['wg', 'set', iface, 'peer', pub, 'allowed-ips', wanted_host]
+
+        def _runtime_set(
+            wanted_host,
+            wanted_endpoint='',
+            wanted_keepalive=0,
+        ):
+            command = [
+                'wg',
+                'set',
+                iface,
+                'peer',
+                public_key,
+                'allowed-ips',
+                wanted_host,
+            ]
+
             if wanted_endpoint:
-                cmd += ['endpoint', wanted_endpoint]
-            if int(wanted_keepalive or 0) > 0:
-                cmd += ['persistent-keepalive', str(int(wanted_keepalive))]
+                command += [
+                    'endpoint',
+                    wanted_endpoint,
+                ]
+
+            if int(
+                wanted_keepalive
+                or 0
+            ) > 0:
+                command += [
+                    'persistent-keepalive',
+                    str(
+                        int(
+                            wanted_keepalive
+                        )
+                    ),
+                ]
+
             return subprocess.run(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, timeout=12,
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=12,
+                check=False,
             )
+
 
         def _runtime_remove():
             return subprocess.run(
-                ['wg', 'set', iface, 'peer', pub, 'remove'],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, timeout=12,
+                [
+                    'wg',
+                    'set',
+                    iface,
+                    'peer',
+                    public_key,
+                    'remove',
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=12,
+                check=False,
             )
+
 
         def _restore_runtime(block):
-        """Restore the previous runtime peer after a failed update.
-        Saved hostname endpoints must be resolved before being passed to
-        the live Wg runtime."""
-        if not block:
-            _runtime_remove()
-            return
 
-        old_allowed = (_block_allowed_ips(block)or [''])[0]
+            if not block:
+                _runtime_remove()
+                return
 
-        old_endpoint = _block_value(block,'endpoint',)
+            old_allowed = (
+                _block_allowed_ips(
+                    block
+                )
+                or ['']
+            )[0]
 
-        old_keepalive = (_block_value(block,'persistentkeepalive',)or 0)
-
-        _runtime_remove()
-
-        if not old_allowed:
-            return
-
-        runtime_old_endpoint = ''
-
-        if old_endpoint:
-            runtime_old_endpoint = (_runtime_endpoint(old_endpoint))
-
-        restore_result = _runtime_set(old_allowed,runtime_old_endpoint,old_keepalive,)
-
-        if restore_result.returncode != 0:
-            raise RuntimeError(
-               (
-                    restore_result.stderr
-                    or restore_result.stdout
-                    or 'Could not restore the previous peer runtime.'
-                ).strip()
+            old_endpoint = (
+                _block_value(
+                    block,
+                    'endpoint',
+                )
             )
-        #This matters when an update fails. Without it, rollback may attempt to restore the original domain directly...
 
-        with open(lock_path, 'w') as lockf:
-            fcntl.flock(lockf, fcntl.LOCK_EX)
+            old_keepalive = (
+                _block_value(
+                    block,
+                    'persistentkeepalive',
+                )
+                or 0
+            )
 
-            meta = _read_iface(conf) if os.path.exists(conf) else None
-            if not meta:
+            _runtime_remove()
+
+            if not old_allowed:
+                return
+
+            runtime_old_endpoint = ''
+
+            if old_endpoint:
+                runtime_old_endpoint = (
+                    _runtime_endpoint(
+                        old_endpoint
+                    )
+                )
+
+            restore_result = (
+                _runtime_set(
+                    old_allowed,
+                    runtime_old_endpoint,
+                    old_keepalive,
+                )
+            )
+
+            if (
+                restore_result.returncode
+                != 0
+            ):
+                raise RuntimeError(
+                    (
+                        restore_result.stderr
+                        or restore_result.stdout
+                        or (
+                            'Could not restore '
+                            'the previous peer '
+                            'runtime.'
+                        )
+                    ).strip()
+                )
+
+        with open(
+            lock_path,
+            'w',
+        ) as lock_file:
+            fcntl.flock(
+                lock_file,
+                fcntl.LOCK_EX,
+            )
+
+            metadata = (
+                _read_iface(conf)
+                if os.path.exists(conf)
+                else None
+            )
+
+            if not metadata:
                 return jsonify(
-                    error="interface_conf_not_found",
-                    detail=f"{conf} does not exist. Create the interface first."
+                    ok=False,
+                    error=(
+                        'interface_conf_not_found'
+                    ),
+                    detail=(
+                        f'{conf} does not exist. '
+                        'Create the interface first.'
+                    ),
                 ), 404
 
-            if host_cidr:
+            if requested_host_cidr:
                 try:
-                    host = validate_requested_host_cidr(host_cidr, meta['address'])
-                except Exception as e:
-                    return jsonify(error="invalid_host_cidr", detail=str(e)), 400
+                    host = (
+                        validate_requested_host_cidr(
+                            requested_host_cidr,
+                            metadata[
+                                'address'
+                            ],
+                        )
+                    )
 
-            blocks = _peer_blocks_from_conf(conf)
+                except Exception as exc:
+                    return jsonify(
+                        ok=False,
+                        error=(
+                            'invalid_host_cidr'
+                        ),
+                        detail=str(
+                            exc
+                        ),
+                    ), 400
+
+            blocks = (
+                _peer_blocks_from_conf(
+                    conf
+                )
+            )
+
             previous_block = next(
-                (block for block in blocks if _block_public_key(block) == pub),
+                (
+                    block
+                    for block in blocks
+                    if (
+                        _block_public_key(
+                            block
+                        )
+                        == public_key
+                    )
+                ),
                 None,
             )
-            duplicate = previous_block is not None
 
-            if host is None and duplicate:
-                # Updating an existing peer with no explicit address: keep the
-                # address it already has. Falling through to allocation would
-                # hand it a DIFFERENT host, because `available_ips` treats the
-                # peer's own current address as taken and excludes it - so an
-                # endpoint- or keepalive-only update would silently re-address
-                # the client and invalidate its config.
-                existing = (_block_allowed_ips(previous_block) or [''])[0]
-                if existing:
+            duplicate = (
+                previous_block
+                is not None
+            )
+
+            if (
+                host is None
+                and duplicate
+            ):
+                existing_host = (
+                    _block_allowed_ips(
+                        previous_block
+                    )
+                    or ['']
+                )[0]
+
+                if existing_host:
                     try:
-                        host = validate_requested_host_cidr(existing, meta['address'])
-                    except Exception:
-                        # An unusable existing AllowedIPs (a route, not a host)
-                        # falls through to normal allocation below.
-                        app.logger.warning(
-                            "Peer %s on %s has an unusable AllowedIPs %r; allocating a new address",
-                            pub, iface, existing,
+                        host = (
+                            validate_requested_host_cidr(
+                                existing_host,
+                                metadata[
+                                    'address'
+                                ],
+                            )
                         )
+
+                    except Exception:
+                        app.logger.warning(
+                            (
+                                'Peer %s on %s has '
+                                'an unusable '
+                                'AllowedIPs %r; '
+                                'allocating a new '
+                                'address'
+                            ),
+                            public_key,
+                            iface,
+                            existing_host,
+                        )
+
                         host = None
 
             if host is None:
-                free = available_ips(iface, meta['address'], WG_CONF_PATH, limit=1)
-                if not free:
-                    # Distinct from a host_cidr collision (also 409): this code
-                    # tells the panel the pool is empty so it must NOT retry.
-                    # The panel maps it to `address_pool_exhausted`.
+                free_addresses = (
+                    available_ips(
+                        iface,
+                        metadata[
+                            'address'
+                        ],
+                        WG_CONF_PATH,
+                        limit=1,
+                    )
+                )
+
+                if not free_addresses:
                     return jsonify(
-                        error="address_pool_exhausted",
-                        detail=f"No free client address left on {iface}.",
+                        ok=False,
+                        error=(
+                            'address_pool_exhausted'
+                        ),
+                        detail=(
+                            'No free client '
+                            f'address left on '
+                            f'{iface}.'
+                        ),
                         iface=iface,
                     ), 409
 
-                host = hostPrefix(free[0])
+                host = hostPrefix(
+                    free_addresses[0]
+                )
 
             for block in blocks:
-                existing_pub = _block_public_key(block)
-                allowed = _block_allowed_ips(block)
+                existing_public_key = (
+                    _block_public_key(
+                        block
+                    )
+                )
 
-                if existing_pub and existing_pub != pub and _host_matches_any(allowed, host):
+                allowed_values = (
+                    _block_allowed_ips(
+                        block
+                    )
+                )
+
+                if (
+                    existing_public_key
+                    and existing_public_key
+                    != public_key
+                    and _host_matches_any(
+                        allowed_values,
+                        host,
+                    )
+                ):
                     return jsonify(
-                        error="host_cidr_already_used",
-                        detail=f"{host} is already assigned to another peer",
+                        ok=False,
+                        error=(
+                            'host_cidr_already_used'
+                        ),
+                        detail=(
+                            f'{host} is already '
+                            'assigned to another '
+                            'peer.'
+                        ),
                         iface=iface,
-                        host_cidr=host
+                        host_cidr=host,
                     ), 409
 
-            if not os.path.exists(conf):
+            if not os.path.exists(
+                conf
+            ):
                 return jsonify(
-                    error="interface_conf_not_found",
-                    detail=f"{conf} does not exist. Create the interface first."
+                    ok=False,
+                    error=(
+                        'interface_conf_not_found'
+                    ),
+                    detail=(
+                        f'{conf} does not exist. '
+                        'Create the interface first.'
+                    ),
                 ), 404
 
             try:
                 subprocess.check_call(
-                    ['wg', 'show', iface],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
+                    [
+                        'wg',
+                        'show',
+                        iface,
+                    ],
+                    stdout=(
+                        subprocess.DEVNULL
+                    ),
+                    stderr=(
+                        subprocess.DEVNULL
+                    ),
                 )
+
             except Exception:
-                up = subprocess.run(
-                    ['wg-quick', 'up', iface],
+                up_result = subprocess.run(
+                    [
+                        'wg-quick',
+                        'up',
+                        iface,
+                    ],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True
+                    text=True,
+                    timeout=20,
+                    check=False,
                 )
-                if up.returncode != 0:
+
+                if (
+                    up_result.returncode
+                    != 0
+                ):
                     return jsonify(
-                        error="failed_to_bring_iface_up",
+                        ok=False,
+                        error=(
+                            'failed_to_bring_iface_up'
+                        ),
                         iface=iface,
-                        stderr=(up.stderr or up.stdout or '').strip()
+                        stderr=(
+                            up_result.stderr
+                            or up_result.stdout
+                            or ''
+                        ).strip(),
                     ), 500
 
-            endpoint = (j.get('endpoint')or '').strip()
+            endpoint = (
+                payload.get(
+                    'endpoint'
+                )
+                or ''
+            ).strip()
+
+            runtime_endpoint = ''
+
+            if endpoint:
+                try:
+                    runtime_endpoint = (
+                        _runtime_endpoint(
+                            endpoint
+                        )
+                    )
+
+                except ValueError as exc:
+                    return jsonify(
+                        ok=False,
+                        error=(
+                            'invalid_fixed_endpoint'
+                        ),
+                        detail=str(
+                            exc
+                        ),
+                        endpoint=endpoint,
+                    ), 400
 
             try:
-                runtime_endpoint = (_runtime_endpoint(endpoint)
-                                    if endpoint
-                                    else '')
+                keepalive = int(
+                    payload.get(
+                        'persistent_keepalive'
+                    )
+                    or 0
+                )
 
-            except ValueError as exc:
-                return jsonify(
-                    ok=False,
-                    error='invalid_fixed_endpoint',
-                    detail=str(exc),
-                    endpoint=endpoint,), 400
-
-            keepalive = j.get('persistent_keepalive')
-            try:
-                keepalive = int(keepalive or 0)
             except Exception:
                 keepalive = 0
 
-            # Removing before an update is intentional: omitting Endpoint or a
-            # keepalive must clear the previous values, which `wg set` cannot do
-            # by merely leaving those arguments out.
+            if keepalive < 0:
+                keepalive = 0
+
+            if keepalive > 65535:
+                return jsonify(
+                    ok=False,
+                    error=(
+                        'invalid_persistent_keepalive'
+                    ),
+                    detail=(
+                        'PersistentKeepalive is '
+                        'outside the accepted range.'
+                    ),
+                ), 400
+
             if duplicate:
-                removed = _runtime_remove()
-                if removed.returncode != 0:
+                removed = (
+                    _runtime_remove()
+                )
+
+                if (
+                    removed.returncode
+                    != 0
+                ):
                     return jsonify(
-                        error="wg_remove_before_update_failed",
-                        stderr=(removed.stderr or removed.stdout or '').strip(),
+                        ok=False,
+                        error=(
+                            'wg_remove_before_update_failed'
+                        ),
+                        stderr=(
+                            removed.stderr
+                            or removed.stdout
+                            or ''
+                        ).strip(),
                     ), 500
 
-            proc = _runtime_set(host,runtime_endpoint,keepalive,)
+            runtime_result = (
+                _runtime_set(
+                    host,
+                    runtime_endpoint,
+                    keepalive,
+                )
+            )
 
-            if proc.returncode != 0:
+            if (
+                runtime_result.returncode
+                != 0
+            ):
                 if duplicate:
                     try:
-                        _restore_runtime(previous_block)
+                        _restore_runtime(
+                            previous_block
+                        )
+
                     except Exception:
-                        app.logger.exception('Could not restore peer after failed update')
+                        app.logger.exception(
+                            'Could not restore '
+                            'peer after failed '
+                            'runtime update'
+                        )
+
                 return jsonify(
-                    error="wg_set_failed",
-                    stderr=(proc.stderr or '').strip()
+                    ok=False,
+                    error='wg_set_failed',
+                    stderr=(
+                        runtime_result.stderr
+                        or runtime_result.stdout
+                        or ''
+                    ).strip(),
                 ), 500
 
-            block = ['', '[Peer]', f'PublicKey = {pub}', f'AllowedIPs = {host}']
+            peer_block = [
+                '',
+                '[Peer]',
+                (
+                    'PublicKey = '
+                    f'{public_key}'
+                ),
+                (
+                    'AllowedIPs = '
+                    f'{host}'
+                ),
+            ]
 
-            # `endpoint` here is a fixed remote-client endpoint for the SERVER's
-            # peer block. The node's own public address must never land here.
             if endpoint:
-                block.append(f'Endpoint = {endpoint}')
+                peer_block.append(
+                    f'Endpoint = {endpoint}'
+                )
 
             if keepalive > 0:
-                block.append(f'PersistentKeepalive = {keepalive}')
+                peer_block.append(
+                    (
+                        'PersistentKeepalive = '
+                        f'{keepalive}'
+                    )
+                )
 
-            block.append('')
+            peer_block.append('')
 
-            with open(conf, 'r', encoding='utf-8', errors='ignore') as f:
-                existing = f.read()
+            with open(
+                conf,
+                'r',
+                encoding='utf-8',
+                errors='ignore',
+            ) as handle:
+                existing_config = (
+                    handle.read()
+                )
 
             try:
-                _write_conf_atomic(conf, _upsert_peer_block_text(existing, pub, block))
-                if not _conf_has_peer(conf, pub) or not _runtime_has_peer(iface, pub):
-                    raise RuntimeError('Peer update could not be verified in config and runtime.')
+                updated_config = (
+                    _upsert_peer_block_text(
+                        existing_config,
+                        public_key,
+                        peer_block,
+                    )
+                )
+
+                _write_conf_atomic(
+                    conf,
+                    updated_config,
+                )
+
+                if not _conf_has_peer(
+                    conf,
+                    public_key,
+                ):
+                    raise RuntimeError(
+                        'Peer update was not '
+                        'written to the '
+                        'WireGuard config.'
+                    )
+
+                if not _runtime_has_peer(
+                    iface,
+                    public_key,
+                ):
+                    raise RuntimeError(
+                        'Peer update was not '
+                        'present in the '
+                        'WireGuard runtime.'
+                    )
+
             except Exception:
+
                 try:
-                    _write_conf_atomic(conf, existing)
+                    _write_conf_atomic(
+                        conf,
+                        existing_config,
+                    )
+
                 except Exception:
-                    app.logger.exception('Could not restore config after peer update failure')
+                    app.logger.exception(
+                        'Could not restore '
+                        'WireGuard config after '
+                        'peer update failure'
+                    )
+
                 try:
-                    _restore_runtime(previous_block)
+                    _restore_runtime(
+                        previous_block
+                    )
+
                 except Exception:
-                    app.logger.exception('Could not restore runtime after config update failure')
+                    app.logger.exception(
+                        'Could not restore '
+                        'WireGuard runtime after '
+                        'peer update failure'
+                    )
+
                 raise
 
             return jsonify(
@@ -2664,13 +3996,38 @@ def add_peer():
                 duplicate=duplicate,
                 updated=duplicate,
                 iface=iface,
-                public_key=pub,
-                host_cidr=host
+                public_key=public_key,
+                host_cidr=host,
+                endpoint=endpoint,
+                runtime_endpoint=(
+                    runtime_endpoint
+                    if endpoint
+                    else ''
+                ),
             ), 200
 
-    except Exception as e:
-        app.logger.exception("add_peer failed")
-        return jsonify(error="unhandled_exception", detail=str(e)), 500
+    except subprocess.TimeoutExpired as exc:
+        app.logger.exception(
+            'WireGuard peer operation timed out'
+        )
+
+        return jsonify(
+            ok=False,
+            error='peer_operation_timeout',
+            detail=str(exc),
+        ), 504
+
+    except Exception as exc:
+        app.logger.exception(
+            'add_peer failed'
+        )
+
+        return jsonify(
+            ok=False,
+            error='unhandled_exception',
+            detail=str(exc),
+        ), 500
+
 
 def _peer_conf(pub):
     for fn in os.listdir(WG_CONF_PATH):
@@ -2775,11 +4132,16 @@ def reset_peer_data(pub):
             detail=str(exc),
         ), 500
     
-@app.route('/api/peer/<path:pub>/enable', methods=['POST'])
+@app.route(
+    '/api/peer/<path:pub>/enable',
+    methods=['POST'],
+)
 @require_api_key
 def enable_peer(pub):
 
-    info = _peer_conf(pub)
+    info = _peer_conf(
+        pub
+    )
 
     if not info:
         return jsonify(
@@ -2787,23 +4149,49 @@ def enable_peer(pub):
             error='peer_not_found',
         ), 404
 
-    payload = request.get_json(
-        silent=True
-    ) or {}
+    payload = (
+        request.get_json(
+            silent=True
+        )
+        or {}
+    )
 
     host = (
-        payload.get('host_cidr')
+        payload.get(
+            'host_cidr'
+        )
         or _orig_host(
-            info.get('allowed')
+            info.get(
+                'allowed'
+            )
         )
     )
 
-    interface_name = info.get('iface')
+    interface_name = (
+        info.get(
+            'iface'
+        )
+        or ''
+    ).strip()
 
     if not interface_name:
         return jsonify(
             ok=False,
             error='peer_interface_missing',
+        ), 400
+
+    try:
+        interface_name = (
+            _safe_iface_name(
+                interface_name
+            )
+        )
+
+    except Exception as exc:
+        return jsonify(
+            ok=False,
+            error='invalid_iface',
+            detail=str(exc),
         ), 400
 
     try:
@@ -2819,18 +4207,27 @@ def enable_peer(pub):
         )
 
     except Exception:
-        up_result = subprocess.run(
-            [
-                'wg-quick',
-                'up',
-                interface_name,
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=20,
-            check=False,
-        )
+        try:
+            up_result = subprocess.run(
+                [
+                    'wg-quick',
+                    'up',
+                    interface_name,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+
+        except subprocess.TimeoutExpired as exc:
+            return jsonify(
+                ok=False,
+                error='interface_enable_timeout',
+                detail=str(exc),
+                interface=interface_name,
+            ), 504
 
         if up_result.returncode != 0:
             return jsonify(
@@ -2840,8 +4237,8 @@ def enable_peer(pub):
                     up_result.stderr
                     or up_result.stdout
                     or (
-                        'Could not bring WireGuard '
-                        'interface up.'
+                        'Could not bring '
+                        'WireGuard interface up.'
                     )
                 ).strip(),
                 interface=interface_name,
@@ -2855,37 +4252,88 @@ def enable_peer(pub):
         pub,
     ]
 
-    if info.get('allowed'):
+    allowed_ips = (
+        info.get(
+            'allowed'
+        )
+        or ''
+    ).strip()
+
+    if allowed_ips:
         command += [
             'allowed-ips',
-            info['allowed'],
+            allowed_ips,
         ]
 
-    if info.get('endpoint'):
+    endpoint = (
+        info.get(
+            'endpoint'
+        )
+        or ''
+    ).strip()
+
+    if endpoint:
         try:
-            runtime_endpoint = (
-                runtime_endpoint(
-                    info['endpoint']
+            resolved_endpoint = (
+                _runtime_endpoint(
+                    endpoint
                 )
             )
-        except ValueError as exc:
-            return jsonify(ok=False,error='invalid_fixed_endpoint',detail=str(exc),endpoint=info.get('endpoint'),interface=interface_name,), 400
-        command += ['endpoint',runtime_endpoint,]
 
-    if info.get('keep'):
+        except ValueError as exc:
+            return jsonify(
+                ok=False,
+                error='invalid_fixed_endpoint',
+                detail=str(exc),
+                endpoint=endpoint,
+                interface=interface_name,
+            ), 400
+
         command += [
-            'persistent-keepalive',
-            str(info['keep']),
+            'endpoint',
+            resolved_endpoint,
         ]
 
-    result = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=12,
-        check=False,
+    keepalive = (
+        info.get(
+            'keep'
+        )
+        or 0
     )
+
+    try:
+        keepalive = int(
+            keepalive
+        )
+
+    except Exception:
+        keepalive = 0
+
+    if keepalive > 0:
+        command += [
+            'persistent-keepalive',
+            str(
+                keepalive
+            ),
+        ]
+
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=12,
+            check=False,
+        )
+
+    except subprocess.TimeoutExpired as exc:
+        return jsonify(
+            ok=False,
+            error='peer_enable_timeout',
+            detail=str(exc),
+            interface=interface_name,
+        ), 504
 
     if result.returncode != 0:
         return jsonify(
@@ -2894,7 +4342,10 @@ def enable_peer(pub):
             detail=(
                 result.stderr
                 or result.stdout
-                or 'WireGuard peer enable failed.'
+                or (
+                    'WireGuard peer '
+                    'enable failed.'
+                )
             ).strip(),
             interface=interface_name,
         ), 500
@@ -2911,15 +4362,28 @@ def enable_peer(pub):
         interface=interface_name,
         public_key=pub,
         host_cidr=host,
+        endpoint=endpoint,
     )
 
 @app.route('/api/peer/<path:pub>/disable', methods=['POST'])
 @require_api_key
 def disable_peer(pub):
 
-    payload = request.get_json(
-        silent=True
-    ) or {}
+    payload = request.get_json(silent=True)
+
+    if not isinstance(payload, dict):
+        try:
+            raw = request.get_data(cache=True, as_text=True).strip()
+            payload = json.loads(raw) if raw else None
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = None
+
+    if not isinstance(payload, dict):
+        return jsonify(
+        ok=False,
+        error='invalid_payload',
+        detail='The request body must be a JSON object.',
+    ), 400
 
     info = _peer_conf(pub)
 
@@ -2989,12 +4453,7 @@ def disable_peer(pub):
 @app.route('/api/peer/<path:pub>', methods=['DELETE'])
 @require_api_key
 def delete_peer(pub):
-    """Remove a peer from the runtime and from every interface config.
 
-    Both layers are verified afterwards and reported separately, so the panel
-    never deletes its own row on the strength of an unconfirmed removal.
-    Each config file is rewritten atomically under its own interface lock.
-    """
     import fcntl
 
     pub = (pub or '').strip()
@@ -3034,7 +4493,6 @@ def delete_peer(pub):
             runtime_removed = True
 
     if not runtime_ifaces and not errors:
-        # Nothing live to remove: an interface that is down is not a failure.
         runtime_removed = True
 
     try:
@@ -3150,7 +4608,21 @@ def iface_delete(name):
     if not os.path.isfile(conf_path):
         return jsonify(error='not_found', detail=f'{name}.conf not found'), 404
 
-    j = request.get_json(silent=True) or {}
+    j = request.get_json(silent=True)
+
+    if not isinstance(j, dict):
+        try:
+            raw = request.get_data(cache=True, as_text=True).strip()
+            j = json.loads(raw) if raw else None
+        except (TypeError, ValueError, json.JSONDecodeError):
+            j = None
+
+    if not isinstance(j, dict):
+        return jsonify(
+        ok=False,
+        error='invalid_payload',
+        detail='The request body must be a JSON object.',
+    ), 400
     force = bool(j.get('force') or j.get('delete_peers'))
 
     peer_count = 0
@@ -3299,7 +4771,27 @@ def agent_iface_logs(name):
 if __name__ == "__main__":
     import os, multiprocessing, sys
 
-    use_gunicorn = os.getenv("USE_GUNICORN", "1") != "0"
+    try:
+        firewall_summary = (
+            _migrate_existing_rules()
+        )
+
+        app.logger.info(
+            "Existing node firewall "
+            "migration: %s",
+            firewall_summary,
+        )
+
+    except Exception:
+        app.logger.exception(
+            "Existing node firewall "
+            "migration failed"
+        )
+
+    use_gunicorn = os.getenv(
+        "USE_GUNICORN",
+        "1"
+    ) != "0"
 
     if not use_gunicorn:
         app.run(
