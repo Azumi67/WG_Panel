@@ -11615,7 +11615,6 @@ def _write_conf_atomic(conf_path: str, text_body: str):
 
 
 def _peer_to_conf(peer: Peer):
-=
     conf_path = getattr(peer.iface, 'path', None)
     if not conf_path:
         raise RuntimeError('The interface has no configuration file path.')
