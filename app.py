@@ -21340,6 +21340,51 @@ def api_edit(pid):
         ),
     )
 
+@app.route('/api/nodes/<int:nid>/peer/<path:pub>', methods=['PUT'])
+@csrf.exempt
+@require_api_key_or_login
+def api_edit_node_peer(nid, pub):
+    """
+    Edit a peer that belongs to a remote node.
+
+    """
+    Node.query.get_or_404(nid)
+
+    pub = (pub or '').strip()
+
+    if not pub:
+        return jsonify(
+            success=False,
+            ok=False,
+            error='peer_not_found',
+            detail='Peer public key is required.',
+        ), 404
+
+    p = (
+        db.session.query(Peer)
+        .join(
+            InterfaceConfig,
+            Peer.iface_id == InterfaceConfig.id,
+        )
+        .filter(Peer.public_key == pub)
+        .filter(
+            or_(
+                InterfaceConfig.name.like(f'n{nid}:%'),
+                InterfaceConfig.node_id == nid,
+            )
+        )
+        .first()
+    )
+
+    if p is None:
+        return jsonify(
+            success=False,
+            ok=False,
+            error='peer_not_found',
+            detail='No peer with that public key exists on this node.',
+        ), 404
+
+    return api_edit(p.id)
 
 @app.route('/api/peer/<int:pid>', methods=['DELETE'])
 @require_api_key
@@ -25522,16 +25567,104 @@ def subscription_public_config(token):
         return revoked
 
     mem = BytesIO()
-    with zipfile.ZipFile(mem, 'w', zipfile.ZIP_DEFLATED) as z:
-        for link in sorted(sub.links, key=lambda x: (x.sort_order or 0, x.id or 0)):
-            if not link.peer:
-                continue
-            safe = re.sub(r'[^A-Za-z0-9_.-]+', '_', link.peer.name or f'peer-{link.peer.id}').strip('_')
-            z.writestr(f'{safe or "peer"}.conf', _client_config_txt(link.peer))
-    mem.seek(0)
-    fname = re.sub(r'[^A-Za-z0-9_.-]+', '_', sub.name or 'subscription').strip('_') or 'subscription'
-    return send_file(mem, mimetype='application/zip', as_attachment=True, download_name=f'{fname}.zip')
+    used_names = set()
 
+    with zipfile.ZipFile(
+        mem,
+        'w',
+        zipfile.ZIP_DEFLATED,
+    ) as z:
+
+        for index, link in enumerate(
+            sorted(
+                sub.links,
+                key=lambda x: (
+                    x.sort_order or 0,
+                    x.id or 0,
+                ),
+            ),
+            start=1,
+        ):
+            peer = getattr(link, 'peer', None)
+
+            if not peer:
+                continue
+
+            safe_peer = re.sub(
+                r'[^A-Za-z0-9_.-]+',
+                '_',
+                peer.name or f'peer-{peer.id}',
+            ).strip('._')
+
+            base = safe_peer or f'peer-{peer.id}'
+
+            safe_location = re.sub(
+                r'[^A-Za-z0-9_.-]+',
+                '_',
+                (
+                    getattr(
+                        link,
+                        'location_label',
+                        '',
+                    )
+                    or ''
+                ),
+            ).strip('._')
+
+            if safe_location:
+                candidate = (
+                    f'{base}-{safe_location}'
+                )
+            else:
+                candidate = base
+
+            entry = f'{candidate}.conf'
+
+            # ZIP entry names should also be unique
+            normalized = entry.lower()
+
+            if normalized in used_names:
+                entry = (
+                    f'{candidate}-{index}.conf'
+                )
+                normalized = entry.lower()
+
+            if normalized in used_names:
+                entry = (
+                    f'{base}-peer{peer.id}.conf'
+                )
+                normalized = entry.lower()
+
+            suffix = 2
+
+            while normalized in used_names:
+                entry = (
+                    f'{base}-peer{peer.id}-{suffix}.conf'
+                )
+                normalized = entry.lower()
+                suffix += 1
+
+            used_names.add(normalized)
+
+            z.writestr(
+                entry,
+                _client_config_txt(peer),
+            )
+
+    mem.seek(0)
+
+    fname = re.sub(
+        r'[^A-Za-z0-9_.-]+',
+        '_',
+        sub.name or 'subscription',
+    ).strip('._') or 'subscription'
+
+    return send_file(
+        mem,
+        mimetype='application/zip',
+        as_attachment=True,
+        download_name=f'{fname}.zip',
+    )
 
 @app.get(
     '/s/<token>/inbound/<int:link_id>/config'
