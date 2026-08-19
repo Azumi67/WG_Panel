@@ -636,7 +636,6 @@ html[data-theme="dark"] .iface-down-btn { background:#321922 !important; border-
 html[data-theme="dark"] .iface-down-btn:hover { background:#43202c !important; }
 
 
-/* Telegram notification rules */
 html[data-theme="dark"] .tg-notify-intro,
 html[data-theme="dark"] .tg-notify-group,
 html[data-theme="dark"] .tg-notify-savebar {
@@ -708,4 +707,82 @@ html[data-theme="dark"] .tg-notify-group-icon.operations {
 html[data-theme="dark"] .tg-notify-savebar {
   background: rgba(11, 25, 33, .96) !important;
   box-shadow: 0 14px 34px rgba(0, 0, 0, .35);
+}
+
+html[data-theme="dark"] #card-telegram #tg-test,
+html[data-theme="dark"] #card-telegram #open-logs-telegram,
+html[data-theme="dark"] #card-telegram #open-logs-admin-top,
+html[data-theme="dark"] #card-telegram #tg-notify-critical,
+html[data-theme="dark"] #card-telegram #tg-notify-all,
+html[data-theme="dark"] #card-telegram #tg-notify-none {
+  background: #12232d !important;
+  color: #dce7ed !important;
+  border-color: #35505e !important;
+  box-shadow: none !important;
+}
+html[data-theme="dark"] #card-telegram #tg-test:hover,
+html[data-theme="dark"] #card-telegram #open-logs-telegram:hover,
+html[data-theme="dark"] #card-telegram #open-logs-admin-top:hover,
+html[data-theme="dark"] #card-telegram #tg-notify-critical:hover,
+html[data-theme="dark"] #card-telegram #tg-notify-all:hover,
+html[data-theme="dark"] #card-telegram #tg-notify-none:hover {
+  background: #18303b !important;
+  border-color: #466775 !important;
+  color: #f2f8fb !important;
+  filter: none !important;
+}
+
+html[data-theme="dark"] #tg-save,
+html[data-theme="dark"] #tg-add-admin,
+html[data-theme="dark"] #tpl-save,
+html[data-theme="dark"] #soc-save,
+html[data-theme="dark"] #admin-rename,
+html[data-theme="dark"] #pw-save,
+html[data-theme="dark"] #twofa-begin,
+html[data-theme="dark"] #twofa-confirm {
+  background: linear-gradient(180deg, #24785f 0%, #1b604d 100%) !important;
+  border: 1px solid #389075 !important;
+  color: #f3fffb !important;
+  box-shadow: 0 7px 18px rgba(8, 48, 39, .24) !important;
+}
+html[data-theme="dark"] #tg-save:hover:not(:disabled),
+html[data-theme="dark"] #tg-add-admin:hover:not(:disabled),
+html[data-theme="dark"] #tpl-save:hover:not(:disabled),
+html[data-theme="dark"] #soc-save:hover:not(:disabled),
+html[data-theme="dark"] #admin-rename:hover:not(:disabled),
+html[data-theme="dark"] #pw-save:hover:not(:disabled),
+html[data-theme="dark"] #twofa-begin:hover:not(:disabled),
+html[data-theme="dark"] #twofa-confirm:hover:not(:disabled) {
+  background: linear-gradient(180deg, #2b8a6d 0%, #20705a 100%) !important;
+  border-color: #51aa8d !important;
+  color: #ffffff !important;
+  filter: none !important;
+}
+
+html[data-theme="dark"] .panel[data-panel="template"] .savebar {
+  background: #0b1921 !important;
+  border: 1px solid #29434f !important;
+  box-shadow: none !important;
+}
+
+html[data-theme="dark"] .panel[data-panel="admin"] #twofa-disable {
+  background: #3a2028 !important;
+  border-color: #75404b !important;
+  color: #f5a7b1 !important;
+}
+html[data-theme="dark"] .panel[data-panel="admin"] #twofa-disable:hover:not(:disabled) {
+  background: #4a2630 !important;
+  border-color: #8c4b58 !important;
+  color: #ffc2c9 !important;
+}
+
+html[data-theme="dark"] .panel[data-panel="admin"] #twofa-setup.open {
+  background: #0a171e !important;
+  border: 1px solid #29434f !important;
+  border-radius: 14px !important;
+  padding: 14px !important;
+}
+html[data-theme="dark"] .panel[data-panel="admin"] #admin-qr {
+  border-color: #45616d !important;
+  box-shadow: 0 8px 22px rgba(0,0,0,.22) !important;
 }
