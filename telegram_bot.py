@@ -6,6 +6,7 @@ from datetime import datetime, time as dtime, timezone
 import os, io, json, logging, math, re, asyncio
 from functools import wraps
 from pathlib import Path
+from urllib.parse import quote
 from typing import Dict, Any, Tuple, List, Optional, Set
 import requests
 from requests import HTTPError, RequestException
@@ -397,7 +398,8 @@ def _peer_lines(p: Dict[str, Any]) -> str:
     return "\n".join([
         f"⌘ <b>Interface</b>: {iface}   •   <b>Status</b>: {status}",
         f"◎ <b>Address</b>: {addr}",
-        f"⌁ <b>Endpoint</b>: {endpoint}",
+        f"⌁ <b>Server endpoint</b>: {endpoint}",
+        f"◎ <b>Fixed client</b>: {p.get('peer_endpoint') or 'Automatic / roaming'}",
         f"▦ <b>Used</b>: {used_mib:.2f} MiB   •   <b>TTL</b>: {ttl}",
         f"◫ <b>Limit</b>: {limit_val} {limit_unit}   •   <b>Unlimited</b>: {unlimited}",
         f"↓ <b>RX</b>: {rx} MiB   •   ↑ <b>TX</b>: {tx} MiB",
@@ -412,7 +414,8 @@ def _peer_more_info(p: Dict[str, Any]) -> str:
         f"◇ <b>{html(g('name'))}</b> (id {html(str(p.get('id')))} )",
         f"⌘ <b>Interface</b>: {html(g('iface','interface'))} • <b>Status</b>: {html(str(p.get('status') or '—'))}",
         f"◎ <b>Address</b>: {html(g('address', 'ip'))} • <b>MTU</b>: {html(g('mtu'))}",
-        f"⌁ <b>Endpoint</b>: {html(g('endpoint'))}",
+        f"⌁ <b>Server endpoint</b>: {html(g('endpoint'))}",
+        f"◎ <b>Fixed client</b>: {html(g('peer_endpoint'))}",
         f"◇ <b>Public key</b>: <code>{html(g('public_key'))}</code>",
         f"◷ <b>Created</b>: {html(g('created_at'))} • <b>First used</b>: {html(g('first_used'))}",
         f"◷ <b>Expires</b>: {html(g('expires_at'))} • <b>TTL</b>: {html(human_ttl(p.get('ttl_seconds')))}",
@@ -1434,6 +1437,7 @@ PANEL_DEFAULTS: Dict[str, Any] = {
 
     "allowed_ips": "0.0.0.0/0, ::/0",
     "endpoint": "",
+    "peer_endpoint": "",
     "persistent_keepalive": 25,  
     "data_limit_value": 0,
     "data_limit_unit": "Mi",     
@@ -1453,201 +1457,101 @@ PANEL_DEFAULTS: Dict[str, Any] = {
 PROFILE_KEYS = set(PANEL_DEFAULTS.keys()) | {"name", "use_for"}
 
 def _profiles_load() -> Dict[str, Any]:
+    """Read peer profiles from the panel API, matching the web UI exactly."""
+    listing = _api_data("GET", "/api/peer_profiles", timeout=15)
+    if isinstance(listing, dict) and listing.get("profiles") is not None:
+        active = str(listing.get("active") or "Default").strip() or "Default"
+        profiles = {}
+        for name in listing.get("profiles") or []:
+            clean = str(name or "").strip()
+            if not clean:
+                continue
+            detail = _api_data("GET", f"/api/peer_profile?name={quote(clean, safe='')}", timeout=15)
+            if isinstance(detail, dict) and detail.get("ok") is not False:
+                values = {k: detail.get(k) for k in PANEL_DEFAULTS.keys() if k in detail}
+                values["use_for"] = "peer"
+                profiles[clean] = values
+        if profiles:
+            return {"default": active, "active": active, "profiles": profiles}
 
-    def _c_bool(v):
-        if isinstance(v, bool):
-            return v
-        s = str(v).strip().lower()
-        return s in {"1", "true", "yes", "on"}
-
-    def _normalize(v):
-        u = str(v).strip().capitalize()
-        return "Gi" if u.startswith("Gi") else "Mi"
-
-    if PROFILES_FILE.exists():
-        try:
-            with PROFILES_FILE.open("r", encoding="utf-8") as f:
-                j = json.load(f)
-            if not isinstance(j, dict):
-                raise ValueError("profiles json not a dict")
-            j.setdefault("default", None)
-            j.setdefault("profiles", {})
-            profs = j["profiles"]
-
-            changed = False
-            for p in profs.values():
-                if "name_prefix" in p:
-                    if not p.get("name") and p.get("name_prefix"):
-                        p["name"] = p.get("name_prefix", "")
-                    p.pop("name_prefix", None)
-                    changed = True
-
-                if "keepalive" in p and "persistent_keepalive" not in p:
-                    try:
-                        p["persistent_keepalive"] = int(p.pop("keepalive"))
-                    except Exception:
-                        p.pop("keepalive", None)
-                    changed = True
-                else:
-                    p.pop("keepalive", None)
-
-                for bk in ("start_on_first_use", "unlimited"):
-                    if bk in p:
-                        b = _c_bool(p[bk])
-                        if p[bk] != b:
-                            p[bk] = b
-                            changed = True
-
-                if "data_limit_unit" in p:
-                    unit = _normalize(p.get("data_limit_unit", "Mi"))
-                    if p.get("data_limit_unit") != unit:
-                        p["data_limit_unit"] = unit
-                        changed = True
-
-                scope = str(p.get("use_for", "both")).lower()
-                if scope not in ("single", "bulk", "both"):
-                    scope = "both"
-                    changed = True
-                p["use_for"] = scope
-
-                # for k in list(p.keys()):
-                #     if k not in PROFILE_KEYS:
-                #         p.pop(k, None); changed = True
-
-            if not j["default"] or j["default"] not in profs:
-                if profs:
-                    j["default"] = next(iter(profs.keys()))
-                else:
-                    base = {k: v for k, v in PANEL_DEFAULTS.items() if k in PROFILE_KEYS}
-                    base["use_for"] = "both"
-                    profs["default"] = base
-                    j["default"] = "default"
-                    changed = True
-
-            if changed:
-                _profiles_save(j)
-            return j
-        except Exception:
-            pass
-
-    seed_base = {k: v for k, v in PANEL_DEFAULTS.items() if k in PROFILE_KEYS}
-    seed_base["use_for"] = "both"
-    seed = {
-        "default": "default",
-        "profiles": {
-            "default": seed_base
-        }
-    }
-    _profiles_save(seed)
-    return seed
+    try:
+        if PROFILES_FILE.exists():
+            raw = json.loads(PROFILES_FILE.read_text(encoding="utf-8")) or {}
+            profs = raw.get("profiles") if isinstance(raw.get("profiles"), dict) else {}
+            active = str(raw.get("active") or raw.get("default") or "Default")
+            return {"default": active, "active": active, "profiles": profs}
+    except Exception:
+        pass
+    return {"default": "Default", "active": "Default", "profiles": {"Default": dict(PANEL_DEFAULTS)}}
 
 
 def _profiles_save(data: Dict[str, Any]) -> None:
-    data = {"default": data.get("default"), "profiles": data.get("profiles", {})}
-
-    PROFILES_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = PROFILES_FILE.with_suffix(".tmp")
-
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-    try:
-        os.chmod(tmp, 0o600)
-    except Exception:
-        pass
-
-    tmp.replace(PROFILES_FILE)
-
-    try:
-        os.chmod(PROFILES_FILE, 0o600)
-    except Exception:
-        pass
+    """Compatibility helper: save profiles through the panel API."""
+    profiles = data.get("profiles") if isinstance(data, dict) else {}
+    for name, values in (profiles or {}).items():
+        profile_set(str(name), dict(values or {}))
+    active = str((data or {}).get("active") or (data or {}).get("default") or "").strip()
+    if active:
+        profile_set_default(active)
 
 
 def default_profile(scope: str) -> Optional[str]:
-
     base = _profiles_load()
-    profs = (base.get("profiles") or {})
-    dname = base.get("default")
+    active = str(base.get("active") or base.get("default") or "").strip()
+    if active and active in (base.get("profiles") or {}):
+        return active
+    names = list((base.get("profiles") or {}).keys())
+    return names[0] if names else None
 
-    def _ok(name: str) -> bool:
-        p = profs.get(name) or {}
-        use = str(p.get("use_for", "both")).lower()
-        if scope in ("single", "bulk"):
-            return use in ("peer", "single", "bulk", "both", "all")
-        return use in (scope, "all")
-
-    if dname and dname in profs and _ok(dname):
-        return dname
-
-    for name in profs.keys():
-        if _ok(name):
-            return name
-
-    return None
 
 def profiles_list() -> List[str]:
-    return list(_profiles_load().get("profiles", {}).keys())
+    return sorted(_profiles_load().get("profiles", {}).keys(), key=str.lower)
+
 
 def profiles_list_for(scope: str) -> list[str]:
-    base = _profiles_load()
-    out = []
-    for n, vals in (base.get("profiles") or {}).items():
-        use = str((vals or {}).get("use_for", "both")).lower()
-        if scope in ("single", "bulk"):
-            ok = use in ("peer", "single", "bulk", "both", "all")
-        else:
-            ok = use in (scope, "all")
-        if ok:
-            out.append(n)
-    return out
+    return profiles_list()
+
 
 def profile_get(name: str) -> Dict[str, Any]:
     return _profiles_load().get("profiles", {}).get(name, {}).copy()
 
 
 def profile_set(name: str, values: Dict[str, Any]) -> None:
-    base = _profiles_load()
-
-    prof = {k: v for k, v in (values or {}).items() if k in PROFILE_KEYS}
-
-    scope = str(prof.get("use_for") or "peer").lower()
-    if scope in ("single", "bulk", "both", "all"):
-        scope = "peer"
-    if scope not in ("peer", "subscription"):
-        scope = "peer"
-    prof["use_for"] = scope
-
-    base.setdefault("profiles", {})[name] = prof
-    _profiles_save(base)
+    payload = {"name": str(name or "").strip() or "Default"}
+    for key in PANEL_DEFAULTS.keys():
+        if key in (values or {}):
+            payload[key] = values[key]
+    result = _api_data("POST", "/api/peer_profile", payload=payload, timeout=20)
+    if result.get("ok") is False:
+        raise RuntimeError(result.get("message") or result.get("detail") or result.get("error") or "Could not save profile")
 
 
 def profile_delete(name: str) -> None:
-    base = _profiles_load()
-    base.get("profiles", {}).pop(name, None)
-    if base.get("default") == name:
-        base["default"] = None
-    _profiles_save(base)
+    clean = str(name or "").strip()
+    result = _api_data("DELETE", f"/api/peer_profile?name={quote(clean, safe='')}", timeout=20)
+    if result.get("ok") is False:
+        raise RuntimeError(result.get("message") or result.get("detail") or result.get("error") or "Could not delete profile")
 
 
 def profile_default() -> Optional[str]:
-    return _profiles_load().get("default")
+    base = _profiles_load()
+    return str(base.get("active") or base.get("default") or "").strip() or None
 
 
 def profile_set_default(name: Optional[str]) -> None:
-    base = _profiles_load()
-    if name and name not in base.get("profiles", {}):
-        raise KeyError("profile not found")
-    base["default"] = name
-    _profiles_save(base)
+    clean = str(name or "").strip()
+    if not clean:
+        return
+    result = _api_data("POST", "/api/peer_profile/activate", payload={"name": clean}, timeout=20)
+    if result.get("ok") is False:
+        raise RuntimeError(result.get("message") or result.get("detail") or result.get("error") or "Could not activate profile")
+
 
 def profile_scope(scope: str) -> tuple[Optional[str], Dict[str, Any]]:
-
-    name = default_profile(scope) 
+    name = default_profile(scope)
     if name:
         return name, profile_get(name) or {}
-    vals = {k: v for k, v in PANEL_DEFAULTS.items() if k in PROFILE_KEYS}
-    return None, vals
+    return None, dict(PANEL_DEFAULTS)
 
 BOOL_KEYS = {"start_on_first_use", "unlimited", "include_internal_network"}
 UNIT_KEYS = {"data_limit_unit"}  
@@ -1679,7 +1583,8 @@ def menu_kb(flow: str, key: str, allow_skip: bool = True) -> InlineKeyboardMarku
 _PROFILE_LABELS = [
     ("name",                 "Friendly name"),
     ("allowed_ips",          "Allowed IPs"),
-    ("endpoint",             "Endpoint (host:port)"),
+    ("endpoint",             "Server endpoint (host:port)"),
+    ("peer_endpoint",        "Fixed client endpoint"),
     ("persistent_keepalive", "Keepalive (s)"),
     ("mtu",                  "MTU"),
     ("dns",                  "DNS"),
@@ -1697,7 +1602,8 @@ def kb_profile(pname: str):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Friendly name",     callback_data=f"profiles:editkey:{pname}:name")],
         [InlineKeyboardButton("Allowed IPs",       callback_data=f"profiles:editkey:{pname}:allowed_ips"),
-         InlineKeyboardButton("Endpoint",          callback_data=f"profiles:editkey:{pname}:endpoint")],
+         InlineKeyboardButton("Server endpoint",   callback_data=f"profiles:editkey:{pname}:endpoint")],
+        [InlineKeyboardButton("Fixed client endpoint", callback_data=f"profiles:editkey:{pname}:peer_endpoint")],
         [InlineKeyboardButton("Keepalive (s)",     callback_data=f"profiles:editkey:{pname}:persistent_keepalive"),
          InlineKeyboardButton("MTU",               callback_data=f"profiles:editkey:{pname}:mtu")],
         [InlineKeyboardButton("DNS",               callback_data=f"profiles:editkey:{pname}:dns")],
@@ -3228,6 +3134,13 @@ def render_update_center(*, fresh: bool = False):
         f"↥ Pending     <code>{len(node_updates)}</code> node update(s)",
     ]
 
+    restarted_services = [str(x) for x in (status.get("restarted_services") or []) if str(x).strip()]
+    telegram_services = [str(x) for x in (status.get("telegram_services") or []) if str(x).strip()]
+    if restarted_services:
+        lines.append(f"↻ Restarted    <code>{html(', '.join(restarted_services))}</code>")
+    if telegram_services:
+        lines.append(f"✦ Telegram     <code>{html(', '.join(telegram_services))}</code>")
+
     message = str(status.get("message") or "").strip()
     if message and message.lower() not in {"no update is running.", "no node update is running."}:
         lines.extend(["", f"✦ {html(message[:360])}"])
@@ -3499,6 +3412,44 @@ def _last_backup() -> int | None:
 
     return None
 
+def _fmt_backup_datetime(value, *, fallback="—") -> str:
+
+    if value in (None, "", "—"):
+        return fallback
+
+    try:
+        if isinstance(value, (int, float)):
+            dt = datetime.fromtimestamp(
+                float(value),
+                tz=timezone.utc,
+            )
+        else:
+            raw = str(value).strip()
+
+            # Unix timestamp supplied as a string
+            if re.fullmatch(r"\d+(?:\.\d+)?", raw):
+                dt = datetime.fromtimestamp(
+                    float(raw),
+                    tz=timezone.utc,
+                )
+            else:
+                dt = datetime.fromisoformat(
+                    raw.replace("Z", "+00:00")
+                )
+
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+
+                dt = dt.astimezone(timezone.utc)
+
+        if dt.second:
+            return dt.strftime("%d %b %Y · %H:%M:%S UTC")
+
+        return dt.strftime("%d %b %Y · %H:%M UTC")
+
+    except Exception:
+        return str(value)
+    
 def _fmt_when(ts: int | None) -> str:
     if not ts:
         return "Never"
@@ -3541,7 +3492,8 @@ BASIC_CREATE_FIELDS = [
 ADVANCED_CREATE_FIELDS = [
     ("name", "Friendly name", ""),
     ("allowed_ips", "Allowed IPs", PANEL_DEFAULTS["allowed_ips"]),
-    ("endpoint", "Endpoint override (leave automatic when empty)", PANEL_DEFAULTS["endpoint"]),
+    ("endpoint", "Server endpoint override (automatic when empty)", PANEL_DEFAULTS["endpoint"]),
+    ("peer_endpoint", "Fixed client endpoint (stable host:UDP port; empty for normal clients)", PANEL_DEFAULTS["peer_endpoint"]),
     ("keepalive", "Persistent keepalive (seconds)", str(PANEL_DEFAULTS["persistent_keepalive"])),
     ("data_limit_value", "Data limit value (0 = no cap)", str(PANEL_DEFAULTS["data_limit_value"])),
     ("data_limit_unit", "Data limit unit", PANEL_DEFAULTS["data_limit_unit"]),
@@ -3564,7 +3516,8 @@ BULK_FIELDS = [
 
 EDIT_FIELDS = [
     ("name", "New name (enter to skip)", None),
-    ("endpoint", "Endpoint host:port (enter to skip)", None),
+    ("endpoint", "Server endpoint host:port (enter to skip)", None),
+    ("peer_endpoint", "Fixed client endpoint host:UDP port (enter to skip)", None),
     ("dns", "DNS (comma-separated, enter to skip)", None),
     ("mtu", "MTU (enter to skip)", None),
     ("phone_number", "Phone number (enter to skip)", None),
@@ -4001,9 +3954,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ); return
 
     if data == "profiles:restore":
-        seed_base = {k: v for k, v in PANEL_DEFAULTS.items() if k in PROFILE_KEYS}
-        seed_base["use_for"] = "single"
-        _profiles_save({"default_single": "default", "profiles": {"default": seed_base}})
+        profile_set("Default", dict(PANEL_DEFAULTS))
+        profile_set_default("Default")
         _log_admin("profiles_restore", "restored default profile")
         await edit_send(update, "↺ Restored the default profile.", KB.profiles_menu()); return
 
@@ -4026,13 +3978,11 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.callback_query.answer("Missing name.", show_alert=True)
             return
 
-        base = _profiles_load()
-        base.setdefault("profiles", {})
-        base["profiles"][pname] = {
-            "use_for": profile_type,
+        profile_set(pname, {
             "name": "",
             "allowed_ips": "0.0.0.0/0, ::/0",
             "endpoint": "",
+            "peer_endpoint": "",
             "persistent_keepalive": 25,
             "mtu": 1280,
             "dns": "1.1.1.1, 1.0.0.1",
@@ -4040,12 +3990,12 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "data_limit_unit": "Gi",
             "time_limit_days": 0,
             "time_limit_hours": 0,
+            "time_limit_minutes": 0,
             "start_on_first_use": True,
             "unlimited": False,
             "phone_number": "",
             "telegram_id": "",
-        }
-        _profiles_save(base)
+        })
 
         context.user_data.pop(STATE["P_NEW"], None)
         await edit_send(update, profile_summary(pname), kb_profile_editor(pname))
@@ -4930,7 +4880,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         when = str(sched.get("time") or "03:00")
         freq = str(sched.get("freq") or "daily")
         tz = str(sched.get("timezone") or "UTC")
-        next_run = str(sched.get("next_run") or "—")
+        next_run = _fmt_backup_datetime(sched.get("next_run"))
         header = "\n".join([
             "▣ <b>Backup center</b>",
             "<i>Create, restore, and schedule protected archives</i>",
@@ -4952,7 +4902,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         freq = str(s.get("freq") or "daily")
         run_time = str(s.get("time") or "03:00")
         timezone_name = str(s.get("timezone") or "UTC")
-        next_run = str(s.get("next_run") or "—")
+        next_run = _fmt_backup_datetime(s.get("next_run"))
         keep = int(s.get("keep") or 7)
 
         msg = "\n".join([
@@ -5946,7 +5896,8 @@ def profile_summary(pname: str) -> str:
     labels = [
         ("name",                 "Friendly name",               lambda: str(p.get("name") or "")),
         ("allowed_ips",          "Allowed IPs",                 lambda: str(p.get("allowed_ips") or "")),
-        ("endpoint",             "Endpoint (host:port)",        lambda: str(p.get("endpoint") or "")),
+        ("endpoint",             "Server endpoint",             lambda: str(p.get("endpoint") or "")),
+        ("peer_endpoint",        "Fixed client endpoint",       lambda: str(p.get("peer_endpoint") or "")),
         ("persistent_keepalive", "Keepalive (s)",               lambda: str(p.get("persistent_keepalive") or "")),
         ("mtu",                  "MTU",                         lambda: str(p.get("mtu") or "")),
         ("dns",                  "DNS",                         lambda: str(p.get("dns") or "")),
@@ -5987,7 +5938,8 @@ def kb_profile_editor(pname: str) -> InlineKeyboardMarkup:
         [B("◇ Name", f"profiles:editkey:{pname}:name"),
          B("✦ Note", f"profiles:editkey:{pname}:note")],
         [B("◎ Allowed IPs", f"profiles:editkey:{pname}:allowed_ips"),
-         B("⌁ Endpoint", f"profiles:editkey:{pname}:endpoint")],
+         B("⌁ Server endpoint", f"profiles:editkey:{pname}:endpoint")],
+        [B("ⓘ Fixed client endpoint", f"profiles:editkey:{pname}:peer_endpoint")],
         [B("⋄ Keepalive", f"profiles:editkey:{pname}:persistent_keepalive"),
          B("↔ MTU", f"profiles:editkey:{pname}:mtu")],
         [B("◉ DNS", f"profiles:editkey:{pname}:dns"),
