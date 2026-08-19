@@ -1582,13 +1582,12 @@ function cardHTML(p, i) {
       ? ' (starts on first use)'
       : '';
 
-  const isOpen     = openMore.has(String(p.id));
-
   const cStatus    = connStatus(p);
   const pStatus    = panelStatus(p);
   const depleted   = isDepleting(p);
   const blocked    = isBlocked(p);
   const pKey       = peerEsc(peerKey(p) ?? p.id ?? p.public_key ?? '');
+  const isOpen     = openMore.has(String(pKey));
 
   return `
   <div class="peer-card"
@@ -2003,7 +2002,8 @@ function updateCard(card, p, i) {
 
   const more = card.querySelector('.peer-more-section');
   const moreBtn = card.querySelector('.more-toggle');
-  const isOpen = openMore.has(String(p.id));
+  const stateKey = String(card.dataset.id || peerKey(p) || p.id || p.public_key || '');
+  const isOpen = openMore.has(stateKey);
   if (more) more.hidden = !isOpen;
   if (moreBtn) moreBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
 
@@ -2367,7 +2367,6 @@ function matchPeer(card) {
 }
 
 
-  // peers refresh
 let refreshTimer = null,
     isRefreshing = false,
     firstLoad = false,
@@ -2895,9 +2894,7 @@ async function getShortLink(idOrPeer) {
     if (editForm.allowed_ips) editForm.allowed_ips.dataset.autoInternalNetworks = '';
     const editInternalToggle = document.getElementById('edit-include-internal-network');
     if (editInternalToggle) editInternalToggle.checked = false;
-    // Prefill the stored value, not the resolved one: `p.endpoint` is what the
-    // peer effectively gets, and writing it back would freeze the interface
-    // default onto this peer the next time any field is saved.
+
     if (editForm.endpoint) {
       editForm.endpoint.value = p.endpoint_saved || '';
       editForm.endpoint.placeholder = p.endpoint || 'Leave empty to use interface default';
@@ -2946,7 +2943,6 @@ async function getShortLink(idOrPeer) {
     finally { if (loader) { loader.classList.add('hide'); setTimeout(() => loader.remove(), 500); } }
   }
 
-  // QR & logs 
   let qrModal;
   function itsQR() {
     if (qrModal) return qrModal;
@@ -3005,7 +3001,7 @@ async function getShortLink(idOrPeer) {
     logsModal = document.createElement('div'); logsModal.className = 'modal'; logsModal.id = 'logs-modal';
     logsModal.innerHTML = `
       <div class="modal-content logs">
-        <button class="modal-close" id="logs-close" aria-label="Close" style="position:absolute;top:10px;right:10px">&times;</button>
+        <button type="button" class="modal-close" id="logs-close" aria-label="Close peer logs" title="Close" style="position:absolute;top:10px;right:10px">&times;</button>
         <div class="logs-header" style="display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem;">
           <i class="fas fa-list"></i><h2 style="margin:0">Peer Logs</h2>
         </div>
@@ -3055,8 +3051,19 @@ async function getShortLink(idOrPeer) {
         </div>
       </div>`;
     document.body.appendChild(logsModal);
-    $('#logs-close', logsModal)?.addEventListener('click', () => closeModal(logsModal));
+    $('#logs-close', logsModal)?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      closeModal(logsModal);
+    });
     logsModal.addEventListener('click', e => {
+      const closeButton = e.target.closest('#logs-close, .modal-close');
+      if (closeButton && logsModal.contains(closeButton)) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeModal(logsModal);
+        return;
+      }
       if (e.target === logsModal) closeModal(logsModal);
       const t = e.target.closest('.logs-tab'); if (!t) return;
       $$('.logs-tab', logsModal).forEach(b => b.classList.toggle('active', b === t));
@@ -3468,8 +3475,6 @@ function refreshDefaultIface(iface) {
   if (ep.dataset.lastIface !== String(SELECTED_IFACE_ID)) ep.dataset.userEdited = '0';
   if (ep.dataset.userEdited === '1') return;
 
-  // Show what the interface will hand out, but leave the field empty so a
-  // blank submit stores NULL and the server-side override applies.
   ep.value = '';
   ep.placeholder = 'Leave empty to use interface default';
   ep.dataset.lastIface = String(SELECTED_IFACE_ID);
@@ -3959,7 +3964,6 @@ async function ifaceDelete(e) {
     btn.disabled = false;
   }
 }
-//  BULK 
 let bulkModal = null, bulkForm = null;
 
 function bulkOptions() {
@@ -4275,7 +4279,6 @@ function setCreateAddressOptions(list) {
     })
     .join('');
 
-  // Always select the first currently available IP.
   addrSel.selectedIndex = ips.length ? 0 : -1;
 
   const hiddenAddr = document.getElementById('create-address');
@@ -4496,7 +4499,14 @@ async function clickList(e) {
   }
 
   if (btn.classList.contains('delete-btn')) {
-    if (await confirmBox('Really delete this peer?')) {
+    if (await confirmBox(
+      'This peer, its configuration, QR code, usage records, and related access will be permanently removed. This action cannot be undone.',
+      {
+        title: 'Delete this peer?',
+        yesText: 'Delete peer',
+        noText: 'Keep peer',
+      }
+    )) {
       const loader = toastSafe('Deleting peer…', 'info', true);
       try {
         const url = scopeId
@@ -5078,4 +5088,243 @@ if (scopeEl) {
     card.classList.toggle('is-open', open);
     trigger.setAttribute('aria-expanded', String(open));
   });
+})();
+
+/* PEER_DROPDOWN_SUMMARY_POLISH_START */
+(() => {
+  'use strict';
+
+  let active = null;
+
+  const escapeHtml = (value) => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
+  function closeActive({ focus = false } = {}) {
+    if (!active) return;
+    active.menu.classList.remove('open');
+    active.menu.hidden = true;
+    active.trigger.setAttribute('aria-expanded', 'false');
+    if (focus) active.trigger.focus();
+    active = null;
+  }
+
+  function enhance(select) {
+    if (!select || select.dataset.customIpReady === '1') return;
+    select.dataset.customIpReady = '1';
+
+    let shell = select.closest('.peer-ip-select-shell');
+    if (!shell) {
+      shell = document.createElement('span');
+      shell.className = 'peer-ip-select-shell';
+      select.parentNode.insertBefore(shell, select);
+      shell.appendChild(select);
+    }
+    shell.classList.add('peer-ip-custom-ready');
+
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'peer-ip-combobox';
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.innerHTML = `
+      <span class="peer-ip-combobox-icon"><i class="fas fa-network-wired" aria-hidden="true"></i></span>
+      <span class="peer-ip-combobox-copy"><strong>Choose an address</strong><small>Available on selected interface</small></span>
+      <span class="peer-ip-combobox-chevron"><i class="fas fa-chevron-down" aria-hidden="true"></i></span>`;
+    shell.insertBefore(trigger, select);
+
+    const menu = document.createElement('div');
+    menu.className = 'peer-ip-menu';
+    menu.hidden = true;
+    menu.innerHTML = `
+      <div class="peer-ip-menu-head">
+        <span><b>Available IP addresses</b><small>Choose a free address for this peer.</small></span>
+        <span class="peer-ip-menu-count">0</span>
+      </div>
+      <label class="peer-ip-menu-search-wrap">
+        <i class="fas fa-magnifying-glass" aria-hidden="true"></i>
+        <input class="peer-ip-menu-search" type="search" autocomplete="off" placeholder="Search addresses…" aria-label="Search available IP addresses">
+      </label>
+      <div class="peer-ip-menu-list" role="listbox"></div>`;
+    document.body.appendChild(menu);
+
+    const currentText = trigger.querySelector('strong');
+    const currentSub = trigger.querySelector('small');
+    const search = menu.querySelector('.peer-ip-menu-search');
+    const list = menu.querySelector('.peer-ip-menu-list');
+    const count = menu.querySelector('.peer-ip-menu-count');
+
+    function options() {
+      return Array.from(select.options).filter((option) => option.value);
+    }
+
+    function syncTrigger() {
+      const selected = select.options[select.selectedIndex];
+      currentText.textContent = selected?.textContent?.trim() || selected?.value || 'Choose an address';
+      currentSub.textContent = options().length
+        ? `${options().length} free address${options().length === 1 ? '' : 'es'}`
+        : 'No free addresses available';
+    }
+
+    function render(query = '') {
+      const term = String(query || '').trim().toLowerCase();
+      const all = options();
+      const filtered = all.filter((option) => {
+        const label = `${option.textContent || ''} ${option.value || ''}`.toLowerCase();
+        return !term || label.includes(term);
+      });
+      count.textContent = String(all.length);
+      if (!filtered.length) {
+        list.innerHTML = `<div class="peer-ip-menu-empty">${all.length ? 'No addresses match your search.' : 'No free addresses are currently available.'}</div>`;
+        return;
+      }
+      list.innerHTML = filtered.map((option) => {
+        const selected = option.value === select.value;
+        const value = escapeHtml(option.value);
+        const label = escapeHtml(option.textContent?.trim() || option.value);
+        return `<button type="button" class="peer-ip-option${selected ? ' selected' : ''}" data-value="${value}" role="option" aria-selected="${selected ? 'true' : 'false'}">
+          <span class="peer-ip-option-icon"><i class="fas fa-network-wired" aria-hidden="true"></i></span>
+          <span class="peer-ip-option-copy"><b>${label}</b><small>Free address</small></span>
+          <span class="peer-ip-option-check"><i class="fas fa-check" aria-hidden="true"></i></span>
+        </button>`;
+      }).join('');
+      list.querySelectorAll('.peer-ip-option').forEach((button) => {
+        button.addEventListener('click', () => {
+          select.value = button.dataset.value || '';
+          select.dispatchEvent(new Event('input', { bubbles: true }));
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+          syncTrigger();
+          closeActive({ focus: true });
+        });
+      });
+    }
+
+    function position() {
+      const rect = trigger.getBoundingClientRect();
+      const margin = 10;
+      const viewportWidth = document.documentElement.clientWidth;
+      const viewportHeight = document.documentElement.clientHeight;
+      const width = Math.min(Math.max(rect.width, 310), viewportWidth - margin * 2);
+      const left = Math.min(Math.max(margin, rect.left), viewportWidth - width - margin);
+      const estimatedHeight = Math.min(360, Math.max(190, 104 + options().length * 47));
+      const below = viewportHeight - rect.bottom - margin;
+      const above = rect.top - margin;
+      const placeAbove = below < Math.min(estimatedHeight, 270) && above > below;
+      menu.classList.toggle('is-above', placeAbove);
+      menu.style.width = `${width}px`;
+      menu.style.left = `${left}px`;
+      if (placeAbove) {
+        menu.style.top = 'auto';
+        menu.style.bottom = `${Math.max(margin, viewportHeight - rect.top + 8)}px`;
+      } else {
+        menu.style.bottom = 'auto';
+        menu.style.top = `${Math.min(viewportHeight - margin - 120, rect.bottom + 8)}px`;
+      }
+    }
+
+    function open() {
+      if (active && active.menu !== menu) closeActive();
+      render('');
+      search.value = '';
+      menu.hidden = false;
+      position();
+      requestAnimationFrame(() => menu.classList.add('open'));
+      trigger.setAttribute('aria-expanded', 'true');
+      active = { menu, trigger, select };
+      setTimeout(() => search.focus(), 30);
+    }
+
+    trigger.addEventListener('click', () => {
+      if (active?.menu === menu) closeActive({ focus: true });
+      else open();
+    });
+    trigger.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+    search.addEventListener('input', () => render(search.value));
+    menu.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeActive({ focus: true });
+        return;
+      }
+      const items = Array.from(list.querySelectorAll('.peer-ip-option'));
+      if (!items.length || !['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+      event.preventDefault();
+      const index = Math.max(-1, items.indexOf(document.activeElement));
+      const next = event.key === 'ArrowDown'
+        ? items[(index + 1) % items.length]
+        : items[(index <= 0 ? items.length : index) - 1];
+      next?.focus();
+    });
+
+    select.addEventListener('change', () => {
+      syncTrigger();
+      if (active?.menu === menu) render(search.value);
+    });
+    new MutationObserver(() => {
+      syncTrigger();
+      if (active?.menu === menu) {
+        render(search.value);
+        position();
+      }
+    }).observe(select, { childList: true, subtree: true, attributes: true });
+
+    syncTrigger();
+  }
+
+  function init() {
+    enhance(document.querySelector('#peer-modal #create-address-select'));
+  }
+
+  document.addEventListener('click', (event) => {
+    if (!active) return;
+    if (active.menu.contains(event.target) || active.trigger.contains(event.target)) return;
+    closeActive();
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && active) closeActive({ focus: true });
+  });
+  window.addEventListener('resize', () => closeActive());
+  window.addEventListener('scroll', () => closeActive(), true);
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+
+  const rootObserver = new MutationObserver(() => init());
+  rootObserver.observe(document.documentElement, { childList: true, subtree: true });
+})();
+/* PEER_DROPDOWN_SUMMARY_POLISH_END */
+/* Allowed IP chip editors for Create / Edit / Bulk */
+(() => {
+  'use strict';
+  const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  const split=v=>String(v||'').split(',').map(x=>x.trim()).filter(Boolean);
+  const unique=a=>[...new Set(a.map(x=>String(x||'').trim()).filter(Boolean))];
+  function valid(v){v=String(v||'').trim();if(!v||!v.includes('/'))return false;const [h,p]=v.split('/'),n=Number(p);if(!Number.isInteger(n))return false;if(h.includes(':'))return n>=0&&n<=128;const q=h.split('.');return q.length===4&&q.every(x=>/^\d{1,3}$/.test(x)&&Number(x)<=255)&&n>=0&&n<=32}
+  function build(input,opt={}){
+    if(!input||input.dataset.routeEditorReady==='1')return;
+    input.dataset.routeEditorReady='1';input.classList.add('peer-route-source');
+    const host=document.createElement('div');host.className='peer-route-editor';host.innerHTML=`
+      <div class="peer-route-editor-head"><span><b>Allowed IPs</b><small>Each route is written to the client configuration.</small></span><button type="button" class="peer-route-default"><i class="fas fa-rotate-left"></i><span>Default</span></button></div>
+      <div class="peer-route-box"><div class="peer-route-chips" aria-live="polite"></div><div class="peer-route-add-row"><i class="fas fa-plus"></i><input type="text" class="peer-route-add-input" placeholder="Add route, e.g. 192.168.1.0/24" autocomplete="off" spellcheck="false"><button type="button" class="peer-route-add-btn">Add</button></div></div><div class="peer-route-error" role="alert" hidden></div>`;
+    input.insertAdjacentElement('afterend',host);
+    const chips=host.querySelector('.peer-route-chips'),addInput=host.querySelector('.peer-route-add-input'),err=host.querySelector('.peer-route-error');
+    const detected=()=>unique(split(opt.internalHidden?document.querySelector(opt.internalHidden)?.value:''));
+    const routes=()=>unique(split(input.value));
+    function render(){const d=new Set(detected()),r=routes();chips.innerHTML=r.length?r.map(x=>`<span class="peer-route-chip${d.has(x)?' detected':''}" data-route="${esc(x)}"><span>${esc(x)}</span>${d.has(x)?'<small>Private</small>':''}<button type="button" aria-label="Remove ${esc(x)}"><i class="fas fa-xmark"></i></button></span>`).join(''):'<span class="peer-route-empty">No routes added</span>';chips.querySelectorAll('[data-route] button').forEach(b=>b.onclick=()=>set(routes().filter(x=>x!==b.closest('[data-route]').dataset.route)))}
+    function set(a){input.value=unique(a).join(', ');render();input.dispatchEvent(new Event('input',{bubbles:true}))}
+    function add(){const r=addInput.value.trim();err.hidden=true;if(!valid(r)){err.textContent='Enter a valid IPv4 or IPv6 CIDR route.';err.hidden=false;addInput.focus();return}set([...routes(),r]);addInput.value='';addInput.focus()}
+    host.querySelector('.peer-route-add-btn').onclick=add;addInput.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();add()}};host.querySelector('.peer-route-default').onclick=()=>set(['0.0.0.0/0','::/0']);input.addEventListener('input',render);input.addEventListener('change',render);
+    if(opt.toggle){const t=document.querySelector(opt.toggle),label=t?.closest('label');if(label){label.classList.add('peer-route-private-toggle');host.querySelector('.peer-route-editor-head').appendChild(label)}t?.addEventListener('change',()=>setTimeout(render,0))}
+    render();
+  }
+  function init(){build(document.querySelector('#peer-allowed-ips'),{toggle:'#peer-include-internal-network',internalHidden:'#peer-internal-network'});build(document.querySelector('#bulk-allowed-ips'),{toggle:'#bulk-include-internal-network',internalHidden:'#bulk-internal-network'});build(document.querySelector('#edit-allowed-ips'),{toggle:'#edit-include-internal-network'})}
+  document.readyState==='loading'?document.addEventListener('DOMContentLoaded',init):init();
 })();
