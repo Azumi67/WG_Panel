@@ -817,6 +817,7 @@ def __wg_serverconf(
     enable_nat: bool,
     enable_ipv6_fwd: bool,
 ) -> str:
+
     lines: List[str] = [
         "[Interface]",
         f"Address = {address}",
@@ -824,55 +825,141 @@ def __wg_serverconf(
         f"PrivateKey = {privkey}",
     ]
 
-    if enable_nat and wan_iface:
-        network = _wireguard_ipv4_network(address)
+    if (
+        enable_nat
+        and wan_iface
+    ):
+        network = (
+            _wireguard_ipv4_network(
+                address
+            )
+        )
+
         if not network:
             raise ValueError(
-                "NAT requires at least one private IPv4 WireGuard address."
+                "NAT requires at least one "
+                "private IPv4 WireGuard address."
             )
 
-        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,32}", wan_iface):
-            raise ValueError("Invalid outbound interface name.")
+        if not re.fullmatch(
+            r"[A-Za-z0-9_.:-]{1,32}",
+            wan_iface,
+        ):
+            raise ValueError(
+                "Invalid outbound interface name."
+            )
 
-        lines.append("")
-        lines.append("# NAT + forwarding (auto-generated)")
-        lines.append(
-            "PostUp = "
-            "sysctl -w net.ipv4.ip_forward=1 >/dev/null; "
-            "iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null "
-            "|| iptables -A FORWARD -i %i -j ACCEPT; "
-            "iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null "
-            "|| iptables -A FORWARD -o %i -j ACCEPT; "
-            f"iptables -t nat -C POSTROUTING -s {network} -o {wan_iface} "
-            "-j MASQUERADE 2>/dev/null "
-            f"|| iptables -t nat -A POSTROUTING -s {network} -o {wan_iface} "
-            "-j MASQUERADE"
-        )
-        lines.append(
-            "PostDown = "
-            "iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; "
-            "iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; "
-            f"iptables -t nat -D POSTROUTING -s {network} -o {wan_iface} "
-            "-j MASQUERADE 2>/dev/null || true"
-        )
+        lines.extend([
+            "",
+            "# NAT + forwarding (auto-generated)",
 
-        if enable_ipv6_fwd and _cmd("ip6tables"):
-            lines.append(
+            (
                 "PostUp = "
-                "sysctl -w net.ipv6.conf.all.forwarding=1 >/dev/null; "
-                "ip6tables -C FORWARD -i %i -j ACCEPT 2>/dev/null "
-                "|| ip6tables -A FORWARD -i %i -j ACCEPT; "
-                "ip6tables -C FORWARD -o %i -j ACCEPT 2>/dev/null "
-                "|| ip6tables -A FORWARD -o %i -j ACCEPT"
-            )
-            lines.append(
+                "sysctl -w "
+                "net.ipv4.ip_forward=1"
+            ),
+
+            (
+                "PostUp = "
+                "iptables -A FORWARD "
+                "-i %i -j ACCEPT"
+            ),
+
+            (
+                "PostUp = "
+                "iptables -A FORWARD "
+                "-o %i "
+                "-m conntrack "
+                "--ctstate RELATED,ESTABLISHED "
+                "-j ACCEPT"
+            ),
+
+            (
+                "PostUp = "
+                "iptables -t nat "
+                "-A POSTROUTING "
+                f"-s {network} "
+                f"-o {wan_iface} "
+                "-j MASQUERADE"
+            ),
+
+            (
                 "PostDown = "
-                "ip6tables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; "
-                "ip6tables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true"
+                "iptables -D FORWARD "
+                "-i %i -j ACCEPT"
+            ),
+
+            (
+                "PostDown = "
+                "iptables -D FORWARD "
+                "-o %i "
+                "-m conntrack "
+                "--ctstate RELATED,ESTABLISHED "
+                "-j ACCEPT"
+            ),
+
+            (
+                "PostDown = "
+                "iptables -t nat "
+                "-D POSTROUTING "
+                f"-s {network} "
+                f"-o {wan_iface} "
+                "-j MASQUERADE"
+            ),
+        ])
+
+        if (
+            enable_ipv6_fwd
+            and _cmd(
+                "ip6tables"
             )
+        ):
+            lines.extend([
+                (
+                    "PostUp = "
+                    "sysctl -w "
+                    "net.ipv6.conf.all.forwarding=1"
+                ),
+
+                (
+                    "PostUp = "
+                    "ip6tables -A FORWARD "
+                    "-i %i -j ACCEPT"
+                ),
+
+                (
+                    "PostUp = "
+                    "ip6tables -A FORWARD "
+                    "-o %i "
+                    "-m conntrack "
+                    "--ctstate RELATED,ESTABLISHED "
+                    "-j ACCEPT"
+                ),
+
+                (
+                    "PostDown = "
+                    "ip6tables -D FORWARD "
+                    "-i %i -j ACCEPT"
+                ),
+
+                (
+                    "PostDown = "
+                    "ip6tables -D FORWARD "
+                    "-o %i "
+                    "-m conntrack "
+                    "--ctstate RELATED,ESTABLISHED "
+                    "-j ACCEPT"
+                ),
+            ])
 
     lines.append("")
-    return "\n".join(lines) + "\n"
+
+    return (
+        "\n".join(
+            lines
+        )
+        + "\n"
+    )
 
 def _sysctl_forwarding(enable_ipv6: bool = False) -> bool:
     if not isitroot():
