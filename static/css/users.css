@@ -536,3 +536,33 @@ html[data-theme="dark"] .peerx-inline-help-endpoint > summary::after{border-colo
 .peer-input-dialog-input:focus{border-color: #64748b !important;box-shadow: 0 0 0 3px rgba(100,116,139,.13) !important;}
 .peer-input-dialog-actions{display: flex !important;justify-content: flex-end !important;gap: 8px !important;margin-top: 13px !important;}
 .peer-input-dialog-actions .btn{min-width: 76px !important;height: 36px !important;border-radius: 11px !important;}
+.peer-summary-card{border:1px solid rgba(191,203,219,.95)!important;background:linear-gradient(180deg,#fff,#f7fafc)!important;box-shadow:0 16px 36px rgba(15,23,42,.07),inset 0 1px 0 rgba(255,255,255,.92)!important}
+.peer-summary-head{margin-bottom:12px!important}
+.peer-summary-title .peer-summary-icon{background:linear-gradient(180deg,#f8fbff,#e9eff7)!important;border:1px solid #d8e2ee!important;color:#1e293b!important}
+.peer-summary-title strong{color:#0f172a!important}
+.peer-summary-title small{color:#475569!important;font-weight:800!important}
+.peer-summary-live{background:#fff!important;border:1px solid #d7e2ee!important;color:#334155!important;box-shadow:0 8px 18px rgba(15,23,42,.05)!important}
+.peer-summary-grid{gap:10px!important}
+.summary-stat{background:linear-gradient(180deg,#fff,#f8fafc)!important;border:1px solid #dbe4ef!important;box-shadow:0 8px 18px rgba(15,23,42,.05)!important}
+.summary-stat:hover{border-color:#c3d1e2!important;box-shadow:0 14px 28px rgba(15,23,42,.08)!important}
+.summary-stat.is-active{background:linear-gradient(180deg,#f8fbff,#eef4fb)!important;border-color:#bfd1e3!important;outline:none!important;box-shadow:0 0 0 2px rgba(148,163,184,.14)!important}
+.summary-stat .stat-ico{background:#eef2f7!important;color:#334155!important}
+.summary-stat .stat-copy b{color:#0f172a!important}
+.summary-stat .stat-copy small{color:#475569!important;font-weight:800!important}
+.summary-stat.online .stat-ico{background:#dcfce7!important;color:#166534!important}
+.summary-stat.offline .stat-ico{background:#eef2f7!important;color:#64748b!important}
+.summary-stat.enabled .stat-ico{background:#dcfce7!important;color:#166534!important}
+.summary-stat.disabled .stat-ico{background:#e2e8f0!important;color:#475569!important}
+.summary-stat.depleting .stat-ico{background:#ffedd5!important;color:#9a3412!important}
+.summary-stat.blocked .stat-ico{background:#fee2e2!important;color:#b91c1c!important}
+.peer-tag.depleting,.peer-tag.depleting.compact{width:auto!important;min-width:max-content!important;max-width:none!important;min-height:26px!important;height:26px!important;padding:0 10px!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;gap:5px!important;white-space:nowrap!important;border:1px solid rgba(251,146,60,.42)!important;background:linear-gradient(180deg,#fff7ed,#ffedd5)!important;color:#9a3412!important;box-shadow:0 6px 16px rgba(249,115,22,.10)!important}
+.peer-tag.depleting i{color:#ea580c!important;font-size:10.5px!important;margin:0!important}
+.peer-tag.depleting span{display:inline!important;color:inherit!important}
+html[data-theme="dark"] .peer-summary-card{background:linear-gradient(180deg,#111827,#0f172a)!important;border-color:#2b394d!important;box-shadow:0 18px 38px rgba(0,0,0,.24),inset 0 1px 0 rgba(255,255,255,.04)!important}
+html[data-theme="dark"] .peer-summary-title strong,html[data-theme="dark"] .summary-stat .stat-copy b{color:#e5edf7!important}
+html[data-theme="dark"] .peer-summary-title small,html[data-theme="dark"] .summary-stat .stat-copy small,html[data-theme="dark"] .peer-summary-live{color:#a9b7c8!important}
+html[data-theme="dark"] .peer-summary-title .peer-summary-icon,html[data-theme="dark"] .summary-stat,html[data-theme="dark"] .peer-summary-live{background:#111827!important;border-color:#2b394d!important}
+html[data-theme="dark"] .summary-stat{box-shadow:0 10px 24px rgba(0,0,0,.18)!important}
+html[data-theme="dark"] .summary-stat.is-active{background:#172033!important;border-color:#3a4b61!important;box-shadow:0 0 0 2px rgba(148,163,184,.12)!important}
+html[data-theme="dark"] .peer-tag.depleting,html[data-theme="dark"] .peer-tag.depleting.compact{border-color:rgba(251,146,60,.34)!important;background:linear-gradient(180deg,rgba(154,52,18,.34),rgba(124,45,18,.28))!important;color:#fdba74!important;box-shadow:0 8px 18px rgba(0,0,0,.16)!important}
+html[data-theme="dark"] .peer-tag.depleting i{color:#fb923c!important}
