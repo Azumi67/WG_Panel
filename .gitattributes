@@ -2,3 +2,4 @@
 # checks. Several legacy files are intentionally still CRLF; real trailing
 # spaces, blank-at-EOF, and space-before-tab problems remain reportable.
 * text=auto whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+static/css/subscriptions.css linguist-generated=true
