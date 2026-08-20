@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block head_extras %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/subscriptions.css') }}?v=subscription-theme-layout-v2">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/subscription-dark.css') }}?v=subscription-theme-layout-v2">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/subscriptions.css') }}?v=20260820-studio-v16-3">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/subscription-dark.css') }}?v=20260820-studio-v16-3">
 {% endblock %}
 {% block content %}
 <script defer src="{{ url_for('static', filename='js/csrf.js') }}"></script>
@@ -469,6 +469,7 @@
       <aside class="studio8-editor">
         <nav class="studio8-nav" aria-label="Template customization sections">
           <button type="button" class="active" data-studio8-tab="layout"><i class="fas fa-layer-group"></i><span><b>Layout</b><small>Structure</small></span></button>
+          <button type="button" data-studio8-tab="modules"><i class="fas fa-table-cells-large"></i><span><b>Modules</b><small>All layouts</small></span></button>
           <button type="button" data-studio8-tab="appearance"><i class="fas fa-palette"></i><span><b>Appearance</b><small>Colors & surfaces</small></span></button>
           <button type="button" data-studio8-tab="statistics"><i class="fas fa-chart-pie"></i><span><b>Statistics</b><small>Usage display</small></span></button>
           <button type="button" data-studio8-tab="motion"><i class="fas fa-wind"></i><span><b>Motion</b><small>Animation</small></span></button>
@@ -480,15 +481,22 @@
 
         <div class="studio8-panels">
           <section class="studio8-panel active" data-studio8-panel="layout">
-            <div class="studio8-section-head"><div><b>Page layout</b><small>Choose the information hierarchy. Selection is shown by the highlighted card—no checkmark is used.</small></div><em id="studio-layout-summary">Modern</em></div>
-            <div class="studio8-choice-grid layouts">
-              <label><input type="radio" name="sub-layout" value="aurora"><span class="studio8-choice"><i class="layout-demo modern"><b></b><b></b><b></b></i><span><b>Modern</b><small>Balanced and versatile</small></span></span></label>
-              <label><input type="radio" name="sub-layout" value="cards"><span class="studio8-choice"><i class="layout-demo dashboard"><b></b><b></b><b></b></i><span><b>Dashboard</b><small>Structured panels</small></span></span></label>
-              <label><input type="radio" name="sub-layout" value="compact"><span class="studio8-choice"><i class="layout-demo compact"><b></b><b></b><b></b></i><span><b>Compact</b><small>High information density</small></span></span></label>
-              <label><input type="radio" name="sub-layout" value="minimal"><span class="studio8-choice"><i class="layout-demo minimal"><b></b><b></b><b></b></i><span><b>Minimal</b><small>Quiet and simple</small></span></span></label>
-              <label><input type="radio" name="sub-layout" value="split"><span class="studio8-choice"><i class="layout-demo split"><b></b><b></b><b></b></i><span><b>Split</b><small>Usage beside configs</small></span></span></label>
-              <label><input type="radio" name="sub-layout" value="profile"><span class="studio8-choice"><i class="layout-demo profile"><b></b><b></b><b></b></i><span><b>Profile</b><small>Identity-led portal</small></span></span></label>
+            <div class="studio8-section-head"><div><b>Page layout</b><small>Choose the information hierarchy. The current layout is highlighted and shown at the right.</small></div><em id="studio-layout-summary">PS5</em></div>
+            <section class="studio16-resetbar" aria-label="Layout reset controls">
+              <div class="studio16-reset-copy"><span><i class="fas fa-sliders"></i></span><div><b>Preset behavior</b><small>Choose whether a new layout starts clean or keeps your current tuning.</small></div></div>
+              <label class="studio16-reset-toggle"><input type="checkbox" id="studio-reset-on-layout-change" checked><span></span><div><b>Reset when switching</b><small>Recommended: load the new preset's intended structure, surface and motion.</small></div></label>
+              <div class="studio16-reset-actions"><button type="button" id="studio-reset-layout"><i class="fas fa-rotate-left"></i><span>Reset current layout</span></button><button type="button" id="studio-reset-all" class="danger"><i class="fas fa-arrow-rotate-left"></i><span>Factory reset</span></button></div>
+              <div class="studio16-capability-map"><span><i class="fas fa-layer-group"></i> Structure</span><span><i class="fas fa-table-cells-large"></i> Modules</span><span><i class="fas fa-palette"></i> Colors</span><span><i class="fas fa-wind"></i> Motion</span><span><i class="fas fa-bell"></i> Toasts</span><span><i class="fas fa-mobile-screen"></i> Mobile</span></div>
+            </section>
+            <div class="studio8-choice-grid layouts layout15-grid">
+              <label><input type="radio" name="sub-layout" value="ps5"><span class="studio8-choice"><i class="layout-demo ps5"><b></b><b></b><b></b><b></b></i><span><b>PS5</b><small>Cinematic console dashboard with floating focus cards.</small></span></span></label>
+              <label><input type="radio" name="sub-layout" value="mac"><span class="studio8-choice"><i class="layout-demo mac"><b></b><b></b><b></b><b></b></i><span><b>macOS</b><small>Window-style glass workspace with clean desktop hierarchy.</small></span></span></label>
+              <label><input type="radio" name="sub-layout" value="app"><span class="studio8-choice"><i class="layout-demo app"><b></b><b></b><b></b><b></b></i><span><b>Desktop app</b><small>Native application shell with a navigation rail and workspace.</small></span></span></label>
+              <label><input type="radio" name="sub-layout" value="compact"><span class="studio8-choice"><i class="layout-demo compact"><b></b><b></b><b></b><b></b></i><span><b>Compact</b><small>Dense operations view with almost no wasted space.</small></span></span></label>
+              <label><input type="radio" name="sub-layout" value="minimal"><span class="studio8-choice"><i class="layout-demo minimal"><b></b><b></b><b></b><b></b></i><span><b>Minimal</b><small>Typography-first, calm, spacious and nearly borderless.</small></span></span></label>
+              <label><input type="radio" name="sub-layout" value="showcase"><span class="studio8-choice"><i class="layout-demo showcase"><b></b><b></b><b></b><b></b></i><span><b>Showcase</b><small>Premium visual portal with a large identity and config focus.</small></span></span></label>
             </div>
+            <div class="studio15-layout-note"><i class="fas fa-wand-magic-sparkles"></i><span><b>Presets set the visual grammar, not a locked template.</b><small>After choosing one, every module can still be reordered, resized, restyled, hidden, or positioned differently on mobile.</small></span></div>
             <div class="studio8-field-grid two">
               <fieldset><legend>Hero style</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-hero-style" value="panel"><span>Panel</span></label><label><input type="radio" name="sub-hero-style" value="banner"><span>Banner</span></label><label><input type="radio" name="sub-hero-style" value="minimal"><span>Minimal</span></label></div></fieldset>
               <fieldset><legend>Page width</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-page-width" value="narrow"><span>Narrow</span></label><label><input type="radio" name="sub-page-width" value="standard"><span>Standard</span></label><label><input type="radio" name="sub-page-width" value="wide"><span>Wide</span></label></div></fieldset>
@@ -497,6 +505,133 @@
               <fieldset><legend>Config columns</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-config-columns" value="auto"><span>Auto</span></label><label><input type="radio" name="sub-config-columns" value="one"><span>One</span></label><label><input type="radio" name="sub-config-columns" value="two"><span>Two</span></label></div></fieldset>
               <fieldset><legend>Section order</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-section-order" value="standard"><span>Standard</span></label><label><input type="radio" name="sub-section-order" value="configs_first"><span>Configs first</span></label><label><input type="radio" name="sub-section-order" value="usage_first"><span>Usage first</span></label></div></fieldset>
             </div>
+
+          </section>
+
+
+          <section class="studio8-panel" data-studio8-panel="modules" hidden>
+            <div class="studio8-section-head"><div><b>Module composer</b><small>Control the four real public-page modules. Reorder, resize, style or hide them without adding duplicate information.</small></div><em id="studio-modules-summary">4 visible</em></div>
+            <section class="studio24-composer" id="studio-module-layout">
+              <div class="studio24-composer-head">
+                <div class="studio24-composer-title"><span><i class="fas fa-grid-2"></i></span><div><b>Page composition</b><small>Defaults preserve each layout's intended design. Override only what you need.</small></div></div>
+                <button type="button" class="studio24-reset" id="studio-module-reset"><i class="fas fa-rotate-left"></i><span>Reset</span></button>
+              </div>
+              <div class="studio24-global-row">
+                <label><span>Space between modules</span><select class="input" id="studio-module-gap"><option value="auto">Layout default</option><option value="tight">Tight</option><option value="standard">Standard</option><option value="roomy">Roomy</option></select></label>
+                <div class="studio24-global-note"><i class="fas fa-mobile-screen"></i><span><b>Independent mobile composition</b><small>Width and order can be different on phones.</small></span></div>
+              </div>
+              <div class="studio24-module-list" id="studio-module-list">
+                <article class="studio24-module" data-module-editor="configs">
+                  <header class="studio24-module-head">
+                    <div class="studio24-module-id"><span><i class="fas fa-location-dot"></i></span><div><b>Configs</b><small>Locations, QR codes and downloads</small></div></div>
+                    <div class="studio24-actions">
+                      <button type="button" data-module-up="configs" title="Move earlier"><i class="fas fa-arrow-up"></i><span>Up</span></button>
+                      <button type="button" data-module-down="configs" title="Move later"><i class="fas fa-arrow-down"></i><span>Down</span></button>
+                      <button type="button" class="danger" data-module-remove="configs" title="Hide this module"><i class="fas fa-eye-slash"></i><span>Hide</span></button>
+                    </div>
+                  </header>
+                  <div class="studio24-module-basic">
+                    <label><span>Desktop width</span><select class="input" data-module-size="configs"><option value="auto">Default</option><option value="small">1 / 3</option><option value="medium">1 / 2</option><option value="large">2 / 3</option><option value="full">Full</option></select></label>
+                    <label><span>Mobile width</span><select class="input" data-module-mobile="configs"><option value="auto">Default</option><option value="half">Half</option><option value="full">Full</option></select></label>
+                    <label><span>Mobile order</span><select class="input" data-module-mobile-position="configs"><option value="auto">Follow desktop</option><option value="1">1st</option><option value="2">2nd</option><option value="3">3rd</option><option value="4">4th</option></select></label>
+                  </div>
+                  <details class="studio24-advanced">
+                    <summary><span><i class="fas fa-sliders"></i> Module style</span><small>Surface, padding, corners and heading</small><i class="fas fa-chevron-down"></i></summary>
+                    <div class="studio24-module-style">
+                      <label><span>Surface</span><select class="input" data-module-surface="configs"><option value="auto">Default</option><option value="panel">Panel</option><option value="soft">Soft</option><option value="outline">Outline</option><option value="flat">Flat</option><option value="accent">Accent</option></select></label>
+                      <label><span>Padding</span><select class="input" data-module-spacing="configs"><option value="auto">Default</option><option value="compact">Compact</option><option value="comfortable">Comfortable</option><option value="roomy">Roomy</option></select></label>
+                      <label><span>Corners</span><select class="input" data-module-radius="configs"><option value="auto">Default</option><option value="square">Square</option><option value="soft">Soft</option><option value="round">Rounded</option></select></label>
+                      <label><span>Heading</span><select class="input" data-module-heading="configs"><option value="auto">Default</option><option value="standard">Standard</option><option value="compact">Compact</option><option value="accent">Accent</option><option value="hidden">Hidden</option></select></label>
+                    </div>
+                  </details>
+                </article>                <article class="studio24-module" data-module-editor="usage">
+                  <header class="studio24-module-head">
+                    <div class="studio24-module-id"><span><i class="fas fa-chart-pie"></i></span><div><b>Usage</b><small>Data and time remaining</small></div></div>
+                    <div class="studio24-actions">
+                      <button type="button" data-module-up="usage" title="Move earlier"><i class="fas fa-arrow-up"></i><span>Up</span></button>
+                      <button type="button" data-module-down="usage" title="Move later"><i class="fas fa-arrow-down"></i><span>Down</span></button>
+                      <button type="button" class="danger" data-module-remove="usage" title="Hide this module"><i class="fas fa-eye-slash"></i><span>Hide</span></button>
+                    </div>
+                  </header>
+                  <div class="studio24-module-basic">
+                    <label><span>Desktop width</span><select class="input" data-module-size="usage"><option value="auto">Default</option><option value="small">1 / 3</option><option value="medium">1 / 2</option><option value="large">2 / 3</option><option value="full">Full</option></select></label>
+                    <label><span>Mobile width</span><select class="input" data-module-mobile="usage"><option value="auto">Default</option><option value="half">Half</option><option value="full">Full</option></select></label>
+                    <label><span>Mobile order</span><select class="input" data-module-mobile-position="usage"><option value="auto">Follow desktop</option><option value="1">1st</option><option value="2">2nd</option><option value="3">3rd</option><option value="4">4th</option></select></label>
+                  </div>
+                  <details class="studio24-advanced">
+                    <summary><span><i class="fas fa-sliders"></i> Module style</span><small>Surface, padding, corners and heading</small><i class="fas fa-chevron-down"></i></summary>
+                    <div class="studio24-module-style">
+                      <label><span>Surface</span><select class="input" data-module-surface="usage"><option value="auto">Default</option><option value="panel">Panel</option><option value="soft">Soft</option><option value="outline">Outline</option><option value="flat">Flat</option><option value="accent">Accent</option></select></label>
+                      <label><span>Padding</span><select class="input" data-module-spacing="usage"><option value="auto">Default</option><option value="compact">Compact</option><option value="comfortable">Comfortable</option><option value="roomy">Roomy</option></select></label>
+                      <label><span>Corners</span><select class="input" data-module-radius="usage"><option value="auto">Default</option><option value="square">Square</option><option value="soft">Soft</option><option value="round">Rounded</option></select></label>
+                      <label><span>Heading</span><select class="input" data-module-heading="usage"><option value="auto">Default</option><option value="standard">Standard</option><option value="compact">Compact</option><option value="accent">Accent</option><option value="hidden">Hidden</option></select></label>
+                    </div>
+                  </details>
+                </article>                <article class="studio24-module" data-module-editor="install">
+                  <header class="studio24-module-head">
+                    <div class="studio24-module-id"><span><i class="fas fa-mobile-screen-button"></i></span><div><b>Install</b><small>WireGuard application shortcuts</small></div></div>
+                    <div class="studio24-actions">
+                      <button type="button" data-module-up="install" title="Move earlier"><i class="fas fa-arrow-up"></i><span>Up</span></button>
+                      <button type="button" data-module-down="install" title="Move later"><i class="fas fa-arrow-down"></i><span>Down</span></button>
+                      <button type="button" class="danger" data-module-remove="install" title="Hide this module"><i class="fas fa-eye-slash"></i><span>Hide</span></button>
+                    </div>
+                  </header>
+                  <div class="studio24-module-basic">
+                    <label><span>Desktop width</span><select class="input" data-module-size="install"><option value="auto">Default</option><option value="small">1 / 3</option><option value="medium">1 / 2</option><option value="large">2 / 3</option><option value="full">Full</option></select></label>
+                    <label><span>Mobile width</span><select class="input" data-module-mobile="install"><option value="auto">Default</option><option value="half">Half</option><option value="full">Full</option></select></label>
+                    <label><span>Mobile order</span><select class="input" data-module-mobile-position="install"><option value="auto">Follow desktop</option><option value="1">1st</option><option value="2">2nd</option><option value="3">3rd</option><option value="4">4th</option></select></label>
+                  </div>
+                  <details class="studio24-advanced">
+                    <summary><span><i class="fas fa-sliders"></i> Module style</span><small>Surface, padding, corners and heading</small><i class="fas fa-chevron-down"></i></summary>
+                    <div class="studio24-module-style">
+                      <label><span>Surface</span><select class="input" data-module-surface="install"><option value="auto">Default</option><option value="panel">Panel</option><option value="soft">Soft</option><option value="outline">Outline</option><option value="flat">Flat</option><option value="accent">Accent</option></select></label>
+                      <label><span>Padding</span><select class="input" data-module-spacing="install"><option value="auto">Default</option><option value="compact">Compact</option><option value="comfortable">Comfortable</option><option value="roomy">Roomy</option></select></label>
+                      <label><span>Corners</span><select class="input" data-module-radius="install"><option value="auto">Default</option><option value="square">Square</option><option value="soft">Soft</option><option value="round">Rounded</option></select></label>
+                      <label><span>Heading</span><select class="input" data-module-heading="install"><option value="auto">Default</option><option value="standard">Standard</option><option value="compact">Compact</option><option value="accent">Accent</option><option value="hidden">Hidden</option></select></label>
+                    </div>
+                  </details>
+                </article>                <article class="studio24-module" data-module-editor="support">
+                  <header class="studio24-module-head">
+                    <div class="studio24-module-id"><span><i class="fas fa-headset"></i></span><div><b>Support</b><small>Contact and service channels</small></div></div>
+                    <div class="studio24-actions">
+                      <button type="button" data-module-up="support" title="Move earlier"><i class="fas fa-arrow-up"></i><span>Up</span></button>
+                      <button type="button" data-module-down="support" title="Move later"><i class="fas fa-arrow-down"></i><span>Down</span></button>
+                      <button type="button" class="danger" data-module-remove="support" title="Hide this module"><i class="fas fa-eye-slash"></i><span>Hide</span></button>
+                    </div>
+                  </header>
+                  <div class="studio24-module-basic">
+                    <label><span>Desktop width</span><select class="input" data-module-size="support"><option value="auto">Default</option><option value="small">1 / 3</option><option value="medium">1 / 2</option><option value="large">2 / 3</option><option value="full">Full</option></select></label>
+                    <label><span>Mobile width</span><select class="input" data-module-mobile="support"><option value="auto">Default</option><option value="half">Half</option><option value="full">Full</option></select></label>
+                    <label><span>Mobile order</span><select class="input" data-module-mobile-position="support"><option value="auto">Follow desktop</option><option value="1">1st</option><option value="2">2nd</option><option value="3">3rd</option><option value="4">4th</option></select></label>
+                  </div>
+                  <details class="studio24-advanced">
+                    <summary><span><i class="fas fa-sliders"></i> Module style</span><small>Surface, padding, corners and heading</small><i class="fas fa-chevron-down"></i></summary>
+                    <div class="studio24-module-style">
+                      <label><span>Surface</span><select class="input" data-module-surface="support"><option value="auto">Default</option><option value="panel">Panel</option><option value="soft">Soft</option><option value="outline">Outline</option><option value="flat">Flat</option><option value="accent">Accent</option></select></label>
+                      <label><span>Padding</span><select class="input" data-module-spacing="support"><option value="auto">Default</option><option value="compact">Compact</option><option value="comfortable">Comfortable</option><option value="roomy">Roomy</option></select></label>
+                      <label><span>Corners</span><select class="input" data-module-radius="support"><option value="auto">Default</option><option value="square">Square</option><option value="soft">Soft</option><option value="round">Rounded</option></select></label>
+                      <label><span>Heading</span><select class="input" data-module-heading="support"><option value="auto">Default</option><option value="standard">Standard</option><option value="compact">Compact</option><option value="accent">Accent</option><option value="hidden">Hidden</option></select></label>
+                    </div>
+                  </details>
+                </article>
+              </div>
+              <div class="studio24-hidden">
+                <div><b>Hidden modules</b><small>Hidden boxes are removed from the public page but keep their settings.</small></div>
+                <div class="studio24-hidden-actions" id="studio-hidden-modules">
+                  <button type="button" data-module-restore="configs" hidden><i class="fas fa-plus"></i> Configs</button>
+                  <button type="button" data-module-restore="usage" hidden><i class="fas fa-plus"></i> Usage</button>
+                  <button type="button" data-module-restore="install" hidden><i class="fas fa-plus"></i> Install</button>
+                  <button type="button" data-module-restore="support" hidden><i class="fas fa-plus"></i> Support</button>
+                </div>
+              </div>
+              <div class="studio24-presets">
+                <button type="button" data-module-preset="balanced"><i class="fas fa-table-cells-large"></i><span>Balanced</span></button>
+                <button type="button" data-module-preset="configs"><i class="fas fa-location-dot"></i><span>Config focus</span></button>
+                <button type="button" data-module-preset="minimal"><i class="fas fa-feather"></i><span>Essentials</span></button>
+                <button type="button" data-module-preset="support"><i class="fas fa-headset"></i><span>Service first</span></button>
+              </div>
+              <p class="studio24-note"><i class="fas fa-circle-info"></i><span>At least one module always remains visible. Explicit mobile order values are locked so the same position cannot be assigned twice.</span></p>
+            </section>
           </section>
 
           <section class="studio8-panel" data-studio8-panel="appearance" hidden>
@@ -529,9 +664,21 @@
               <fieldset><legend>Shadow</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-shadow" value="none"><span>None</span></label><label><input type="radio" name="sub-shadow" value="soft"><span>Soft</span></label><label><input type="radio" name="sub-shadow" value="deep"><span>Deep</span></label></div></fieldset>
               <fieldset><legend>Button style</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-button-style" value="solid"><span>Solid</span></label><label><input type="radio" name="sub-button-style" value="outline"><span>Outline</span></label><label><input type="radio" name="sub-button-style" value="soft"><span>Soft</span></label></div></fieldset>
               <fieldset><legend>Font scale</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-font-scale" value="small"><span>Small</span></label><label><input type="radio" name="sub-font-scale" value="standard"><span>Standard</span></label><label><input type="radio" name="sub-font-scale" value="large"><span>Large</span></label></div></fieldset>
-              <label class="studio8-range"><span>Background intensity <em id="background-intensity-value">70%</em></span><input type="range" id="portal-background-intensity" min="0" max="100" value="70"></label>
+              <label class="studio8-range"><span>Background intensity <em id="background-intensity-value">86%</em></span><input type="range" id="portal-background-intensity" min="0" max="100" value="86"></label>
               <label class="studio8-range"><span>Card opacity <em id="card-opacity-value">82%</em></span><input type="range" id="portal-card-opacity" min="50" max="100" value="82"></label>
             </div>
+            <section class="studio16-token-card">
+              <header class="studio16-token-head"><div><span><i class="fas fa-droplet"></i></span><div><b>Semantic colors</b><small>These colors are independent from the accent palette, so Online never has to inherit your brand color.</small></div></div><button type="button" id="studio-reset-semantic"><i class="fas fa-rotate-left"></i> Reset colors</button></header>
+              <div class="studio16-status-preview" aria-label="Status color preview"><span class="online">Online</span><span class="offline">Offline</span><span class="warning">Warning</span><span class="danger">Expired</span><span class="neutral">Neutral pill</span></div>
+              <div class="studio16-color-grid">
+                <label class="studio16-color-token"><span><b>Online</b><small>Connected / healthy</small></span><span class="studio16-color-input"><input type="color" id="portal-online-color" value="#22c55e"><input class="input" id="portal-online-text" value="#22c55e" maxlength="7"></span></label>
+                <label class="studio16-color-token"><span><b>Offline</b><small>Disconnected / inactive</small></span><span class="studio16-color-input"><input type="color" id="portal-offline-color" value="#94a3b8"><input class="input" id="portal-offline-text" value="#94a3b8" maxlength="7"></span></label>
+                <label class="studio16-color-token"><span><b>Warning</b><small>Attention / maintenance</small></span><span class="studio16-color-input"><input type="color" id="portal-warning-color" value="#f59e0b"><input class="input" id="portal-warning-text" value="#f59e0b" maxlength="7"></span></label>
+                <label class="studio16-color-token"><span><b>Danger</b><small>Expired / blocked / error</small></span><span class="studio16-color-input"><input type="color" id="portal-danger-color" value="#ef4444"><input class="input" id="portal-danger-text" value="#ef4444" maxlength="7"></span></label>
+                <label class="studio16-color-token"><span><b>Neutral pills</b><small>Counts, Auto and metadata chips</small></span><span class="studio16-color-input"><input type="color" id="portal-pill-color" value="#64748b"><input class="input" id="portal-pill-text" value="#64748b" maxlength="7"></span></label>
+                <label class="studio16-color-token"><span><b>Action highlight</b><small>Interactive icon emphasis</small></span><span class="studio16-color-input"><input type="color" id="portal-action-color" value="#3addaa"><input class="input" id="portal-action-text" value="#3addaa" maxlength="7"></span></label>
+              </div>
+            </section>
           </section>
 
           <section class="studio8-panel" data-studio8-panel="statistics" hidden>
@@ -567,9 +714,15 @@
               <label><input type="radio" name="portal-animation-choice" value="off"><span class="studio8-motion-choice"><i class="motiondemo off"><b></b></i><span><b>Off</b><small>No decorative animation</small></span></span></label>
             </div>
             <select class="studio8-hidden" id="portal-animation" aria-hidden="true" tabindex="-1"><option value="cinematic">Cinematic</option><option value="immersive">Immersive</option><option value="rich">Rich</option><option value="balanced">Balanced</option><option value="soft">Soft</option><option value="drift">Drift</option><option value="minimal">Minimal</option><option value="off">Off</option></select>
-            <div class="studio8-field-grid two">
-              <label class="studio8-range"><span>Motion speed <em id="motion-speed-value">100%</em></span><input type="range" id="portal-motion-speed" min="50" max="150" value="100"></label>
-              <label class="studio8-range"><span>Particle density <em id="particle-density-value">60%</em></span><input type="range" id="portal-particle-density" min="0" max="100" value="60"></label>
+            <div class="studio8-field-grid two studio16-motion-tuning">
+              <label class="studio8-range"><span>Motion speed <em id="motion-speed-value">125%</em></span><input type="range" id="portal-motion-speed" min="50" max="180" value="125"></label>
+              <label class="studio8-range"><span>Motion intensity <em id="motion-intensity-value">150%</em></span><input type="range" id="portal-motion-intensity" min="40" max="200" value="150"></label>
+              <label class="studio8-range"><span>Particle density <em id="particle-density-value">90%</em></span><input type="range" id="portal-particle-density" min="0" max="120" value="90"></label>
+              <div class="studio16-motion-actions"><button type="button" id="studio-replay-entrance"><i class="fas fa-play"></i><span>Replay entrance</span></button><button type="button" id="studio-pulse-background"><i class="fas fa-wand-magic-sparkles"></i><span>Refresh background</span></button></div>
+            </div>
+            <div class="studio15-motion-custom">
+              <fieldset><legend>Page entrance</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-entrance-animation" value="stagger"><span>Stagger</span></label><label><input type="radio" name="sub-entrance-animation" value="slide"><span>Slide</span></label><label><input type="radio" name="sub-entrance-animation" value="fade"><span>Fade</span></label><label><input type="radio" name="sub-entrance-animation" value="scale"><span>Scale</span></label><label><input type="radio" name="sub-entrance-animation" value="none"><span>None</span></label></div></fieldset>
+              <fieldset><legend>Hover response</legend><div class="studio8-segmented"><label><input type="radio" name="sub-hover-animation" value="lift"><span>Lift</span></label><label><input type="radio" name="sub-hover-animation" value="glow"><span>Glow</span></label><label><input type="radio" name="sub-hover-animation" value="scale"><span>Scale</span></label><label><input type="radio" name="sub-hover-animation" value="none"><span>None</span></label></div></fieldset>
             </div>
             <div class="studio8-note"><i class="fas fa-universal-access"></i><span>Visitors using reduced-motion accessibility settings automatically receive a calmer page.</span></div>
           </section>
@@ -584,6 +737,19 @@
               <label class="studio8-toggle-card"><input type="checkbox" id="show-location-country"><span class="studio8-toggle"></span><span><b>Country labels</b><small>Country below each location.</small></span></label>
               <label class="studio8-toggle-card"><input type="checkbox" id="show-section-descriptions"><span class="studio8-toggle"></span><span><b>Section descriptions</b><small>Explanatory text under section headings.</small></span></label>
             </div>
+            <section class="studio24-announcement-card">
+              <div class="studio24-announcement-head">
+                <div class="studio24-announcement-title"><span><i class="fas fa-bullhorn"></i></span><div><b>Customer announcement</b><small>Optional service message. Account and connection summaries are not duplicated here because they already exist elsewhere on the portal.</small></div></div>
+                <label class="studio24-switch"><input type="checkbox" id="show-admin-notice"><span></span><b>Show</b></label>
+              </div>
+              <div class="studio24-announcement-fields">
+                <label class="wide"><span><b>Message</b><small>Use this for maintenance, service changes or a short customer instruction.</small></span><textarea class="input" id="portal-notice-text" maxlength="240" rows="3" placeholder="Example: Maintenance is planned tonight from 02:00 to 02:30 UTC."></textarea></label>
+                <label><span><b>Title</b><small>Short heading.</small></span><input class="input" id="portal-notice-title" maxlength="60" placeholder="Service notice"></label>
+                <label><span><b>Tone</b><small>Changes icon and emphasis.</small></span><select class="input" id="portal-notice-tone"><option value="info">Information</option><option value="maintenance">Maintenance</option><option value="warning">Warning</option><option value="success">Resolved / success</option><option value="neutral">Neutral</option></select></label>
+                <label><span><b>Presentation</b><small>How prominent the announcement is.</small></span><select class="input" id="portal-notice-style"><option value="banner">Banner</option><option value="card">Card</option><option value="strip">Compact strip</option></select></label>
+                <label><span><b>Placement</b><small>Where it appears in the customer flow.</small></span><select class="input" id="portal-notice-position"><option value="after_summary">After account summary</option><option value="before_modules">Before content modules</option><option value="after_modules">After content modules</option></select></label>
+              </div>
+            </section>
             <div class="studio8-field-grid two content-heading-grid">
               <label class="content-heading-field"><span><b>Usage heading</b><small>Shown above data and time information.</small></span><input class="input" id="portal-usage-title" placeholder="Usage overview"></label>
               <label class="content-heading-field"><span><b>Configurations heading</b><small>Shown above available locations and configs.</small></span><input class="input" id="portal-configs-title" placeholder="Configs"></label>
@@ -602,6 +768,16 @@
             <div class="studio8-field-grid two">
               <fieldset><legend>Support presentation</legend><div class="studio8-segmented"><label><input type="radio" name="sub-support-style" value="buttons"><span>Buttons</span></label><label><input type="radio" name="sub-support-style" value="icons"><span>Icons</span></label></div></fieldset>
             </div>
+            <section class="studio15-toast-card">
+              <div class="studio15-toast-head"><span><i class="fas fa-bell"></i></span><div><b>Toast notifications</b><small>Customize the copy/feedback notification independently from the page layout.</small></div></div>
+              <div class="studio8-field-grid two">
+                <fieldset><legend>Toast style</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-toast-style" value="pill"><span>Pill</span></label><label><input type="radio" name="sub-toast-style" value="card"><span>Card</span></label><label><input type="radio" name="sub-toast-style" value="glass"><span>Glass</span></label><label><input type="radio" name="sub-toast-style" value="terminal"><span>Terminal</span></label><label><input type="radio" name="sub-toast-style" value="minimal"><span>Minimal</span></label></div></fieldset>
+                <label class="studio15-select"><span>Position</span><select class="input" id="portal-toast-position"><option value="bottom_center">Bottom center</option><option value="bottom_right">Bottom right</option><option value="top_right">Top right</option><option value="top_center">Top center</option></select></label>
+                <fieldset><legend>Toast motion</legend><div class="studio8-segmented"><label><input type="radio" name="sub-toast-motion" value="slide"><span>Slide</span></label><label><input type="radio" name="sub-toast-motion" value="pop"><span>Pop</span></label><label><input type="radio" name="sub-toast-motion" value="fade"><span>Fade</span></label><label><input type="radio" name="sub-toast-motion" value="bounce"><span>Bounce</span></label></div></fieldset>
+                <label class="studio8-range"><span>Visible time <em id="toast-duration-value">2200 ms</em></span><input type="range" id="portal-toast-duration" min="1200" max="6000" step="200" value="2200"></label>
+              </div>
+              <div class="studio16-toast-preview-row"><div><b>Live toast preview</b><small>Uses the real public-page toast inside the preview frame.</small></div><button type="button" id="studio-preview-toast"><i class="fas fa-bell"></i><span>Show toast</span></button></div>
+            </section>
           </section>
 
           <section class="studio8-panel studio92-panel studio10-panel" data-studio8-panel="identity" hidden>
@@ -675,7 +851,7 @@
           </div>
         </div>
         <div class="studio8-frame-stage" data-preview-device="desktop" data-preview-fit="width"><div class="studio8-frame-canvas"><iframe id="studio-preview-frame" title="Public subscription preview" scrolling="no"></iframe></div></div>
-        <div class="studio8-preview-summary"><span id="preview-layout-name">Modern</span><span id="preview-accent-name">Mint</span><span id="preview-stats-name">Hybrid</span><span id="preview-motion-name">Balanced</span></div>
+        <div class="studio8-preview-summary"><span id="preview-layout-name">PS5</span><span id="preview-accent-name">Mint</span><span id="preview-stats-name">Hybrid</span><span id="preview-motion-name">Balanced</span></div>
       </section>
     </div>
 
@@ -740,5 +916,5 @@
 
 
 
-<script defer src="{{ url_for('static', filename='js/subscriptions.js') }}?v=subscription-theme-layout-v2"></script>
+<script defer src="{{ url_for('static', filename='js/subscriptions.js') }}?v=20260820-studio-v16-3"></script>
 {% endblock %}
