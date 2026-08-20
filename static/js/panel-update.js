@@ -133,98 +133,356 @@
     const style = document.createElement('style');
     style.id = 'pu-confirm-style';
     style.textContent = `
-      .pu-confirm-overlay[hidden]{display:none!important}
-      .pu-confirm-overlay{
-        position:fixed;inset:0;z-index:12050;
-        display:grid;place-items:center;padding:20px;
-        background:rgba(2,8,18,.72);
-        backdrop-filter:blur(7px);
+
+      .pu-confirm-overlay[hidden] {
+        display: none !important;
       }
-      .pu-confirm-card{
-        width:min(400px,calc(100vw - 28px));
-        border:1px solid rgba(148,163,184,.24);
-        border-radius:17px;
-        background:var(--card,#111f2e);
-        color:var(--text,#f8fafc);
-        box-shadow:0 30px 90px rgba(0,0,0,.48);
-        overflow:hidden;
+
+      .pu-confirm-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 12050;
+
+        display: grid;
+        place-items: center;
+
+        padding: 20px;
+
+        background: rgba(2, 8, 18, .72);
+        backdrop-filter: blur(7px);
+        -webkit-backdrop-filter: blur(7px);
       }
-      .pu-confirm-main{padding:18px 19px 15px}
-      .pu-confirm-icon{
-        width:40px;height:40px;border-radius:12px;
-        display:grid;place-items:center;
-        margin-bottom:12px;
-        background:rgba(45,212,191,.14);
-        color:#5eead4;font-size:17px;
+
+      .pu-confirm-card {
+        width: min(400px, calc(100vw - 28px));
+
+        border: 1px solid rgba(148, 163, 184, .24);
+        border-radius: 17px;
+
+        background: var(--card, #111f2e);
+        color: var(--text, #f8fafc);
+
+        box-shadow:
+          0 30px 90px rgba(0, 0, 0, .48);
+
+        overflow: hidden;
       }
-      .pu-confirm-card h3{margin:0 0 6px;font-size:18px;line-height:1.25}
-      .pu-confirm-card p{
-        margin:0;color:#a9b8ca;line-height:1.45;font-size:13px
+
+      .pu-confirm-main {
+        padding: 18px 19px 15px;
       }
-      .pu-confirm-notice{
-        margin-top:12px;padding:10px 11px;border-radius:11px;
-        background:rgba(245,158,11,.08);
-        border:1px solid rgba(245,158,11,.2);
-        color:#f8d59a;font-size:12px;line-height:1.4
+
+      .pu-confirm-icon {
+        width: 40px;
+        height: 40px;
+
+        display: grid;
+        place-items: center;
+
+        margin-bottom: 12px;
+
+        border-radius: 12px;
+
+        background: rgba(45, 212, 191, .14);
+        color: #5eead4;
+
+        font-size: 17px;
       }
-      .pu-confirm-actions{
-        display:grid;grid-template-columns:1fr 1fr;gap:10px;
-        padding:11px 14px 14px;
-        border-top:1px solid rgba(148,163,184,.16)
+
+      .pu-confirm-card h3 {
+        margin: 0 0 6px;
+
+        color: inherit;
+
+        font-size: 18px;
+        font-weight: 700;
+        line-height: 1.25;
       }
-      .pu-confirm-actions button{
-        min-height:39px;border-radius:10px;
-        border:1px solid rgba(148,163,184,.22);
-        background:rgba(148,163,184,.08);
-        color:inherit;font:inherit;font-weight:700;cursor:pointer
+
+      .pu-confirm-card p {
+        margin: 0;
+
+        color: #a9b8ca;
+
+        font-size: 13px;
+        line-height: 1.45;
       }
-      .pu-confirm-actions .primary{
-        border-color:transparent;
-        background:linear-gradient(135deg,#14b8a6,#0ea5a4);
-        color:white
+
+      .pu-confirm-notice {
+        margin-top: 12px;
+        padding: 10px 11px;
+
+        border: 1px solid rgba(245, 158, 11, .20);
+        border-radius: 11px;
+
+        background: rgba(245, 158, 11, .08);
+        color: #f8d59a;
+
+        font-size: 12px;
+        line-height: 1.4;
       }
-      .pu-confirm-actions button:focus-visible{
-        outline:3px solid rgba(45,212,191,.28);outline-offset:2px
+
+      .pu-confirm-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+
+        padding: 11px 14px 14px;
+
+        border-top: 1px solid rgba(148, 163, 184, .16);
       }
-      .pu-reconnect-note{
-        display:inline-flex;align-items:center;gap:8px;
-        color:#cbd5e1
+
+      .pu-confirm-actions button {
+        min-height: 39px;
+
+        border: 1px solid rgba(148, 163, 184, .22);
+        border-radius: 10px;
+
+        background: rgba(148, 163, 184, .08);
+        color: inherit;
+
+        font: inherit;
+        font-weight: 700;
+
+        cursor: pointer;
+
+        transition:
+          background .16s ease,
+          border-color .16s ease,
+          color .16s ease,
+          box-shadow .16s ease,
+          transform .16s ease;
       }
-      .pu-reconnect-note i{color:#5eead4}
+
+      .pu-confirm-actions button:hover {
+        background: rgba(148, 163, 184, .14);
+      }
+
+      .pu-confirm-actions button:active {
+        transform: translateY(1px);
+      }
+
+      .pu-confirm-actions .primary {
+        border-color: transparent;
+
+        background: linear-gradient(
+          135deg,
+          #14b8a6,
+          #0ea5a4
+        );
+
+        color: #ffffff;
+
+        box-shadow:
+          0 5px 14px rgba(20, 184, 166, .18);
+      }
+
+      .pu-confirm-actions .primary:hover {
+        background: linear-gradient(
+          135deg,
+          #18c3b0,
+          #10b3b0
+        );
+
+        box-shadow:
+          0 7px 18px rgba(20, 184, 166, .24);
+      }
+
+      .pu-confirm-actions button:focus-visible {
+        outline: 3px solid rgba(45, 212, 191, .28);
+        outline-offset: 2px;
+      }
+
+      .pu-reconnect-note {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+
+        color: #cbd5e1;
+      }
+
+      .pu-reconnect-note i {
+        color: #5eead4;
+      }
+
+
+      html[data-theme="light"] .pu-confirm-overlay {
+        background: rgba(15, 23, 42, .58);
+        backdrop-filter: blur(7px);
+        -webkit-backdrop-filter: blur(7px);
+      }
+
+      html[data-theme="light"] .pu-confirm-card {
+        background: #ffffff;
+        color: #172033;
+
+        border-color: #dce3eb;
+
+        box-shadow:
+          0 28px 70px rgba(15, 23, 42, .18),
+          0 5px 18px rgba(15, 23, 42, .08);
+      }
+
+      html[data-theme="light"] .pu-confirm-card h3 {
+        color: #172033;
+      }
+
+      html[data-theme="light"] .pu-confirm-card p {
+        color: #718198;
+      }
+
+      html[data-theme="light"] .pu-confirm-icon {
+        background: #ddf8f4;
+        color: #14b8a6;
+
+        box-shadow:
+          inset 0 0 0 1px rgba(20, 184, 166, .04);
+      }
+
+      html[data-theme="light"] .pu-confirm-notice {
+        background: #fff8ed;
+        border-color: #f5d5a2;
+        color: #a85d08;
+      }
+
+      html[data-theme="light"] .pu-confirm-actions {
+        background: #fbfcfd;
+        border-top-color: #e7ebf0;
+      }
+
+      html[data-theme="light"] .pu-confirm-actions button:not(.primary) {
+        background: #f8fafc;
+        border-color: #dce3eb;
+        color: #172033;
+
+        box-shadow:
+          0 1px 2px rgba(15, 23, 42, .02);
+      }
+
+      html[data-theme="light"] .pu-confirm-actions button:not(.primary):hover {
+        background: #f1f5f9;
+        border-color: #cbd5e1;
+        color: #0f172a;
+      }
+
+      html[data-theme="light"] .pu-confirm-actions .primary {
+        background: linear-gradient(
+          135deg,
+          #18b7aa,
+          #0fa6a4
+        );
+
+        border-color: transparent;
+        color: #ffffff;
+
+        box-shadow:
+          0 5px 14px rgba(15, 166, 164, .20);
+      }
+
+      html[data-theme="light"] .pu-confirm-actions .primary:hover {
+        background: linear-gradient(
+          135deg,
+          #14aa9e,
+          #0c9797
+        );
+
+        box-shadow:
+          0 7px 18px rgba(15, 166, 164, .26);
+      }
+
+      html[data-theme="light"] .pu-reconnect-note {
+        color: #64748b;
+      }
+
+      html[data-theme="light"] .pu-reconnect-note i {
+        color: #0f9f95;
+      }
+
+
+      @media (max-width: 480px) {
+        .pu-confirm-overlay {
+          padding: 14px;
+        }
+
+        .pu-confirm-card {
+          width: min(100%, 400px);
+          border-radius: 15px;
+        }
+
+        .pu-confirm-main {
+          padding: 17px 17px 14px;
+        }
+
+        .pu-confirm-actions {
+          padding: 10px 12px 12px;
+          gap: 8px;
+        }
+
+        .pu-confirm-actions button {
+          min-height: 41px;
+        }
+      }
     `;
+
     document.head.appendChild(style);
 
     const overlay = document.createElement('div');
     overlay.id = 'pu-confirm-overlay';
     overlay.className = 'pu-confirm-overlay';
     overlay.hidden = true;
+
     overlay.innerHTML = `
-      <section class="pu-confirm-card" role="dialog" aria-modal="true"
-               aria-labelledby="pu-confirm-title">
+      <section
+        class="pu-confirm-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="pu-confirm-title"
+        aria-describedby="pu-confirm-message"
+      >
         <div class="pu-confirm-main">
-          <div class="pu-confirm-icon">
+
+          <div class="pu-confirm-icon" aria-hidden="true">
             <i class="fas fa-cloud-arrow-down"></i>
           </div>
-          <h3 id="pu-confirm-title">Update local panel?</h3>
+
+          <h3 id="pu-confirm-title">
+            Update local panel?
+          </h3>
+
           <p id="pu-confirm-message">
             A rollback backup will be created before panel files are replaced.
           </p>
+
           <div class="pu-confirm-notice">
             The panel will be unavailable briefly while its service restarts.
             This page will wait and reconnect automatically.
           </div>
+
         </div>
+
         <div class="pu-confirm-actions">
-          <button type="button" id="pu-confirm-cancel">Cancel</button>
-          <button type="button" class="primary" id="pu-confirm-accept">
+
+          <button
+            type="button"
+            id="pu-confirm-cancel"
+          >
+            Cancel
+          </button>
+
+          <button
+            type="button"
+            class="primary"
+            id="pu-confirm-accept"
+          >
             Start update
           </button>
+
         </div>
       </section>
     `;
-    document.body.appendChild(overlay);
-  }
 
+    document.body.appendChild(overlay);
+}
   function askConfirmation({
     title,
     message,
