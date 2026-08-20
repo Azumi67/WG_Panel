@@ -16,10 +16,11 @@
     const light=root.dataset.theme==='light';
     return light ? {a:[34,152,230],b:[14,166,139],c:[124,92,210],alpha:.32} : {a:[96,165,250],b:[45,212,191],c:[167,139,250],alpha:.62};
   }
-  function motionFactor(){const m=root.dataset.motion||'balanced';return m==='immersive'?1.9:m==='cinematic'?1.55:m==='rich'?1.25:m==='balanced'?1:m==='soft'?.58:m==='drift'?.38:m==='minimal'?.2:0}
-  function engineSpeed(){return clamp(cssNumber('--engine-speed',1),.35,1.8)*motionFactor()}
-  function density(){return clamp(cssNumber('--engine-density',cssNumber('--particle-density',.6)),0,1)}
-  function intensity(){return clamp(cssNumber('--background-intensity',.7),0,1)}
+  function motionFactor(){const m=root.dataset.motion||'balanced';return m==='cinematic'?2.7:m==='immersive'?2.15:m==='rich'?1.45:m==='balanced'?1:m==='soft'?.58:m==='drift'?.38:m==='minimal'?.2:0}
+  function motionPower(){return clamp(cssNumber('--motion-power',1),.4,2)}
+  function engineSpeed(){return clamp(cssNumber('--engine-speed',1),.35,2.2)*motionFactor()*Math.sqrt(motionPower())}
+  function density(){return clamp(cssNumber('--engine-density',cssNumber('--particle-density',.6)),0,1.2)}
+  function intensity(){return clamp(cssNumber('--background-intensity',.7)*(.72+.28*motionPower()),0,1.35)}
   function mode(){return root.dataset.background||'aurora'}
   function active(){return !destroyed&&!paused&&root.dataset.previewPaused!=='true'&&mode()!=='none'&&motionFactor()>0}
 
@@ -30,7 +31,7 @@
     points=Array.from({length:count},(_,i)=>({x:Math.random()*width,y:Math.random()*height,vx:(Math.random()-.5)*.22,vy:(Math.random()-.5)*.22,r:.7+Math.random()*1.6,phase:Math.random()*Math.PI*2,color:i%3}));
     drawFrame(performance.now(),true);
   }
-  function rgba(rgb,a){return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${a})`}
+  function rgba(rgb,a){return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${clamp(a,0,1)})`}
   function glow(x,y,r,rgb,a){const g=ctx.createRadialGradient(x,y,0,x,y,r);g.addColorStop(0,rgba(rgb,a));g.addColorStop(.45,rgba(rgb,a*.45));g.addColorStop(1,rgba(rgb,0));ctx.fillStyle=g;ctx.fillRect(x-r,y-r,r*2,r*2)}
   function drawAurora(t,c,k){glow(width*(.18+.08*Math.sin(t*.00018*k)),height*(.22+.1*Math.cos(t*.00015*k)),Math.max(width,height)*.36,c.b,.18*k);glow(width*(.82+.07*Math.cos(t*.00013*k)),height*(.28+.12*Math.sin(t*.00017*k)),Math.max(width,height)*.32,c.a,.16*k);glow(width*(.52+.1*Math.sin(t*.00011*k)),height*(.82+.06*Math.cos(t*.00016*k)),Math.max(width,height)*.30,c.c,.12*k)}
   function drawWaves(t,c,k){ctx.save();ctx.globalCompositeOperation='screen';const colors=[c.a,c.b,c.c];for(let j=0;j<3;j++){ctx.beginPath();const y0=height*(.25+j*.22);for(let x=-20;x<=width+20;x+=12){const y=y0+Math.sin(x*.012+t*.0008*k+j*1.7)*22+Math.sin(x*.004-t*.00035*k)*13;if(x===-20)ctx.moveTo(x,y);else ctx.lineTo(x,y)}ctx.lineWidth=2+j*.7;ctx.strokeStyle=rgba(colors[j],(.18-j*.02)*k);ctx.shadowBlur=18;ctx.shadowColor=rgba(colors[j],.25*k);ctx.stroke()}ctx.restore()}
@@ -53,26 +54,11 @@
   function destroy(){destroyed=true;cancelAnimationFrame(raf);ctx.clearRect(0,0,width,height)}
   window.SubscriptionBackgroundEngine={refresh,pause,resume,destroy,get paused(){return paused}};
   addEventListener('resize',resize,{passive:true});
-  new MutationObserver(()=>refresh()).observe(root,{attributes:true,attributeFilter:['data-theme','data-background','data-motion','style','data-preview-paused']});
+  new MutationObserver(()=>refresh()).observe(root,{attributes:true,attributeFilter:['data-theme','data-background','data-motion','data-motion-intensity','style','data-preview-paused']});
   reduceMotion.addEventListener?.('change',refresh);
   resize();
   if(reduceMotion.matches||!active())drawFrame(performance.now(),true);else raf=requestAnimationFrame(drawFrame);
 })();
-
-
-/* Public subscription portal.
- *
- * Data contract (see _subscription_public_payload in app.py). The initial
- * payload rendered into the template and the payload returned by the refresh
- * API are produced by the same function, so this file can rely on one shape:
- *
- *   id, name, token, enabled, unlimited, limit_bytes, used_bytes,
- *   data_limit_value, data_limit_unit, start_on_first_use, first_used_at,
- *   expires_at, expires_at_ts, ttl_seconds,
- *   access: { allowed, reason, message },
- *   locations: [{ link_id, peer_id, name, status, endpoint, public_host,
- *                 location_label, country_code, flag }]
- */
 
 const fmtBytes=b=>{b=Number(b||0);const u=['B','KiB','MiB','GiB','TiB'];let i=0;while(b>=1024&&i<u.length-1){b/=1024;i++}return `${b.toFixed(i?2:0)} ${u[i]}`};
 const humanTTL=s=>{if(s==null)return 'No timer';s=Number(s||0);const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60);return d?`${d}d ${h}h left`:h?`${h}h ${m}m left`:`${m}m left`};
@@ -175,7 +161,7 @@ function clientStateText(){
   return 'Ready';
 }
 function pct(n,d){return d?Math.max(0,Math.min(100,Math.round((n/d)*100))):0}
-function showToast(t='Copied'){const el=document.getElementById('toast');el.textContent=t;el.classList.add('show');clearTimeout(window.__tt);window.__tt=setTimeout(()=>el.classList.remove('show'),2200)}
+function showToast(t='Copied'){const el=document.getElementById('toast');if(!el)return;el.textContent=t;el.classList.remove('show','toast-replay');void el.offsetWidth;el.classList.add('show','toast-replay');clearTimeout(window.__tt);const raw=Number(document.documentElement.dataset.toastDuration||PUBLIC_SETTINGS?.toast_duration||2200);const duration=Math.max(1200,Math.min(6000,Number.isFinite(raw)?raw:2200));window.__tt=setTimeout(()=>el.classList.remove('show','toast-replay'),duration)}
 async function copyText(txt){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(txt);showToast();return}}catch(e){}const ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.left='-9999px';document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();showToast()}
 function configUrl(id){return `/s/${encodeURIComponent(TOKEN)}/inbound/${id}/config`}
 function qrUrl(id){return `/s/${encodeURIComponent(TOKEN)}/inbound/${id}/qr`}
@@ -297,7 +283,7 @@ function renderLocations(){
   if(!access.allowed){grid.innerHTML=`<div class="empty">${escapeHtml(access.message||'Configs are unavailable for this subscription.')}</div>`;return}
   grid.innerHTML=locs.map(l=>{
     const initialLoc=cleanLocation(l), initialFlagHtml=flagMarkup(l.country_code,l.flag||'🌐'), host=publicAddress(l), needsGeo=!!host, label=escapeHtml(l.name||'wireguard');
-    return `<article class="loc" data-link="${l.link_id}" data-host="${escapeHtml(host)}" data-geo="${needsGeo?'1':'0'}"><div class="loc-top"><div class="loc-main"><div class="loc-name"><span class="loc-flag">${initialFlagHtml}</span><span class="loc-title">${escapeHtml(l.name||'Config')}</span></div><span class="loc-country">${needsGeo?'Detecting location...':escapeHtml(initialLoc)}</span></div><span class="status ${escapeHtml(String(l.status||'').toLowerCase())}">${escapeHtml(l.status||'offline')}</span></div><div class="loc-actions"><a class="loc-btn loc-download" href="${configUrl(l.link_id)}" data-download-config="${l.link_id}" data-filename="${label}" download="${label}.conf"><i class="fas fa-download"></i><span>Download</span></a><button class="loc-btn" data-qr="${l.link_id}" data-name="${label}" data-location="${escapeHtml(initialLoc)}"><i class="fas fa-qrcode"></i></button><button class="loc-btn" data-copy="${location.origin}${configUrl(l.link_id)}"><i class="fas fa-copy"></i></button></div></article>`;
+    return `<article class="loc" data-link="${l.link_id}" data-host="${escapeHtml(host)}" data-geo="${needsGeo?'1':'0'}"><div class="loc-top"><div class="loc-main"><div class="loc-name"><span class="loc-flag">${initialFlagHtml}</span><span class="loc-title">${escapeHtml(l.name||'Config')}</span></div><span class="loc-country">${needsGeo?'Detecting location...':escapeHtml(initialLoc)}</span></div><span class="status ${escapeHtml(String(l.status||'').toLowerCase())}">${escapeHtml(l.status||'offline')}</span></div><div class="loc-actions"><a class="loc-btn loc-download" href="${configUrl(l.link_id)}" data-download-config="${l.link_id}" data-filename="${label}" download="${label}.conf" title="Download config" aria-label="Download config"><i class="fas fa-download"></i></a><button class="loc-btn" data-qr="${l.link_id}" data-name="${label}" data-location="${escapeHtml(initialLoc)}"><i class="fas fa-qrcode"></i></button><button class="loc-btn" data-copy="${location.origin}${configUrl(l.link_id)}"><i class="fas fa-copy"></i></button></div></article>`;
   }).join('');
   detectVisibleGeo();
 }
@@ -360,16 +346,41 @@ async function detectVisibleGeo(){
         if(c) c.textContent = 'Location';
       }
     }catch(_){
-      // Geo lookup is decoration: a failure must never block the config actions.
       const c = card.querySelector('.loc-country');
       if(c) c.textContent = 'Location';
     }
   }
 }
 
-function render(){renderAccess();renderStats();renderLocations()}
+function renderAnnouncement(){
+  const s=PUBLIC_SETTINGS||{};
+  const notice=document.getElementById('portal-announcement');
+  if(!notice)return;
+  const enabled=!!s.show_admin_notice&&!!String(s.notice_text||'').trim();
+  notice.hidden=!enabled;
+  if(!enabled)return;
+
+  const tone=['info','maintenance','warning','success','neutral'].includes(String(s.notice_tone||''))?String(s.notice_tone):'info';
+  const style=['banner','card','strip'].includes(String(s.notice_style||''))?String(s.notice_style):'banner';
+  const position=['after_summary','before_modules','after_modules'].includes(String(s.notice_position||''))?String(s.notice_position):'after_summary';
+  notice.dataset.tone=tone;
+  notice.dataset.style=style;
+
+  const icon=notice.querySelector('.announcement-icon i');
+  if(icon){
+    icon.className={info:'fas fa-circle-info',maintenance:'fas fa-screwdriver-wrench',warning:'fas fa-triangle-exclamation',success:'fas fa-circle-check',neutral:'fas fa-bullhorn'}[tone]||'fas fa-bullhorn';
+  }
+
+  const content=document.querySelector('.portal-content');
+  const quick=document.querySelector('.quick-stats');
+  if(position==='before_modules'&&content){content.prepend(notice)}
+  else if(position==='after_modules'&&content){content.append(notice)}
+  else if(quick){quick.after(notice)}
+}
+function render(){renderAccess();renderStats();renderLocations();renderAnnouncement()}
 
 async function refreshData(silent=false){
+  if(typeof PREVIEW_MODE!=='undefined'&&PREVIEW_MODE)return;
   const live=document.getElementById('live-dot');
   if(live) live.classList.add('loading');
   try{
@@ -494,16 +505,19 @@ document.addEventListener('click', e => {
 })();
 try{
   const root=document.documentElement,s=PUBLIC_SETTINGS||{};
-  const attrs={statStyle:s.display_mode,motion:s.animation,accent:s.accent,surface:s.surface,radius:s.radius,shadow:s.shadow,density:s.density,pageWidth:s.page_width,configStyle:s.config_style,configColumns:s.config_columns,sectionOrder:s.section_order,supportStyle:s.support_style,buttonStyle:s.button_style,fontScale:s.font_scale,heroStyle:s.hero_style,background:s.background,layout:s.layout,statSize:s.stat_size,titleAlign:s.title_align,logoSize:s.logo_size};
+  const attrs={statStyle:s.display_mode,motion:s.animation,entrance:s.entrance_animation,hover:s.hover_animation,toastStyle:s.toast_style,toastPosition:s.toast_position,toastMotion:s.toast_motion,toastDuration:s.toast_duration,accent:s.accent,surface:s.surface,radius:s.radius,shadow:s.shadow,density:s.density,pageWidth:s.page_width,configStyle:s.config_style,configColumns:s.config_columns,sectionOrder:s.section_order,supportStyle:s.support_style,buttonStyle:s.button_style,fontScale:s.font_scale,heroStyle:s.hero_style,background:s.background,layout:s.layout,statSize:s.stat_size,titleAlign:s.title_align,logoSize:s.logo_size};
   Object.entries(attrs).forEach(([k,v])=>{if(v)root.dataset[k]=v});
   [['showQuick','show_quick_stats'],['showInstall','show_install'],['showSupport','show_support'],['showLive','show_live_badge'],['showPercentage','show_percentage'],['showUsedDetail','show_used_detail'],['showStatus','show_status_badge'],['showCountry','show_location_country'],['showDownload','show_download_action'],['showCopy','show_copy_action'],['showThemeAction','show_theme_action'],['showDescriptions','show_section_descriptions']].forEach(([dataKey,key])=>{if(key in s)root.dataset[dataKey]=String(!!s[key]);});
-  if(s.custom_primary)root.style.setProperty('--custom-accent',s.custom_primary);
-  if(s.custom_secondary)root.style.setProperty('--custom-accent2',s.custom_secondary);
+  const primary=s.primary_color||s.custom_primary;const secondary=s.secondary_color||s.custom_secondary;
+  if(primary)root.style.setProperty('--custom-accent',primary);
+  if(secondary)root.style.setProperty('--custom-accent2',secondary);
   if(s.background_intensity!=null)root.style.setProperty('--background-intensity',Math.max(0,Math.min(1,Number(s.background_intensity)/100)));
   if(s.card_opacity!=null)root.style.setProperty('--card-opacity',Math.max(.5,Math.min(1,Number(s.card_opacity)/100)));
-  if(s.motion_speed!=null)root.style.setProperty('--motion-speed',Math.max(.5,Math.min(1.5,100/Number(s.motion_speed||100))));
-  if(s.particle_density!=null)root.style.setProperty('--particle-density',Math.max(0,Math.min(1,Number(s.particle_density)/100)));
+  if(s.motion_speed!=null){root.style.setProperty('--motion-speed',Math.max(.5,Math.min(1.8,100/Number(s.motion_speed||100))));root.style.setProperty('--engine-speed',Math.max(.5,Math.min(1.8,Number(s.motion_speed||100)/100)));}
+  if(s.motion_intensity!=null){root.style.setProperty('--motion-power',Math.max(.4,Math.min(2,Number(s.motion_intensity||100)/100)));root.dataset.motionIntensity=String(s.motion_intensity);}
+  if(s.particle_density!=null){const pd=Math.max(0,Math.min(1.2,Number(s.particle_density)/100));root.style.setProperty('--particle-density',pd);root.style.setProperty('--engine-density',pd);}
+  const semantic={online_color:'--status-online',offline_color:'--status-offline',warning_color:'--status-warning',danger_color:'--status-danger',pill_color:'--pill-color',action_color:'--action-color'};
+  Object.entries(semantic).forEach(([key,cssVar])=>{if(s[key])root.style.setProperty(cssVar,s[key]);});
 }catch(_){}
 render();
-setInterval(()=>refreshData(true), 30000);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden) refreshData(true)});
+if(!(typeof PREVIEW_MODE!=='undefined'&&PREVIEW_MODE)){setInterval(()=>refreshData(true),30000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshData(true)});}
