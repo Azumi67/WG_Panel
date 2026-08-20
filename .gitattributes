@@ -3,3 +3,4 @@
 # spaces, blank-at-EOF, and space-before-tab problems remain reportable.
 * text=auto whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 static/css/subscriptions.css linguist-generated=true
+static/css/subscription_public.css linguist-generated=true
