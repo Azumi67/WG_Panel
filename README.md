@@ -363,6 +363,13 @@ node
     <img src="https://github.com/user-attachments/assets/a87617da-18e0-4065-b2ed-d38d4322958b" alt="menu screen" />
   </p>
 </details>
+<details>
+  <summary align="right">template settings</summary>
+
+  <p align="right">
+    <img src="https://github.com/user-attachments/assets/b2bfc186-ba26-4c5f-b78d-a9889e168060" alt="menu screen" />
+  </p>
+</details>
 
 ---------------------------------------------------------------
    </details>
