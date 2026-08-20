@@ -39,6 +39,10 @@
 
 <p dir="rtl" align="right">▪&nbsp; <b><bdi dir="ltr"><bdi dir="ltr">Subscription</bdi> Template Studio</bdi></b> برای طراحی صفحه <bdi dir="ltr">Public <bdi dir="ltr">Subscription</bdi></bdi> با <bdi dir="ltr">Live Preview</bdi> واقعی در حالت Desktop و Mobile</p>
 
+<p dir="rtl" align="right">
+▪&nbsp; امکان شخصی‌سازی مستقل <bdi dir="ltr">Template</bdi> برای هر کاربر به‌صورت جداگانه
+</p>
+
 <p dir="rtl" align="right">▪&nbsp; امکان تغییر <bdi dir="ltr">Layout</bdi>، <bdi dir="ltr">Background</bdi>، <bdi dir="ltr">Live <bdi dir="ltr">Background</bdi></bdi>، <bdi dir="ltr">Animation</bdi>، <bdi dir="ltr">Motion</bdi>، <bdi dir="ltr">Statistics</bdi>، <bdi dir="ltr">Colors</bdi>، <bdi dir="ltr">Surface</bdi>، <bdi dir="ltr">Radius</bdi>، <bdi dir="ltr">Shadow</bdi>، <bdi dir="ltr">Density</bdi>، <bdi dir="ltr">Font scale</bdi> و <bdi dir="ltr">Page width</bdi></p>
 
 <p dir="rtl" align="right">▪&nbsp; امکان تغییر نحوه نمایش Configها، تعداد ستون‌ها، ترتیب Sectionها و نمایش یا مخفی کردن بخش‌هایی مانند Usage، Configs، Install <bdi dir="ltr">WireGuard</bdi> و <bdi dir="ltr">Support</bdi></p>
