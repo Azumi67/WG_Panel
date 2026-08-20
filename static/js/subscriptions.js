@@ -260,6 +260,7 @@ const ttlText = sec => {
 };
 
 let MODE='new', SCOPE='all', STATUS_SCOPE='all', SEARCH='', NEW_ITEMS=[], CURRENT_ITEMS=[], SUBS=[], EDIT_ID=null, SUB_SETTINGS=null;
+let SUB_STUDIO_TARGET_ID=null, SUB_STUDIO_TARGET_NAME='', SUB_STUDIO_HAS_OVERRIDE=false;
 let SUBS_LIVE_TIMER=null, SUBS_LOADING=false, SUBS_LAST_JSON='';
 let CURRENT_SELECTED = new Set();
 let OPEN_SUBSCRIPTION_LOGS_SID = null;
@@ -325,10 +326,65 @@ function closeSettings(){
   subxUpdateModalBodyState();
 }
 
-async function loadSubscriptionSettings(){
-  const r = await fetch('/api/subscriptions/settings', {credentials:'same-origin'});
-  SUB_SETTINGS = await r.json().catch(()=>({layout:'aurora', support:{}}));
+async function loadSubscriptionSettings(sid=null){
+  SUB_STUDIO_TARGET_ID = sid == null ? null : Number(sid);
+  const endpoint = SUB_STUDIO_TARGET_ID
+    ? `/api/subscriptions/${SUB_STUDIO_TARGET_ID}/portal-settings`
+    : '/api/subscriptions/settings';
+  const r = await fetch(endpoint, {credentials:'same-origin', cache:'no-store'});
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(j.detail || j.message || j.error || 'Could not load template settings.');
+  if(SUB_STUDIO_TARGET_ID){
+    SUB_STUDIO_TARGET_NAME = j.subscription_name || (SUBS.find(x=>Number(x.id)===SUB_STUDIO_TARGET_ID)?.name || `Client #${SUB_STUDIO_TARGET_ID}`);
+    SUB_STUDIO_HAS_OVERRIDE = !!j.has_override;
+    SUB_SETTINGS = j.settings || j.global_settings || {};
+  }else{
+    SUB_STUDIO_TARGET_NAME = '';
+    SUB_STUDIO_HAS_OVERRIDE = false;
+    SUB_SETTINGS = j || {};
+  }
   applySettingsToForm();
+  updateStudioTargetUI();
+  return SUB_SETTINGS;
+}
+
+function updateStudioTargetUI(){
+  const actions=document.querySelector('#sub-settings-modal .studio8-head-actions');
+  if(!actions) return;
+  let box=document.getElementById('studio-template-target');
+  if(!box){
+    box=document.createElement('div');
+    box.id='studio-template-target';
+    box.className='studio-template-target';
+    actions.prepend(box);
+  }
+  if(SUB_STUDIO_TARGET_ID){
+    box.innerHTML=`<span class="studio-template-target-badge"><i class="fas fa-user"></i><span><small>Editing template for</small><b>${esc(SUB_STUDIO_TARGET_NAME)}</b></span></span><button type="button" id="studio-use-global" class="studio-template-inherit" ${SUB_STUDIO_HAS_OVERRIDE?'':'disabled'} title="Remove this client override and inherit the global template"><i class="fas fa-rotate-left"></i><span>${SUB_STUDIO_HAS_OVERRIDE?'Use global':'Using global'}</span></button>`;
+    document.getElementById('studio-use-global')?.addEventListener('click',async()=>{
+      if(!SUB_STUDIO_TARGET_ID || !SUB_STUDIO_HAS_OVERRIDE) return;
+      try{
+        const r=await fetch(`/api/subscriptions/${SUB_STUDIO_TARGET_ID}/portal-settings`,{method:'DELETE',headers:csrfHeaders(true),credentials:'same-origin',cache:'no-store'});
+        const j=await r.json().catch(()=>({}));
+        if(!r.ok) throw new Error(j.detail||j.message||j.error||'Could not remove client template override.');
+        SUB_STUDIO_HAS_OVERRIDE=false;
+        SUB_SETTINGS=j.settings||{};
+        window.SubscriptionStudioV14?.apply?.(SUB_SETTINGS);
+        window.SubscriptionStudioV13?.apply?.(SUB_SETTINGS);
+        applySettingsToForm();
+        updateStudioTargetUI();
+        toastOk('This client now inherits the global subscription template.');
+      }catch(err){toastBad(err.message||String(err));}
+    });
+  }else{
+    box.innerHTML='<span class="studio-template-target-badge global"><i class="fas fa-earth-europe"></i><span><small>Editing</small><b>Global default template</b></span></span>';
+  }
+}
+
+async function openClientTemplateStudio(sid){
+  try{
+    await loadSubscriptionSettings(sid);
+    openSettings();
+  }catch(err){toastBad(err.message||String(err));}
 }
 function applySettingsToForm(){
   const s = SUB_SETTINGS || {layout:'aurora', support:{}};
@@ -362,17 +418,45 @@ function updateLayoutPreview(layout){
   p.className = 'preview-card layout-' + (layout || 'aurora');
 }
 async function saveSubscriptionSettings(){
-  const body = collectSettingsForm();
-  const r = await fetch('/api/subscriptions/settings', {
-    method:'POST',
-    headers:csrfHeaders(true),
-    credentials:'same-origin',
-    body:JSON.stringify(body)
+  const body = window.SubscriptionStudioV14?.collect?.()
+    || window.SubscriptionStudioV13?.collect?.()
+    || window.SubscriptionStudioV9?.collect?.()
+    || collectSettingsForm();
+
+  const endpoint = SUB_STUDIO_TARGET_ID
+    ? `/api/subscriptions/${SUB_STUDIO_TARGET_ID}/portal-settings`
+    : '/api/subscriptions/settings';
+
+  const r = await fetch(endpoint, {
+    method:'POST', headers:csrfHeaders(true), credentials:'same-origin', cache:'no-store', body:JSON.stringify(body)
   });
   const j = await r.json().catch(()=>({}));
-  if(!r.ok){ toastBad(j.detail || j.error || 'Settings save failed.'); return; }
-  SUB_SETTINGS = j.settings || body;
-  toastOk('Short-link settings saved.');
+  if(!r.ok){ toastBad(j.detail || j.message || j.error || 'Settings save failed.'); return; }
+
+  let saved = SUB_STUDIO_TARGET_ID ? (j.settings || null) : (j.settings || null);
+  try{
+    const verify=await fetch(endpoint,{credentials:'same-origin',cache:'no-store'});
+    if(verify.ok){
+      const v=await verify.json();
+      saved=SUB_STUDIO_TARGET_ID ? (v.settings||saved) : v;
+      if(SUB_STUDIO_TARGET_ID){SUB_STUDIO_HAS_OVERRIDE=!!v.has_override;SUB_STUDIO_TARGET_NAME=v.subscription_name||SUB_STUDIO_TARGET_NAME;}
+    }
+  }catch(_){}
+
+  SUB_SETTINGS=saved||body;
+  window.SubscriptionStudioV14?.apply?.(SUB_SETTINGS);
+  window.SubscriptionStudioV13?.apply?.(SUB_SETTINGS);
+  window.SubscriptionStudioV9?.apply?.(SUB_SETTINGS);
+  updateStudioTargetUI();
+
+  const expected=String(body.layout||'aurora');
+  const persisted=String((SUB_SETTINGS||{}).layout||expected);
+  if(persisted!==expected){toastBad(`The server returned “${persisted}” after saving “${expected}”. app.py is still using old layout validation.`);return;}
+
+  const layoutNames={ps5:'PS5',mac:'macOS',app:'Desktop app',compact:'Compact',minimal:'Minimal',showcase:'Showcase',aurora:'PS5',cards:'macOS',console:'Desktop app',split:'Showcase',profile:'Showcase',executive:'macOS',flow:'Minimal'};
+  toastOk(SUB_STUDIO_TARGET_ID
+    ? `${SUB_STUDIO_TARGET_NAME} template saved · ${layoutNames[persisted]||persisted}`
+    : `Global template saved · ${layoutNames[persisted]||persisted}`);
   closeSettings();
 }
 
@@ -886,7 +970,7 @@ function rowHtml(s){
         <button class="subx-icon-btn" title="Reset data" data-reset-data="${s.id}"><i class="fas fa-gauge-high"></i></button>
         <button class="subx-icon-btn" title="Reset timer" data-reset-timer="${s.id}"><i class="fas fa-clock-rotate-left"></i></button>
         <button class="subx-icon-btn" title="Manage inbounds" data-inbounds="${s.id}"><i class="fas fa-network-wired"></i></button>
-        <button class="subx-icon-btn" title="Edit client" data-edit="${s.id}"><i class="fas fa-pen"></i></button>
+        <button class="subx-icon-btn" title="Customize public template for this client" data-template="${s.id}"><i class="fas fa-wand-magic-sparkles"></i></button><button class="subx-icon-btn" title="Edit client" data-edit="${s.id}"><i class="fas fa-pen"></i></button>
         <button class="subx-icon-btn" title="More information" data-more="${s.id}"><i class="fas fa-circle-info"></i></button>
         <button class="subx-icon-btn danger" title="Delete" data-del="${s.id}"><i class="fas fa-trash"></i></button>
       </div>
@@ -1490,7 +1574,7 @@ function payloadFromForm() {
 $('#open-sub-modal').onclick=openCreate; $('#sub-close').onclick=closeModal; $('#sub-cancel').onclick=closeModal;
 $('#details-close').onclick=closeDetails;
 
-$('#open-sub-settings').onclick=async()=>{ await loadSubscriptionSettings(); openSettings(); };
+$('#open-sub-settings').onclick=async()=>{ try{await loadSubscriptionSettings(null);openSettings();}catch(err){toastBad(err.message||String(err));} };
 $('#settings-close').onclick=closeSettings;
 $('#settings-cancel').onclick=closeSettings;
 $('#settings-save').onclick=saveSubscriptionSettings;
@@ -1973,6 +2057,7 @@ document.addEventListener('click', async e=>{
   const editLabel=e.target.closest('[data-edit-inbound-label]'); if(editLabel){ openLabelEditor(editLabel.dataset.editInboundLabel, editLabel.dataset.currentLabel || ''); return; }
   const inbounds=e.target.closest('[data-inbounds]'); if(inbounds){ const s=SUBS.find(x=>String(x.id)===String(inbounds.dataset.inbounds)); if(s) renderDetails(s); return; }
   const addInbound=e.target.closest('[data-add-inbound]');if(addInbound){await openEdit(addInbound.dataset.addInbound, {manageInbounds:true});return;}
+  const template=e.target.closest('[data-template]'); if(template){ await openClientTemplateStudio(template.dataset.template); return; }
   const edit=e.target.closest('[data-edit]'); if(edit){ await openEdit(edit.dataset.edit); return; }
   const subEnable=e.target.closest('[data-sub-enable]'); if(subEnable){
     const id=subEnable.dataset.subEnable;
@@ -2122,7 +2207,7 @@ function rowHtml(s){
         <button class="subx-icon-btn" title="Reset data" data-reset-data="${s.id}"><i class="fas fa-gauge-high"></i></button>
         <button class="subx-icon-btn" title="Reset timer" data-reset-timer="${s.id}"><i class="fas fa-clock-rotate-left"></i></button>
         <button class="subx-icon-btn" title="Manage inbounds" data-inbounds="${s.id}"><i class="fas fa-network-wired"></i></button>
-        <button class="subx-icon-btn" title="Edit client" data-edit="${s.id}"><i class="fas fa-pen"></i></button>
+        <button class="subx-icon-btn" title="Customize public template for this client" data-template="${s.id}"><i class="fas fa-wand-magic-sparkles"></i></button><button class="subx-icon-btn" title="Edit client" data-edit="${s.id}"><i class="fas fa-pen"></i></button>
         <button class="subx-icon-btn" title="More information" data-more="${s.id}"><i class="fas fa-circle-info"></i></button>
         <button class="subx-icon-btn danger" title="Delete" data-del="${s.id}"><i class="fas fa-trash"></i></button>
       </div>
@@ -2348,30 +2433,22 @@ function subxActionButtons(s){
   const isBlocked = state.cls === 'blocked';
   const isDisabled = !s.enabled || state.cls === 'disabled';
   let toggleButton;
-
-  if(isBlocked){
-    toggleButton = `<button class="subx-icon-btn subscription-power state-blocked" title="Blocked — enable and reset data and timer" aria-label="Blocked subscription. Enable and reset" data-sub-enable="${s.id}"><i class="fas fa-power-off"></i></button>`;
-  }else if(isDisabled){
-    toggleButton = `<button class="subx-icon-btn subscription-power state-disabled" title="Disabled — enable and reset data and timer" aria-label="Disabled subscription. Enable and reset" data-sub-enable="${s.id}"><i class="fas fa-power-off"></i></button>`;
-  }else{
-    toggleButton = `<button class="subx-icon-btn subscription-power state-ready" title="Ready — disable subscription and stop all configs" aria-label="Ready subscription. Disable" data-sub-disable="${s.id}"><i class="fas fa-power-off"></i></button>`;
-  }
-
+  if(isBlocked){toggleButton = `<button class="subx-icon-btn subscription-power state-blocked" title="Blocked — enable and reset data and timer" aria-label="Blocked subscription. Enable and reset" data-sub-enable="${s.id}"><i class="fas fa-power-off"></i></button>`;}
+  else if(isDisabled){toggleButton = `<button class="subx-icon-btn subscription-power state-disabled" title="Disabled — enable and reset data and timer" aria-label="Disabled subscription. Enable and reset" data-sub-enable="${s.id}"><i class="fas fa-power-off"></i></button>`;}
+  else{toggleButton = `<button class="subx-icon-btn subscription-power state-ready" title="Ready — disable subscription and stop all configs" aria-label="Ready subscription. Disable" data-sub-disable="${s.id}"><i class="fas fa-power-off"></i></button>`;}
   return `<div class="subx-actions subx-actions-icons" aria-label="Subscription actions">
-    <button class="subx-logs-box-btn" type="button" title="Open subscription activity history" data-subscription-logs="${s.id}">
-      <i class="fas fa-clock-rotate-left" aria-hidden="true"></i>
-      <span>Logs</span>
-    </button>
-
+    <div class="subx-tool-row" aria-label="Subscription tools">
+      <button class="subx-tool-btn subx-logs-box-btn" type="button" title="Open subscription activity history" data-subscription-logs="${s.id}"><i class="fas fa-clock-rotate-left"></i><span>Logs</span></button>
+      <button class="subx-tool-btn subx-theme-box-btn" type="button" title="Open Theme Studio for this client's public portal" data-template="${s.id}"><span class="subx-theme-pulse"><i class="fas fa-wand-magic-sparkles"></i></span><span>Theme</span></button>
+    </div>
     <div class="subx-action-icon-grid">
-      <button class="subx-icon-btn" title="Copy public page link" aria-label="Copy public page link" data-copy="${esc(s.public_url)}"><i class="fas fa-link"></i></button>
-      ${toggleButton}
-      <button class="subx-icon-btn" title="Reset used data" aria-label="Reset used data" data-reset-data="${s.id}"><i class="fas fa-gauge-high"></i></button>
-      <button class="subx-icon-btn" title="Reset time limit" aria-label="Reset time limit" data-reset-timer="${s.id}"><i class="fas fa-clock-rotate-left"></i></button>
-      <button class="subx-icon-btn" title="Manage inbounds" aria-label="Manage inbounds" data-inbounds="${s.id}"><i class="fas fa-network-wired"></i></button>
-      <button class="subx-icon-btn" title="Edit client" aria-label="Edit client" data-edit="${s.id}"><i class="fas fa-pen"></i></button>
-      <button class="subx-icon-btn" title="View details" aria-label="View details" data-more="${s.id}"><i class="fas fa-circle-info"></i></button>
-      <button class="subx-icon-btn danger" title="Delete subscription" aria-label="Delete subscription" data-del="${s.id}"><i class="fas fa-trash"></i></button>
+      <button class="subx-icon-btn" title="Copy public page link" data-copy="${esc(s.public_url)}"><i class="fas fa-link"></i></button>${toggleButton}
+      <button class="subx-icon-btn" title="Reset used data" data-reset-data="${s.id}"><i class="fas fa-gauge-high"></i></button>
+      <button class="subx-icon-btn" title="Reset time limit" data-reset-timer="${s.id}"><i class="fas fa-clock-rotate-left"></i></button>
+      <button class="subx-icon-btn" title="Manage inbounds" data-inbounds="${s.id}"><i class="fas fa-network-wired"></i></button>
+      <button class="subx-icon-btn" title="Edit client" data-edit="${s.id}"><i class="fas fa-pen"></i></button>
+      <button class="subx-icon-btn" title="View details" data-more="${s.id}"><i class="fas fa-circle-info"></i></button>
+      <button class="subx-icon-btn danger" title="Delete subscription" data-del="${s.id}"><i class="fas fa-trash"></i></button>
     </div>
   </div>`;
 }
@@ -2415,8 +2492,7 @@ function rowHtml(s){
       <div class="subx-note">${esc(note)}</div>
       <div class="subx-client-connection ${esc(connection.cls)}" title="${esc(connection.title || '')}">
         <span class="subx-conn-dot" aria-hidden="true"></span>
-        <b>${esc(connection.label)}</b>
-        <span>${esc(connection.detail)}</span>
+        <span class="subx-conn-copy"><b>${esc(connection.label)}</b><small>${esc(connection.detail)}</small></span>
       </div>
     </div>
 
@@ -2457,7 +2533,7 @@ function rowHtml(s){
       <span class="subx-state-pill ${state.cls}">
         <i class="fas ${subxIconForState(state.cls)}"></i>${esc(state.label)}
       </span>
-      <small>${esc(state.sub)}</small>
+      <small class="subx-policy-note">${esc(state.sub)}</small>
     </div>
 
     ${subxActionButtons(s)}
@@ -2711,8 +2787,8 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
 (() => {
   'use strict';
   const q=(s,r=document)=>r.querySelector(s), qa=(s,r=document)=>[...r.querySelectorAll(s)];
-  const defaults={layout:'aurora',background:'aurora',display_mode:'hybrid',animation:'balanced',accent:'mint',custom_primary:'#3addaa',custom_secondary:'#63a5ff',surface:'glass',radius:'rounded',shadow:'soft',density:'comfortable',page_width:'standard',config_style:'cards',config_columns:'auto',section_order:'standard',support_style:'buttons',theme_default:'auto',hero_style:'panel',button_style:'solid',font_scale:'standard',background_intensity:70,card_opacity:82,motion_speed:100,particle_density:60,stat_size:'standard',show_quick_stats:true,show_percentage:true,show_used_detail:true,show_install:true,show_support:true,show_live_badge:true,show_status_badge:true,show_location_country:true,show_download_action:true,show_copy_action:true,show_theme_action:true,show_section_descriptions:true,title_align:'left',logo_size:'medium',portal_label:'Secure WireGuard portal',portal_title:'',portal_subtitle:'Your account is ready. Install WireGuard, then scan QR or import a config.',portal_icon:'fas fa-bolt',usage_title:'Usage overview',configs_title:'Configs',install_title:'Install WireGuard',support_title:'Support',support:{telegram:'',whatsapp:'',phone:'',email:'',website:'',instagram:''}};
-  const labels={layout:{aurora:'Modern',cards:'Dashboard',compact:'Compact',minimal:'Minimal',split:'Split',profile:'Profile'},background:{aurora:'Aurora',waves:'Waves',network:'Network',orbits:'Orbits',mesh:'Mesh',nebula:'Nebula',lines:'Lines',constellation:'Constellation',prism:'Prism',circuit:'Circuit',pulse:'Pulse',none:'None'},display_mode:{bars:'Progress bars',rings:'Circles',hybrid:'Hybrid',focus:'Large values',minimal:'Compact rows',segments:'Segments'},animation:{cinematic:'Cinematic',immersive:'Immersive',rich:'Rich',balanced:'Balanced',soft:'Soft',drift:'Drift',minimal:'Minimal',off:'Off'},accent:{mint:'Mint',blue:'Blue',violet:'Violet',coral:'Coral',amber:'Amber',mono:'Monochrome',custom:'Custom'}};
+  const defaults={layout:'ps5',background:'orbits',display_mode:'hybrid',animation:'cinematic',entrance_animation:'stagger',hover_animation:'lift',toast_style:'pill',toast_position:'bottom_center',toast_motion:'slide',toast_duration:2200,accent:'mint',primary_color:'#3addaa',secondary_color:'#63a5ff',online_color:'#22c55e',offline_color:'#94a3b8',warning_color:'#f59e0b',danger_color:'#ef4444',pill_color:'#64748b',action_color:'#3addaa',custom_primary:'#3addaa',custom_secondary:'#63a5ff',surface:'glass',radius:'rounded',shadow:'deep',density:'comfortable',page_width:'wide',config_style:'cards',config_columns:'two',section_order:'usage_first',module_order:['configs','usage','install','support'],module_enabled:{configs:true,usage:true,install:true,support:true},module_sizes:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_mobile:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_surface:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_spacing:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_radius:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_heading:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_mobile_position:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_gap:'standard',support_style:'buttons',theme_default:'auto',hero_style:'banner',button_style:'solid',font_scale:'standard',background_intensity:86,card_opacity:82,motion_speed:125,motion_intensity:150,particle_density:90,stat_size:'standard',show_quick_stats:true,show_percentage:true,show_used_detail:true,show_install:true,show_support:true,show_live_badge:true,show_status_badge:true,show_location_country:true,show_download_action:true,show_copy_action:true,show_theme_action:true,show_section_descriptions:true,show_admin_notice:false,notice_title:'Service notice',notice_text:'',notice_tone:'info',notice_style:'banner',notice_position:'after_summary',title_align:'left',logo_size:'medium',portal_label:'Secure WireGuard portal',portal_title:'',portal_subtitle:'Your account is ready. Install WireGuard, then scan QR or import a config.',portal_icon:'fas fa-bolt',usage_title:'Usage overview',configs_title:'Configs',install_title:'Install WireGuard',support_title:'Support',support:{telegram:'',whatsapp:'',phone:'',email:'',website:'',instagram:''}};
+  const labels={layout:{ps5:'PS5',mac:'macOS',app:'Desktop app',compact:'Compact',minimal:'Minimal',showcase:'Showcase',aurora:'PS5',cards:'macOS',console:'Desktop app',split:'Showcase',profile:'Showcase',executive:'macOS',flow:'Minimal'},background:{aurora:'Aurora',waves:'Waves',network:'Network',orbits:'Orbits',mesh:'Mesh',nebula:'Nebula',lines:'Lines',constellation:'Constellation',prism:'Prism',circuit:'Circuit',pulse:'Pulse',none:'None'},display_mode:{bars:'Progress bars',rings:'Circles',hybrid:'Hybrid',focus:'Large values',minimal:'Compact rows',segments:'Segments'},animation:{cinematic:'Cinematic',immersive:'Immersive',rich:'Rich',balanced:'Balanced',soft:'Soft',drift:'Drift',minimal:'Minimal',off:'Off'},accent:{mint:'Mint',blue:'Blue',violet:'Violet',coral:'Coral',amber:'Amber',mono:'Monochrome',custom:'Custom'}};
   let previewTheme='auto',previewDevice='desktop',previewFit='width',previewPaused=false,previewTimer=0,frameToken=0;
   function radio(name,fallback){return q(`input[name="${name}"]:checked`)?.value||fallback}
   function setRadio(name,value){const el=q(`input[name="${name}"][value="${CSS.escape(String(value))}"]`);if(el)el.checked=true}
@@ -2722,12 +2798,15 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   function number(id,fallback){const n=Number(q('#'+id)?.value);return Number.isFinite(n)?n:fallback}
   function supportValues(){const out={};for(const key of ['telegram','whatsapp','phone','email','website','instagram'])out[key]=q('#sup-'+key)?.value||'';return out}
   function currentSettings(){
-    return {layout:radio('sub-layout',defaults.layout),background:radio('sub-background',defaults.background),display_mode:radio('sub-display-mode',defaults.display_mode),animation:radio('portal-animation-choice',q('#portal-animation')?.value||defaults.animation),accent:radio('sub-accent',defaults.accent),custom_primary:q('#portal-primary-color')?.value||defaults.custom_primary,custom_secondary:q('#portal-secondary-color')?.value||defaults.custom_secondary,surface:radio('sub-surface',defaults.surface),radius:radio('sub-radius',defaults.radius),shadow:radio('sub-shadow',defaults.shadow),density:radio('sub-density',defaults.density),page_width:radio('sub-page-width',defaults.page_width),config_style:radio('sub-config-style',defaults.config_style),config_columns:radio('sub-config-columns',defaults.config_columns),section_order:radio('sub-section-order',defaults.section_order),support_style:radio('sub-support-style',defaults.support_style),theme_default:radio('sub-theme-default',defaults.theme_default),hero_style:radio('sub-hero-style',defaults.hero_style),button_style:radio('sub-button-style',defaults.button_style),font_scale:radio('sub-font-scale',defaults.font_scale),background_intensity:number('portal-background-intensity',defaults.background_intensity),card_opacity:number('portal-card-opacity',defaults.card_opacity),motion_speed:number('portal-motion-speed',defaults.motion_speed),particle_density:number('portal-particle-density',defaults.particle_density),stat_size:radio('sub-stat-size',defaults.stat_size),show_quick_stats:checked('show-quick-stats'),show_percentage:checked('show-percentage'),show_used_detail:checked('show-used-detail'),show_install:checked('show-install'),show_support:checked('show-support'),show_live_badge:checked('show-live-badge'),show_status_badge:checked('show-status-badge'),show_location_country:checked('show-location-country'),show_download_action:checked('show-download-action'),show_copy_action:checked('show-copy-action'),show_theme_action:checked('show-theme-action'),show_section_descriptions:checked('show-section-descriptions'),title_align:radio('sub-title-align',defaults.title_align),logo_size:radio('sub-logo-size',defaults.logo_size),portal_label:q('#portal-label')?.value||'',portal_title:q('#portal-title')?.value||'',portal_subtitle:q('#portal-subtitle')?.value||'',portal_icon:q('#portal-icon')?.value||defaults.portal_icon,usage_title:q('#portal-usage-title')?.value||defaults.usage_title,configs_title:q('#portal-configs-title')?.value||defaults.configs_title,install_title:q('#portal-install-title')?.value||defaults.install_title,support_title:q('#portal-support-title')?.value||defaults.support_title,support:supportValues()};
+    return {layout:radio('sub-layout',defaults.layout),background:radio('sub-background',defaults.background),display_mode:radio('sub-display-mode',defaults.display_mode),animation:radio('portal-animation-choice',q('#portal-animation')?.value||defaults.animation),entrance_animation:radio('sub-entrance-animation',defaults.entrance_animation),hover_animation:radio('sub-hover-animation',defaults.hover_animation),toast_style:radio('sub-toast-style',defaults.toast_style),toast_position:q('#portal-toast-position')?.value||defaults.toast_position,toast_motion:radio('sub-toast-motion',defaults.toast_motion),toast_duration:number('portal-toast-duration',defaults.toast_duration),accent:radio('sub-accent',defaults.accent),primary_color:q('#portal-primary-color')?.value||defaults.primary_color,secondary_color:q('#portal-secondary-color')?.value||defaults.secondary_color,online_color:q('#portal-online-color')?.value||defaults.online_color,offline_color:q('#portal-offline-color')?.value||defaults.offline_color,warning_color:q('#portal-warning-color')?.value||defaults.warning_color,danger_color:q('#portal-danger-color')?.value||defaults.danger_color,pill_color:q('#portal-pill-color')?.value||defaults.pill_color,action_color:q('#portal-action-color')?.value||defaults.action_color,custom_primary:q('#portal-primary-color')?.value||defaults.primary_color,custom_secondary:q('#portal-secondary-color')?.value||defaults.secondary_color,surface:radio('sub-surface',defaults.surface),radius:radio('sub-radius',defaults.radius),shadow:radio('sub-shadow',defaults.shadow),density:radio('sub-density',defaults.density),page_width:radio('sub-page-width',defaults.page_width),config_style:radio('sub-config-style',defaults.config_style),config_columns:radio('sub-config-columns',defaults.config_columns),section_order:radio('sub-section-order',defaults.section_order),module_order:moduleOrderFromComposer(),module_enabled:moduleEnabledFromComposer(),module_sizes:moduleSizesFromComposer(),module_mobile:moduleMobileFromComposer(),module_surface:moduleSurfaceFromComposer(),module_spacing:moduleSpacingFromComposer(),module_radius:moduleRadiusFromComposer(),module_heading:moduleHeadingFromComposer(),module_mobile_position:moduleMobilePositionFromComposer(),module_gap:q('#studio-module-gap')?.value||defaults.module_gap,support_style:radio('sub-support-style',defaults.support_style),theme_default:radio('sub-theme-default',defaults.theme_default),hero_style:radio('sub-hero-style',defaults.hero_style),button_style:radio('sub-button-style',defaults.button_style),font_scale:radio('sub-font-scale',defaults.font_scale),background_intensity:number('portal-background-intensity',defaults.background_intensity),card_opacity:number('portal-card-opacity',defaults.card_opacity),motion_speed:number('portal-motion-speed',defaults.motion_speed),motion_intensity:number('portal-motion-intensity',defaults.motion_intensity),particle_density:number('portal-particle-density',defaults.particle_density),stat_size:radio('sub-stat-size',defaults.stat_size),show_quick_stats:checked('show-quick-stats'),show_percentage:checked('show-percentage'),show_used_detail:checked('show-used-detail'),show_install:checked('show-install'),show_support:checked('show-support'),show_live_badge:checked('show-live-badge'),show_status_badge:checked('show-status-badge'),show_location_country:checked('show-location-country'),show_download_action:checked('show-download-action'),show_copy_action:checked('show-copy-action'),show_theme_action:checked('show-theme-action'),show_section_descriptions:checked('show-section-descriptions'),show_admin_notice:checked('show-admin-notice'),notice_title:q('#portal-notice-title')?.value||defaults.notice_title,notice_text:q('#portal-notice-text')?.value||'',notice_tone:q('#portal-notice-tone')?.value||defaults.notice_tone,notice_style:q('#portal-notice-style')?.value||defaults.notice_style,notice_position:q('#portal-notice-position')?.value||defaults.notice_position,title_align:radio('sub-title-align',defaults.title_align),logo_size:radio('sub-logo-size',defaults.logo_size),portal_label:q('#portal-label')?.value||'',portal_title:q('#portal-title')?.value||'',portal_subtitle:q('#portal-subtitle')?.value||'',portal_icon:q('#portal-icon')?.value||defaults.portal_icon,usage_title:q('#portal-usage-title')?.value||defaults.usage_title,configs_title:q('#portal-configs-title')?.value||defaults.configs_title,install_title:q('#portal-install-title')?.value||defaults.install_title,support_title:q('#portal-support-title')?.value||defaults.support_title,support:supportValues()};
   }
   function applySettings(settings={}){
-    const s={...defaults,...settings,support:{...defaults.support,...(settings.support||{})}};
-    for(const [name,key] of [['sub-layout','layout'],['sub-background','background'],['sub-display-mode','display_mode'],['portal-animation-choice','animation'],['sub-accent','accent'],['sub-surface','surface'],['sub-radius','radius'],['sub-shadow','shadow'],['sub-density','density'],['sub-page-width','page_width'],['sub-config-style','config_style'],['sub-config-columns','config_columns'],['sub-section-order','section_order'],['sub-support-style','support_style'],['sub-theme-default','theme_default'],['sub-hero-style','hero_style'],['sub-button-style','button_style'],['sub-font-scale','font_scale'],['sub-stat-size','stat_size'],['sub-title-align','title_align'],['sub-logo-size','logo_size']])setRadio(name,s[key]);
-    setValue('portal-animation',s.animation);setValue('portal-primary-color',s.custom_primary);setValue('portal-primary-text',s.custom_primary);setValue('portal-secondary-color',s.custom_secondary);setValue('portal-secondary-text',s.custom_secondary);setValue('portal-background-intensity',s.background_intensity);setValue('portal-card-opacity',s.card_opacity);setValue('portal-motion-speed',s.motion_speed);setValue('portal-particle-density',s.particle_density);
+    const legacyLayout={aurora:'ps5',cards:'mac',console:'app',split:'showcase',profile:'showcase',executive:'mac',flow:'minimal'};
+    const normalized={...settings,layout:legacyLayout[settings.layout]||settings.layout};
+    const s={...defaults,...normalized,support:{...defaults.support,...(settings.support||{})}};
+    for(const [name,key] of [['sub-layout','layout'],['sub-background','background'],['sub-display-mode','display_mode'],['portal-animation-choice','animation'],['sub-entrance-animation','entrance_animation'],['sub-hover-animation','hover_animation'],['sub-toast-style','toast_style'],['sub-toast-motion','toast_motion'],['sub-accent','accent'],['sub-surface','surface'],['sub-radius','radius'],['sub-shadow','shadow'],['sub-density','density'],['sub-page-width','page_width'],['sub-config-style','config_style'],['sub-config-columns','config_columns'],['sub-section-order','section_order'],['sub-support-style','support_style'],['sub-theme-default','theme_default'],['sub-hero-style','hero_style'],['sub-button-style','button_style'],['sub-font-scale','font_scale'],['sub-stat-size','stat_size'],['sub-title-align','title_align'],['sub-logo-size','logo_size']])setRadio(name,s[key]);
+    setModuleComposer(s);syncModuleEditor(s.layout);setCheck('show-admin-notice',!!s.show_admin_notice);setValue('portal-notice-title',s.notice_title||defaults.notice_title);setValue('portal-notice-text',s.notice_text||'');setValue('portal-notice-tone',s.notice_tone||defaults.notice_tone);setValue('portal-notice-style',s.notice_style||defaults.notice_style);setValue('portal-notice-position',s.notice_position||defaults.notice_position);
+    setValue('portal-animation',s.animation);setValue('portal-toast-position',s.toast_position);setValue('portal-toast-duration',s.toast_duration);const primary=s.primary_color||s.custom_primary||defaults.primary_color;const secondary=s.secondary_color||s.custom_secondary||defaults.secondary_color;setValue('portal-primary-color',primary);setValue('portal-primary-text',primary);setValue('portal-secondary-color',secondary);setValue('portal-secondary-text',secondary);for(const [id,key] of [['online','online_color'],['offline','offline_color'],['warning','warning_color'],['danger','danger_color'],['pill','pill_color'],['action','action_color']]){const value=s[key]||defaults[key];setValue(`portal-${id}-color`,value);setValue(`portal-${id}-text`,value)}setValue('portal-background-intensity',s.background_intensity);setValue('portal-card-opacity',s.card_opacity);setValue('portal-motion-speed',s.motion_speed);setValue('portal-motion-intensity',s.motion_intensity);setValue('portal-particle-density',s.particle_density);updateStudioTokenPreview(s);
     for(const [id,key] of [['show-quick-stats','show_quick_stats'],['show-percentage','show_percentage'],['show-used-detail','show_used_detail'],['show-install','show_install'],['show-support','show_support'],['show-live-badge','show_live_badge'],['show-status-badge','show_status_badge'],['show-location-country','show_location_country'],['show-download-action','show_download_action'],['show-copy-action','show_copy_action'],['show-theme-action','show_theme_action'],['show-section-descriptions','show_section_descriptions']])setCheck(id,s[key]);
     for(const [id,key] of [['portal-label','portal_label'],['portal-title','portal_title'],['portal-subtitle','portal_subtitle'],['portal-icon','portal_icon'],['portal-usage-title','usage_title'],['portal-configs-title','configs_title'],['portal-install-title','install_title'],['portal-support-title','support_title']])setValue(id,s[key]);
     for(const key of Object.keys(defaults.support))setValue('sup-'+key,s.support[key]);
@@ -2735,22 +2814,293 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   }
   try{applySettingsToForm=()=>applySettings(SUB_SETTINGS||{});collectSettingsForm=()=>currentSettings();updateLayoutPreview=()=>schedulePreview()}catch(_){window.applySettingsToForm=()=>applySettings(window.SUB_SETTINGS||{});window.collectSettingsForm=currentSettings}
   window.SubscriptionStudioV9={collect:currentSettings,apply:applySettings,refresh:()=>schedulePreview(true)};
+  window.SubscriptionStudioV13=window.SubscriptionStudioV9;
+  window.SubscriptionStudioV14=window.SubscriptionStudioV9;
 
+  const MODULE_KEYS=['configs','usage','install','support'];
+  function normalizeModuleOrder(order){
+    const out=[];
+    for(const v of (Array.isArray(order)?order:[])){if(MODULE_KEYS.includes(v)&&!out.includes(v))out.push(v)}
+    for(const v of MODULE_KEYS)if(!out.includes(v))out.push(v);
+    return out.slice(0,4);
+  }
+  function moduleList(){return q('#studio-module-list')}
+  function moduleItems(){return qa('#studio-module-list [data-module-editor]')}
+  function moduleItem(key){return q(`[data-module-editor="${key}"]`)}
+  function moduleOrderFromComposer(){return moduleItems().map(el=>el.dataset.moduleEditor)}
+  function moduleEnabledFromComposer(){const out={};MODULE_KEYS.forEach(k=>{out[k]=!moduleItem(k)?.classList.contains('is-hidden')});return out}
+  function moduleSizesFromComposer(){const out={};MODULE_KEYS.forEach(k=>{out[k]=q(`[data-module-size="${k}"]`)?.value||'auto'});return out}
+  function moduleMobileFromComposer(){const out={};MODULE_KEYS.forEach(k=>{out[k]=q(`[data-module-mobile="${k}"]`)?.value||'auto'});return out}
+  function moduleSurfaceFromComposer(){const out={};MODULE_KEYS.forEach(k=>{out[k]=q(`[data-module-surface="${k}"]`)?.value||'auto'});return out}
+  function moduleSpacingFromComposer(){const out={};MODULE_KEYS.forEach(k=>{out[k]=q(`[data-module-spacing="${k}"]`)?.value||'auto'});return out}
+  function moduleRadiusFromComposer(){const out={};MODULE_KEYS.forEach(k=>{out[k]=q(`[data-module-radius="${k}"]`)?.value||'auto'});return out}
+  function moduleHeadingFromComposer(){const out={};MODULE_KEYS.forEach(k=>{out[k]=q(`[data-module-heading="${k}"]`)?.value||'auto'});return out}
+  function moduleMobilePositionFromComposer(){const out={};MODULE_KEYS.forEach(k=>{out[k]=q(`[data-module-mobile-position="${k}"]`)?.value||'auto'});return out}
+
+  function normalizedModuleEnabled(value){
+    const src=value&&typeof value==='object'?value:{},out={};
+    MODULE_KEYS.forEach(k=>{out[k]=src[k]===undefined?true:!!src[k]});
+    if(!MODULE_KEYS.some(k=>out[k]))out.configs=true;
+    return out;
+  }
+  function normalizeModuleMap(value,allowed,defaultValue){
+    const src=value&&typeof value==='object'?value:{},out={};
+    MODULE_KEYS.forEach(k=>{out[k]=allowed.includes(src[k])?src[k]:defaultValue});
+    return out;
+  }
+  function normalizedModuleSizes(value){return normalizeModuleMap(value,['auto','small','medium','large','full'],'auto')}
+  function normalizedModuleMobile(value){return normalizeModuleMap(value,['auto','half','full'],'auto')}
+  function normalizedModuleSurface(value){return normalizeModuleMap(value,['auto','panel','soft','outline','flat','accent'],'auto')}
+  function normalizedModuleSpacing(value){return normalizeModuleMap(value,['auto','compact','comfortable','roomy'],'auto')}
+  function normalizedModuleRadius(value){return normalizeModuleMap(value,['auto','square','soft','round'],'auto')}
+  function normalizedModuleHeading(value){return normalizeModuleMap(value,['auto','standard','compact','accent','hidden'],'auto')}
+  function normalizedModuleMobilePosition(value){return normalizeModuleMap(value,['auto','1','2','3','4'],'auto')}
+
+  function updateModuleComposer(){
+    const items=moduleItems(),visible=items.filter(el=>!el.classList.contains('is-hidden'));
+    items.forEach((el,idx)=>{
+      const key=el.dataset.moduleEditor,hidden=el.classList.contains('is-hidden');
+      el.hidden=hidden;
+      const restore=q(`[data-module-restore="${key}"]`);if(restore)restore.hidden=!hidden;
+      q(`[data-module-up="${key}"]`)?.toggleAttribute('disabled',idx===0);
+      q(`[data-module-down="${key}"]`)?.toggleAttribute('disabled',idx===items.length-1);
+      q(`[data-module-remove="${key}"]`)?.toggleAttribute('disabled',!hidden&&visible.length<=1);
+    });
+    const summary=q('#studio-modules-summary');if(summary)summary.textContent=`${visible.length} visible`;
+    q('#studio-hidden-modules')?.classList.toggle('is-empty',visible.length===items.length);
+    updateMobilePositionLocks();
+  }
+
+  function updateMobilePositionLocks(){
+    const selects=MODULE_KEYS.map(k=>q(`[data-module-mobile-position="${k}"]`)).filter(Boolean);
+    const selected=selects.map(el=>el.value).filter(v=>v!=='auto');
+    selects.forEach(select=>{
+      [...select.options].forEach(option=>{
+        if(option.value==='auto'){option.disabled=false;return}
+        option.disabled=selected.includes(option.value)&&select.value!==option.value;
+      });
+    });
+  }
+  function setModuleComposer(s){
+    const order=normalizeModuleOrder(s?.module_order||defaults.module_order);
+    const enabled=normalizedModuleEnabled(s?.module_enabled||defaults.module_enabled);
+    const sizes=normalizedModuleSizes(s?.module_sizes||defaults.module_sizes);
+    const mobile=normalizedModuleMobile(s?.module_mobile||defaults.module_mobile);
+    const surfaces=normalizedModuleSurface(s?.module_surface||defaults.module_surface);
+    const spacing=normalizedModuleSpacing(s?.module_spacing||defaults.module_spacing);
+    const radius=normalizedModuleRadius(s?.module_radius||defaults.module_radius);
+    const heading=normalizedModuleHeading(s?.module_heading||defaults.module_heading);
+    const mobilePosition=normalizedModuleMobilePosition(s?.module_mobile_position||defaults.module_mobile_position);
+    const list=moduleList();
+    if(list)order.forEach(k=>{const el=moduleItem(k);if(el)list.appendChild(el)});
+    MODULE_KEYS.forEach(k=>{
+      moduleItem(k)?.classList.toggle('is-hidden',!enabled[k]);
+      const size=q(`[data-module-size="${k}"]`);if(size)size.value=sizes[k];
+      const mob=q(`[data-module-mobile="${k}"]`);if(mob)mob.value=mobile[k];
+      const surface=q(`[data-module-surface="${k}"]`);if(surface)surface.value=surfaces[k];
+      const space=q(`[data-module-spacing="${k}"]`);if(space)space.value=spacing[k];
+      const rad=q(`[data-module-radius="${k}"]`);if(rad)rad.value=radius[k];
+      const head=q(`[data-module-heading="${k}"]`);if(head)head.value=heading[k];
+      const pos=q(`[data-module-mobile-position="${k}"]`);if(pos)pos.value=mobilePosition[k];
+    });
+    const gap=q('#studio-module-gap');if(gap)gap.value=['auto','tight','standard','roomy'].includes(s?.module_gap)?s.module_gap:defaults.module_gap;
+    updateModuleComposer();
+    applyModuleStateToPreview();
+  }
+
+  function moduleState(){
+    return {
+      module_order:moduleOrderFromComposer(),
+      module_enabled:moduleEnabledFromComposer(),
+      module_sizes:moduleSizesFromComposer(),
+      module_mobile:moduleMobileFromComposer(),
+      module_surface:moduleSurfaceFromComposer(),
+      module_spacing:moduleSpacingFromComposer(),
+      module_radius:moduleRadiusFromComposer(),
+      module_heading:moduleHeadingFromComposer(),
+      module_mobile_position:moduleMobilePositionFromComposer(),
+      module_gap:q('#studio-module-gap')?.value||defaults.module_gap
+    };
+  }
+
+  function applyModuleStateToPreview(){
+    const frame=q('#studio-preview-frame'),root=frame?.contentDocument?.documentElement;if(!root)return;
+    const s=moduleState(),order=normalizeModuleOrder(s.module_order);
+    order.forEach((v,i)=>root.dataset['module'+(i+1)]=v);
+    root.dataset.moduleGap=s.module_gap;
+    MODULE_KEYS.forEach(k=>{
+      const cap=k[0].toUpperCase()+k.slice(1);
+      root.dataset['module'+cap+'Enabled']=s.module_enabled[k]?'true':'false';
+      root.dataset['module'+cap+'Size']=s.module_sizes[k];
+      root.dataset['module'+cap+'Mobile']=s.module_mobile[k];
+      root.dataset['module'+cap+'Surface']=s.module_surface[k];
+      root.dataset['module'+cap+'Spacing']=s.module_spacing[k];
+      root.dataset['module'+cap+'Radius']=s.module_radius[k];
+      root.dataset['module'+cap+'Heading']=s.module_heading[k];
+      root.dataset['module'+cap+'MobilePosition']=s.module_mobile_position[k];
+    });
+    requestAnimationFrame(()=>requestAnimationFrame(fitFrame));
+  }
+
+  function moduleChanged(){updateModuleComposer();applyModuleStateToPreview();schedulePreview(true)}
+  function moveModule(key,delta){
+    const list=moduleList(),el=moduleItem(key);if(!list||!el)return;
+    const items=moduleItems(),idx=items.indexOf(el),target=items[idx+delta];if(!target)return;
+    if(delta<0)list.insertBefore(el,target);else list.insertBefore(target,el);
+    moduleChanged();
+  }
+  function removeModule(key){
+    const visible=moduleItems().filter(el=>!el.classList.contains('is-hidden'));
+    if(visible.length<=1)return;
+    moduleItem(key)?.classList.add('is-hidden');moduleChanged();
+  }
+  function restoreModule(key){moduleItem(key)?.classList.remove('is-hidden');moduleChanged()}
+  function applyModulePreset(name){
+    const presets={
+      balanced:{order:['configs','usage','install','support'],enabled:{configs:true,usage:true,install:true,support:true},sizes:{configs:'large',usage:'medium',install:'small',support:'small'},mobile:{configs:'full',usage:'full',install:'half',support:'half'},surface:{configs:'auto',usage:'auto',install:'auto',support:'auto'},spacing:{configs:'auto',usage:'auto',install:'auto',support:'auto'},radius:{configs:'auto',usage:'auto',install:'auto',support:'auto'},heading:{configs:'auto',usage:'auto',install:'auto',support:'auto'},mobilePosition:{configs:'auto',usage:'auto',install:'auto',support:'auto'},gap:'standard'},
+      configs:{order:['configs','usage','install','support'],enabled:{configs:true,usage:true,install:true,support:true},sizes:{configs:'full',usage:'medium',install:'small',support:'small'},mobile:{configs:'full',usage:'full',install:'half',support:'half'},surface:{configs:'accent',usage:'auto',install:'soft',support:'soft'},spacing:{configs:'roomy',usage:'comfortable',install:'compact',support:'compact'},radius:{configs:'round',usage:'auto',install:'soft',support:'soft'},heading:{configs:'accent',usage:'standard',install:'compact',support:'compact'},mobilePosition:{configs:'1',usage:'2',install:'3',support:'4'},gap:'standard'},
+      minimal:{order:['configs','usage','install','support'],enabled:{configs:true,usage:true,install:false,support:false},sizes:{configs:'full',usage:'full',install:'auto',support:'auto'},mobile:{configs:'full',usage:'full',install:'auto',support:'auto'},surface:{configs:'flat',usage:'flat',install:'auto',support:'auto'},spacing:{configs:'comfortable',usage:'comfortable',install:'auto',support:'auto'},radius:{configs:'square',usage:'square',install:'auto',support:'auto'},heading:{configs:'standard',usage:'standard',install:'auto',support:'auto'},mobilePosition:{configs:'1',usage:'2',install:'auto',support:'auto'},gap:'tight'},
+      support:{order:['support','configs','usage','install'],enabled:{configs:true,usage:true,install:true,support:true},sizes:{support:'full',configs:'large',usage:'medium',install:'small'},mobile:{support:'full',configs:'full',usage:'full',install:'half'},surface:{support:'accent',configs:'auto',usage:'auto',install:'soft'},spacing:{support:'roomy',configs:'auto',usage:'auto',install:'compact'},radius:{support:'round',configs:'auto',usage:'auto',install:'soft'},heading:{support:'accent',configs:'auto',usage:'auto',install:'compact'},mobilePosition:{support:'1',configs:'2',usage:'3',install:'4'},gap:'standard'}
+    };
+    const p=presets[name]||presets.balanced;
+    setModuleComposer({module_order:p.order,module_enabled:p.enabled,module_sizes:p.sizes,module_mobile:p.mobile,module_surface:p.surface,module_spacing:p.spacing,module_radius:p.radius,module_heading:p.heading,module_mobile_position:p.mobilePosition,module_gap:p.gap});
+    schedulePreview(true);
+  }
+  function syncModuleEditor(){updateModuleComposer()}
   function activateTab(name){qa('[data-studio8-tab]').forEach(btn=>btn.classList.toggle('active',btn.dataset.studio8Tab===name));qa('[data-studio8-panel]').forEach(panel=>{const active=panel.dataset.studio8Panel===name;panel.classList.toggle('active',active);panel.hidden=!active})}
   qa('[data-studio8-tab]').forEach(btn=>btn.addEventListener('click',()=>activateTab(btn.dataset.studio8Tab)));
-  function updateRangeLabels(){const set=(id,text)=>{const el=q('#'+id);if(el)el.textContent=text};set('background-intensity-value',`${number('portal-background-intensity',70)}%`);set('card-opacity-value',`${number('portal-card-opacity',82)}%`);set('motion-speed-value',`${number('portal-motion-speed',100)}%`);set('particle-density-value',`${number('portal-particle-density',60)}%`)}
-  for(const [color,text] of [['portal-primary-color','portal-primary-text'],['portal-secondary-color','portal-secondary-text']]){q('#'+color)?.addEventListener('input',e=>{setValue(text,e.target.value);setRadio('sub-accent','custom')});q('#'+text)?.addEventListener('change',e=>{if(/^#[0-9a-fA-F]{6}$/.test(e.target.value)){setValue(color,e.target.value);setRadio('sub-accent','custom')}else e.target.value=q('#'+color)?.value||''})}
 
-  function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-  function bool(v){return v?'true':'false'}
-  function resolvedTheme(s){if(previewTheme==='light'||previewTheme==='dark')return previewTheme;if(s.theme_default==='light'||s.theme_default==='dark')return s.theme_default;return document.documentElement.dataset.theme==='light'?'light':'dark'}
-  function supportMarkup(s){if(!s.show_support)return'';const icons={telegram:'fab fa-telegram',whatsapp:'fab fa-whatsapp',phone:'fas fa-phone',email:'fas fa-envelope',website:'fas fa-globe',instagram:'fab fa-instagram'};const active=Object.entries(s.support||{}).filter(([,v])=>String(v||'').trim());return `<section class="support surface" id="support-box"><div class="section-head simple"><div><h2><i class="fas fa-headset"></i>${esc(s.support_title)}</h2><p>Contact the service team.</p></div></div><div class="support-links">${active.length?active.map(([k])=>`<a href="#"><i class="${icons[k]}"></i><span>${esc(k[0].toUpperCase()+k.slice(1))}</span></a>`).join(''):'<span class="support-empty">No support channels configured.</span>'}</div></section>`}
+  q('#studio-module-list')?.addEventListener('change',e=>{
+    if(e.target.matches('[data-module-size],[data-module-mobile],[data-module-mobile-position],[data-module-surface],[data-module-spacing],[data-module-radius],[data-module-heading]'))moduleChanged();
+  });
+  q('#studio-module-list')?.addEventListener('click',e=>{
+    const up=e.target.closest('[data-module-up]'),down=e.target.closest('[data-module-down]'),remove=e.target.closest('[data-module-remove]');
+    if(up)moveModule(up.dataset.moduleUp,-1);
+    if(down)moveModule(down.dataset.moduleDown,1);
+    if(remove)removeModule(remove.dataset.moduleRemove);
+  });
+  q('#studio-hidden-modules')?.addEventListener('click',e=>{const btn=e.target.closest('[data-module-restore]');if(btn)restoreModule(btn.dataset.moduleRestore)});
+  q('#studio-module-gap')?.addEventListener('change',moduleChanged);
+  q('#studio-module-reset')?.addEventListener('click',()=>{setModuleComposer(defaults);schedulePreview(true)});
+  qa('[data-module-preset]').forEach(btn=>btn.addEventListener('click',()=>applyModulePreset(btn.dataset.modulePreset)));
+  const layoutPresets={
+    ps5:{background:'orbits',animation:'cinematic',motion_speed:125,motion_intensity:150,particle_density:90,background_intensity:86,surface:'glass',radius:'rounded',shadow:'deep',density:'comfortable',page_width:'wide',hero_style:'banner',config_style:'cards',config_columns:'two',section_order:'usage_first',module_gap:'standard'},
+    mac:{background:'mesh',animation:'balanced',motion_speed:92,motion_intensity:82,particle_density:42,background_intensity:62,surface:'glass',radius:'rounded',shadow:'soft',density:'comfortable',page_width:'wide',hero_style:'panel',config_style:'cards',config_columns:'two',section_order:'standard',module_gap:'comfortable'},
+    app:{background:'network',animation:'rich',motion_speed:112,motion_intensity:112,particle_density:72,background_intensity:70,surface:'solid',radius:'medium',shadow:'soft',density:'compact',page_width:'wide',hero_style:'minimal',config_style:'list',config_columns:'one',section_order:'configs_first',module_gap:'tight'},
+    compact:{background:'lines',animation:'soft',motion_speed:80,motion_intensity:65,particle_density:30,background_intensity:52,surface:'solid',radius:'medium',shadow:'none',density:'compact',page_width:'standard',hero_style:'minimal',config_style:'compact',config_columns:'two',section_order:'configs_first',module_gap:'tight'},
+    minimal:{background:'none',animation:'drift',motion_speed:65,motion_intensity:50,particle_density:0,background_intensity:30,surface:'soft',radius:'square',shadow:'none',density:'comfortable',page_width:'narrow',hero_style:'minimal',config_style:'list',config_columns:'one',section_order:'standard',module_gap:'comfortable'},
+    showcase:{background:'nebula',animation:'immersive',motion_speed:120,motion_intensity:138,particle_density:82,background_intensity:84,surface:'glass',radius:'rounded',shadow:'deep',density:'comfortable',page_width:'wide',hero_style:'banner',config_style:'cards',config_columns:'two',section_order:'configs_first',module_gap:'standard'}
+  };
+  function cleanModuleDefaults(){return {module_order:[...defaults.module_order],module_enabled:{...defaults.module_enabled},module_sizes:{...defaults.module_sizes},module_mobile:{...defaults.module_mobile},module_surface:{...defaults.module_surface},module_spacing:{...defaults.module_spacing},module_radius:{...defaults.module_radius},module_heading:{...defaults.module_heading},module_mobile_position:{...defaults.module_mobile_position}}}
+  function applyLayoutPreset(layout,{preserveIdentity=true}={}){
+    const base=preserveIdentity?currentSettings():defaults;
+    const preset=layoutPresets[layout]||layoutPresets.ps5;
+    applySettings({...base,...cleanModuleDefaults(),...preset,layout});
+    activateTab('layout');
+    applyPreviewSettingsToFrame(currentSettings(),{replay:true});
+  }
+  function resetOnLayoutChange(){const el=q('#studio-reset-on-layout-change');return el?!!el.checked:true}
+  try{const saved=localStorage.getItem('sub-studio-reset-on-layout-change');if(saved!==null)setCheck('studio-reset-on-layout-change',saved!=='false')}catch(_){}
+  q('#studio-reset-on-layout-change')?.addEventListener('change',e=>{try{localStorage.setItem('sub-studio-reset-on-layout-change',String(!!e.target.checked))}catch(_){}});
+  qa('input[name="sub-layout"]').forEach(el=>el.addEventListener('change',()=>{if(resetOnLayoutChange())applyLayoutPreset(el.value);else{syncModuleEditor();applyPreviewSettingsToFrame(currentSettings(),{replay:true});schedulePreview(true)}}));
+  q('#studio-reset-layout')?.addEventListener('click',()=>applyLayoutPreset(radio('sub-layout',defaults.layout)));
+  q('#studio-reset-all')?.addEventListener('click',async()=>{let yes=true;try{if(window.subConfirm)yes=await window.subConfirm({title:'Factory reset template?',body:'This resets the unsaved Studio design, module sizing, colors, motion, content visibility and toast settings.',yesText:'Reset everything',noText:'Cancel',danger:true});else yes=window.confirm('Factory reset all unsaved template settings?')}catch(_){}if(yes)applySettings({...defaults,...cleanModuleDefaults(),support:{...defaults.support}})});
+  q('#studio-reset-semantic')?.addEventListener('click',()=>{for(const key of ['online_color','offline_color','warning_color','danger_color','pill_color','action_color']){const short=key.replace('_color','');setValue(`portal-${short}-color`,defaults[key]);setValue(`portal-${short}-text`,defaults[key])}const s=currentSettings();updateStudioTokenPreview(s);applyPreviewSettingsToFrame(s);schedulePreview()});
+
+  function updateRangeLabels(){
+    const set=(id,text)=>{const el=q('#'+id);if(el)el.textContent=text};
+    set('background-intensity-value',`${number('portal-background-intensity',70)}%`);
+    set('card-opacity-value',`${number('portal-card-opacity',82)}%`);
+    set('motion-speed-value',`${number('portal-motion-speed',100)}%`);
+    set('motion-intensity-value',`${number('portal-motion-intensity',100)}%`);
+    set('particle-density-value',`${number('portal-particle-density',60)}%`);
+    set('toast-duration-value',`${number('portal-toast-duration',2200)} ms`);
+  }
+
+  for(const [color,text] of [
+    ['portal-primary-color','portal-primary-text'],
+    ['portal-secondary-color','portal-secondary-text']
+  ]){
+    q('#'+color)?.addEventListener('input',e=>{
+      setValue(text,e.target.value);
+      setRadio('sub-accent','custom');
+    });
+    q('#'+text)?.addEventListener('change',e=>{
+      if(/^#[0-9a-fA-F]{6}$/.test(e.target.value)){
+        setValue(color,e.target.value);
+        setRadio('sub-accent','custom');
+      }else{
+        e.target.value=q('#'+color)?.value||'';
+      }
+    });
+  }
+
+  function updateStudioTokenPreview(s=currentSettings()){
+    const modal=q('#sub-settings-modal');if(!modal)return;
+    modal.style.setProperty('--studio-online',s.online_color||defaults.online_color);
+    modal.style.setProperty('--studio-offline',s.offline_color||defaults.offline_color);
+    modal.style.setProperty('--studio-warning',s.warning_color||defaults.warning_color);
+    modal.style.setProperty('--studio-danger',s.danger_color||defaults.danger_color);
+    modal.style.setProperty('--studio-pill',s.pill_color||defaults.pill_color);
+  }
+  for(const name of ['online','offline','warning','danger','pill','action']){
+    const color=q(`#portal-${name}-color`),text=q(`#portal-${name}-text`);
+    color?.addEventListener('input',e=>{if(text)text.value=e.target.value;updateStudioTokenPreview();applyPreviewSettingsToFrame(currentSettings())});
+    text?.addEventListener('change',e=>{if(/^#[0-9a-fA-F]{6}$/.test(e.target.value)){if(color)color.value=e.target.value;updateStudioTokenPreview();applyPreviewSettingsToFrame(currentSettings())}else e.target.value=color?.value||''});
+  }
+
+  function esc(v){
+    return String(v??'').replace(/[&<>"']/g,c=>({
+      '&':'&amp;',
+      '<':'&lt;',
+      '>':'&gt;',
+      '"':'&quot;',
+      "'":'&#39;'
+    }[c]));
+  }
+
+  function bool(v){
+    return v?'true':'false';
+  }
+
+  function resolvedTheme(s={}){
+    if(previewTheme==='light'||previewTheme==='dark')return previewTheme;
+    if(s.theme_default==='light'||s.theme_default==='dark')return s.theme_default;
+    return document.documentElement.dataset.theme==='light'?'light':'dark';
+  }
+
+  function supportMarkup(s){if(!s.show_support)return'';const icons={telegram:'fab fa-telegram',whatsapp:'fab fa-whatsapp',phone:'fas fa-phone',email:'fas fa-envelope',website:'fas fa-globe',instagram:'fab fa-instagram'};const active=Object.entries(s.support||{}).filter(([,v])=>String(v||'').trim());return `<section class="support surface" id="support-box" data-module-key="support"><div class="section-head simple"><div><h2><i class="fas fa-headset"></i>${esc(s.support_title)}</h2><p>Contact the service team.</p></div></div><div class="support-links">${active.length?active.map(([k])=>`<a href="#"><i class="${icons[k]}"></i><span>${esc(k[0].toUpperCase()+k.slice(1))}</span></a>`).join(''):'<span class="support-empty">No support channels configured.</span>'}</div></section>`}
   function previewDoc(s){
-    const theme=resolvedTheme(s),title=esc(s.portal_title||'premium-user'),label=esc(s.portal_label||defaults.portal_label),subtitle=esc(s.portal_subtitle||defaults.portal_subtitle),css=`${location.origin}/static/css/subscription_public.css?v=20260806-experience-v12.2`,fa=`${location.origin}/static/vendor/fa/css/all.min.css`;
-    const customStyle=`:root{--custom-accent:${esc(s.custom_primary)};--custom-accent2:${esc(s.custom_secondary)};--background-intensity:${s.background_intensity/100};--card-opacity:${s.card_opacity/100};--motion-speed:${100/s.motion_speed};--particle-density:${s.particle_density/100};--engine-speed:${s.motion_speed/100};--engine-density:${s.particle_density/100}}`;
-    return `<!doctype html><html lang="en" data-preview="true" data-theme="${theme}" data-layout="${s.layout}" data-hero-style="${s.hero_style}" data-background="${s.background}" data-stat-style="${s.display_mode}" data-motion="${s.animation}" data-accent="${s.accent}" data-surface="${s.surface}" data-radius="${s.radius}" data-shadow="${s.shadow}" data-density="${s.density}" data-page-width="${s.page_width}" data-config-style="${s.config_style}" data-config-columns="${s.config_columns}" data-section-order="${s.section_order}" data-support-style="${s.support_style}" data-button-style="${s.button_style}" data-font-scale="${s.font_scale}" data-stat-size="${s.stat_size}" data-title-align="${s.title_align}" data-logo-size="${s.logo_size}" data-show-quick="${bool(s.show_quick_stats)}" data-show-install="${bool(s.show_install)}" data-show-support="${bool(s.show_support)}" data-show-live="${bool(s.show_live_badge)}" data-show-percentage="${bool(s.show_percentage)}" data-show-used-detail="${bool(s.show_used_detail)}" data-show-status="${bool(s.show_status_badge)}" data-show-country="${bool(s.show_location_country)}" data-show-download="${bool(s.show_download_action)}" data-show-copy="${bool(s.show_copy_action)}" data-show-theme-action="${bool(s.show_theme_action)}" data-show-descriptions="${bool(s.show_section_descriptions)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="${fa}"><link rel="stylesheet" href="${css}"><style>${customStyle}</style></head><body class="preview-body"><div class="live-bg"><span class="bg-orb one"></span><span class="bg-orb two"></span><span class="bg-orb three"></span><span class="bg-wave one"></span><span class="bg-wave two"></span><span class="bg-grid"></span><span class="bg-orbits"></span><span class="bg-lines"></span></div><canvas id="particles" aria-hidden="true"></canvas><div class="page"><main class="portal-shell"><section class="portal-hero surface"><div class="portal-id"><div class="portal-icon"><i class="${esc(s.portal_icon)}"></i></div><div class="portal-copy"><div class="portal-meta"><span class="portal-label">${label}</span><span class="hero-live"><i class="fas fa-circle"></i> Live</span></div><h1>${title}</h1><p>${subtitle}</p></div></div><div class="portal-actions"><a class="icon-action primary"><i class="fas fa-download"></i></a><button class="icon-action copy-action"><i class="fas fa-link"></i></button><button class="icon-action theme-action"><i class="fas fa-moon"></i></button><span class="auto-chip"><i class="fas fa-circle"></i><b>Auto</b></span></div></section><section class="quick-stats surface"><article><span>Status</span><b>Ready</b><small>2 configs</small></article><article><span>Data</span><b>8.4 GiB left</b><small>78% left</small></article><article><span>Time</span><b>12d 4h</b><small>Fixed expiry</small></article></section><div class="portal-content"><section class="usage-section"><div class="section-head simple"><div><h2><i class="fas fa-chart-pie"></i>${esc(s.usage_title)}</h2><p>Live data and time remaining.</p></div></div><div class="stats-grid"><article class="stat-card surface data-stat"><div class="stat-head"><span><i class="fas fa-database"></i> Data remaining</span></div><div class="stat-body"><div class="ring" style="--p:78;--c:var(--accent)"><span>78%</span></div><div class="stat-copy"><div class="big">8.4 GiB</div><div class="subline">2.4 GiB used from 10.8 GiB</div><div class="meter"><span style="width:78%"></span></div><div class="segments"><i></i><i></i><i></i><i></i><i></i></div></div></div></article><article class="stat-card surface time-stat"><div class="stat-head"><span><i class="fas fa-clock"></i> Time remaining</span></div><div class="stat-body"><div class="ring" style="--p:42;--c:var(--accent2)"><span>42%</span></div><div class="stat-copy"><div class="big">12d 4h</div><div class="subline">Expires 18 Aug 2026</div><div class="meter"><span style="width:42%"></span></div><div class="segments"><i></i><i></i><i></i><i></i><i></i></div></div></div></article></div></section><section class="install-card surface"><div><h2><i class="fas fa-mobile-screen-button"></i>${esc(s.install_title)}</h2><p>Open the official app, then scan QR or import a config.</p></div><div class="client-links"><a><i class="fas fa-desktop"></i></a><a><i class="fab fa-apple"></i></a><a><i class="fab fa-android"></i></a></div></section><section class="configs surface"><div class="section-head"><div><h2><i class="fas fa-location-dot"></i>${esc(s.configs_title)}</h2><p>Choose a location, download the config, or scan QR.</p></div><span>2 configs</span></div><div class="loc-grid">${['🇳🇱|Amsterdam|Netherlands','🇩🇪|Frankfurt|Germany'].map(row=>{const [flag,name,country]=row.split('|');return `<article class="loc"><div class="loc-top"><div class="loc-main"><div class="loc-name"><span class="loc-flag">${flag}</span><span class="loc-title">${name}</span></div><span class="loc-country">${country}</span></div><span class="status online">Online</span></div><div class="loc-actions"><a class="loc-btn loc-download"><i class="fas fa-download"></i><span>Download</span></a><button class="loc-btn"><i class="fas fa-qrcode"></i></button><button class="loc-btn copy-action"><i class="fas fa-copy"></i></button></div></article>`}).join('')}</div></section>${supportMarkup(s)}</div></main></div></body></html>`;
+    const theme=resolvedTheme(s),title=esc(s.portal_title||'premium-user'),label=esc(s.portal_label||defaults.portal_label),subtitle=esc(s.portal_subtitle||defaults.portal_subtitle),css=`${location.origin}/static/css/subscription_public.css?v=20260820-studio-v16`,fa=`${location.origin}/static/vendor/fa/css/all.min.css`;
+    const customStyle=`:root{--custom-accent:${esc(s.primary_color||s.custom_primary)};--custom-accent2:${esc(s.secondary_color||s.custom_secondary)};--background-intensity:${s.background_intensity/100};--card-opacity:${s.card_opacity/100};--motion-speed:${100/s.motion_speed};--motion-power:${s.motion_intensity/100};--particle-density:${s.particle_density/100};--engine-speed:${s.motion_speed/100};--engine-density:${s.particle_density/100};--status-online:${esc(s.online_color)};--status-offline:${esc(s.offline_color)};--status-warning:${esc(s.warning_color)};--status-danger:${esc(s.danger_color)};--pill-color:${esc(s.pill_color)};--action-color:${esc(s.action_color)}}`;
+    return `<!doctype html><html lang="en" data-preview="true" data-preview-device="${previewDevice}" data-theme="${theme}" data-layout="${s.layout}" data-hero-style="${s.hero_style}" data-background="${s.background}" data-stat-style="${s.display_mode}" data-motion="${s.animation}" data-motion-intensity="${s.motion_intensity}" data-accent="${s.accent}" data-surface="${s.surface}" data-radius="${s.radius}" data-shadow="${s.shadow}" data-density="${s.density}" data-page-width="${s.page_width}" data-config-style="${s.config_style}" data-config-columns="${s.config_columns}" data-section-order="${s.section_order}" data-module-1="${normalizeModuleOrder(s.module_order)[0]}" data-module-2="${normalizeModuleOrder(s.module_order)[1]}" data-module-3="${normalizeModuleOrder(s.module_order)[2]}" data-module-4="${normalizeModuleOrder(s.module_order)[3]}" data-module-configs-enabled="${bool(normalizedModuleEnabled(s.module_enabled).configs)}" data-module-usage-enabled="${bool(normalizedModuleEnabled(s.module_enabled).usage)}" data-module-install-enabled="${bool(normalizedModuleEnabled(s.module_enabled).install)}" data-module-support-enabled="${bool(normalizedModuleEnabled(s.module_enabled).support)}" data-module-configs-size="${normalizedModuleSizes(s.module_sizes).configs}" data-module-usage-size="${normalizedModuleSizes(s.module_sizes).usage}" data-module-install-size="${normalizedModuleSizes(s.module_sizes).install}" data-module-support-size="${normalizedModuleSizes(s.module_sizes).support}" data-module-configs-mobile="${normalizedModuleMobile(s.module_mobile).configs}" data-module-usage-mobile="${normalizedModuleMobile(s.module_mobile).usage}" data-module-install-mobile="${normalizedModuleMobile(s.module_mobile).install}" data-module-support-mobile="${normalizedModuleMobile(s.module_mobile).support}" data-module-configs-surface="${normalizedModuleSurface(s.module_surface).configs}" data-module-usage-surface="${normalizedModuleSurface(s.module_surface).usage}" data-module-install-surface="${normalizedModuleSurface(s.module_surface).install}" data-module-support-surface="${normalizedModuleSurface(s.module_surface).support}" data-module-configs-spacing="${normalizedModuleSpacing(s.module_spacing).configs}" data-module-usage-spacing="${normalizedModuleSpacing(s.module_spacing).usage}" data-module-install-spacing="${normalizedModuleSpacing(s.module_spacing).install}" data-module-support-spacing="${normalizedModuleSpacing(s.module_spacing).support}" data-module-configs-radius="${normalizedModuleRadius(s.module_radius).configs}" data-module-usage-radius="${normalizedModuleRadius(s.module_radius).usage}" data-module-install-radius="${normalizedModuleRadius(s.module_radius).install}" data-module-support-radius="${normalizedModuleRadius(s.module_radius).support}" data-module-configs-heading="${normalizedModuleHeading(s.module_heading).configs}" data-module-usage-heading="${normalizedModuleHeading(s.module_heading).usage}" data-module-install-heading="${normalizedModuleHeading(s.module_heading).install}" data-module-support-heading="${normalizedModuleHeading(s.module_heading).support}" data-module-configs-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).configs}" data-module-usage-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).usage}" data-module-install-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).install}" data-module-support-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).support}" data-module-gap="${s.module_gap||'auto'}" data-notice-tone="${esc(s.notice_tone||'info')}" data-notice-style="${esc(s.notice_style||'banner')}" data-notice-position="${esc(s.notice_position||'after_summary')}" data-support-style="${s.support_style}" data-button-style="${s.button_style}" data-font-scale="${s.font_scale}" data-stat-size="${s.stat_size}" data-title-align="${s.title_align}" data-logo-size="${s.logo_size}" data-show-quick="${bool(s.show_quick_stats)}" data-show-install="${bool(s.show_install)}" data-show-support="${bool(s.show_support)}" data-show-live="${bool(s.show_live_badge)}" data-show-percentage="${bool(s.show_percentage)}" data-show-used-detail="${bool(s.show_used_detail)}" data-show-status="${bool(s.show_status_badge)}" data-show-country="${bool(s.show_location_country)}" data-show-download="${bool(s.show_download_action)}" data-show-copy="${bool(s.show_copy_action)}" data-show-theme-action="${bool(s.show_theme_action)}" data-show-descriptions="${bool(s.show_section_descriptions)}" data-entrance="${s.entrance_animation}" data-hover="${s.hover_animation}" data-toast-style="${s.toast_style}" data-toast-position="${s.toast_position}" data-toast-motion="${s.toast_motion}" data-toast-duration="${s.toast_duration}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="${fa}"><link rel="stylesheet" href="${css}"><style>${customStyle}</style></head><body class="preview-body"><div class="live-bg"><span class="bg-orb one"></span><span class="bg-orb two"></span><span class="bg-orb three"></span><span class="bg-wave one"></span><span class="bg-wave two"></span><span class="bg-grid"></span><span class="bg-orbits"></span><span class="bg-lines"></span></div><canvas id="particles" aria-hidden="true"></canvas><div class="page"><main class="portal-shell"><div class="layout-chrome" aria-hidden="true"><span class="chrome-dot one"></span><span class="chrome-dot two"></span><span class="chrome-dot three"></span><span class="chrome-brand"><i class="fas fa-shield-halved"></i></span><span class="chrome-rail"><i></i><i></i><i></i><i></i></span></div><section class="portal-hero surface"><div class="portal-id"><div class="portal-icon"><i class="${esc(s.portal_icon)}"></i></div><div class="portal-copy"><div class="portal-meta"><span class="portal-label">${label}</span><span class="hero-live"><i class="fas fa-circle"></i> Live</span></div><h1>${title}</h1><p>${subtitle}</p></div></div><div class="portal-actions"><a class="icon-action primary"><i class="fas fa-download"></i></a><button class="icon-action copy-action"><i class="fas fa-link"></i></button><button class="icon-action theme-action"><i class="fas fa-moon"></i></button><span class="auto-chip"><i class="fas fa-circle"></i><b>Auto</b></span></div></section><section class="quick-stats surface"><article><span>Status</span><b>Ready</b><small>2 configs</small></article><article><span>Data</span><b>8.4 GiB left</b><small>78% left</small></article><article><span>Time</span><b>12d 4h</b><small>Fixed expiry</small></article></section>${s.show_admin_notice&&String(s.notice_text||'').trim()?`<section class="portal-announcement surface" id="portal-announcement" data-tone="${esc(s.notice_tone||'info')}" data-style="${esc(s.notice_style||'banner')}"><span class="announcement-icon"><i class="fas fa-bullhorn"></i></span><div class="announcement-copy"><b>${esc(s.notice_title||'Service notice')}</b><p>${esc(s.notice_text||'')}</p></div></section>`:''}<div class="portal-content"><section class="usage-section" data-module-key="usage"><div class="section-head simple"><div><h2><i class="fas fa-chart-pie"></i>${esc(s.usage_title)}</h2><p>Live data and time remaining.</p></div></div><div class="stats-grid"><article class="stat-card surface data-stat"><div class="stat-head"><span><i class="fas fa-database"></i> Data remaining</span></div><div class="stat-body"><div class="ring" style="--p:78;--c:var(--accent)"><span>78%</span></div><div class="stat-copy"><div class="big">8.4 GiB</div><div class="subline">2.4 GiB used from 10.8 GiB</div><div class="meter"><span style="width:78%"></span></div><div class="segments"><i></i><i></i><i></i><i></i><i></i></div></div></div></article><article class="stat-card surface time-stat"><div class="stat-head"><span><i class="fas fa-clock"></i> Time remaining</span></div><div class="stat-body"><div class="ring" style="--p:42;--c:var(--accent2)"><span>42%</span></div><div class="stat-copy"><div class="big">12d 4h</div><div class="subline">Expires 18 Aug 2026</div><div class="meter"><span style="width:42%"></span></div><div class="segments"><i></i><i></i><i></i><i></i><i></i></div></div></div></article></div></section><section class="install-card surface" data-module-key="install"><div><h2><i class="fas fa-mobile-screen-button"></i>${esc(s.install_title)}</h2><p>Open the official app, then scan QR or import a config.</p></div><div class="client-links"><a title="Desktop"><i class="fas fa-desktop"></i></a><a title="iPhone / iPad"><i class="fab fa-apple"></i></a><a title="Android"><i class="fab fa-android"></i></a><a title="All platforms"><i class="fas fa-arrow-up-right-from-square"></i></a></div></section><section class="configs surface" data-module-key="configs"><div class="section-head"><div><h2><i class="fas fa-location-dot"></i>${esc(s.configs_title)}</h2><p>Choose a location, download the config, or scan QR.</p></div><span>2 configs</span></div><div class="loc-grid">${['🇳🇱|Amsterdam|Netherlands','🇩🇪|Frankfurt|Germany'].map(row=>{const [flag,name,country]=row.split('|');return `<article class="loc"><div class="loc-top"><div class="loc-main"><div class="loc-name"><span class="loc-flag">${flag}</span><span class="loc-title">${name}</span></div><span class="loc-country">${country}</span></div><span class="status online">Online</span></div><div class="loc-actions"><a class="loc-btn loc-download" title="Download config" aria-label="Download config"><i class="fas fa-download"></i></a><button class="loc-btn"><i class="fas fa-qrcode"></i></button><button class="loc-btn copy-action"><i class="fas fa-copy"></i></button></div></article>`}).join('')}</div></section>${supportMarkup(s)}</div></main></div></body></html>`;
   }
   function updateSummaries(s){const set=(id,text)=>{const el=q('#'+id);if(el)el.textContent=text};set('studio-layout-summary',labels.layout[s.layout]||s.layout);set('studio-background-summary',labels.background[s.background]||s.background);set('studio-stats-summary',labels.display_mode[s.display_mode]||s.display_mode);set('studio-motion-summary',labels.animation[s.animation]||s.animation);set('preview-layout-name',labels.layout[s.layout]||s.layout);set('preview-accent-name',labels.accent[s.accent]||s.accent);set('preview-stats-name',labels.display_mode[s.display_mode]||s.display_mode);set('preview-motion-name',labels.animation[s.animation]||s.animation);set('studio-support-summary',`${Object.values(s.support||{}).filter(v=>String(v||'').trim()).length} active`)}
+  let lastVisualSignature='';
+  function applyPreviewSettingsToFrame(s=currentSettings(),{replay=false}={}){
+    const frame=q('#studio-preview-frame'),doc=frame?.contentDocument,root=doc?.documentElement;if(!root)return;
+    const data={preview:'true',previewDevice,layout:s.layout,heroStyle:s.hero_style,background:s.background,statStyle:s.display_mode,motion:s.animation,motionIntensity:s.motion_intensity,accent:s.accent,surface:s.surface,radius:s.radius,shadow:s.shadow,density:s.density,pageWidth:s.page_width,configStyle:s.config_style,configColumns:s.config_columns,sectionOrder:s.section_order,moduleGap:s.module_gap||'auto',supportStyle:s.support_style,buttonStyle:s.button_style,fontScale:s.font_scale,statSize:s.stat_size,titleAlign:s.title_align,logoSize:s.logo_size,entrance:s.entrance_animation,hover:s.hover_animation,toastStyle:s.toast_style,toastPosition:s.toast_position,toastMotion:s.toast_motion,toastDuration:s.toast_duration};
+    Object.entries(data).forEach(([k,v])=>{if(v!==undefined&&v!==null)root.dataset[k]=String(v)});
+    const order=normalizeModuleOrder(s.module_order),enabled=normalizedModuleEnabled(s.module_enabled),sizes=normalizedModuleSizes(s.module_sizes),mobile=normalizedModuleMobile(s.module_mobile),surfaces=normalizedModuleSurface(s.module_surface),spacing=normalizedModuleSpacing(s.module_spacing),radii=normalizedModuleRadius(s.module_radius),headings=normalizedModuleHeading(s.module_heading),mobilePos=normalizedModuleMobilePosition(s.module_mobile_position);
+    order.forEach((v,i)=>root.dataset[`module${i+1}`]=v);
+    for(const key of MODULE_KEYS){const cap=key[0].toUpperCase()+key.slice(1);root.dataset[`module${cap}Enabled`]=String(!!enabled[key]);root.dataset[`module${cap}Size`]=sizes[key];root.dataset[`module${cap}Mobile`]=mobile[key];root.dataset[`module${cap}Surface`]=surfaces[key];root.dataset[`module${cap}Spacing`]=spacing[key];root.dataset[`module${cap}Radius`]=radii[key];root.dataset[`module${cap}Heading`]=headings[key];root.dataset[`module${cap}MobilePosition`]=mobilePos[key]}
+    const visibility={showQuick:s.show_quick_stats,showInstall:s.show_install,showSupport:s.show_support,showLive:s.show_live_badge,showPercentage:s.show_percentage,showUsedDetail:s.show_used_detail,showStatus:s.show_status_badge,showCountry:s.show_location_country,showDownload:s.show_download_action,showCopy:s.show_copy_action,showThemeAction:s.show_theme_action,showDescriptions:s.show_section_descriptions};Object.entries(visibility).forEach(([k,v])=>root.dataset[k]=String(!!v));
+    const primary=s.primary_color||s.custom_primary||defaults.primary_color,secondary=s.secondary_color||s.custom_secondary||defaults.secondary_color;
+    const vars={'--custom-accent':primary,'--custom-accent2':secondary,'--background-intensity':Math.max(0,Math.min(1,Number(s.background_intensity||0)/100)),'--card-opacity':Math.max(.5,Math.min(1,Number(s.card_opacity||82)/100)),'--motion-speed':100/Math.max(1,Number(s.motion_speed||100)),'--motion-power':Math.max(.4,Math.min(2,Number(s.motion_intensity||100)/100)),'--particle-density':Math.max(0,Math.min(1.2,Number(s.particle_density||0)/100)),'--engine-speed':Math.max(.5,Math.min(1.8,Number(s.motion_speed||100)/100)),'--engine-density':Math.max(0,Math.min(1.2,Number(s.particle_density||0)/100)),'--status-online':s.online_color||defaults.online_color,'--status-offline':s.offline_color||defaults.offline_color,'--status-warning':s.warning_color||defaults.warning_color,'--status-danger':s.danger_color||defaults.danger_color,'--pill-color':s.pill_color||defaults.pill_color,'--action-color':s.action_color||primary};Object.entries(vars).forEach(([k,v])=>root.style.setProperty(k,String(v)));
+    const setText=(sel,value)=>{const el=doc.querySelector(sel);if(el&&value!==undefined)el.textContent=value};setText('.portal-label',s.portal_label||defaults.portal_label);if(String(s.portal_title||'').trim())setText('.portal-copy h1',s.portal_title);setText('.portal-copy p',s.portal_subtitle||defaults.portal_subtitle);
+    updateStudioTokenPreview(s);
+    const sig=[s.background,s.animation,s.motion_speed,s.motion_intensity,s.particle_density,s.background_intensity,previewDevice,resolvedTheme(s)].join('|');
+    const engine=frame.contentWindow?.SubscriptionBackgroundEngine;if(engine&&sig!==lastVisualSignature){lastVisualSignature=sig;try{engine.refresh()}catch(_){}}if(engine&&!previewPaused){try{engine.resume()}catch(_){}}
+    if(replay){const entrance=s.entrance_animation||'stagger';root.dataset.entrance='none';void doc.body?.offsetWidth;requestAnimationFrame(()=>{root.dataset.entrance=entrance})}
+    applyPreviewPlayback();
+  }
+  function replayPreviewEntrance(){applyPreviewSettingsToFrame(currentSettings(),{replay:true})}
+  function pulsePreviewBackground(){const frame=q('#studio-preview-frame'),root=frame?.contentDocument?.documentElement;if(!root)return;const s=currentSettings(),normal=Math.max(.4,Math.min(2,Number(s.motion_intensity||100)/100));root.style.setProperty('--motion-power','2');try{frame.contentWindow?.SubscriptionBackgroundEngine?.refresh()}catch(_){}setTimeout(()=>{root.style.setProperty('--motion-power',String(normal));try{frame.contentWindow?.SubscriptionBackgroundEngine?.refresh()}catch(_){ }},1200)}
+  function showPreviewToast(){const frame=q('#studio-preview-frame');if(!frame?.contentDocument)return;applyPreviewSettingsToFrame(currentSettings());try{if(typeof frame.contentWindow?.showToast==='function'){frame.contentWindow.showToast('Template preview · toast is live');return}}catch(_){}const el=frame.contentDocument.getElementById('toast');if(el){el.textContent='Template preview · toast is live';el.classList.remove('show');void el.offsetWidth;el.classList.add('show')}}
+  q('#studio-replay-entrance')?.addEventListener('click',replayPreviewEntrance);
+  q('#studio-pulse-background')?.addEventListener('click',pulsePreviewBackground);
+  q('#studio-preview-toast')?.addEventListener('click',showPreviewToast);
+
   function applyPreviewPlayback(){
     const frame=q('#studio-preview-frame');
     if(!frame?.contentDocument)return;
@@ -2763,7 +3113,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   function fitFrame(){
     const frame=q('#studio-preview-frame'),stage=q('.studio8-frame-stage'),canvas=q('.studio8-frame-canvas');
     if(!frame||!stage||!canvas||!frame.contentDocument)return;
-    const baseWidth=previewDevice==='mobile'?390:1180;
+    const baseWidth=previewDevice==='mobile'?390:1280;
     const doc=frame.contentDocument,root=doc.documentElement,body=doc.body;
     frame.style.transform='none';
     frame.style.width=baseWidth+'px';
@@ -2786,17 +3136,36 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
     stage.style.overflow=previewFit==='page'?'hidden':'auto';
     stage.scrollTop=0;stage.scrollLeft=0;
   }
-  function refreshPreview(){clearTimeout(previewTimer);const s=currentSettings();updateRangeLabels();updateSummaries(s);const frame=q('#studio-preview-frame');if(!frame)return;const token=++frameToken;frame.onload=()=>{if(token!==frameToken)return;applyPreviewPlayback();requestAnimationFrame(()=>requestAnimationFrame(fitFrame));setTimeout(()=>{applyPreviewPlayback();fitFrame()},160);setTimeout(fitFrame,480);setTimeout(fitFrame,900)};frame.srcdoc=previewDoc(s)}
+  async function refreshPreview(){
+    clearTimeout(previewTimer);
+    const s=currentSettings();updateRangeLabels();updateSummaries(s);
+    const frame=q('#studio-preview-frame');if(!frame)return;
+    const token=++frameToken;
+    const applyFrame=()=>{if(token!==frameToken)return;frame.style.display='block';frame.style.visibility='visible';frame.style.opacity='1';applyPreviewSettingsToFrame(s,{replay:true});requestAnimationFrame(()=>requestAnimationFrame(fitFrame));setTimeout(()=>{applyPreviewSettingsToFrame(currentSettings());fitFrame()},160);setTimeout(fitFrame,480);setTimeout(fitFrame,900)};
+    frame.onload=applyFrame;
+    try{
+      const r=await fetch('/api/subscriptions/template-preview',{method:'POST',headers:csrfHeaders(true),credentials:'same-origin',cache:'no-store',body:JSON.stringify({settings:{...s,theme_default:resolvedTheme(s)},subscription_id:SUB_STUDIO_TARGET_ID||null})});
+      if(!r.ok)throw new Error(`Preview HTTP ${r.status}`);
+      const html=await r.text();
+      if(token!==frameToken)return;
+      frame.srcdoc=html;
+    }catch(err){
+      console.warn('Server-rendered template preview unavailable; using local preview fallback.',err);
+      if(token!==frameToken)return;
+      frame.srcdoc=previewDoc(s);
+    }
+  }
+
   function schedulePreview(now=false){clearTimeout(previewTimer);previewTimer=setTimeout(refreshPreview,now?0:90)}
-  q('#sub-settings-modal')?.addEventListener('input',()=>schedulePreview());q('#sub-settings-modal')?.addEventListener('change',e=>{if(e.target.name==='portal-animation-choice')setValue('portal-animation',e.target.value);schedulePreview()});
+  q('#sub-settings-modal')?.addEventListener('input',()=>{const s=currentSettings();updateRangeLabels();updateSummaries(s);applyPreviewSettingsToFrame(s);schedulePreview()});q('#sub-settings-modal')?.addEventListener('change',e=>{if(e.target.name==='portal-animation-choice')setValue('portal-animation',e.target.value);const s=currentSettings();updateStudioTokenPreview(s);applyPreviewSettingsToFrame(s,{replay:e.target.name==='sub-entrance-animation'});schedulePreview()});
   qa('[data-preview-theme]').forEach(btn=>btn.addEventListener('click',()=>{previewTheme=btn.dataset.previewTheme;qa('[data-preview-theme]').forEach(b=>b.classList.toggle('active',b===btn));schedulePreview(true)}));
-  qa('[data-preview-device]').forEach(btn=>btn.addEventListener('click',()=>{previewDevice=btn.dataset.previewDevice==='mobile'?'mobile':'desktop';q('.studio8-frame-stage')?.setAttribute('data-preview-device',previewDevice);qa('[data-preview-device]').forEach(b=>b.classList.toggle('active',b===btn));schedulePreview(true)}));
+  qa('[data-preview-device]').forEach(btn=>btn.addEventListener('click',()=>{previewDevice=btn.dataset.previewDevice==='mobile'?'mobile':'desktop';q('.studio8-frame-stage')?.setAttribute('data-preview-device',previewDevice);qa('[data-preview-device]').forEach(b=>b.classList.toggle('active',b===btn));applyPreviewSettingsToFrame(currentSettings(),{replay:true});schedulePreview(true)}));
   qa('[data-preview-fit]').forEach(btn=>btn.addEventListener('click',()=>{previewFit=['page','width','actual'].includes(btn.dataset.previewFit)?btn.dataset.previewFit:'page';q('.studio8-frame-stage')?.setAttribute('data-preview-fit',previewFit);qa('[data-preview-fit]').forEach(b=>b.classList.toggle('active',b===btn));fitFrame()}));
   q('#studio-preview-motion-toggle')?.addEventListener('click',()=>{previewPaused=!previewPaused;applyPreviewPlayback()});
   new ResizeObserver(()=>fitFrame()).observe(q('.studio8-frame-stage'));
   new MutationObserver(()=>{if(previewTheme==='auto')schedulePreview()}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
   const settingsModal=q('#sub-settings-modal');if(settingsModal)new MutationObserver(()=>{if(settingsModal.getAttribute('aria-hidden')==='false'){activateTab('layout');setTimeout(()=>{applySettings(SUB_SETTINGS||{});schedulePreview(true);setTimeout(fitFrame,220)},0)}}).observe(settingsModal,{attributes:true,attributeFilter:['aria-hidden']});
-  activateTab('layout');updateRangeLabels();schedulePreview(true);
+  activateTab('layout');updateRangeLabels();updateStudioTokenPreview();schedulePreview(true);
 })();
 
 
