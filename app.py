@@ -9642,12 +9642,6 @@ def _wireguard_endpoint(value: str) -> str:
         except ValueError:
             pass
 
-        # -----------------------------------------------------
-        # Hostname
-        #
-        # Validate the hostname syntax only.
-        # DO NOT require it to resolve while saving the peer.
-        # -----------------------------------------------------
         hostname = host.rstrip('.')
 
         if (
@@ -21636,14 +21630,52 @@ def peer_logs(pid):
         logs=logs,
     )
 
-SUBSCRIPTION_SETTINGS_FILE = os.path.join(app.instance_path, 'subscription_settings.json')
+SUBSCRIPTION_SETTINGS_FILE = os.path.join(
+    app.instance_path,
+    'subscription_settings.json',
+)
+
+SUBSCRIPTION_PORTAL_OVERRIDES_FILE = os.path.join(
+    app.instance_path,
+    'subscription_portal_overrides.json',
+)
+
+
+# Subscription Studio backend contract: v16
+SUBSCRIPTION_LAYOUTS = {
+    'ps5',
+    'mac',
+    'app',
+    'compact',
+    'minimal',
+    'showcase',
+}
+
+SUBSCRIPTION_LAYOUT_ALIASES = {
+    'aurora': 'ps5',
+    'cards': 'mac',
+    'console': 'app',
+    'split': 'showcase',
+    'profile': 'showcase',
+    'executive': 'mac',
+    'flow': 'minimal',
+}
+
 
 def _sub_bool(v):
     if isinstance(v, bool):
         return v
+
     if v is None:
         return False
-    return str(v).strip().lower() in ('1', 'true', 'yes', 'on')
+
+    return str(v).strip().lower() in {
+        '1',
+        'true',
+        'yes',
+        'on',
+    }
+
 
 def _sub_float(v, default=0.0):
     try:
@@ -21651,33 +21683,185 @@ def _sub_float(v, default=0.0):
     except Exception:
         return float(default)
 
+
 def _sub_int(v, default=0):
     try:
         return int(float(v or default))
     except Exception:
         return int(default)
 
+
 def _subscription_settings_default():
     return {
-        'layout': 'aurora',
-        'display_mode': 'hybrid',  # bars | rings | hybrid
-        'animation': 'rich',       # rich | soft | minimal
 
-        # Public page
+        'layout': 'ps5',
+
+        'hero_style': 'banner',
+        'page_width': 'wide',
+        'density': 'comfortable',
+
+        'config_style': 'cards',
+        'config_columns': 'two',
+        'section_order': 'usage_first',
+
+        'module_order': [
+            'configs',
+            'usage',
+            'install',
+            'support',
+        ],
+        'module_enabled': {
+            'configs': True,
+            'usage': True,
+            'install': True,
+            'support': True,
+        },
+
+        'module_sizes': {
+            'configs': 'auto',
+            'usage': 'auto',
+            'install': 'auto',
+            'support': 'auto',
+        },
+
+        'module_mobile': {
+            'configs': 'auto',
+            'usage': 'auto',
+            'install': 'auto',
+            'support': 'auto',
+        },
+
+        'module_surface': {
+            'configs': 'auto',
+            'usage': 'auto',
+            'install': 'auto',
+            'support': 'auto',
+        },
+
+                'module_spacing': {
+            'configs': 'auto',
+            'usage': 'auto',
+            'install': 'auto',
+            'support': 'auto',
+        },
+
+
+        'module_radius': {
+            'configs': 'auto',
+            'usage': 'auto',
+            'install': 'auto',
+            'support': 'auto',
+        },
+
+
+        'module_heading': {
+            'configs': 'auto',
+            'usage': 'auto',
+            'install': 'auto',
+            'support': 'auto',
+        },
+
+        'module_mobile_position': {
+            'configs': 'auto',
+            'usage': 'auto',
+            'install': 'auto',
+            'support': 'auto',
+        },
+
+        'module_gap': 'standard',
+
+        'background': 'orbits',
+        'accent': 'mint',
+
+        'primary_color': '#3addaa',
+        'secondary_color': '#63a5ff',
+
+        'online_color': '#22c55e',
+        'offline_color': '#94a3b8',
+        'warning_color': '#f59e0b',
+        'danger_color': '#ef4444',
+        'pill_color': '#64748b',
+        'action_color': '#3addaa',
+
+        'theme_default': 'auto',
+
+        'surface': 'glass',
+        'radius': 'rounded',
+        'shadow': 'deep',
+        'button_style': 'solid',
+        'font_scale': 'standard',
+
+        'background_intensity': 86,
+        'card_opacity': 82,
+
+        'display_mode': 'hybrid',
+        'stat_size': 'standard',
+
+        'show_percentage': True,
+        'show_used_detail': True,
+
+        'animation': 'cinematic',
+        'entrance_animation': 'stagger',
+        'hover_animation': 'lift',
+        'toast_style': 'pill',
+        'toast_position': 'bottom_center',
+        'toast_motion': 'slide',
+        'toast_duration': 2200,
+        'motion_speed': 125,
+        'motion_intensity': 150,
+        'particle_density': 90,
+
+        'show_quick_stats': True,
+        'show_install': True,
+        'show_support': True,
+        'show_live_badge': True,
+        'show_status_badge': True,
+
+        'show_location_country': True,
+        'show_download_action': True,
+        'show_copy_action': True,
+        'show_theme_action': True,
+        'show_section_descriptions': True,
+
+        'show_admin_notice': False,
+
+        'show_account_details': False,
+        'show_connection_overview': False,
+
+        'notice_title': 'Service notice',
+        'notice_text': '',
+
+        'notice_tone': 'info',
+        'notice_style': 'banner',
+        'notice_position': 'after_summary',
+
         'portal_label': 'Secure WireGuard portal',
         'portal_icon': 'fas fa-bolt',
-        'portal_title': '',
-        'portal_subtitle': 'Your Account is ready. Install Wireguard, then scan QR or import a config.',
 
-        # Optional support links
+        'portal_title': '',
+        'portal_subtitle': (
+            'Your account is ready. Install WireGuard, '
+            'then scan QR or import a config.'
+        ),
+
+        'title_align': 'left',
+        'logo_size': 'medium',
+
+        'usage_title': 'Usage overview',
+        'configs_title': 'Configs',
+        'install_title': 'Install WireGuard',
+        'support_title': 'Support',
+
+        'support_style': 'buttons',
+
         'support': {
             'telegram': '',
             'whatsapp': '',
             'phone': '',
             'email': '',
             'website': '',
-            'instagram': ''
-        }
+            'instagram': '',
+        },
     }
 
 
@@ -21705,154 +21889,1384 @@ def _subscription_portal_icons():
 
 
 def _subscription_portal_icon(value):
-    value = str(value or '').strip()
-    return value if value in _subscription_portal_icons() else 'fas fa-bolt'
+    value = str(
+        value or ''
+    ).strip()
+
+    return (
+        value
+        if value in _subscription_portal_icons()
+        else 'fas fa-bolt'
+    )
 
 
-def _subscription_text(value, default='', max_len=160):
-    value = str(value or '').strip()
+def _subscription_text(
+    value,
+    default='',
+    max_len=160,
+):
+    value = str(
+        value or ''
+    ).strip()
+
     if not value:
         return default
+
     return value[:max_len]
 
 
-def _load_subscription_settings():
-    os.makedirs(app.instance_path, exist_ok=True)
+def _subscription_choice(
+    value,
+    allowed,
+    default,
+):
+    value = str(
+        value or ''
+    ).strip().lower()
+
+    return (
+        value
+        if value in allowed
+        else default
+    )
+
+
+def _subscription_number(
+    value,
+    default,
+    minimum,
+    maximum,
+):
+    try:
+        number = int(
+            float(value)
+        )
+    except Exception:
+        number = int(default)
+
+    return max(
+        minimum,
+        min(
+            maximum,
+            number,
+        ),
+    )
+
+
+def _normalize_subscription_settings(
+    incoming=None,
+    *,
+    base=None,
+):
+    incoming = (
+        incoming
+        if isinstance(incoming, dict)
+        else {}
+    )
+
+    defaults = (
+        dict(base)
+        if isinstance(base, dict)
+        else _subscription_settings_default()
+    )
 
     d = _subscription_settings_default()
 
-    try:
-        with open(SUBSCRIPTION_SETTINGS_FILE, 'r', encoding='utf-8') as f:
-            got = json.load(f) or {}
+    for key, value in defaults.items():
+        if key == 'support':
+            continue
 
-        if not isinstance(got, dict):
-            got = {}
+        d[key] = value
 
-        layout = (got.get('layout') or got.get('selected') or d['layout']).strip().lower()
-        d['layout'] = layout if layout in ('aurora', 'compact', 'cards', 'minimal') else 'aurora'
-        display_mode = str(got.get('display_mode') or got.get('stats_style') or d.get('display_mode') or 'hybrid').strip().lower()
-        d['display_mode'] = display_mode if display_mode in ('bars', 'rings', 'hybrid') else 'hybrid'
+    d['support'] = dict(
+        defaults.get('support')
+        or d['support']
+    )
 
-        animation = str(got.get('animation') or got.get('motion') or d.get('animation') or 'rich').strip().lower()
-        d['animation'] = animation if animation in ('rich', 'soft', 'minimal') else 'rich'
 
-        support = got.get('support') if isinstance(got.get('support'), dict) else {}
-        identity = got.get('identity') if isinstance(got.get('identity'), dict) else {}
-        public = got.get('public') if isinstance(got.get('public'), dict) else {}
+    layout = str(
+        incoming.get('layout')
+        or incoming.get('selected')
+        or d['layout']
+    ).strip().lower()
 
-        def pick(*keys, default=''):
-            for src in (got, identity, public, support):
-                if not isinstance(src, dict):
-                    continue
-                for key in keys:
-                    if key in src and src.get(key) not in (None, ''):
-                        return src.get(key)
-            return default
 
-        d['portal_label'] = _subscription_text(
-            pick('portal_label', 'badge_label', 'label', default=d['portal_label']),
-            d['portal_label'],
-            80
+    layout = SUBSCRIPTION_LAYOUT_ALIASES.get(
+        layout,
+        layout,
+    )
+
+    d['layout'] = (
+        layout
+        if layout in SUBSCRIPTION_LAYOUTS
+        else 'ps5'
+    )
+
+    d['hero_style'] = _subscription_choice(
+        incoming.get(
+            'hero_style',
+            d['hero_style'],
+        ),
+        {
+            'panel',
+            'banner',
+            'minimal',
+        },
+        'panel',
+    )
+
+    d['page_width'] = _subscription_choice(
+        incoming.get(
+            'page_width',
+            d['page_width'],
+        ),
+        {
+            'narrow',
+            'standard',
+            'wide',
+        },
+        'standard',
+    )
+
+    d['density'] = _subscription_choice(
+        incoming.get(
+            'density',
+            d['density'],
+        ),
+        {
+            'comfortable',
+            'compact',
+        },
+        'comfortable',
+    )
+
+    d['config_style'] = _subscription_choice(
+        incoming.get(
+            'config_style',
+            d['config_style'],
+        ),
+        {
+            'cards',
+            'list',
+            'compact',
+        },
+        'cards',
+    )
+
+    d['config_columns'] = _subscription_choice(
+        incoming.get(
+            'config_columns',
+            d['config_columns'],
+        ),
+        {
+            'auto',
+            'one',
+            'two',
+        },
+        'auto',
+    )
+
+    d['section_order'] = _subscription_choice(
+        incoming.get(
+            'section_order',
+            d['section_order'],
+        ),
+        {
+            'standard',
+            'configs_first',
+            'usage_first',
+        },
+        'standard',
+    )
+
+    allowed_modules = (
+        'configs',
+        'usage',
+        'install',
+        'support',
+    )
+
+    default_module_order = [
+        'configs',
+        'usage',
+        'install',
+        'support',
+    ]
+
+    incoming_module_order = incoming.get(
+        'module_order',
+        d.get(
+            'module_order',
+            default_module_order,
+        ),
+    )
+
+    if not isinstance(
+        incoming_module_order,
+        (list, tuple),
+    ):
+        incoming_module_order = []
+
+    normalized_module_order = []
+
+    for module_name in incoming_module_order:
+        module_name = str(
+            module_name or ''
+        ).strip().lower()
+
+        if (
+            module_name in allowed_modules
+            and module_name
+            not in normalized_module_order
+        ):
+            normalized_module_order.append(
+                module_name
+            )
+
+    for module_name in default_module_order:
+        if (
+            module_name
+            not in normalized_module_order
+        ):
+            normalized_module_order.append(
+                module_name
+            )
+
+    d['module_order'] = (
+        normalized_module_order[:4]
+    )
+
+    module_keys = (
+        'configs',
+        'usage',
+        'install',
+        'support',
+    )
+
+    current_enabled = (
+        d.get('module_enabled')
+        if isinstance(
+            d.get('module_enabled'),
+            dict,
         )
-        d['portal_icon'] = _subscription_portal_icon(
-            pick('portal_icon', 'badge_icon', 'icon', default=d['portal_icon'])
+        else {}
+    )
+
+    incoming_enabled = (
+        incoming.get('module_enabled')
+        if isinstance(
+            incoming.get('module_enabled'),
+            dict,
         )
-        d['portal_title'] = _subscription_text(
-            pick('portal_title', 'title', default=d['portal_title']),
-            d['portal_title'],
-            90
+        else {}
+    )
+
+    normalized_enabled = {}
+
+    for module_name in module_keys:
+
+        if module_name in incoming_enabled:
+            value = incoming_enabled.get(
+                module_name
+            )
+        else:
+            value = current_enabled.get(
+                module_name,
+                True,
+            )
+
+        normalized_enabled[
+            module_name
+        ] = _sub_bool(
+            value
         )
-        d['portal_subtitle'] = _subscription_text(
-            pick('portal_subtitle', 'subtitle', default=d['portal_subtitle']),
-            d['portal_subtitle'],
-            180
+
+    if not any(
+        normalized_enabled.values()
+    ):
+        normalized_enabled[
+            'configs'
+        ] = True
+
+    d['module_enabled'] = (
+        normalized_enabled
+    )
+
+    allowed_module_sizes = {
+        'auto',
+        'small',
+        'medium',
+        'large',
+        'full',
+    }
+
+    current_sizes = (
+        d.get('module_sizes')
+        if isinstance(
+            d.get('module_sizes'),
+            dict,
+        )
+        else {}
+    )
+
+    incoming_sizes = (
+        incoming.get('module_sizes')
+        if isinstance(
+            incoming.get('module_sizes'),
+            dict,
+        )
+        else {}
+    )
+
+    normalized_sizes = {}
+
+    for module_name in module_keys:
+
+        value = str(
+            incoming_sizes.get(
+                module_name,
+                current_sizes.get(
+                    module_name,
+                    'auto',
+                ),
+            )
+            or 'auto'
+        ).strip().lower()
+
+        if value not in allowed_module_sizes:
+            value = 'auto'
+
+        normalized_sizes[
+            module_name
+        ] = value
+
+    d['module_sizes'] = (
+        normalized_sizes
+    )
+
+    allowed_mobile_sizes = {
+        'auto',
+        'half',
+        'full',
+    }
+
+    current_mobile = (
+        d.get('module_mobile')
+        if isinstance(
+            d.get('module_mobile'),
+            dict,
+        )
+        else {}
+    )
+
+    incoming_mobile = (
+        incoming.get('module_mobile')
+        if isinstance(
+            incoming.get('module_mobile'),
+            dict,
+        )
+        else {}
+    )
+
+    normalized_mobile = {}
+
+    for module_name in module_keys:
+
+        value = str(
+            incoming_mobile.get(
+                module_name,
+                current_mobile.get(
+                    module_name,
+                    'auto',
+                ),
+            )
+            or 'auto'
+        ).strip().lower()
+
+        if value not in allowed_mobile_sizes:
+            value = 'auto'
+
+        normalized_mobile[
+            module_name
+        ] = value
+
+    d['module_mobile'] = (
+        normalized_mobile
+    )
+
+    allowed_surfaces = {
+        'auto',
+        'panel',
+        'soft',
+        'outline',
+        'flat',
+        'accent',
+    }
+
+    current_surfaces = (
+        d.get('module_surface')
+        if isinstance(
+            d.get('module_surface'),
+            dict,
+        )
+        else {}
+    )
+
+    incoming_surfaces = (
+        incoming.get('module_surface')
+        if isinstance(
+            incoming.get('module_surface'),
+            dict,
+        )
+        else {}
+    )
+
+    normalized_surfaces = {}
+
+    for module_name in module_keys:
+
+        value = str(
+            incoming_surfaces.get(
+                module_name,
+                current_surfaces.get(
+                    module_name,
+                    'auto',
+                ),
+            )
+            or 'auto'
+        ).strip().lower()
+
+        if value not in allowed_surfaces:
+            value = 'auto'
+
+        normalized_surfaces[
+            module_name
+        ] = value
+
+    d['module_surface'] = (
+        normalized_surfaces
+    )
+
+    allowed_spacing = {
+        'auto',
+        'compact',
+        'comfortable',
+        'roomy',
+    }
+
+    current_spacing = (
+        d.get('module_spacing')
+        if isinstance(
+            d.get('module_spacing'),
+            dict,
+        )
+        else {}
+    )
+
+    incoming_spacing = (
+        incoming.get('module_spacing')
+        if isinstance(
+            incoming.get('module_spacing'),
+            dict,
+        )
+        else {}
+    )
+
+    normalized_spacing = {}
+
+    for module_name in module_keys:
+
+        value = str(
+            incoming_spacing.get(
+                module_name,
+                current_spacing.get(
+                    module_name,
+                    'auto',
+                ),
+            )
+            or 'auto'
+        ).strip().lower()
+
+        if value not in allowed_spacing:
+            value = 'auto'
+
+        normalized_spacing[
+            module_name
+        ] = value
+
+    d['module_spacing'] = (
+        normalized_spacing
+    )
+
+    def normalize_module_option_map(
+        setting_key,
+        allowed_values,
+        default_value='auto',
+        *,
+        unique_non_default=False,
+    ):
+        current_values = (
+            d.get(setting_key)
+            if isinstance(
+                d.get(setting_key),
+                dict,
+            )
+            else {}
         )
 
-        sup = d.get('support') or {}
-        incoming_support = got.get('support') if isinstance(got.get('support'), dict) else {}
-        incoming_socials = got.get('socials') if isinstance(got.get('socials'), dict) else {}
+        incoming_values = (
+            incoming.get(setting_key)
+            if isinstance(
+                incoming.get(setting_key),
+                dict,
+            )
+            else {}
+        )
 
-        for key in sup.keys():
-            sup[key] = str(
-                incoming_support.get(key)
-                if incoming_support.get(key) is not None
-                else incoming_socials.get(key, sup.get(key, ''))
-            ).strip()
+        normalized_values = {}
+        used_values = set()
 
-        d['support'] = sup
+        for module_name in module_keys:
 
-    except Exception:
-        pass
+            value = str(
+                incoming_values.get(
+                    module_name,
+                    current_values.get(
+                        module_name,
+                        default_value,
+                    ),
+                )
+                or default_value
+            ).strip().lower()
+
+            if value not in allowed_values:
+                value = default_value
+
+            if (
+                unique_non_default
+                and value != default_value
+            ):
+                if value in used_values:
+                    value = default_value
+                else:
+                    used_values.add(
+                        value
+                    )
+
+            normalized_values[
+                module_name
+            ] = value
+
+        return normalized_values
+
+
+    d['module_radius'] = (
+        normalize_module_option_map(
+            'module_radius',
+            {
+                'auto',
+                'square',
+                'soft',
+                'round',
+            },
+        )
+    )
+
+
+    d['module_heading'] = (
+        normalize_module_option_map(
+            'module_heading',
+            {
+                'auto',
+                'standard',
+                'compact',
+                'accent',
+                'hidden',
+            },
+        )
+    )
+
+    d['module_mobile_position'] = (
+        normalize_module_option_map(
+            'module_mobile_position',
+            {
+                'auto',
+                '1',
+                '2',
+                '3',
+                '4',
+            },
+            unique_non_default=True,
+        )
+    )
+
+    d['module_gap'] = _subscription_choice(
+        incoming.get(
+            'module_gap',
+            d.get(
+                'module_gap',
+                'auto',
+            ),
+        ),
+        {
+            'auto',
+            'tight',
+            'standard',
+            'roomy',
+        },
+        'auto',
+    )
+
+    d['background'] = _subscription_choice(
+        incoming.get(
+            'background',
+            d['background'],
+        ),
+        {
+            'aurora',
+            'waves',
+            'network',
+            'orbits',
+            'mesh',
+            'nebula',
+            'lines',
+            'constellation',
+            'prism',
+            'circuit',
+            'pulse',
+            'none',
+        },
+        'aurora',
+    )
+
+    d['accent'] = _subscription_choice(
+        incoming.get(
+            'accent',
+            d['accent'],
+        ),
+        {
+            'mint',
+            'blue',
+            'violet',
+            'coral',
+            'amber',
+            'mono',
+            'custom',
+        },
+        'mint',
+    )
+
+    d['theme_default'] = _subscription_choice(
+        incoming.get(
+            'theme_default',
+            d['theme_default'],
+        ),
+        {
+            'auto',
+            'light',
+            'dark',
+        },
+        'auto',
+    )
+
+    d['surface'] = _subscription_choice(
+        incoming.get(
+            'surface',
+            d['surface'],
+        ),
+        {
+            'glass',
+            'solid',
+            'soft',
+        },
+        'glass',
+    )
+
+    d['radius'] = _subscription_choice(
+        incoming.get(
+            'radius',
+            d['radius'],
+        ),
+        {
+            'rounded',
+            'medium',
+            'square',
+        },
+        'rounded',
+    )
+
+    d['shadow'] = _subscription_choice(
+        incoming.get(
+            'shadow',
+            d['shadow'],
+        ),
+        {
+            'none',
+            'soft',
+            'deep',
+        },
+        'soft',
+    )
+
+    d['button_style'] = _subscription_choice(
+        incoming.get(
+            'button_style',
+            d['button_style'],
+        ),
+        {
+            'solid',
+            'outline',
+            'soft',
+        },
+        'solid',
+    )
+
+    d['font_scale'] = _subscription_choice(
+        incoming.get(
+            'font_scale',
+            d['font_scale'],
+        ),
+        {
+            'small',
+            'standard',
+            'large',
+        },
+        'standard',
+    )
+
+    color_fields = (
+        ('primary_color', 'custom_primary', '#3addaa'),
+        ('secondary_color', 'custom_secondary', '#63a5ff'),
+        ('online_color', None, '#22c55e'),
+        ('offline_color', None, '#94a3b8'),
+        ('warning_color', None, '#f59e0b'),
+        ('danger_color', None, '#ef4444'),
+        ('pill_color', None, '#64748b'),
+        ('action_color', None, '#3addaa'),
+    )
+
+    for key, legacy_key, fallback in color_fields:
+        candidate = incoming.get(key)
+
+        if candidate in (None, '') and legacy_key:
+            candidate = incoming.get(legacy_key)
+
+        if candidate in (None, ''):
+            candidate = d.get(key) or fallback
+
+        value = str(candidate or '').strip()
+
+        if not re.fullmatch(r'#[0-9A-Fa-f]{6}', value):
+            value = fallback
+
+        d[key] = value.lower()
+
+    d['background_intensity'] = (
+        _subscription_number(
+            incoming.get(
+                'background_intensity',
+                d['background_intensity'],
+            ),
+            86,
+            0,
+            100,
+        )
+    )
+
+    d['card_opacity'] = (
+        _subscription_number(
+            incoming.get(
+                'card_opacity',
+                d['card_opacity'],
+            ),
+            82,
+            50,
+            100,
+        )
+    )
+
+    d['display_mode'] = _subscription_choice(
+        incoming.get(
+            'display_mode',
+            incoming.get(
+                'stats_style',
+                d['display_mode'],
+            ),
+        ),
+        {
+            'bars',
+            'rings',
+            'hybrid',
+            'focus',
+            'minimal',
+            'segments',
+        },
+        'hybrid',
+    )
+
+    d['stat_size'] = _subscription_choice(
+        incoming.get(
+            'stat_size',
+            d['stat_size'],
+        ),
+        {
+            'compact',
+            'standard',
+            'large',
+        },
+        'standard',
+    )
+
+    d['animation'] = _subscription_choice(
+        incoming.get(
+            'animation',
+            incoming.get(
+                'motion',
+                d['animation'],
+            ),
+        ),
+        {
+            'cinematic',
+            'immersive',
+            'rich',
+            'balanced',
+            'soft',
+            'drift',
+            'minimal',
+            'off',
+        },
+        'cinematic',
+    )
+
+    d['entrance_animation'] = _subscription_choice(
+        incoming.get(
+            'entrance_animation',
+            d['entrance_animation'],
+        ),
+        {'stagger', 'slide', 'fade', 'scale', 'none'},
+        'stagger',
+    )
+
+    d['hover_animation'] = _subscription_choice(
+        incoming.get(
+            'hover_animation',
+            d['hover_animation'],
+        ),
+        {'lift', 'glow', 'scale', 'none'},
+        'lift',
+    )
+
+    d['toast_style'] = _subscription_choice(
+        incoming.get('toast_style', d['toast_style']),
+        {'pill', 'card', 'glass', 'terminal', 'minimal'},
+        'pill',
+    )
+
+    d['toast_position'] = _subscription_choice(
+        incoming.get('toast_position', d['toast_position']),
+        {'bottom_center', 'bottom_right', 'top_right', 'top_center'},
+        'bottom_center',
+    )
+
+    d['toast_motion'] = _subscription_choice(
+        incoming.get('toast_motion', d['toast_motion']),
+        {'slide', 'pop', 'fade', 'bounce'},
+        'slide',
+    )
+
+    d['toast_duration'] = _subscription_number(
+        incoming.get('toast_duration', d['toast_duration']),
+        2200,
+        1200,
+        6000,
+    )
+
+    d['motion_speed'] = _subscription_number(
+        incoming.get('motion_speed', d['motion_speed']),
+        125,
+        50,
+        180,
+    )
+
+    d['motion_intensity'] = _subscription_number(
+        incoming.get('motion_intensity', d['motion_intensity']),
+        150,
+        40,
+        200,
+    )
+
+    d['particle_density'] = _subscription_number(
+        incoming.get('particle_density', d['particle_density']),
+        90,
+        0,
+        120,
+    )
+
+    for key in (
+        'show_percentage',
+        'show_used_detail',
+        'show_quick_stats',
+        'show_install',
+        'show_support',
+        'show_live_badge',
+        'show_status_badge',
+        'show_location_country',
+        'show_download_action',
+        'show_copy_action',
+        'show_theme_action',
+        'show_section_descriptions',
+        'show_admin_notice',
+        'show_account_details',
+        'show_connection_overview',
+    ):
+        if key in incoming:
+            d[key] = _sub_bool(
+                incoming.get(key)
+            )
+
+    identity = (
+        incoming.get('identity')
+        if isinstance(
+            incoming.get('identity'),
+            dict,
+        )
+        else {}
+    )
+
+    public = (
+        incoming.get('public')
+        if isinstance(
+            incoming.get('public'),
+            dict,
+        )
+        else {}
+    )
+
+    def pick(
+        *keys,
+        default=None,
+    ):
+        for source in (
+            incoming,
+            identity,
+            public,
+        ):
+            if not isinstance(
+                source,
+                dict,
+            ):
+                continue
+
+            for key in keys:
+                if key in source:
+                    return source.get(key)
+
+        return default
+
+    d['portal_label'] = _subscription_text(
+        pick(
+            'portal_label',
+            'badge_label',
+            'label',
+            default=d['portal_label'],
+        ),
+        d['portal_label'],
+        80,
+    )
+
+    d['portal_icon'] = (
+        _subscription_portal_icon(
+            pick(
+                'portal_icon',
+                'badge_icon',
+                'icon',
+                default=d['portal_icon'],
+            )
+        )
+    )
+
+    d['portal_title'] = _subscription_text(
+        pick(
+            'portal_title',
+            'title',
+            default=d['portal_title'],
+        ),
+        '',
+        90,
+    )
+
+    d['portal_subtitle'] = _subscription_text(
+        pick(
+            'portal_subtitle',
+            'subtitle',
+            default=d['portal_subtitle'],
+        ),
+        d['portal_subtitle'],
+        180,
+    )
+
+    d['title_align'] = _subscription_choice(
+        incoming.get(
+            'title_align',
+            d['title_align'],
+        ),
+        {
+            'left',
+            'center',
+        },
+        'left',
+    )
+
+    d['logo_size'] = _subscription_choice(
+        incoming.get(
+            'logo_size',
+            d['logo_size'],
+        ),
+        {
+            'small',
+            'medium',
+            'large',
+        },
+        'medium',
+    )
+
+    d['usage_title'] = _subscription_text(
+        incoming.get(
+            'usage_title',
+            d['usage_title'],
+        ),
+        'Usage overview',
+        80,
+    )
+
+    d['configs_title'] = _subscription_text(
+        incoming.get(
+            'configs_title',
+            d['configs_title'],
+        ),
+        'Configs',
+        80,
+    )
+
+    d['install_title'] = _subscription_text(
+        incoming.get(
+            'install_title',
+            d['install_title'],
+        ),
+        'Install WireGuard',
+        80,
+    )
+
+    d['support_title'] = _subscription_text(
+        incoming.get(
+            'support_title',
+            d['support_title'],
+        ),
+        'Support',
+        80,
+    )
+
+    d['notice_title'] = _subscription_text(
+        incoming.get(
+            'notice_title',
+            d.get(
+                'notice_title',
+                'Service notice',
+            ),
+        ),
+        'Service notice',
+        60,
+    )
+
+    d['notice_text'] = _subscription_text(
+        incoming.get(
+            'notice_text',
+            d.get(
+                'notice_text',
+                '',
+            ),
+        ),
+        '',
+        240,
+    )
+    d['notice_tone'] = _subscription_choice(
+        incoming.get(
+            'notice_tone',
+            d.get(
+                'notice_tone',
+                'info',
+            ),
+        ),
+        {
+            'info',
+            'maintenance',
+            'warning',
+            'success',
+            'neutral',
+        },
+        'info',
+    )
+
+    d['notice_style'] = _subscription_choice(
+        incoming.get(
+            'notice_style',
+            d.get(
+                'notice_style',
+                'banner',
+            ),
+        ),
+        {
+            'banner',
+            'card',
+            'strip',
+        },
+        'banner',
+    )
+
+    d['notice_position'] = _subscription_choice(
+        incoming.get(
+            'notice_position',
+            d.get(
+                'notice_position',
+                'after_summary',
+            ),
+        ),
+        {
+            'after_summary',
+            'before_modules',
+            'after_modules',
+        },
+        'after_summary',
+    )
+
+    d['support_style'] = _subscription_choice(
+        incoming.get(
+            'support_style',
+            d['support_style'],
+        ),
+        {
+            'buttons',
+            'list',
+            'compact',
+        },
+        'buttons',
+    )
+
+    support = (
+        incoming.get('support')
+        if isinstance(
+            incoming.get('support'),
+            dict,
+        )
+        else {}
+    )
+
+    socials = (
+        incoming.get('socials')
+        if isinstance(
+            incoming.get('socials'),
+            dict,
+        )
+        else {}
+    )
+
+    existing_support = (
+        d.get('support')
+        or {}
+    )
+
+    normalized_support = {}
+
+    for key in (
+        'telegram',
+        'whatsapp',
+        'phone',
+        'email',
+        'website',
+        'instagram',
+    ):
+        if key in support:
+            value = support.get(key)
+
+        elif key in socials:
+            value = socials.get(key)
+
+        else:
+            value = existing_support.get(
+                key,
+                '',
+            )
+
+        normalized_support[key] = str(
+            value or ''
+        ).strip()[:500]
+
+    d['support'] = normalized_support
 
     return d
 
 
+def _write_json_atomic(
+    path,
+    payload,
+):
+    os.makedirs(
+        os.path.dirname(path),
+        exist_ok=True,
+    )
+
+    temporary = (
+        path
+        + '.tmp'
+    )
+
+    with open(
+        temporary,
+        'w',
+        encoding='utf-8',
+    ) as handle:
+        json.dump(
+            payload,
+            handle,
+            indent=2,
+            ensure_ascii=False,
+        )
+
+    os.replace(
+        temporary,
+        path,
+    )
+
+
+def _load_subscription_settings():
+    os.makedirs(
+        app.instance_path,
+        exist_ok=True,
+    )
+
+    try:
+        with open(
+            SUBSCRIPTION_SETTINGS_FILE,
+            'r',
+            encoding='utf-8',
+        ) as handle:
+            payload = (
+                json.load(handle)
+                or {}
+            )
+
+    except Exception:
+        payload = {}
+
+    return _normalize_subscription_settings(
+        payload
+    )
+
+
 def _save_subscription_settings(data):
+    current = (
+        _load_subscription_settings()
+    )
+
+    saved = (
+        _normalize_subscription_settings(
+            data,
+            base=current,
+        )
+    )
+
+    _write_json_atomic(
+        SUBSCRIPTION_SETTINGS_FILE,
+        saved,
+    )
+
+    return saved
+
+
+def _load_subscription_portal_overrides():
+    try:
+        with open(
+            SUBSCRIPTION_PORTAL_OVERRIDES_FILE,
+            'r',
+            encoding='utf-8',
+        ) as handle:
+            payload = (
+                json.load(handle)
+                or {}
+            )
+
+        return (
+            payload
+            if isinstance(payload, dict)
+            else {}
+        )
+
+    except Exception:
+        return {}
+
+
+def _save_subscription_portal_overrides(
+    data,
+):
     if not isinstance(data, dict):
         data = {}
 
-    cur = _load_subscription_settings()
-
-    if 'layout' in data or 'selected' in data:
-        layout = str(data.get('layout') or data.get('selected') or cur.get('layout') or 'aurora').strip().lower()
-        cur['layout'] = layout if layout in ('aurora', 'compact', 'cards', 'minimal') else 'aurora'
-
-    if 'display_mode' in data or 'stats_style' in data:
-        display_mode = str(data.get('display_mode') or data.get('stats_style') or cur.get('display_mode') or 'hybrid').strip().lower()
-        cur['display_mode'] = display_mode if display_mode in ('bars', 'rings', 'hybrid') else 'hybrid'
-
-    if 'animation' in data or 'motion' in data:
-        animation = str(data.get('animation') or data.get('motion') or cur.get('animation') or 'rich').strip().lower()
-        cur['animation'] = animation if animation in ('rich', 'soft', 'minimal') else 'rich'
-
-    support = data.get('support') if isinstance(data.get('support'), dict) else {}
-    identity = data.get('identity') if isinstance(data.get('identity'), dict) else {}
-    public = data.get('public') if isinstance(data.get('public'), dict) else {}
-
-    def pick(*keys, default=None):
-        for src in (data, identity, public, support):
-            if not isinstance(src, dict):
-                continue
-            for key in keys:
-                if key in src:
-                    return src.get(key)
-        return default
-
-    portal_label = pick('portal_label', 'badge_label', 'label', default=cur.get('portal_label'))
-    portal_icon = pick('portal_icon', 'badge_icon', 'icon', default=cur.get('portal_icon'))
-    portal_title = pick('portal_title', 'title', default=cur.get('portal_title'))
-    portal_subtitle = pick('portal_subtitle', 'subtitle', default=cur.get('portal_subtitle'))
-
-    cur['portal_label'] = _subscription_text(
-        portal_label,
-        'Secure WireGuard portal',
-        80
-    )
-    cur['portal_icon'] = _subscription_portal_icon(portal_icon)
-    cur['portal_title'] = _subscription_text(
-        portal_title,
-        '',
-        90
-    )
-    cur['portal_subtitle'] = _subscription_text(
-        portal_subtitle,
-        'Your account is ready. Install WireGuard, then scan QR or import a config.',
-        180
+    _write_json_atomic(
+        SUBSCRIPTION_PORTAL_OVERRIDES_FILE,
+        data,
     )
 
-    if isinstance(data.get('support'), dict):
-        cur['support'].update({
-            k: str(data['support'].get(k) or '').strip()
-            for k in cur['support'].keys()
-        })
 
-    cur['support']['portal_label'] = cur['portal_label']
+def _subscription_portal_override(
+    sub,
+):
+    if not sub:
+        return {}
 
-    os.makedirs(app.instance_path, exist_ok=True)
-    with open(SUBSCRIPTION_SETTINGS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(cur, f, indent=2)
+    store = (
+        _load_subscription_portal_overrides()
+    )
 
-    return cur
+    value = store.get(
+        str(
+            getattr(
+                sub,
+                'id',
+                '',
+            )
+        )
+    )
+
+    return (
+        value
+        if isinstance(value, dict)
+        else {}
+    )
+
+
+def _effective_subscription_settings(
+    sub=None,
+):
+    global_settings = (
+        _load_subscription_settings()
+    )
+
+    if sub is None:
+        return global_settings
+
+    override = (
+        _subscription_portal_override(
+            sub
+        )
+    )
+
+    if not override:
+        return global_settings
+
+    return _normalize_subscription_settings(
+        override,
+        base=global_settings,
+    )
 
 def _sub_limit_bytes(sub):
     try:
@@ -24161,6 +25575,455 @@ def api_subscription_settings():
     saved = _save_subscription_settings(request.get_json(silent=True) or {})
     return jsonify(ok=True, settings=saved)
 
+@app.post('/api/subscriptions/template-preview')
+@require_api_key_or_login
+def api_subscription_template_preview():
+    """
+    Render the real public subscription template for Template Studio.
+
+    Nothing is saved here. The submitted settings exist only for this
+    preview response.
+    """
+
+    payload = (
+        request.get_json(
+            silent=True
+        )
+        or {}
+    )
+
+    raw_settings = (
+        payload.get('settings')
+        if isinstance(
+            payload.get('settings'),
+            dict,
+        )
+        else {}
+    )
+
+    subscription_id = payload.get(
+        'subscription_id'
+    )
+
+    sub = None
+
+    if subscription_id not in (
+        None,
+        '',
+        0,
+        '0',
+    ):
+        try:
+            subscription_id = int(
+                subscription_id
+            )
+
+            sub = db.session.get(
+                Subscription,
+                subscription_id,
+            )
+
+        except Exception:
+            sub = None
+
+    if sub is not None:
+        base_settings = (
+            _effective_subscription_settings(
+                sub
+            )
+        )
+    else:
+        base_settings = (
+            _load_subscription_settings()
+        )
+
+    cfg = (
+        _normalize_subscription_settings(
+            raw_settings,
+            base=base_settings,
+        )
+    )
+
+    if sub is not None:
+        preview_sub = sub
+
+        try:
+            preview_data = (
+                _subscription_public_payload(
+                    sub
+                )
+            )
+        except Exception:
+            preview_data = {}
+
+    else:
+        from types import SimpleNamespace
+
+        preview_sub = SimpleNamespace(
+            id=0,
+            name='premium-user',
+            token='preview',
+        )
+
+        gib = 1024 ** 3
+
+        preview_data = {
+            'id': 0,
+            'name': 'premium-user',
+            'token': 'preview',
+
+            'enabled': True,
+            'unlimited': False,
+
+            'limit_bytes': 10 * gib,
+            'used_bytes': int(
+                2.4 * gib
+            ),
+
+            'data_limit_value': 10,
+            'data_limit_unit': 'Gi',
+
+            'start_on_first_use': False,
+
+            'first_used_at': (
+                '2026-08-07T09:30:00Z'
+            ),
+
+            'expires_at': (
+                '2026-08-31T18:00:00Z'
+            ),
+
+            'expires_at_ts': None,
+
+            'ttl_seconds': (
+                12 * 86400
+                + 4 * 3600
+            ),
+
+            'access': {
+                'allowed': True,
+                'reason': '',
+                'message': '',
+                'has_inbounds': True,
+            },
+
+            'locations': [
+                {
+                    'link_id': 1,
+                    'peer_id': 1,
+                    'name': 'Amsterdam',
+                    'status': 'online',
+                    'endpoint': '',
+                    'public_host': '',
+                    'location_label': (
+                        'Netherlands'
+                    ),
+                    'country_code': 'NL',
+                    'flag': '🇳🇱',
+                },
+                {
+                    'link_id': 2,
+                    'peer_id': 2,
+                    'name': 'Frankfurt',
+                    'status': 'online',
+                    'endpoint': '',
+                    'public_host': '',
+                    'location_label': (
+                        'Germany'
+                    ),
+                    'country_code': 'DE',
+                    'flag': '🇩🇪',
+                },
+                {
+                    'link_id': 3,
+                    'peer_id': 3,
+                    'name': 'Backup',
+                    'status': 'offline',
+                    'endpoint': '',
+                    'public_host': '',
+                    'location_label': (
+                        'Netherlands'
+                    ),
+                    'country_code': 'NL',
+                    'flag': '🇳🇱',
+                },
+            ],
+        }
+
+    support = (
+        cfg.get('support')
+        or {}
+    )
+
+    portal_title = (
+        cfg.get('portal_title')
+        or preview_sub.name
+    )
+
+    return render_template(
+        'subscription_public.html',
+
+        preview_mode=True,
+
+        sub=preview_sub,
+        data=preview_data,
+
+        portal_settings=cfg,
+
+        sub_layout=cfg.get(
+            'layout',
+            'aurora',
+        ),
+
+        sub_display_mode=cfg.get(
+            'display_mode',
+            'hybrid',
+        ),
+
+        sub_animation=cfg.get(
+            'animation',
+            'balanced',
+        ),
+
+        sub_background=cfg.get(
+            'background',
+            'aurora',
+        ),
+
+        portal_label=cfg.get(
+            'portal_label',
+            'Secure WireGuard portal',
+        ),
+
+        portal_icon=cfg.get(
+            'portal_icon',
+            'fas fa-bolt',
+        ),
+
+        portal_title=portal_title,
+
+        portal_subtitle=cfg.get(
+            'portal_subtitle',
+            (
+                'Your account is ready. '
+                'Install WireGuard, then '
+                'scan QR or import a config.'
+            ),
+        ),
+
+        support_portal_label=cfg.get(
+            'portal_label',
+            'Secure WireGuard portal',
+        ),
+
+        support_portal_icon=cfg.get(
+            'portal_icon',
+            'fas fa-bolt',
+        ),
+
+        support_portal_title=(
+            portal_title
+        ),
+
+        support_portal_subtitle=cfg.get(
+            'portal_subtitle',
+            (
+                'Your account is ready. '
+                'Install WireGuard, then '
+                'scan QR or import a config.'
+            ),
+        ),
+
+        support_telegram=support.get(
+            'telegram',
+            '',
+        ),
+
+        support_whatsapp=support.get(
+            'whatsapp',
+            '',
+        ),
+
+        support_instagram=support.get(
+            'instagram',
+            '',
+        ),
+
+        support_phone=support.get(
+            'phone',
+            '',
+        ),
+
+        support_website=support.get(
+            'website',
+            '',
+        ),
+
+        support_email=support.get(
+            'email',
+            '',
+        ),
+    )
+
+@app.route(
+    '/api/subscriptions/<int:sid>/portal-settings',
+    methods=[
+        'GET',
+        'POST',
+        'DELETE',
+    ],
+)
+@require_api_key_or_login
+def api_subscription_portal_settings(
+    sid,
+):
+    sub = (
+        db.session.get(
+            Subscription,
+            sid,
+        )
+        or abort(404)
+    )
+
+    store = (
+        _load_subscription_portal_overrides()
+    )
+
+    key = str(
+        sub.id
+    )
+
+    if request.method == 'GET':
+        override = (
+            store.get(key)
+            if isinstance(
+                store.get(key),
+                dict,
+            )
+            else {}
+        )
+
+        return jsonify(
+            ok=True,
+            subscription_id=sub.id,
+            subscription_name=sub.name,
+
+            has_override=bool(
+                override
+            ),
+
+            override=override,
+
+            settings=(
+                _effective_subscription_settings(
+                    sub
+                )
+            ),
+
+            global_settings=(
+                _load_subscription_settings()
+            ),
+        )
+
+    if request.method == 'DELETE':
+        existed = (
+            key in store
+        )
+
+        store.pop(
+            key,
+            None,
+        )
+
+        _save_subscription_portal_overrides(
+            store
+        )
+
+        return jsonify(
+            ok=True,
+            removed=existed,
+            subscription_id=sub.id,
+            settings=(
+                _load_subscription_settings()
+            ),
+        )
+
+    payload = (
+        request.get_json(
+            silent=True
+        )
+        or {}
+    )
+
+    global_settings = (
+        _load_subscription_settings()
+    )
+
+    normalized = (
+        _normalize_subscription_settings(
+            payload,
+            base=global_settings,
+        )
+    )
+
+    override = {}
+
+    for field in payload.keys():
+
+        if (
+            field == 'support'
+            and isinstance(
+                payload.get('support'),
+                dict,
+            )
+        ):
+            override['support'] = {
+                support_key: (
+                    normalized[
+                        'support'
+                    ].get(
+                        support_key,
+                        '',
+                    )
+                )
+                for support_key
+                in payload['support'].keys()
+                if support_key
+                in normalized['support']
+            }
+
+        elif (
+            field in normalized
+            and field != 'socials'
+        ):
+            override[
+                field
+            ] = normalized[
+                field
+            ]
+
+    store[
+        key
+    ] = override
+
+    _save_subscription_portal_overrides(
+        store
+    )
+
+    return jsonify(
+        ok=True,
+        subscription_id=sub.id,
+        subscription_name=sub.name,
+        has_override=True,
+        override=override,
+
+        settings=(
+            _effective_subscription_settings(
+                sub
+            )
+        ),
+    )
+
 @app.get('/api/subscriptions/locations')
 @require_api_key_or_login
 def api_subscriptions_locations():
@@ -25329,11 +27192,6 @@ def subscription_access(sub, used_bytes=None) -> dict:
 
 def _subscription_inbound_state(sub):
     """A non-blocking signal for the portal: are there any usable inbounds?
-
-    ``subscription_access`` deliberately does *not* revoke access when this is
-    empty, because the page must still render its explanatory state. The
-    payload exposes it so the UI can show "no configs available" instead of a
-    misleading "Ready" over an empty grid (review finding #3).
     """
     links = getattr(sub, 'links', None) or []
     usable = sum(
@@ -25464,92 +27322,208 @@ def _subscription_public_payload(sub) -> dict:
     }
 
 
-def _subscription_settings_public():
-    try:
-        s = _load_subscription_settings()
-    except Exception:
-        s = _subscription_settings_default()
+def _subscription_settings_public(
+    sub=None,
+):
+    settings = (
+        _effective_subscription_settings(
+            sub
+        )
+    )
 
-    socials = s.get('support') or s.get('socials') or {}
+    support = (
+        settings.get('support')
+        or {}
+    )
 
-    layout = str(s.get('layout') or s.get('selected') or 'aurora').strip().lower()
-    if layout not in ('aurora', 'compact', 'cards', 'minimal'):
-        layout = 'aurora'
+    result = dict(
+        settings
+    )
 
-    return {
-        'layout': layout,
-        'display_mode': s.get('display_mode') if s.get('display_mode') in ('bars', 'rings', 'hybrid') else 'hybrid',
-        'animation': s.get('animation') if s.get('animation') in ('rich', 'soft', 'minimal') else 'rich',
-
-        'portal_label': _subscription_text(
-            s.get('portal_label'),
-            'Secure WireGuard portal',
-            80
-        ),
-        'portal_icon': _subscription_portal_icon(
-            s.get('portal_icon')
-        ),
-        'portal_title': _subscription_text(
-            s.get('portal_title'),
+    result[
+        'socials'
+    ] = {
+        'telegram': support.get(
+            'telegram',
             '',
-            90
-        ),
-        'portal_subtitle': _subscription_text(
-            s.get('portal_subtitle'),
-            'Your account is ready. Install WireGuard, then scan QR or import a config.',
-            180
         ),
 
-        'socials': {
-            'telegram': socials.get('telegram', ''),
-            'whatsapp': socials.get('whatsapp', ''),
-            'instagram': socials.get('instagram', ''),
-            'phone': socials.get('phone', ''),
-            'website': socials.get('website', ''),
-            'email': socials.get('email', ''),
-        }
+        'whatsapp': support.get(
+            'whatsapp',
+            '',
+        ),
+
+        'instagram': support.get(
+            'instagram',
+            '',
+        ),
+
+        'phone': support.get(
+            'phone',
+            '',
+        ),
+
+        'website': support.get(
+            'website',
+            '',
+        ),
+
+        'email': support.get(
+            'email',
+            '',
+        ),
     }
 
+    result[
+        'has_override'
+    ] = bool(
+        sub
+        and _subscription_portal_override(
+            sub
+        )
+    )
+
+    return result
 
 @app.get('/s/<token>')
-def subscription_public_page(token):
-    sub = Subscription.query.filter_by(token=token).first() or abort(404)
+def subscription_public_page(
+    token,
+):
+    sub = (
+        Subscription.query
+        .filter_by(
+            token=token
+        )
+        .first()
+        or abort(404)
+    )
 
-    cfg = _subscription_settings_public()
-    socials = cfg['socials']
+    cfg = (
+        _subscription_settings_public(
+            sub
+        )
+    )
 
-    portal_title = cfg.get('portal_title') or sub.name
+    socials = (
+        cfg.get(
+            'socials'
+        )
+        or {}
+    )
+
+    portal_title = (
+        cfg.get(
+            'portal_title'
+        )
+        or sub.name
+    )
 
     return render_template(
         'subscription_public.html',
-        sub=sub,
-        data=_subscription_public_payload(sub),
-        sub_layout=cfg['layout'],
-        sub_display_mode=cfg.get('display_mode', 'hybrid'),
-        sub_animation=cfg.get('animation', 'rich'),
 
-        portal_label=cfg.get('portal_label', 'Secure WireGuard portal'),
-        portal_icon=cfg.get('portal_icon', 'fas fa-bolt'),
+        sub=sub,
+
+        data=(
+            _subscription_public_payload(
+                sub
+            )
+        ),
+
+        portal_settings=cfg,
+
+        sub_layout=cfg.get(
+            'layout',
+            'aurora',
+        ),
+
+        sub_display_mode=cfg.get(
+            'display_mode',
+            'hybrid',
+        ),
+
+        sub_animation=cfg.get(
+            'animation',
+            'balanced',
+        ),
+
+        sub_background=cfg.get(
+            'background',
+            'aurora',
+        ),
+
+        portal_label=cfg.get(
+            'portal_label',
+            'Secure WireGuard portal',
+        ),
+
+        portal_icon=cfg.get(
+            'portal_icon',
+            'fas fa-bolt',
+        ),
+
         portal_title=portal_title,
+
         portal_subtitle=cfg.get(
             'portal_subtitle',
-            'Your account is ready. Install WireGuard, then scan QR or import a config.'
+            (
+                'Your account is ready. '
+                'Install WireGuard, then '
+                'scan QR or import a config.'
+            ),
         ),
 
-        support_portal_label=cfg.get('portal_label', 'Secure WireGuard portal'),
-        support_portal_icon=cfg.get('portal_icon', 'fas fa-bolt'),
-        support_portal_title=portal_title,
+        support_portal_label=cfg.get(
+            'portal_label',
+            'Secure WireGuard portal',
+        ),
+
+        support_portal_icon=cfg.get(
+            'portal_icon',
+            'fas fa-bolt',
+        ),
+
+        support_portal_title=(
+            portal_title
+        ),
+
         support_portal_subtitle=cfg.get(
             'portal_subtitle',
-            'Your account is ready. Install WireGuard, then scan QR or import a config.'
+            (
+                'Your account is ready. '
+                'Install WireGuard, then '
+                'scan QR or import a config.'
+            ),
         ),
 
-        support_telegram=socials.get('telegram', ''),
-        support_whatsapp=socials.get('whatsapp', ''),
-        support_instagram=socials.get('instagram', ''),
-        support_phone=socials.get('phone', ''),
-        support_website=socials.get('website', ''),
-        support_email=socials.get('email', ''),
+        support_telegram=socials.get(
+            'telegram',
+            '',
+        ),
+
+        support_whatsapp=socials.get(
+            'whatsapp',
+            '',
+        ),
+
+        support_instagram=socials.get(
+            'instagram',
+            '',
+        ),
+
+        support_phone=socials.get(
+            'phone',
+            '',
+        ),
+
+        support_website=socials.get(
+            'website',
+            '',
+        ),
+
+        support_email=socials.get(
+            'email',
+            '',
+        ),
     )
 
 @app.get('/s/<token>/api', endpoint='subscription_public_api')
@@ -25620,7 +27594,6 @@ def subscription_public_config(token):
 
             entry = f'{candidate}.conf'
 
-            # ZIP entry names should also be unique
             normalized = entry.lower()
 
             if normalized in used_names:
