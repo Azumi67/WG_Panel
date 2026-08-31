@@ -897,9 +897,20 @@ def diagnostics(g):
         (
             "Security",
             (
-                ("login_success", "Successful admin login"),
-                ("login_fail", "Failed login / 2FA"),
-                ("suspicious_4xx", "Suspicious 4xx activity"),
+                ("login_success", "Successful login"),
+                ("login_fail", "Failed login"),
+                ("suspicious_4xx", "Suspicious HTTP activity"),
+                ("security_block", "Temporary block applied"),
+                ("security_release", "Manual security release"),
+                ("security_auto_release", "Automatic security release"),
+            ),
+        ),
+        (
+            "Traffic Control",
+            (
+                ("traffic_policy_change", "Policy configuration changed"),
+                ("traffic_apply_success", "Rules applied successfully"),
+                ("traffic_apply_failed", "Rule application failed"),
             ),
         ),
         (
@@ -949,6 +960,7 @@ def diagnostics(g):
             f"<code>{('v' + _html(g, latest)) if latest else 'not detected'}</code>"
         ),
         f"◷ Updater        {_html(g, updater_text)}",
+        f"✦ Bot            <code>{_html(g, g.get('BOT_VERSION') or 'wg-bot')}</code>",
     ]
 
     for group_name, items in groups:
@@ -963,6 +975,10 @@ def diagnostics(g):
             )
 
     lines.extend([
+        "",
+        "<b>Traffic note</b>",
+        "◇ Traffic Control notifications cover configuration and apply results.",
+        "◇ Block counters remain available in the web panel; they are not per-packet Telegram events.",
         "",
         "<i>TLS, ports, certificates, and account security remain in the authenticated web panel.</i>",
     ])
