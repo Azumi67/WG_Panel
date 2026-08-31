@@ -131,7 +131,7 @@ function _fmtAgo(d){
     document.body.style.paddingRight = '';
   }
   function pinModals() {
-    ['tg-logs-modal', 'iface-logs-modal', 'tg-add-modal', 'admin-logs-modal'].forEach(id => {
+    ['tg-logs-modal', 'iface-logs-modal', 'tg-add-modal', 'admin-logs-modal', 'sec-advanced-modal', 'sec-history-modal'].forEach(id => {
       const el = document.getElementById(id);
       if (el && el.parentElement !== document.body) document.body.appendChild(el);
     });
@@ -181,7 +181,7 @@ function _fmtAgo(d){
       if (pct > 0) rafId = requestAnimationFrame(tick); else hide();
     });
     el.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
-    window.toast = window.showToast;        
+    window.toast = window.showToast;        // expose
     window.toastSafe = (m, t='info') => window.showToast(m, t);
     return { hide };
   };
@@ -248,6 +248,70 @@ function _fmtAgo(d){
     if (note) note.style.display = managed ? '' : 'none';
   }
 
+  function browserTimezoneName() {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch {
+      return 'UTC';
+    }
+  }
+
+  function supportedTimezoneNames(current = 'UTC') {
+    let zones = [];
+    try {
+      if (typeof Intl.supportedValuesOf === 'function') {
+        zones = Intl.supportedValuesOf('timeZone');
+      }
+    } catch {}
+    if (!zones.length) {
+      zones = ['UTC','Africa/Cairo','America/New_York','Asia/Dubai','Asia/Tehran','Asia/Tokyo','Australia/Sydney','Europe/Amsterdam','Europe/Berlin','Europe/London'];
+    }
+    const wanted = String(current || 'UTC');
+    if (!zones.includes('UTC')) zones.unshift('UTC');
+    if (wanted && !zones.includes(wanted)) zones.unshift(wanted);
+    return Array.from(new Set(zones));
+  }
+
+  function populatePanelTimezone(current) {
+    const select = document.getElementById('panel-timezone');
+    if (!select) return;
+    const wanted = String(current || 'UTC');
+    const zones = supportedTimezoneNames(wanted);
+    select.innerHTML = '';
+    zones.forEach((zone) => {
+      const option = document.createElement('option');
+      option.value = zone;
+      option.textContent = zone;
+      option.selected = zone === wanted;
+      select.appendChild(option);
+    });
+    select.value = wanted;
+    select.dispatchEvent(new Event('change', { bubbles:true }));
+  }
+
+  function updateRegionalPreview(timezoneName) {
+    const tz = String(timezoneName || 'UTC');
+    const current = document.getElementById('panel-timezone-current');
+    const nowEl = document.getElementById('panel-timezone-now');
+    const status = document.getElementById('panel-timezone-status');
+    if (current) current.textContent = tz;
+    if (status) {
+      status.textContent = tz;
+      status.className = 'badge green';
+    }
+    if (nowEl) {
+      try {
+        nowEl.textContent = 'Current local time ' + new Intl.DateTimeFormat(undefined, {
+          timeZone: tz,
+          year:'numeric', month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit',
+          hour12:false,
+        }).format(new Date());
+      } catch {
+        nowEl.textContent = 'Current local time unavailable';
+      }
+    }
+  }
+
   async function loadPanelSettings() {
     const j = await jfetch('/api/settings');
     const tlsOn = !!j.tls_enabled;
@@ -271,6 +335,13 @@ function _fmtAgo(d){
       curEl.textContent = onHttps ? 'HTTPS' : 'HTTP';
       curEl.className = 'badge ' + (onHttps ? 'green' : 'gray');
     }
+
+    const timezoneName = String(j.timezone || 'UTC');
+    populatePanelTimezone(timezoneName);
+    updateRegionalPreview(timezoneName);
+
+    const browserTz = document.getElementById('panel-browser-timezone');
+    if (browserTz) browserTz.textContent = browserTimezoneName();
 
     setTLSAdvanced(tlsOn);
     rowsForTLS(tlsOn);
@@ -326,6 +397,7 @@ function _fmtAgo(d){
     const httpsP  = Number(document.getElementById('https-port')?.value || 0) || null;
     const tlsCert = (document.getElementById('cert-path')?.value || '').trim();
     const tlsKey  = (document.getElementById('key-path')?.value  || '').trim();
+    const panelTimezone = (document.getElementById('panel-timezone')?.value || 'UTC').trim() || 'UTC';
 
     const btn = document.getElementById('save-panel'); 
     if (btn) btn.disabled = true;
@@ -346,6 +418,7 @@ function _fmtAgo(d){
           https_port: httpsP,
           tls_cert_path: tlsCert || null,
           tls_key_path:  tlsKey  || null,
+          timezone: panelTimezone,
         }
       });
 
@@ -371,6 +444,37 @@ function _fmtAgo(d){
     } catch (e) {
       console.error(e);
       toast('Save failed: ' + (e?.message || 'unknown'), 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function saveRegionalSettings() {
+    const select = document.getElementById('panel-timezone');
+    const timezoneName = String(select?.value || 'UTC').trim() || 'UTC';
+    const btn = document.getElementById('save-regional');
+    if (btn) btn.disabled = true;
+    try {
+      const current = await jfetch('/api/settings');
+      await jfetch('/api/settings', {
+        method: 'POST',
+        body: {
+          tls_enabled: !!current.tls_enabled,
+          domain: current.domain || null,
+          force_https_redirect: !!current.force_https_redirect,
+          hsts: !!current.hsts,
+          http_port: current.http_port ?? null,
+          https_port: current.https_port ?? null,
+          tls_cert_path: current.tls_cert_path || null,
+          tls_key_path: current.tls_key_path || null,
+          timezone: timezoneName,
+        }
+      });
+      toast(`Panel timezone saved: ${timezoneName}`, 'success');
+      await loadPanelSettings();
+    } catch (e) {
+      console.error(e);
+      toast('Timezone save failed: ' + (e?.message || 'unknown'), 'error');
     } finally {
       if (btn) btn.disabled = false;
     }
@@ -456,6 +560,7 @@ document.getElementById('rt-restart')
 
     if (name === 'tls') loadPanelSettings();
     if (name === 'runtime') rtLoad();
+    if (name === 'regional') loadPanelSettings();
   }
 
   document.addEventListener('DOMContentLoaded', async () => {
@@ -481,6 +586,18 @@ document.getElementById('rt-restart')
     document.getElementById('save-panel')?.addEventListener('click', () =>
       tLSSyncRuntime().catch(e => toast('Save failed: ' + (e?.message || 'unknown'), 'error'))
     );
+    document.getElementById('save-regional')?.addEventListener('click', () =>
+      saveRegionalSettings().catch(e => toast('Timezone save failed: ' + (e?.message || 'unknown'), 'error'))
+    );
+    document.getElementById('panel-timezone')?.addEventListener('change', (e) => {
+      updateRegionalPreview(e.target.value || 'UTC');
+    });
+    document.getElementById('panel-use-browser-timezone')?.addEventListener('click', () => {
+      const detected = browserTimezoneName();
+      populatePanelTimezone(detected);
+      updateRegionalPreview(detected);
+      toast(`Selected browser timezone: ${detected}. Save to apply.`, 'info');
+    });
     document.getElementById('save-runtime')?.addEventListener('click', () =>
       rtSave().catch(e => toast('Runtime save failed: ' + (e?.message || 'unknown'), 'error'))
     );
@@ -1133,6 +1250,724 @@ document.getElementById('rt-restart')
 })();
 
 
+  (function securitySettings() {
+    const $s = (id) => document.getElementById(id);
+    let lastTelegram = null;
+    let trustedNetworks = [];
+    let denyNetworks = [];
+    let temporaryAllows = [];
+    let lastSecurityPayload = null;
+    let firewallCapability = {};
+    let advancedDirty = false;
+    let advancedSnapshot = null;
+    const dirtySecuritySelects = new Set();
+    const dirtySecurityBooleans = new Set();
+    const dirtyTelegramToggles = new Set();
+    let applyingSecurityFromServer = false;
+
+    const booleanIds = {
+      enabled: 'sec-enabled',
+      escalate: 'sec-escalate',
+      enrich_ip: 'sec-enrich-ip',
+      firewall_enabled: 'sec-firewall-enabled'
+    };
+    const selectIds = {
+      response_mode: 'sec-response-mode',
+      ip_source: 'sec-ip-source',
+      block_scope: 'sec-block-scope'
+    };
+    const numberIds = {
+      threshold: 'sec-threshold',
+      sensitive_threshold: 'sec-sensitive-threshold',
+      rate_limit_threshold: 'sec-rate-limit-threshold',
+      login_threshold: 'sec-login-threshold',
+      firewall_after_offenses: 'sec-firewall-after'
+    };
+    const timeFields = {
+      window_seconds: { hidden:'sec-window', value:'sec-window-value', unit:'sec-window-unit', fallback:60 },
+      cooldown_seconds: { hidden:'sec-cooldown', value:'sec-cooldown-value', unit:'sec-cooldown-unit', fallback:600 },
+      block_seconds: { hidden:'sec-block-seconds', value:'sec-block-value', unit:'sec-block-unit', fallback:900 },
+      max_block_seconds: { hidden:'sec-max-block-seconds', value:'sec-max-block-value', unit:'sec-max-block-unit', fallback:86400 },
+      login_window_seconds: { hidden:'sec-login-window', value:'sec-login-window-value', unit:'sec-login-window-unit', fallback:600 }
+    };
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+    }
+
+    function humanSeconds(raw) {
+      let n = Math.max(0, Math.floor(Number(raw || 0)));
+      if (!n) return '0m';
+      const d = Math.floor(n / 86400); n %= 86400;
+      const h = Math.floor(n / 3600); n %= 3600;
+      const m = Math.floor(n / 60); const sec = n % 60;
+      const out = [];
+      if (d) out.push(`${d}d`);
+      if (h) out.push(`${h}h`);
+      if (m) out.push(`${m}m`);
+      if (sec && !d && !h) out.push(`${sec}s`);
+      return out.slice(0, 2).join(' ') || '<1m';
+    }
+
+    function bestTimeParts(seconds) {
+      let n = Math.max(60, Math.round(Number(seconds || 60)));
+      if (n % 86400 === 0) return { value:n/86400, unit:86400 };
+      if (n % 3600 === 0) return { value:n/3600, unit:3600 };
+      return { value:Math.max(1, Math.round(n/60)), unit:60 };
+    }
+
+    function setTimeField(name, seconds) {
+      const f = timeFields[name]; if (!f) return;
+      const parts = bestTimeParts(seconds ?? f.fallback);
+      if ($s(f.value)) $s(f.value).value = String(parts.value);
+      if ($s(f.unit)) {
+        $s(f.unit).value = String(parts.unit);
+        $s(f.unit).dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      syncTimeField(name);
+    }
+
+    function syncTimeField(name) {
+      const f = timeFields[name]; if (!f) return f?.fallback || 60;
+      const amount = Math.max(1, Number($s(f.value)?.value || 1));
+      const unit = Math.max(60, Number($s(f.unit)?.value || 60));
+      const seconds = Math.round(amount * unit);
+      if ($s(f.hidden)) $s(f.hidden).value = String(seconds);
+      return seconds;
+    }
+
+    function syncAllTimeFields() {
+      Object.keys(timeFields).forEach(syncTimeField);
+    }
+
+    function selectedCustomValue(id, fallback = '') {
+      const select = $s(id);
+      if (!select) return fallback;
+      const wrap = select.closest('.set-select');
+      const selectedItem = wrap?.querySelector('.set-select__option[aria-selected="true"]');
+      return String(selectedItem?.dataset?.value ?? select.value ?? fallback);
+    }
+
+    function setSelectValueAndSync(id, value) {
+      const select = $s(id);
+      if (!select) return;
+      const wanted = String(value ?? '');
+      const options = Array.from(select.options || []);
+      const index = options.findIndex(opt => String(opt.value) === wanted);
+      if (index >= 0) {
+        select.selectedIndex = index;
+        options.forEach((opt, i) => { opt.selected = i === index; });
+      }
+      select.value = wanted;
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    function renderStats(stats) {
+      stats = stats || {};
+      const pill = $s('sec-status-24h');
+      if (pill) {
+        const events = Number(stats.monitor_triggers || 0) + Number(stats.blocks || 0);
+        pill.innerHTML = `<i class="fa-solid fa-chart-simple"></i> 24h ${events} trigger${events === 1 ? '' : 's'} · ${Number(stats.blocks || 0)} block${Number(stats.blocks || 0) === 1 ? '' : 's'}`;
+        pill.className = 'sec-state ' + (Number(stats.blocks || 0) ? 'warn' : 'neutral');
+      }
+      const map = {
+        'sec-stat-rejected': stats.rejected,
+        'sec-stat-sensitive': stats.sensitive,
+        'sec-stat-blocks': stats.blocks,
+        'sec-stat-logins': stats.login_failures,
+        'sec-stat-ips': stats.unique_ips
+      };
+      Object.entries(map).forEach(([id, value]) => { if ($s(id)) $s(id).textContent = String(Number(value || 0)); });
+    }
+
+    function setStatus(settings, blocks, stats) {
+      const enabled = !!settings.enabled;
+      const blocking = settings.response_mode === 'block';
+      const monitor = $s('sec-status-monitor');
+      const response = $s('sec-status-response');
+      const engine = $s('sec-engine-pill');
+      const blockPill = $s('sec-status-blocks');
+      if (monitor) { monitor.innerHTML = `<i class="fa-solid fa-circle"></i> ${enabled ? 'Monitoring' : 'Disabled'}`; monitor.className = 'sec-state ' + (enabled ? 'good' : 'neutral'); }
+      if (response) { response.innerHTML = `<i class="fa-solid fa-shield"></i> ${blocking ? 'Blocking' : 'Monitor only'}`; response.className = 'sec-state ' + (blocking ? 'good' : 'neutral'); }
+      if (engine) { engine.textContent = enabled ? 'Enabled' : 'Disabled'; engine.className = 'sec-pill ' + (enabled ? 'good' : 'neutral'); }
+      if (blockPill) { const n = Array.isArray(blocks) ? blocks.length : 0; blockPill.innerHTML = `<i class="fa-solid fa-ban"></i> ${n} active block${n === 1 ? '' : 's'}`; blockPill.className = 'sec-state ' + (n ? 'danger' : 'good'); }
+      renderStats(stats);
+    }
+
+    function updateHumanHints() {
+      syncAllTimeFields();
+      const items = [
+        ['window_seconds','sec-window-human','Rolling window'],
+        ['cooldown_seconds','sec-cooldown-human','Alert cooldown'],
+        ['block_seconds','sec-block-human','First offense'],
+        ['max_block_seconds','sec-max-block-human','Maximum'],
+        ['login_window_seconds','sec-login-window-human','Login window']
+      ];
+      for (const [name, hintId, label] of items) {
+        const f = timeFields[name]; const hint = $s(hintId);
+        if (f && hint) hint.textContent = `${label}: ${humanSeconds($s(f.hidden)?.value || f.fallback)}`;
+      }
+      updateEscalationPreview();
+    }
+
+    function updateEscalationPreview() {
+      const host = $s('sec-escalation-preview'); if (!host) return;
+      const base = Math.max(60, Number($s('sec-block-seconds')?.value || 900));
+      const max = Math.max(base, Number($s('sec-max-block-seconds')?.value || 86400));
+      const escalating = !!$s('sec-escalate')?.checked;
+      const values = [];
+      for (let i=0;i<5;i++) values.push(humanSeconds(Math.min(max, escalating ? base * (2 ** i) : base)));
+      const span = host.querySelector('span');
+      if (span) span.textContent = escalating ? `${values.join(' → ')} … capped at ${humanSeconds(max)}` : `Every offense: ${humanSeconds(base)}`;
+    }
+
+    function updateIpSourceHelp() {
+      const effective = selectedCustomValue('sec-ip-source', 'direct') === 'effective';
+      const help = $s('sec-ip-source-help');
+      if (!help) return;
+      help.textContent = effective
+        ? 'Use only when direct access to Flask is restricted to a trusted reverse proxy or CDN.'
+        : 'Recommended when the panel is reached directly; headers cannot override the socket address.';
+      help.classList.toggle('is-warning', effective);
+    }
+
+    function renderNetworkChips(hostId, list, kind) {
+      const host = $s(hostId); if (!host) return;
+      host.innerHTML = '';
+      if (!list.length) {
+        host.innerHTML = `<span class="sec-trust-empty"><i class="fa-solid fa-shield"></i> ${kind === 'deny' ? 'No permanent deny entries.' : 'No trusted addresses — every valid client IP is eligible for temporary blocking.'}</span>`;
+        return;
+      }
+      list.forEach((network, index) => {
+        const chip = document.createElement('span');
+        chip.className = 'sec-cidr-chip ' + (kind === 'deny' ? 'is-deny' : '');
+        chip.innerHTML = `<i class="fa-solid ${kind === 'deny' ? 'fa-ban' : 'fa-shield-check'}"></i><code>${escapeHtml(network)}</code><button type="button" class="sec-cidr-remove" data-kind="${kind}" data-index="${index}" aria-label="Remove ${escapeHtml(network)}" title="Remove"><i class="fa-solid fa-xmark"></i></button>`;
+        host.appendChild(chip);
+      });
+    }
+
+    function renderTrustedChips() { renderNetworkChips('sec-trusted-chips', trustedNetworks, 'trusted'); }
+    function renderDenyChips() { renderNetworkChips('sec-deny-chips', denyNetworks, 'deny'); }
+
+    function addNetworkFromInput(inputId, list, render, duplicateMessage) {
+      const input = $s(inputId); if (!input) return;
+      const value = input.value.trim(); if (!value) return;
+      if (list.some(v => v.toLowerCase() === value.toLowerCase())) { toast(duplicateMessage, 'warn'); return; }
+      list.push(value); input.value = ''; render();
+    }
+
+    function renderTempAllows(rows) {
+      temporaryAllows = Array.isArray(rows) ? rows : [];
+      const host = $s('sec-temp-allow-list'); if (!host) return;
+      host.innerHTML = '';
+      if (!temporaryAllows.length) {
+        host.innerHTML = '<span class="sec-trust-empty"><i class="fa-solid fa-clock"></i> No temporary allow entries.</span>';
+        return;
+      }
+      const now = Date.now() / 1000;
+      temporaryAllows.forEach(row => {
+        const remain = Math.max(0, Number(row.expires_at || 0) - now);
+        const chip = document.createElement('span'); chip.className = 'sec-temp-allow-chip';
+        chip.innerHTML = `<span><i class="fa-solid fa-clock"></i><code>${escapeHtml(row.network || '')}</code><small>${humanSeconds(remain)} left</small></span><button type="button" data-temp-allow-remove="${escapeHtml(row.network || '')}" aria-label="Remove temporary allow"><i class="fa-solid fa-xmark"></i></button>`;
+        host.appendChild(chip);
+      });
+    }
+
+    function markAdvancedDirty(on = true) {
+      advancedDirty = !!on;
+      const state = $s('sec-advanced-save-state');
+      const badge = $s('sec-advanced-badge');
+      if (state) {
+        state.classList.toggle('is-dirty', advancedDirty);
+        state.innerHTML = advancedDirty
+          ? '<i class="fa-solid fa-circle-exclamation"></i> Unsaved advanced changes · Temporary Allow entries still apply immediately.'
+          : '<i class="fa-solid fa-circle-check"></i> Saved policy · Temporary Allow entries apply immediately.';
+      }
+      if (badge && advancedDirty) {
+        badge.textContent = 'Unsaved';
+        badge.classList.add('is-dirty');
+      }
+    }
+
+    function captureAdvancedSnapshot() {
+      return {
+        block_scope: selectedCustomValue('sec-block-scope', 'all'),
+        rate_limit_threshold: $s('sec-rate-limit-threshold')?.value ?? '',
+        enrich_ip: !!$s('sec-enrich-ip')?.checked,
+        login_threshold: $s('sec-login-threshold')?.value ?? '',
+        login_window_value: $s('sec-login-window-value')?.value ?? '',
+        login_window_unit: $s('sec-login-window-unit')?.value ?? '60',
+        firewall_enabled: !!$s('sec-firewall-enabled')?.checked,
+        firewall_after: $s('sec-firewall-after')?.value ?? '',
+        deny_networks: [...denyNetworks],
+        tg_security_block: !!$s('tg-n-security-block')?.checked,
+        tg_security_release: !!$s('tg-n-security-release')?.checked,
+        tg_security_auto_release: !!$s('tg-n-security-auto-release')?.checked
+      };
+    }
+
+    function clearAdvancedDirtyFlags() {
+      dirtySecuritySelects.delete('sec-block-scope');
+      dirtySecurityBooleans.delete('sec-enrich-ip');
+      dirtySecurityBooleans.delete('sec-firewall-enabled');
+      dirtyTelegramToggles.delete('tg-n-security-block');
+      dirtyTelegramToggles.delete('tg-n-security-release');
+      dirtyTelegramToggles.delete('tg-n-security-auto-release');
+    }
+
+    function restoreAdvancedSnapshot(snapshot) {
+      if (!snapshot) return;
+      applyingSecurityFromServer = true;
+      try {
+        setSelectValueAndSync('sec-block-scope', snapshot.block_scope ?? 'all');
+        if ($s('sec-rate-limit-threshold')) $s('sec-rate-limit-threshold').value = snapshot.rate_limit_threshold ?? '';
+        if ($s('sec-enrich-ip')) $s('sec-enrich-ip').checked = !!snapshot.enrich_ip;
+        if ($s('sec-login-threshold')) $s('sec-login-threshold').value = snapshot.login_threshold ?? '';
+        if ($s('sec-login-window-value')) $s('sec-login-window-value').value = snapshot.login_window_value ?? '';
+        if ($s('sec-login-window-unit')) {
+          $s('sec-login-window-unit').value = String(snapshot.login_window_unit ?? '60');
+          $s('sec-login-window-unit').dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        syncTimeField('login_window_seconds');
+        if ($s('sec-firewall-enabled')) $s('sec-firewall-enabled').checked = !!snapshot.firewall_enabled;
+        if ($s('sec-firewall-after')) $s('sec-firewall-after').value = snapshot.firewall_after ?? '';
+        denyNetworks = Array.isArray(snapshot.deny_networks) ? [...snapshot.deny_networks] : [];
+        renderDenyChips();
+        if ($s('tg-n-security-block')) $s('tg-n-security-block').checked = !!snapshot.tg_security_block;
+        if ($s('tg-n-security-release')) $s('tg-n-security-release').checked = !!snapshot.tg_security_release;
+        if ($s('tg-n-security-auto-release')) $s('tg-n-security-auto-release').checked = !!snapshot.tg_security_auto_release;
+      } finally {
+        applyingSecurityFromServer = false;
+      }
+      clearAdvancedDirtyFlags();
+      updateHumanHints();
+      renderFirewallStatus(firewallCapability);
+      renderAdvancedSummary();
+      markAdvancedDirty(false);
+    }
+
+    function cancelAdvancedChanges() {
+      restoreAdvancedSnapshot(advancedSnapshot);
+      closeModal('sec-advanced-modal');
+    }
+
+    function advancedStatusText() {
+      const bits = [];
+      if ($s('sec-enrich-ip')?.checked) bits.push('Geo');
+      if ($s('sec-firewall-enabled')?.checked && firewallCapability?.usable) bits.push('nft');
+      if (denyNetworks.length) bits.push(`${denyNetworks.length} deny`);
+      if (temporaryAllows.length) bits.push(`${temporaryAllows.length} allow`);
+      return bits.length ? bits.join(' · ') : 'Configured';
+    }
+
+    function renderAdvancedSummary() {
+      const scope = selectedCustomValue('sec-block-scope', 'all');
+      const loginThreshold = Number($s('sec-login-threshold')?.value || 5);
+      const loginWindow = Number($s('sec-login-window')?.value || 600);
+      const geoOn = !!$s('sec-enrich-ip')?.checked;
+      const fwConfigured = !!$s('sec-firewall-enabled')?.checked;
+      const fwUsable = !!firewallCapability?.usable;
+
+      const setChip = (id, html, tone='') => {
+        const el = $s(id); if (!el) return;
+        el.innerHTML = html;
+        el.className = 'sec-adv-chip' + (tone ? ` ${tone}` : '');
+      };
+      setChip('sec-adv-status-scope', `<i class="fa-solid fa-shield"></i> ${scope === 'auth_admin' ? 'Auth/admin only' : 'Entire panel'}`);
+      setChip('sec-adv-status-login', `<i class="fa-solid fa-key"></i> Login ${loginThreshold}/${humanSeconds(loginWindow)}`, 'is-good');
+      setChip('sec-adv-status-geo', `<i class="fa-solid fa-earth-europe"></i> Geo/ASN ${geoOn ? 'on' : 'off'}`, geoOn ? 'is-good' : 'is-neutral');
+      setChip('sec-adv-status-firewall', `<i class="fa-solid fa-shield-halved"></i> nftables ${fwConfigured ? (fwUsable ? 'on' : 'unavailable') : (fwUsable ? 'off' : 'unavailable')}`, fwConfigured && fwUsable ? 'is-good' : (!fwUsable ? 'is-warn' : 'is-neutral'));
+      setChip('sec-adv-status-deny', `<i class="fa-solid fa-ban"></i> Deny ${denyNetworks.length}`, denyNetworks.length ? 'is-danger' : 'is-neutral');
+      setChip('sec-adv-status-allow', `<i class="fa-solid fa-clock"></i> Allow ${temporaryAllows.length}`, temporaryAllows.length ? 'is-good' : 'is-neutral');
+
+      const badge = $s('sec-advanced-badge');
+      if (badge && !advancedDirty) {
+        badge.textContent = advancedStatusText();
+        badge.classList.remove('is-dirty');
+      }
+    }
+
+    function renderFirewallStatus(status) {
+      const host = $s('sec-firewall-status'); if (!host) return;
+      status = status || {};
+      firewallCapability = status;
+      const available = !!status.available;
+      const usable = !!status.usable;
+      const toggle = $s('sec-firewall-enabled');
+      const remedy = $s('sec-firewall-remedy');
+      const remedyTitle = $s('sec-firewall-remedy-title');
+      const remedyText = $s('sec-firewall-remedy-text');
+      const remedyCommand = $s('sec-firewall-remedy-command');
+
+      host.className = 'sec-firewall-status ' + (usable ? 'is-good' : 'is-warn');
+      if (usable) {
+        host.innerHTML = '<i class="fa-solid fa-circle-check"></i><span>nftables ready · WG Panel can manage its dedicated temporary-block table</span>';
+        if (remedy) remedy.hidden = true;
+        if (toggle) { toggle.disabled = false; toggle.removeAttribute('aria-disabled'); }
+      } else {
+        const reason = String(status.reason || (available ? 'permission_denied' : 'not_installed'));
+        const detail = String(status.detail || '').trim();
+        host.innerHTML = available
+          ? '<i class="fa-solid fa-triangle-exclamation"></i><span>nftables is installed but WG Panel cannot manage firewall rules · application blocking still works</span>'
+          : '<i class="fa-solid fa-triangle-exclamation"></i><span>nftables is not installed · application blocking still works</span>';
+
+        if (toggle) {
+          if (!toggle.checked) toggle.disabled = true;
+          else toggle.disabled = false;
+          toggle.setAttribute('aria-disabled', toggle.checked ? 'false' : 'true');
+        }
+        if (remedy) remedy.hidden = false;
+        if (remedyTitle) remedyTitle.textContent = available ? 'Firewall permission is unavailable' : 'Install nftables to enable host-firewall escalation';
+        if (remedyText) remedyText.textContent = available
+          ? (detail || 'Keep host-firewall escalation off unless the WG Panel service has permission to manage nftables. Application quarantine remains active.')
+          : 'WG Panel will not install packages automatically. Install nftables manually, then click Recheck.';
+        const command = String(status.install_command || status.check_command || (available ? 'sudo nft list ruleset' : 'sudo apt-get update && sudo apt-get install -y nftables'));
+        if (remedyCommand) remedyCommand.textContent = command;
+      }
+      renderAdvancedSummary();
+    }
+
+    async function refreshFirewallCapability(showToast = false) {
+      try {
+        const result = await jfetch('/api/security/http-protection/capabilities');
+        renderFirewallStatus(result?.firewall || {});
+        if (showToast) toast(result?.firewall?.usable ? 'nftables is ready.' : 'Host firewall is still unavailable. Application blocking remains active.', result?.firewall?.usable ? 'success' : 'warn');
+      } catch (e) {
+        if (showToast) toast('Could not recheck nftables: ' + (e?.message || 'unknown'), 'error');
+      }
+    }
+
+    function renderBlocks(blocks) {
+      const body = document.querySelector('#sec-blocks-table tbody');
+      const tableWrap = $s('sec-blocks-table-wrap');
+      const empty = $s('sec-blocks-empty');
+      if (!body || !tableWrap || !empty) return;
+      body.innerHTML = '';
+      if (!Array.isArray(blocks) || !blocks.length) { tableWrap.hidden = true; empty.hidden = false; return; }
+      empty.hidden = true; tableWrap.hidden = false;
+      for (const block of blocks) {
+        const tr = document.createElement('tr');
+        const until = block.blocked_until ? new Date(Number(block.blocked_until) * 1000) : null;
+        const category = String(block.category || '').replaceAll('_',' ');
+        const network = block.geo || {};
+        const networkText = [network.country_code, network.asn].filter(Boolean).join(' · ');
+        tr.innerHTML = `
+          <td><code class="sec-ip-code"><i class="fa-solid fa-user-lock"></i> ${escapeHtml(block.ip || '')}</code>${networkText ? `<small class="sec-ip-meta">${escapeHtml(networkText)}</small>` : ''}</td>
+          <td><span class="sec-category">${escapeHtml(category || 'security trigger')}</span><span class="sec-reason">${escapeHtml(block.reason || 'Threshold reached')}</span>${block.firewall ? '<small class="sec-firewall-badge"><i class="fa-solid fa-shield"></i> host firewall</small>' : ''}</td>
+          <td><span class="sec-offense">${Number(block.offenses || 1)}</span></td>
+          <td>${until && !isNaN(until) ? escapeHtml(until.toLocaleString()) : '—'}</td>
+          <td><span class="sec-remaining"><i class="fa-regular fa-clock"></i> ${humanSeconds(block.remaining_seconds)}</span></td>
+          <td><button class="btn secondary sm sec-unblock" type="button" data-ip="${escapeHtml(block.ip || '')}"><i class="fa-solid fa-unlock"></i> Release</button></td>`;
+        body.appendChild(tr);
+      }
+    }
+
+    function applyServerSettings(settings) {
+      applyingSecurityFromServer = true;
+      try {
+        Object.entries(booleanIds).forEach(([key, id]) => {
+          const el = $s(id);
+          if (el && !dirtySecurityBooleans.has(id)) el.checked = !!settings[key];
+        });
+        Object.entries(selectIds).forEach(([key, id]) => { if (!dirtySecuritySelects.has(id)) setSelectValueAndSync(id, settings[key] ?? ''); });
+        Object.entries(numberIds).forEach(([key, id]) => { const el = $s(id); if (el) el.value = settings[key] ?? ''; });
+        Object.keys(timeFields).forEach(name => setTimeField(name, settings[name] ?? timeFields[name].fallback));
+        trustedNetworks = Array.isArray(settings.trusted_networks) ? [...settings.trusted_networks] : [];
+        denyNetworks = Array.isArray(settings.deny_networks) ? [...settings.deny_networks] : [];
+        renderTrustedChips(); renderDenyChips(); updateHumanHints(); updateIpSourceHelp();
+      } finally { applyingSecurityFromServer = false; }
+      renderAdvancedSummary();
+    }
+
+    async function loadSecurity() {
+      try {
+        const [security, tg] = await Promise.all([jfetch('/api/security/http-protection'), jfetch('/api/telegram/settings')]);
+        const settings = security?.settings || security || {}; const blocks = security?.active_blocks || [];
+        lastSecurityPayload = security || {};
+        lastTelegram = tg || {};
+        applyServerSettings(settings);
+        renderTempAllows(security?.temporary_allow || []);
+        firewallCapability = security?.firewall || {};
+        renderFirewallStatus(firewallCapability);
+        const notify = tg?.notify || {};
+        const notifyMap = {
+          'tg-n-login-success': 'login_success',
+          'tg-n-login-fail': 'login_fail',
+          'tg-n-4xx': 'suspicious_4xx',
+          'tg-n-security-block': 'security_block',
+          'tg-n-security-release': 'security_release',
+          'tg-n-security-auto-release': 'security_auto_release'
+        };
+        Object.entries(notifyMap).forEach(([id,key]) => {
+          const el = $s(id);
+          if (el && !dirtyTelegramToggles.has(id)) el.checked = !!notify[key];
+        });
+        renderBlocks(blocks); setStatus(settings, blocks, security?.stats_24h || {}); renderAdvancedSummary();
+      } catch (e) { console.error(e); toast('Failed to load security settings: ' + (e?.message || 'unknown'), 'error'); }
+    }
+
+    function applyRecommended() {
+      if ($s('sec-enabled')) $s('sec-enabled').checked = true;
+      setSelectValueAndSync('sec-response-mode', 'monitor');
+      setSelectValueAndSync('sec-ip-source', 'direct');
+      setSelectValueAndSync('sec-block-scope', 'all');
+      if ($s('sec-threshold')) $s('sec-threshold').value = '20';
+      if ($s('sec-sensitive-threshold')) $s('sec-sensitive-threshold').value = '3';
+      if ($s('sec-rate-limit-threshold')) $s('sec-rate-limit-threshold').value = '10';
+      if ($s('sec-login-threshold')) $s('sec-login-threshold').value = '5';
+      setTimeField('window_seconds', 60);
+      setTimeField('login_window_seconds', 600);
+      setTimeField('cooldown_seconds', 600);
+      setTimeField('block_seconds', 900);
+      setTimeField('max_block_seconds', 86400);
+      if ($s('sec-escalate')) $s('sec-escalate').checked = true;
+      if ($s('sec-enrich-ip')) $s('sec-enrich-ip').checked = false;
+      if ($s('sec-firewall-enabled')) $s('sec-firewall-enabled').checked = false;
+      if ($s('sec-firewall-after')) $s('sec-firewall-after').value = '3';
+      if (!trustedNetworks.length) trustedNetworks = ['127.0.0.1/32','::1/128'];
+      renderTrustedChips(); updateHumanHints(); updateIpSourceHelp();
+      toast('Safe recommended values applied. Save to activate them.', 'info');
+    }
+
+    async function saveSecurity() {
+      const buttons = [$s('sec-save'), $s('sec-advanced-save')].filter(Boolean);
+      buttons.forEach(button => button.disabled = true);
+      try {
+        syncAllTimeFields();
+        const securityBody = {
+          enabled: !!$s('sec-enabled')?.checked,
+          response_mode: selectedCustomValue('sec-response-mode', 'monitor'),
+          ip_source: selectedCustomValue('sec-ip-source', 'direct'),
+          block_scope: selectedCustomValue('sec-block-scope', 'all'),
+          threshold: Number($s('sec-threshold')?.value || 20),
+          window_seconds: Number($s('sec-window')?.value || 60),
+          sensitive_threshold: Number($s('sec-sensitive-threshold')?.value || 3),
+          rate_limit_threshold: Number($s('sec-rate-limit-threshold')?.value || 10),
+          login_threshold: Number($s('sec-login-threshold')?.value || 5),
+          login_window_seconds: Number($s('sec-login-window')?.value || 600),
+          cooldown_seconds: Number($s('sec-cooldown')?.value || 600),
+          block_seconds: Number($s('sec-block-seconds')?.value || 900),
+          max_block_seconds: Number($s('sec-max-block-seconds')?.value || 86400),
+          escalate: !!$s('sec-escalate')?.checked,
+          enrich_ip: !!$s('sec-enrich-ip')?.checked,
+          firewall_enabled: !!$s('sec-firewall-enabled')?.checked,
+          firewall_after_offenses: Number($s('sec-firewall-after')?.value || 3),
+          trusted_networks: [...trustedNetworks],
+          deny_networks: [...denyNetworks]
+        };
+        const savedSecurity = await jfetch('/api/security/http-protection', { method: 'POST', body: securityBody });
+        const savedSettings = savedSecurity?.settings || {};
+        for (const key of ['response_mode','ip_source','block_scope']) {
+          if (String(savedSettings[key] || '') !== String(securityBody[key])) throw new Error(`${key.replaceAll('_',' ')} was not persisted.`);
+        }
+        dirtySecuritySelects.clear();
+        dirtySecurityBooleans.clear();
+        markAdvancedDirty(false);
+        applyServerSettings(savedSettings);
+        renderTempAllows(savedSecurity?.temporary_allow || temporaryAllows);
+        firewallCapability = savedSecurity?.firewall || {};
+        renderFirewallStatus(firewallCapability);
+        setStatus(savedSettings, savedSecurity?.active_blocks || [], savedSecurity?.stats_24h || {});
+
+        const current = lastTelegram || await jfetch('/api/telegram/settings');
+        const notify = { ...(current.notify || {}) };
+        notify.login_success = !!$s('tg-n-login-success')?.checked;
+        notify.login_fail = !!$s('tg-n-login-fail')?.checked;
+        notify.suspicious_4xx = !!$s('tg-n-4xx')?.checked;
+        notify.security_block = !!$s('tg-n-security-block')?.checked;
+        notify.security_release = !!$s('tg-n-security-release')?.checked;
+        notify.security_auto_release = !!$s('tg-n-security-auto-release')?.checked;
+        await jfetch('/api/telegram/settings', { method: 'POST', body: { enabled: !!current.enabled, notify } });
+        dirtyTelegramToggles.clear();
+        toast('Security policy saved.', 'success');
+        await loadSecurity();
+      } catch (e) { console.error(e); toast('Security save failed: ' + (e?.message || 'unknown'), 'error'); }
+      finally { buttons.forEach(button => button.disabled = false); }
+    }
+
+    async function addTemporaryAllow() {
+      const input = $s('sec-temp-allow-input');
+      const value = input?.value.trim() || '';
+      if (!value) return;
+      const amount = Math.max(1, Number($s('sec-temp-allow-duration-value')?.value || 1));
+      const unit = Math.max(60, Number(selectedCustomValue('sec-temp-allow-duration-unit', '3600')) || 3600);
+      try {
+        const result = await jfetch('/api/security/http-protection/temporary-allow', { method:'POST', body:{ network:value, duration_seconds:Math.round(amount * unit) } });
+        if (input) input.value = '';
+        renderTempAllows(result?.temporary_allow || []);
+        renderAdvancedSummary();
+        toast(`${result.network || value} temporarily allowed.`, 'success');
+        await loadHistory(false);
+      } catch (e) { toast('Temporary allow failed: ' + (e?.message || 'unknown'), 'error'); }
+    }
+
+    async function loadHistory(showErrors = true) {
+      try {
+        const ip = ($s('sec-history-ip')?.value || '').trim();
+        const type = selectedCustomValue('sec-history-type', '');
+        const params = new URLSearchParams({ limit:'300' });
+        if (ip) params.set('ip', ip);
+        if (type) params.set('type', type);
+        const result = await jfetch('/api/security/http-protection/events?' + params.toString());
+        renderStats(result?.stats_24h || {});
+        const rows = Array.isArray(result?.events) ? result.events : [];
+        const body = document.querySelector('#sec-history-table tbody');
+        const wrap = $s('sec-history-table-wrap'); const empty = $s('sec-history-empty');
+        if (!body || !wrap || !empty) return;
+        body.innerHTML = '';
+        if (!rows.length) { wrap.hidden = true; empty.hidden = false; return; }
+        wrap.hidden = false; empty.hidden = true;
+        for (const row of rows) {
+          const date = row.ts ? new Date(Number(row.ts) * 1000) : null;
+          const geo = row.geo || {};
+          const network = [geo.country_code, geo.asn, geo.provider].filter(Boolean).join(' · ');
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${date && !isNaN(date) ? escapeHtml(date.toLocaleString()) : '—'}</td><td><code>${escapeHtml(row.ip || '—')}</code></td><td><span class="sec-event-type">${escapeHtml(String(row.type || 'event').replaceAll('_',' '))}</span></td><td>${escapeHtml(String(row.category || '—').replaceAll('_',' '))}</td><td>${escapeHtml(row.reason || '—')}</td><td>${escapeHtml(network || '—')}</td>`;
+          body.appendChild(tr);
+        }
+      } catch (e) { if (showErrors) toast('History load failed: ' + (e?.message || 'unknown'), 'error'); }
+    }
+
+    document.addEventListener('click', async (event) => {
+      const remove = event.target.closest('.sec-cidr-remove');
+      if (remove) {
+        const index = Number(remove.dataset.index); const kind = remove.dataset.kind;
+        const list = kind === 'deny' ? denyNetworks : trustedNetworks;
+        if (Number.isInteger(index) && index >= 0 && index < list.length) {
+          list.splice(index,1);
+          kind === 'deny' ? renderDenyChips() : renderTrustedChips();
+          if (kind === 'deny') markAdvancedDirty(true);
+          renderAdvancedSummary();
+        }
+        return;
+      }
+      const tempRemove = event.target.closest('[data-temp-allow-remove]');
+      if (tempRemove) {
+        const network = tempRemove.dataset.tempAllowRemove || '';
+        try { const result = await jfetch('/api/security/http-protection/temporary-allow/remove', { method:'POST', body:{network} }); renderTempAllows(result?.temporary_allow || []); renderAdvancedSummary(); toast(`${network} removed from temporary allow.`, 'success'); }
+        catch (e) { toast('Remove failed: ' + (e?.message || 'unknown'), 'error'); }
+        return;
+      }
+      const unblock = event.target.closest('.sec-unblock'); if (!unblock) return;
+      const ip = unblock.dataset.ip || ''; if (!ip) return;
+      const ok = await confirmDialog({ title:'Release temporary block?', body:`Allow ${ip} to access the panel again immediately? Its offense counter remains for repeat-offender escalation.`, okText:'Release' });
+      if (!ok) return;
+      try { await jfetch('/api/security/http-protection/unban', { method:'POST', body:{ip} }); toast(`${ip} released`, 'success'); await loadSecurity(); await loadHistory(false); }
+      catch (e) { toast('Release failed: ' + (e?.message || 'unknown'), 'error'); }
+    });
+
+    document.addEventListener('DOMContentLoaded', () => {
+      $s('sec-save')?.addEventListener('click', saveSecurity);
+      $s('sec-advanced-save')?.addEventListener('click', saveSecurity);
+      $s('sec-refresh-blocks')?.addEventListener('click', loadSecurity);
+      $s('sec-apply-recommended')?.addEventListener('click', applyRecommended);
+      $s('sec-trusted-add')?.addEventListener('click', () => addNetworkFromInput('sec-trusted-input', trustedNetworks, renderTrustedChips, 'That trusted address is already listed.'));
+      $s('sec-trusted-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addNetworkFromInput('sec-trusted-input', trustedNetworks, renderTrustedChips, 'That trusted address is already listed.'); } });
+      $s('sec-deny-add')?.addEventListener('click', () => { const before = denyNetworks.length; addNetworkFromInput('sec-deny-input', denyNetworks, renderDenyChips, 'That deny entry is already listed.'); if (denyNetworks.length !== before) { markAdvancedDirty(true); renderAdvancedSummary(); } });
+      $s('sec-deny-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); const before = denyNetworks.length; addNetworkFromInput('sec-deny-input', denyNetworks, renderDenyChips, 'That deny entry is already listed.'); if (denyNetworks.length !== before) { markAdvancedDirty(true); renderAdvancedSummary(); } } });
+      $s('sec-temp-allow-add')?.addEventListener('click', addTemporaryAllow);
+      $s('sec-temp-allow-input')?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addTemporaryAllow(); } });
+      Object.values(timeFields).forEach(f => { $s(f.value)?.addEventListener('input', updateHumanHints); $s(f.unit)?.addEventListener('change', updateHumanHints); });
+      $s('sec-escalate')?.addEventListener('input', updateHumanHints);
+      Object.values(selectIds).forEach(id => $s(id)?.addEventListener('change', () => {
+        if (!applyingSecurityFromServer) dirtySecuritySelects.add(id);
+        if (id === 'sec-ip-source') updateIpSourceHelp();
+      }));
+      Object.values(booleanIds).forEach(id => $s(id)?.addEventListener('change', () => {
+        if (!applyingSecurityFromServer) dirtySecurityBooleans.add(id);
+      }));
+
+      const advancedPolicyIds = new Set([
+        'sec-block-scope','sec-rate-limit-threshold','sec-enrich-ip','sec-login-threshold',
+        'sec-login-window-value','sec-login-window-unit','sec-firewall-enabled','sec-firewall-after'
+      ]);
+      const advancedModal = $s('sec-advanced-modal');
+      const advancedPolicyChanged = (event) => {
+        const id = event?.target?.id || '';
+        if (!id || !advancedPolicyIds.has(id) || applyingSecurityFromServer) return;
+        if (id === 'sec-firewall-enabled' && event.target.checked && !firewallCapability?.usable) {
+          event.target.checked = false;
+          toast('Host-firewall escalation is unavailable. Application blocking remains active; use the nftables status box for the fix.', 'warn');
+          renderFirewallStatus(firewallCapability);
+          return;
+        }
+        markAdvancedDirty(true);
+        renderAdvancedSummary();
+      };
+      advancedModal?.addEventListener('change', advancedPolicyChanged);
+      advancedModal?.addEventListener('input', advancedPolicyChanged);
+      ['tg-n-login-success','tg-n-login-fail','tg-n-4xx','tg-n-security-block','tg-n-security-release','tg-n-security-auto-release']
+        .forEach(id => $s(id)?.addEventListener('change', () => {
+          if (!applyingSecurityFromServer) {
+            dirtyTelegramToggles.add(id);
+            if (id.startsWith('tg-n-security-')) markAdvancedDirty(true);
+          }
+        }));
+      document.querySelector('[data-tab="security"]')?.addEventListener('click', () => {
+        if (!dirtySecuritySelects.size && !dirtySecurityBooleans.size && !dirtyTelegramToggles.size) loadSecurity();
+      });
+
+      $s('sec-advanced-trigger')?.addEventListener('click', async () => {
+        if (!lastSecurityPayload) await loadSecurity();
+        advancedSnapshot = captureAdvancedSnapshot();
+        markAdvancedDirty(false);
+        renderAdvancedSummary();
+        openModal('sec-advanced-modal');
+      });
+      $s('sec-firewall-refresh')?.addEventListener('click', () => refreshFirewallCapability(true));
+      $s('sec-firewall-copy')?.addEventListener('click', async () => {
+        const text = ($s('sec-firewall-remedy-command')?.textContent || '').trim();
+        if (!text) return;
+        try { await navigator.clipboard.writeText(text); toast('Command copied.', 'success'); }
+        catch { toast('Copy failed.', 'error'); }
+      });
+
+      const advancedInfoTrigger = $s('sec-advanced-info-trigger');
+      const advancedInfo = $s('sec-advanced-info-popover');
+      const advancedInfoClose = $s('sec-advanced-info-close');
+      const closeAdvancedInfo = () => { if (!advancedInfo) return; advancedInfo.hidden = true; advancedInfoTrigger?.setAttribute('aria-expanded','false'); };
+      advancedInfoTrigger?.addEventListener('click', event => { event.stopPropagation(); if (!advancedInfo) return; const open = !!advancedInfo.hidden; advancedInfo.hidden = !open; advancedInfoTrigger.setAttribute('aria-expanded', String(open)); });
+      advancedInfoClose?.addEventListener('click', event => { event.stopPropagation(); closeAdvancedInfo(); });
+      advancedInfo?.addEventListener('click', event => event.stopPropagation());
+      $s('sec-alert-options-trigger')?.addEventListener('click', async () => {
+        if (!lastSecurityPayload) await loadSecurity();
+        openModal('sec-advanced-modal');
+        setTimeout(() => $s('sec-alert-options-section')?.scrollIntoView({behavior:'smooth',block:'center'}), 80);
+      });
+      $s('sec-history-trigger')?.addEventListener('click', async () => { openModal('sec-history-modal'); await loadHistory(); });
+      $s('sec-history-refresh')?.addEventListener('click', () => loadHistory());
+      $s('sec-history-type')?.addEventListener('change', () => loadHistory(false));
+      $s('sec-history-ip')?.addEventListener('keydown', e => { if (e.key === 'Enter') loadHistory(false); });
+      $s('sec-history-clear')?.addEventListener('click', async () => {
+        const ok = await confirmDialog({title:'Clear security event history?',body:'This removes retained security events. Active blocks, offense counters and 24-hour statistics are not cleared.',okText:'Clear history'});
+        if (!ok) return;
+        try { await jfetch('/api/security/http-protection/events', {method:'DELETE'}); toast('Security history cleared.', 'success'); await loadHistory(); }
+        catch (e) { toast('Clear failed: ' + (e?.message || 'unknown'), 'error'); }
+      });
+
+      document.querySelectorAll('#sec-advanced-modal [data-close]').forEach(el => el.addEventListener('click', cancelAdvancedChanges));
+      document.querySelectorAll('#sec-history-modal [data-close]').forEach(el => el.addEventListener('click', () => closeModal('sec-history-modal')));
+
+      document.addEventListener('click', () => {
+        const advancedInfo = $s('sec-advanced-info-popover');
+        if (advancedInfo && !advancedInfo.hidden) { advancedInfo.hidden = true; $s('sec-advanced-info-trigger')?.setAttribute('aria-expanded','false'); }
+      });
+
+      const infoTrigger = $s('sec-info-trigger');
+      const infoPopover = $s('sec-info-popover');
+      const infoClose = $s('sec-info-close');
+      const closeInfo = () => { if (!infoPopover) return; infoPopover.hidden = true; infoTrigger?.setAttribute('aria-expanded','false'); };
+      const toggleInfo = (event) => { event?.stopPropagation(); if (!infoPopover) return; const willOpen = !!infoPopover.hidden; infoPopover.hidden = !willOpen; infoTrigger?.setAttribute('aria-expanded',String(willOpen)); };
+      infoTrigger?.addEventListener('click', toggleInfo);
+      infoClose?.addEventListener('click', event => { event.stopPropagation(); closeInfo(); });
+      infoPopover?.addEventListener('click', event => event.stopPropagation());
+      document.addEventListener('click', closeInfo);
+      document.addEventListener('keydown', event => { if (event.key === 'Escape') closeInfo(); });
+
+      loadSecurity();
+    });
+  })();
+
 
   (function telegram() {
     function fmtLocal(iso) {
@@ -1175,9 +2010,6 @@ document.getElementById('rt-restart')
         setChecked('tg-n-iface-up',       n.iface_up);
         setChecked('tg-n-peer-expired',   n.peer_expired);
         setChecked('tg-n-peer-limit',     n.peer_limit);
-        setChecked('tg-n-login-success',  n.login_success);
-        setChecked('tg-n-login-fail',     n.login_fail);
-        setChecked('tg-n-4xx',            n.suspicious_4xx);
         setChecked('tg-n-backup-success', n.backup_success);
         setChecked('tg-n-backup-failed',  n.backup_failed);
         setChecked('tg-n-update-success', n.update_success);
@@ -1197,9 +2029,6 @@ document.getElementById('rt-restart')
           iface_up:       !!$('#tg-n-iface-up')?.checked,
           peer_expired:   !!$('#tg-n-peer-expired')?.checked,
           peer_limit:     !!$('#tg-n-peer-limit')?.checked,
-          login_success:  !!$('#tg-n-login-success')?.checked,
-          login_fail:     !!$('#tg-n-login-fail')?.checked,
-          suspicious_4xx: !!$('#tg-n-4xx')?.checked,
           backup_success: !!$('#tg-n-backup-success')?.checked,
           backup_failed:  !!$('#tg-n-backup-failed')?.checked,
           update_success: !!$('#tg-n-update-success')?.checked,
@@ -1244,8 +2073,6 @@ document.getElementById('rt-restart')
         'tg-n-app-down',
         'tg-n-node-down',
         'tg-n-iface-down',
-        'tg-n-login-fail',
-        'tg-n-4xx',
         'tg-n-backup-failed',
         'tg-n-update-failed'
       ]);
@@ -1559,7 +2386,7 @@ document.getElementById('rt-restart')
       } catch (e) { toast('Save failed: ' + (e.message || e), 'error'); }
     });
 
-    document.getElementById('set-tabs')?.addEventListener('click', (e) => {
+  document.getElementById('set-tabs')?.addEventListener('click', (e) => {
       const b = e.target.closest('.tab');
       if (b?.dataset.tab === 'template') loadSocials();
     });
@@ -1924,7 +2751,6 @@ async function loadAdminLogs() {
 
   document.addEventListener('DOMContentLoaded', () => {
     pinModals();
-    (window.toastSafe || console.log)('Settings ready', 'success');
   });
 })();
 
@@ -1992,14 +2818,28 @@ async function loadAdminLogs() {
         item.disabled = !!option.disabled;
         item.setAttribute('role', 'option');
         item.setAttribute('aria-selected', option.selected ? 'true' : 'false');
-        item.addEventListener('click', () => {
+        item.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
           if (item.disabled) return;
-          select.value = option.value;
-          select.dispatchEvent(new Event('change', { bubbles: true }));
+
+          const nextValue = String(item.dataset.value ?? option.value);
+          const options = Array.from(select.options);
+          const nextIndex = options.findIndex((opt) => String(opt.value) === nextValue);
+
+          if (nextIndex >= 0) {
+            select.selectedIndex = nextIndex;
+            options.forEach((opt, index) => { opt.selected = index === nextIndex; });
+          }
+          select.value = nextValue;
+
+          syncButton();
           wrap.classList.remove('is-open');
           button.setAttribute('aria-expanded', 'false');
+          select.dispatchEvent(new Event('input', { bubbles: true }));
+          select.dispatchEvent(new Event('change', { bubbles: true }));
           syncButton();
-          button.focus();
+          button.focus({ preventScroll: true });
         });
         menu.appendChild(item);
       });
@@ -2129,4 +2969,520 @@ async function loadAdminLogs() {
       attributeFilter: ['data-theme', 'class']
     });
   });
+})();
+
+/* ============================================================
+   Traffic Control · WireGuard forwarding policy · V1.8
+   ============================================================ */
+(() => {
+  const byId = (id) => document.getElementById(id);
+  if (!byId('traffic-tab')) return;
+
+  const COUNTRY_CHOICES = [{"code":"AF","name":"Afghanistan"},{"code":"AL","name":"Albania"},{"code":"DZ","name":"Algeria"},{"code":"AS","name":"American Samoa"},{"code":"AD","name":"Andorra"},{"code":"AO","name":"Angola"},{"code":"AI","name":"Anguilla"},{"code":"AQ","name":"Antarctica"},{"code":"AG","name":"Antigua and Barbuda"},{"code":"AR","name":"Argentina"},{"code":"AM","name":"Armenia"},{"code":"AW","name":"Aruba"},{"code":"AU","name":"Australia"},{"code":"AT","name":"Austria"},{"code":"AZ","name":"Azerbaijan"},{"code":"BS","name":"Bahamas"},{"code":"BH","name":"Bahrain"},{"code":"BD","name":"Bangladesh"},{"code":"BB","name":"Barbados"},{"code":"BY","name":"Belarus"},{"code":"BE","name":"Belgium"},{"code":"BZ","name":"Belize"},{"code":"BJ","name":"Benin"},{"code":"BM","name":"Bermuda"},{"code":"BT","name":"Bhutan"},{"code":"BO","name":"Bolivia, Plurinational State of"},{"code":"BQ","name":"Bonaire, Sint Eustatius and Saba"},{"code":"BA","name":"Bosnia and Herzegovina"},{"code":"BW","name":"Botswana"},{"code":"BV","name":"Bouvet Island"},{"code":"BR","name":"Brazil"},{"code":"IO","name":"British Indian Ocean Territory"},{"code":"BN","name":"Brunei Darussalam"},{"code":"BG","name":"Bulgaria"},{"code":"BF","name":"Burkina Faso"},{"code":"BI","name":"Burundi"},{"code":"CV","name":"Cabo Verde"},{"code":"KH","name":"Cambodia"},{"code":"CM","name":"Cameroon"},{"code":"CA","name":"Canada"},{"code":"KY","name":"Cayman Islands"},{"code":"CF","name":"Central African Republic"},{"code":"TD","name":"Chad"},{"code":"CL","name":"Chile"},{"code":"CN","name":"China"},{"code":"CX","name":"Christmas Island"},{"code":"CC","name":"Cocos (Keeling) Islands"},{"code":"CO","name":"Colombia"},{"code":"KM","name":"Comoros"},{"code":"CG","name":"Congo"},{"code":"CD","name":"Congo, The Democratic Republic of the"},{"code":"CK","name":"Cook Islands"},{"code":"CR","name":"Costa Rica"},{"code":"HR","name":"Croatia"},{"code":"CU","name":"Cuba"},{"code":"CW","name":"Curaçao"},{"code":"CY","name":"Cyprus"},{"code":"CZ","name":"Czechia"},{"code":"CI","name":"Côte d'Ivoire"},{"code":"DK","name":"Denmark"},{"code":"DJ","name":"Djibouti"},{"code":"DM","name":"Dominica"},{"code":"DO","name":"Dominican Republic"},{"code":"EC","name":"Ecuador"},{"code":"EG","name":"Egypt"},{"code":"SV","name":"El Salvador"},{"code":"GQ","name":"Equatorial Guinea"},{"code":"ER","name":"Eritrea"},{"code":"EE","name":"Estonia"},{"code":"SZ","name":"Eswatini"},{"code":"ET","name":"Ethiopia"},{"code":"FK","name":"Falkland Islands (Malvinas)"},{"code":"FO","name":"Faroe Islands"},{"code":"FJ","name":"Fiji"},{"code":"FI","name":"Finland"},{"code":"FR","name":"France"},{"code":"GF","name":"French Guiana"},{"code":"PF","name":"French Polynesia"},{"code":"TF","name":"French Southern Territories"},{"code":"GA","name":"Gabon"},{"code":"GM","name":"Gambia"},{"code":"GE","name":"Georgia"},{"code":"DE","name":"Germany"},{"code":"GH","name":"Ghana"},{"code":"GI","name":"Gibraltar"},{"code":"GR","name":"Greece"},{"code":"GL","name":"Greenland"},{"code":"GD","name":"Grenada"},{"code":"GP","name":"Guadeloupe"},{"code":"GU","name":"Guam"},{"code":"GT","name":"Guatemala"},{"code":"GG","name":"Guernsey"},{"code":"GN","name":"Guinea"},{"code":"GW","name":"Guinea-Bissau"},{"code":"GY","name":"Guyana"},{"code":"HT","name":"Haiti"},{"code":"HM","name":"Heard Island and McDonald Islands"},{"code":"VA","name":"Holy See (Vatican City State)"},{"code":"HN","name":"Honduras"},{"code":"HK","name":"Hong Kong"},{"code":"HU","name":"Hungary"},{"code":"IS","name":"Iceland"},{"code":"IN","name":"India"},{"code":"ID","name":"Indonesia"},{"code":"IR","name":"Iran, Islamic Republic of"},{"code":"IQ","name":"Iraq"},{"code":"IE","name":"Ireland"},{"code":"IM","name":"Isle of Man"},{"code":"IL","name":"Israel"},{"code":"IT","name":"Italy"},{"code":"JM","name":"Jamaica"},{"code":"JP","name":"Japan"},{"code":"JE","name":"Jersey"},{"code":"JO","name":"Jordan"},{"code":"KZ","name":"Kazakhstan"},{"code":"KE","name":"Kenya"},{"code":"KI","name":"Kiribati"},{"code":"KP","name":"Korea, Democratic People's Republic of"},{"code":"KR","name":"Korea, Republic of"},{"code":"KW","name":"Kuwait"},{"code":"KG","name":"Kyrgyzstan"},{"code":"LA","name":"Lao People's Democratic Republic"},{"code":"LV","name":"Latvia"},{"code":"LB","name":"Lebanon"},{"code":"LS","name":"Lesotho"},{"code":"LR","name":"Liberia"},{"code":"LY","name":"Libya"},{"code":"LI","name":"Liechtenstein"},{"code":"LT","name":"Lithuania"},{"code":"LU","name":"Luxembourg"},{"code":"MO","name":"Macao"},{"code":"MG","name":"Madagascar"},{"code":"MW","name":"Malawi"},{"code":"MY","name":"Malaysia"},{"code":"MV","name":"Maldives"},{"code":"ML","name":"Mali"},{"code":"MT","name":"Malta"},{"code":"MH","name":"Marshall Islands"},{"code":"MQ","name":"Martinique"},{"code":"MR","name":"Mauritania"},{"code":"MU","name":"Mauritius"},{"code":"YT","name":"Mayotte"},{"code":"MX","name":"Mexico"},{"code":"FM","name":"Micronesia, Federated States of"},{"code":"MD","name":"Moldova, Republic of"},{"code":"MC","name":"Monaco"},{"code":"MN","name":"Mongolia"},{"code":"ME","name":"Montenegro"},{"code":"MS","name":"Montserrat"},{"code":"MA","name":"Morocco"},{"code":"MZ","name":"Mozambique"},{"code":"MM","name":"Myanmar"},{"code":"NA","name":"Namibia"},{"code":"NR","name":"Nauru"},{"code":"NP","name":"Nepal"},{"code":"NL","name":"Netherlands"},{"code":"NC","name":"New Caledonia"},{"code":"NZ","name":"New Zealand"},{"code":"NI","name":"Nicaragua"},{"code":"NE","name":"Niger"},{"code":"NG","name":"Nigeria"},{"code":"NU","name":"Niue"},{"code":"NF","name":"Norfolk Island"},{"code":"MK","name":"North Macedonia"},{"code":"MP","name":"Northern Mariana Islands"},{"code":"NO","name":"Norway"},{"code":"OM","name":"Oman"},{"code":"PK","name":"Pakistan"},{"code":"PW","name":"Palau"},{"code":"PS","name":"Palestine, State of"},{"code":"PA","name":"Panama"},{"code":"PG","name":"Papua New Guinea"},{"code":"PY","name":"Paraguay"},{"code":"PE","name":"Peru"},{"code":"PH","name":"Philippines"},{"code":"PN","name":"Pitcairn"},{"code":"PL","name":"Poland"},{"code":"PT","name":"Portugal"},{"code":"PR","name":"Puerto Rico"},{"code":"QA","name":"Qatar"},{"code":"RO","name":"Romania"},{"code":"RU","name":"Russian Federation"},{"code":"RW","name":"Rwanda"},{"code":"RE","name":"Réunion"},{"code":"BL","name":"Saint Barthélemy"},{"code":"SH","name":"Saint Helena, Ascension and Tristan da Cunha"},{"code":"KN","name":"Saint Kitts and Nevis"},{"code":"LC","name":"Saint Lucia"},{"code":"MF","name":"Saint Martin (French part)"},{"code":"PM","name":"Saint Pierre and Miquelon"},{"code":"VC","name":"Saint Vincent and the Grenadines"},{"code":"WS","name":"Samoa"},{"code":"SM","name":"San Marino"},{"code":"ST","name":"Sao Tome and Principe"},{"code":"SA","name":"Saudi Arabia"},{"code":"SN","name":"Senegal"},{"code":"RS","name":"Serbia"},{"code":"SC","name":"Seychelles"},{"code":"SL","name":"Sierra Leone"},{"code":"SG","name":"Singapore"},{"code":"SX","name":"Sint Maarten (Dutch part)"},{"code":"SK","name":"Slovakia"},{"code":"SI","name":"Slovenia"},{"code":"SB","name":"Solomon Islands"},{"code":"SO","name":"Somalia"},{"code":"ZA","name":"South Africa"},{"code":"GS","name":"South Georgia and the South Sandwich Islands"},{"code":"SS","name":"South Sudan"},{"code":"ES","name":"Spain"},{"code":"LK","name":"Sri Lanka"},{"code":"SD","name":"Sudan"},{"code":"SR","name":"Suriname"},{"code":"SJ","name":"Svalbard and Jan Mayen"},{"code":"SE","name":"Sweden"},{"code":"CH","name":"Switzerland"},{"code":"SY","name":"Syrian Arab Republic"},{"code":"TW","name":"Taiwan, Province of China"},{"code":"TJ","name":"Tajikistan"},{"code":"TZ","name":"Tanzania, United Republic of"},{"code":"TH","name":"Thailand"},{"code":"TL","name":"Timor-Leste"},{"code":"TG","name":"Togo"},{"code":"TK","name":"Tokelau"},{"code":"TO","name":"Tonga"},{"code":"TT","name":"Trinidad and Tobago"},{"code":"TN","name":"Tunisia"},{"code":"TM","name":"Turkmenistan"},{"code":"TC","name":"Turks and Caicos Islands"},{"code":"TV","name":"Tuvalu"},{"code":"TR","name":"Türkiye"},{"code":"UG","name":"Uganda"},{"code":"UA","name":"Ukraine"},{"code":"AE","name":"United Arab Emirates"},{"code":"GB","name":"United Kingdom"},{"code":"US","name":"United States"},{"code":"UM","name":"United States Minor Outlying Islands"},{"code":"UY","name":"Uruguay"},{"code":"UZ","name":"Uzbekistan"},{"code":"VU","name":"Vanuatu"},{"code":"VE","name":"Venezuela, Bolivarian Republic of"},{"code":"VN","name":"Viet Nam"},{"code":"VG","name":"Virgin Islands, British"},{"code":"VI","name":"Virgin Islands, U.S."},{"code":"WF","name":"Wallis and Futuna"},{"code":"EH","name":"Western Sahara"},{"code":"YE","name":"Yemen"},{"code":"ZM","name":"Zambia"},{"code":"ZW","name":"Zimbabwe"},{"code":"AX","name":"Åland Islands"}];
+  const COUNTRY_BY_CODE = new Map(COUNTRY_CHOICES.map(row => [row.code.toUpperCase(), row]));
+  const COUNTRY_BY_NAME = new Map(COUNTRY_CHOICES.map(row => [row.name.toLowerCase(), row]));
+
+  function trafficCsrfHeaders(json = false) {
+    const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+    const token = match ? decodeURIComponent(match[1]) : '';
+    const headers = {};
+    if (json) headers['Content-Type'] = 'application/json';
+    if (token) { headers['X-CSRFToken'] = token; headers['X-CSRF-Token'] = token; }
+    return headers;
+  }
+
+  async function trafficFetch(url, options = {}) {
+    const method = String(options.method || 'GET').toUpperCase();
+    const hasObjectBody = options.body && typeof options.body === 'object';
+    const response = await fetch(url, {
+      method,
+      headers: { ...trafficCsrfHeaders(hasObjectBody), ...(options.headers || {}), 'Accept':'application/json' },
+      body: hasObjectBody ? JSON.stringify(options.body) : (options.body || null),
+      credentials: 'same-origin', cache: 'no-store'
+    });
+    let data = null;
+    const type = response.headers.get('content-type') || '';
+    if (type.includes('application/json')) { try { data = await response.json(); } catch {} }
+    else { try { data = await response.text(); } catch {} }
+    if (!response.ok) {
+      const message = data && typeof data === 'object' && (data.detail || data.message || data.error)
+        ? (data.detail || data.message || data.error)
+        : (typeof data === 'string' && data.trim() ? data.trim() : `HTTP ${response.status}`);
+      throw new Error(String(message).slice(0, 300));
+    }
+    return data;
+  }
+
+  let payload = null;
+  let policies = [];
+  let targets = [];
+  let dirty = false;
+  let activeTrafficTestIndex = null;
+  const editorTags = { domains:[], cidrs:[], countries:[] };
+
+  const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  const uniq = (items) => Array.from(new Set((items || []).map(v => String(v || '').trim()).filter(Boolean)));
+
+  function setHidden(el, hidden) { if (!el) return; el.hidden = !!hidden; el.style.display = hidden ? 'none' : ''; }
+
+  function setDirty(on = true) {
+    dirty = !!on;
+    const badge = byId('traffic-dirty');
+    if (badge) { badge.hidden = !dirty; badge.style.display = dirty ? 'inline-flex' : 'none'; }
+    const notice = byId('traffic-apply-notice');
+    if (notice) { notice.hidden = !dirty; notice.style.display = dirty ? 'flex' : 'none'; }
+  }
+
+  function currentLocation() { return byId('traffic-location')?.value || 'local'; }
+  function currentNodeId() { return Number(byId('traffic-node')?.value || 0) || null; }
+
+  function availableNodes() {
+    const map = new Map();
+    targets.filter(t => t.location === 'node' && t.node_id).forEach(t => map.set(Number(t.node_id), t.node_name || `Node ${t.node_id}`));
+    return Array.from(map.entries()).map(([id,name]) => ({id,name}));
+  }
+
+  function fillNodeSelect() {
+    const select = byId('traffic-node'); if (!select) return;
+    const previous = Number(select.value || 0) || null;
+    const nodes = availableNodes();
+    select.innerHTML = nodes.map(n => `<option value="${n.id}">${escapeHtml(n.name)}</option>`).join('');
+    if (previous && nodes.some(n => n.id === previous)) select.value = String(previous);
+  }
+
+  function matchingInterfaces() {
+    const location = currentLocation(), nodeId = currentNodeId();
+    return targets.filter(t => location === 'local' ? t.location === 'local' : (t.location === 'node' && Number(t.node_id) === Number(nodeId)));
+  }
+
+  function fillInterfaceSelect(preferred = '') {
+    const select = byId('traffic-interface'); if (!select) return;
+    const rows = matchingInterfaces();
+    select.innerHTML = rows.map(t => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)} · ${escapeHtml(t.address || '')}</option>`).join('');
+    if (preferred && rows.some(t => t.name === preferred)) select.value = preferred;
+    fillPeerSelect();
+  }
+
+  function selectedTarget() {
+    const iface = byId('traffic-interface')?.value || '';
+    return matchingInterfaces().find(t => t.name === iface) || null;
+  }
+
+  function fillPeerSelect(preferredAddress = '') {
+    const select = byId('traffic-peer'), note = byId('traffic-peer-address'); if (!select) return;
+    const peers = selectedTarget()?.peers || [];
+    select.innerHTML = peers.map(p => `<option value="${escapeHtml(p.address || '')}">${escapeHtml(p.name || 'Peer')} · ${escapeHtml(p.address || '')}</option>`).join('');
+    if (preferredAddress && peers.some(p => String(p.address) === String(preferredAddress))) select.value = preferredAddress;
+    if (note) note.textContent = select.value ? `WireGuard source: ${select.value}` : (peers.length ? '' : 'No peers are known for this interface.');
+  }
+
+  function syncScopeUI() {
+    const nodeWrap = byId('traffic-node-wrap'), peerWrap = byId('traffic-peer-wrap');
+    if (nodeWrap) nodeWrap.hidden = currentLocation() !== 'node';
+    if (peerWrap) peerWrap.hidden = (byId('traffic-source-mode')?.value || 'interface') !== 'peer';
+  }
+
+  function normalizeDomain(raw) {
+    let value = String(raw || '').trim(); if (!value) return '';
+    try {
+      const maybe = value.includes('://') ? new URL(value) : new URL('https://' + value);
+      value = maybe.hostname || value;
+    } catch { value = value.split('/')[0]; }
+    value = value.replace(/^\*\./, '').replace(/\.$/, '').toLowerCase().trim();
+    return /^[a-z0-9._-]+$/.test(value) ? value : '';
+  }
+
+  function normalizeCountry(raw) {
+    const value = String(raw || '').trim(); if (!value) return '';
+    const upper = value.toUpperCase();
+    if (COUNTRY_BY_CODE.has(upper)) return upper;
+    const exact = COUNTRY_BY_NAME.get(value.toLowerCase());
+    if (exact) return exact.code.toUpperCase();
+    const low = value.toLowerCase();
+    const loose = COUNTRY_CHOICES.filter(row => row.name.toLowerCase().startsWith(low) || row.name.toLowerCase().includes(low));
+    if (loose.length === 1) return loose[0].code.toUpperCase();
+    return /^[A-Za-z]{2}$/.test(value) ? upper : '';
+  }
+
+  function normalizeTag(kind, raw) {
+    if (kind === 'domains') return normalizeDomain(raw);
+    if (kind === 'countries') return normalizeCountry(raw);
+    return String(raw || '').trim();
+  }
+
+  function tagMeta(kind, value) {
+    if (kind === 'domains') return {icon:'fa-globe', label:value};
+    if (kind === 'cidrs') return {icon:'fa-network-wired', label:value};
+    const row = COUNTRY_BY_CODE.get(String(value || '').toUpperCase());
+    return {icon:'fa-earth-asia', label:row ? `${row.name} · ${row.code}` : `Geo ${String(value || '').toUpperCase()}`};
+  }
+
+  function syncHiddenTags(kind) {
+    const id = kind === 'domains' ? 'traffic-domains' : kind === 'cidrs' ? 'traffic-cidrs' : 'traffic-countries';
+    const el = byId(id); if (el) el.value = editorTags[kind].join('\n');
+  }
+
+  function renderEditorTags(kind) {
+    const host = byId(`traffic-${kind}-chips`); if (!host) return;
+    host.innerHTML = editorTags[kind].length
+      ? editorTags[kind].map((value,index) => { const meta=tagMeta(kind,value); return `<span class="traffic-editor-chip is-${kind}"><i class="fa-solid ${meta.icon}"></i><span>${escapeHtml(meta.label)}</span><button type="button" data-traffic-token-remove="${kind}" data-index="${index}" aria-label="Remove ${escapeHtml(value)}"><i class="fa-solid fa-xmark"></i></button></span>`; }).join('')
+      : `<span class="traffic-token-empty">Nothing added yet</span>`;
+    syncHiddenTags(kind);
+  }
+
+  function setEditorTags(kind, values) { editorTags[kind] = uniq(values).map(v => normalizeTag(kind,v)).filter(Boolean); renderEditorTags(kind); }
+
+  function addEditorTag(kind, raw) {
+    const value = normalizeTag(kind, raw);
+    if (!value) { toast(kind === 'countries' ? 'Choose a country from the suggestions or enter a two-letter country code.' : `Enter a valid ${kind === 'domains' ? 'domain or URL' : 'IP/CIDR'}.`, 'warning'); return false; }
+    if (!editorTags[kind].includes(value)) editorTags[kind].push(value);
+    renderEditorTags(kind);
+    const input = byId(kind === 'domains' ? 'traffic-domain-entry' : kind === 'cidrs' ? 'traffic-cidr-entry' : 'traffic-country-entry');
+    if (input) input.value = '';
+    hideTokenSuggestions(kind);
+    return true;
+  }
+
+  function existingTagSuggestions(kind) {
+    const all=[]; policies.forEach(p => (p[kind] || []).forEach(v => all.push(String(v || '').trim()))); return uniq(all);
+  }
+
+  function tokenSuggestions(kind, query) {
+    const q=String(query||'').trim();
+    if (kind === 'countries') {
+      if (!q) return [];
+      const low=q.toLowerCase();
+      const prefix=[]; const contains=[];
+      COUNTRY_CHOICES.forEach(row => {
+        const name=row.name.toLowerCase(), code=row.code.toLowerCase();
+        if (name.startsWith(low) || code.startsWith(low)) prefix.push(row);
+        else if (name.includes(low)) contains.push(row);
+      });
+      const ranked=prefix.length ? prefix : contains;
+      return ranked.slice(0,8).map(row => ({value:row.code,label:row.name,meta:row.code}));
+    }
+
+    let values=existingTagSuggestions(kind)
+      .filter(v => !editorTags[kind].includes(normalizeTag(kind,v)));
+    if (q) {
+      const low=q.toLowerCase();
+      values=values.sort((a,b) => {
+        const aa=String(a).toLowerCase(), bb=String(b).toLowerCase();
+        const ap=aa.startsWith(low)?0:1, bp=bb.startsWith(low)?0:1;
+        return ap-bp || aa.localeCompare(bb);
+      }).filter(v => String(v).toLowerCase().includes(low));
+    }
+    return uniq(values).slice(0,8).map(value => ({value,label:value,meta:'Saved'}));
+  }
+
+  function hideTokenSuggestions(kind) { const box=byId(`traffic-${kind === 'domains' ? 'domain' : kind === 'cidrs' ? 'cidr' : 'country'}-suggestions`); if (box) {box.hidden=true; box.style.display='none'; box.innerHTML='';} }
+
+  function showTokenSuggestions(kind, query) {
+    const key=kind === 'domains' ? 'domain' : kind === 'cidrs' ? 'cidr' : 'country';
+    const box=byId(`traffic-${key}-suggestions`); if (!box) return;
+    const rows=tokenSuggestions(kind,query);
+    if (!rows.length) { hideTokenSuggestions(kind); return; }
+    box.innerHTML=rows.map(row => `<button type="button" data-traffic-token-suggestion="${kind}" data-value="${escapeHtml(row.value)}"><span class="traffic-suggestion-icon"><i class="fa-solid ${kind==='countries'?'fa-earth-asia':kind==='domains'?'fa-globe':'fa-network-wired'}"></i></span><span class="traffic-suggestion-copy"><b>${escapeHtml(row.label)}</b>${row.meta?`<small>${escapeHtml(row.meta)}</small>`:''}</span><span class="traffic-suggestion-add"><i class="fa-solid fa-plus"></i></span></button>`).join('');
+    box.hidden=false; box.style.display='grid';
+
+    const input=byId(`traffic-${key}-entry`);
+    const card=box.closest('.traffic-token-card');
+    if(input && card){
+      const gap=6;
+      const inputTop=input.offsetTop;
+      box.style.top='auto';
+      box.style.bottom=`${Math.max(0, card.clientHeight - inputTop) + gap}px`;
+      box.style.left='auto';
+      box.style.right='8px';
+    }
+  }
+
+  function resetEditor() {
+    if (byId('traffic-policy-id')) byId('traffic-policy-id').value='';
+    if (byId('traffic-policy-name')) byId('traffic-policy-name').value='';
+    if (byId('traffic-policy-enabled')) byId('traffic-policy-enabled').checked=true;
+    setEditorTags('domains',[]); setEditorTags('cidrs',[]); setEditorTags('countries',[]);
+    if (byId('traffic-location')) byId('traffic-location').value='local';
+    fillNodeSelect(); syncScopeUI(); fillInterfaceSelect();
+    if (byId('traffic-source-mode')) byId('traffic-source-mode').value='interface';
+    syncScopeUI(); fillPeerSelect();
+    ['traffic-domain-entry','traffic-cidr-entry','traffic-country-entry'].forEach(id => { const el=byId(id); if(el) el.value=''; });
+    ['domains','cidrs','countries'].forEach(hideTokenSuggestions);
+  }
+
+  function openPolicyEditor(policy = null) {
+    resetEditor();
+    const editing=!!policy;
+    if (editing) {
+      byId('traffic-policy-id').value=policy.id || '';
+      byId('traffic-policy-name').value=policy.name || '';
+      byId('traffic-policy-enabled').checked=policy.enabled !== false;
+      byId('traffic-location').value=policy.location || 'local';
+      fillNodeSelect();
+      if (policy.location === 'node' && policy.node_id) byId('traffic-node').value=String(policy.node_id);
+      syncScopeUI(); fillInterfaceSelect(policy.interface || '');
+      byId('traffic-source-mode').value=policy.source_mode || 'interface';
+      syncScopeUI(); fillPeerSelect(policy.source_ip || '');
+      setEditorTags('domains', policy.domains || []); setEditorTags('cidrs', policy.cidrs || []); setEditorTags('countries', policy.countries || []);
+    }
+    byId('traffic-editor-title').textContent=editing ? 'Edit policy' : 'Add policy';
+    byId('traffic-editor-subtitle').textContent=editing ? 'Update this policy. The saved configuration and live rules will refresh automatically.' : 'Choose who is protected and add destinations. The policy will save and activate automatically.';
+    byId('traffic-policy-save').innerHTML=editing ? '<i class="fa-solid fa-check"></i> Update policy' : '<i class="fa-solid fa-plus"></i> Add policy';
+    const modal=byId('traffic-policy-modal'); if (modal) { modal.hidden=false; modal.style.display='grid'; modal.setAttribute('aria-hidden','false'); }
+    document.body.classList.add('traffic-modal-open');
+    setTimeout(() => byId('traffic-policy-name')?.focus(), 20);
+  }
+
+  function closePolicyEditor() {
+    const modal=byId('traffic-policy-modal'); if (modal) { modal.hidden=true; modal.style.display='none'; modal.setAttribute('aria-hidden','true'); }
+    document.body.classList.remove('traffic-modal-open');
+    resetEditor();
+  }
+
+  function policyFromEditor() {
+    const location=currentLocation(), sourceMode=byId('traffic-source-mode')?.value || 'interface', iface=byId('traffic-interface')?.value || '';
+    const name=(byId('traffic-policy-name')?.value || '').trim() || 'Traffic policy';
+    if (!iface) throw new Error('Choose a WireGuard interface.');
+    const sourceIp=sourceMode === 'peer' ? (byId('traffic-peer')?.value || '') : '';
+    if (sourceMode === 'peer' && !sourceIp) throw new Error('Choose a WireGuard peer.');
+    if (!editorTags.domains.length && !editorTags.cidrs.length && !editorTags.countries.length) throw new Error('Add at least one domain, IP/CIDR or country.');
+    return { id:(byId('traffic-policy-id')?.value || '').trim(), name, enabled:!!byId('traffic-policy-enabled')?.checked, location, node_id:location === 'node' ? currentNodeId() : null, interface:iface, source_mode:sourceMode, source_ip:sourceIp, domains:[...editorTags.domains], cidrs:[...editorTags.cidrs], countries:[...editorTags.countries] };
+  }
+
+  function counterFor(policy) {
+    let packets=0, bytes=0;
+    const consume=(source) => { Object.entries(source?.counters || {}).forEach(([key,row]) => { if (String(key).startsWith(`${policy.id}:`)) { packets += Number(row?.packets || 0); bytes += Number(row?.bytes || 0); } }); };
+    if (policy.location === 'local') consume(payload?.local); else consume(payload?.nodes?.[String(policy.node_id)]);
+    return {packets,bytes};
+  }
+
+  function humanBytes(bytes) { let n=Number(bytes||0); if(n<1024)return `${n} B`; for(const unit of ['KiB','MiB','GiB','TiB']){n/=1024;if(n<1024||unit==='TiB')return `${n.toFixed(n>=10?1:2)} ${unit}`;} return `${bytes} B`; }
+
+  function policyTargetChips(p, limit = 2) {
+    const chips=[];
+    (p.domains||[]).forEach(v=>chips.push({kind:'domain',icon:'fa-globe',text:v}));
+    (p.cidrs||[]).forEach(v=>chips.push({kind:'cidr',icon:'fa-network-wired',text:v}));
+    (p.countries||[]).forEach(v=>{const row=COUNTRY_BY_CODE.get(String(v).toUpperCase());chips.push({kind:'geo',icon:'fa-earth-asia',text:row?`${row.name} · ${row.code}`:`Geo ${String(v).toUpperCase()}`});});
+    const shown=chips.slice(0,limit);
+    const more=Math.max(0,chips.length-limit);
+    return {shown,all:chips,more};
+  }
+
+  function renderPolicyTargetChip(chip, compact=false){
+    return `<span class="traffic-destination-chip is-${chip.kind}${compact?' is-compact':''}"><i class="fa-solid ${chip.icon}"></i><span>${escapeHtml(chip.text)}</span></span>`;
+  }
+
+
+  function renderPolicies() {
+    const host=byId('traffic-policy-list'), empty=byId('traffic-empty'); if(!host)return; host.innerHTML='';
+    const showEmpty=policies.length===0; if(empty){empty.hidden=!showEmpty;empty.style.display=showEmpty?'flex':'none';}
+    policies.forEach((p,index)=>{
+      const target=targets.find(t=>t.name===p.interface&&((p.location==='local'&&t.location==='local')||(p.location==='node'&&Number(t.node_id)===Number(p.node_id))));
+      const nodeName=p.location==='node'?(target?.node_name||`Node ${p.node_id}`):'Local panel';
+      const counts=counterFor(p), chipState=policyTargetChips(p);
+      const visible=chipState.shown.map(chip=>renderPolicyTargetChip(chip)).join('');
+      const full=chipState.all.map(chip=>renderPolicyTargetChip(chip,true)).join('');
+      const article=document.createElement('article'); article.className='traffic-policy-item traffic-policy-item--row'+(p.enabled===false?' is-disabled':'');
+      article.innerHTML=`<div class="traffic-policy-item__state"><span class="traffic-policy-dot"></span></div><div class="traffic-policy-item__main"><div class="traffic-policy-item__top"><b>${escapeHtml(p.name||'Traffic policy')}</b><span class="traffic-mini-badge">${p.enabled===false?'Disabled':'Active'}</span></div><div class="traffic-policy-meta"><span><i class="fa-solid fa-server"></i>${escapeHtml(nodeName)}</span><span><i class="fa-solid fa-network-wired"></i>${escapeHtml(p.interface||'')}</span><span><i class="fa-solid fa-user-shield"></i>${p.source_mode==='peer'?escapeHtml(String(p.source_ip||'').split('/')[0]||'Peer'):'Every peer'}</span></div><div class="traffic-policy-footer"><div class="traffic-policy-targets"><span class="traffic-policy-footer__label">Blocked targets</span><div class="traffic-policy-destinations-wrap"><div class="traffic-policy-destinations">${visible}${chipState.more?`<button type="button" class="traffic-destination-chip traffic-destination-chip--more is-more" data-traffic-chip-toggle="${index}" aria-expanded="false"><span>+${chipState.more} more</span></button>`:''}</div>${chipState.more?`<div class="traffic-chip-popover" id="traffic-chip-popover-${index}" hidden><div class="traffic-chip-popover__head"><strong>Blocked destinations</strong><button type="button" class="traffic-chip-popover__close" data-traffic-chip-close="${index}" aria-label="Close"><i class="fa-solid fa-xmark"></i></button></div><div class="traffic-chip-popover__body">${full}</div></div>`:''}</div></div><div class="traffic-policy-tools"><div class="traffic-policy-counter traffic-policy-counter--inline" title="Traffic actually blocked by this policy"><span><b>${counts.packets.toLocaleString()}</b> pkt</span><span class="traffic-policy-counter__sep" aria-hidden="true">/</span><span><b>${humanBytes(counts.bytes)}</b></span></div><div class="traffic-policy-actions traffic-policy-actions--row"><button class="traffic-action-text" type="button" data-traffic-verify="${index}" title="Check live policy setup">Check</button><button class="traffic-action-text" type="button" data-traffic-manual="${index}" title="Test a destination against this policy">Test</button><button class="traffic-action-text" type="button" data-traffic-edit="${index}" title="Edit policy">Edit</button><button class="traffic-action-text traffic-action-delete" type="button" data-traffic-delete="${index}" title="Delete policy">Delete</button></div></div></div></div>`;
+      host.appendChild(article);
+    });
+    const state=byId('traffic-rule-state'); if(state)state.innerHTML=`<i class="fa-solid fa-shield"></i> ${policies.length} polic${policies.length===1?'y':'ies'}`;
+  }
+
+
+  function renderCapability() {
+    const host=byId('traffic-capability'), engine=byId('traffic-engine-state'); if(!host)return;
+    const rows=[]; const local=payload?.local||{}, localCap=local.capability||{};
+    rows.push({name:'Local panel',ready:!!localCap.usable,loaded:!!local.loaded,detail:localCap.usable?(local.loaded?'Traffic rules are active':'Ready for Traffic Control'):(localCap.reason==='not_installed'?'nftables is not installed':(localCap.detail||'Unavailable'))});
+    availableNodes().forEach(n=>{const st=payload?.nodes?.[String(n.id)]||{},cap=st.capability||{};rows.push({name:n.name,ready:!!cap.usable,loaded:!!st.loaded,detail:cap.usable?(st.loaded?'Traffic rules are active':'Ready for Traffic Control'):(st.error||cap.detail||'Unavailable')});});
+    host.innerHTML=`<div class="traffic-cap-chips">${rows.map(r=>`<span class="traffic-cap-chip ${r.ready?'is-good':'is-warn'} ${r.loaded?'is-active':''}" title="${escapeHtml(r.detail)}"><i class="fa-solid ${r.ready?'fa-circle-check':'fa-triangle-exclamation'}"></i><span class="traffic-cap-chip__name">${escapeHtml(r.name)}</span><span class="traffic-cap-chip__state">${escapeHtml(r.loaded?'Active':(r.ready?'Ready':'Unavailable'))}</span></span>`).join('')}</div>`;
+    const allReady=rows.length&&rows.every(r=>r.ready); if(engine){engine.className='traffic-state '+(allReady?'good':'warn');engine.innerHTML=`<i class="fa-solid fa-circle"></i> ${allReady?'Traffic Control ready':'Needs attention'}`;}
+  }
+
+  function friendlyCheckName(row, packets) {
+    const key=String(row?.key||'').toLowerCase(), status=String(row?.status||'info').toLowerCase(), label=String(row?.label||'').toLowerCase();
+    if(status==='fail') return 'Needs attention';
+    if(status==='warn') return 'Please review';
+    if(status==='info') { if(key==='counters'||label.includes('counter')) return packets>0?'Traffic blocked':'Waiting for traffic'; if(label.includes('ipv6')) return 'Not used'; return 'For your information'; }
+    if(key==='interface') return 'Active';
+    if(key==='scope') return 'Correct peer';
+    if(key==='table'||key==='nftables') return 'Ready';
+    if(key.includes('domain')||label.includes('domain addresses')) return 'Up to date';
+    if(key.includes('geo')||label.includes('geo')) return 'Country block ready';
+    if(key.includes('direct')||label.includes('rule')) return 'Rule ready';
+    if(key==='counters') return packets>0?'Traffic blocked':'Waiting for traffic';
+    return 'Ready';
+  }
+
+  function friendlyCheckIcon(row) { const status=String(row?.status||'info'); if(status==='fail')return 'fa-circle-exclamation'; if(status==='warn')return 'fa-triangle-exclamation'; if(status==='info')return 'fa-circle-info'; return 'fa-circle-check'; }
+
+  function policyScopeChips(policy) {
+    const chips=[]; if(policy?.interface)chips.push({kind:'scope',icon:'fa-network-wired',text:policy.interface});
+    if(policy?.source_mode==='peer'&&policy?.source_ip)chips.push({kind:'peer',icon:'fa-user-shield',text:`Peer ${String(policy.source_ip).split('/')[0]}`}); else chips.push({kind:'scope',icon:'fa-users',text:'Every peer'});
+    return chips;
+  }
+
+  function renderProtectedChips(policy) {
+    const scope=policyScopeChips(policy), targetsChips=policyTargetChips(policy,50).all;
+    const render=(chip)=>`<span class="traffic-lock-chip is-${chip.kind}"><i class="fa-solid ${chip.icon}"></i>${escapeHtml(chip.text)}</span>`;
+    return `<div class="traffic-verify-targets"><div class="traffic-verify-targets__group"><span class="traffic-verify-targets__label">Applies to</span><div>${scope.map(render).join('')}</div></div><div class="traffic-verify-targets__group"><span class="traffic-verify-targets__label">Blocks</span><div>${targetsChips.map(render).join('')||'<span class="traffic-token-empty">No destinations</span>'}</div></div></div>`;
+  }
+
+  function closeVerify() { setHidden(byId('traffic-verify-card'),true); }
+  function closeManual() { setHidden(byId('traffic-manual-card'),true); activeTrafficTestIndex=null; }
+
+  function renderTrafficTest(result, policy) {
+    const card=byId('traffic-verify-card'), host=byId('traffic-verify-result'); if(!card||!host)return;
+    const checks=Array.isArray(result?.checks)?result.checks:[], ok=!!result?.ok, counters=result?.counters||{}, packets=Number(counters.packets||0), bytes=Number(counters.bytes||0);
+    let headline='Needs attention', summary='One or more live rules do not match this saved policy yet.', stateClass='is-fail', icon='fa-triangle-exclamation';
+    if(ok&&packets>0){headline='Live blocking confirmed';summary=`This policy is correctly loaded and has already blocked ${packets.toLocaleString()} matching packet${packets===1?'':'s'}.`;stateClass='is-live';icon='fa-shield-heart';}
+    else if(ok){headline='Ready to block';summary='The live rules match this policy. No matching client traffic has reached the rule yet.';stateClass='is-ready';icon='fa-shield-circle-check';}
+    byId('traffic-verify-heading').textContent=`Check policy setup · ${policy?.name||result?.policy_name||'Traffic policy'}`;
+    host.innerHTML=`<div class="traffic-test-summary ${stateClass}"><span class="traffic-test-summary__icon"><i class="fa-solid ${icon}"></i></span><span><b>${escapeHtml(headline)}</b><small>${escapeHtml(summary)}</small></span><em>${escapeHtml(headline)}</em></div>${renderProtectedChips(policy)}<div class="traffic-test-grid">${checks.map(row=>`<div class="traffic-test-row is-${escapeHtml(row.status||'info')}"><i class="fa-solid ${friendlyCheckIcon(row)}"></i><span><b>${escapeHtml(row.label||row.key||'Check')}</b><small>${escapeHtml(row.detail||'')}</small></span><em>${escapeHtml(friendlyCheckName(row,packets))}</em></div>`).join('')}</div><div class="traffic-test-counters"><span><i class="fa-solid fa-ban"></i><b>${packets.toLocaleString()}</b><small>packets actually blocked</small></span><span><i class="fa-solid fa-database"></i><b>${humanBytes(bytes)}</b><small>traffic actually blocked</small></span><span><i class="fa-solid fa-circle-info"></i><small>${packets>0?'Real forwarded traffic has hit this policy.':'The setup is ready, but only a real WireGuard client packet can increase these counters.'}</small></span></div>`;
+    setHidden(card,false); card.scrollIntoView({behavior:'smooth',block:'center'});
+  }
+
+  function manualVerdictText(verdict) { if(verdict==='blocked')return 'Would be blocked'; if(verdict==='partial')return 'Some addresses would be blocked'; if(verdict==='not_applicable')return 'Not used by this peer'; return 'Would be allowed'; }
+  function manualVerdictIcon(verdict) { if(verdict==='blocked')return 'fa-ban'; if(verdict==='partial')return 'fa-triangle-exclamation'; if(verdict==='not_applicable')return 'fa-circle-minus'; return 'fa-circle-check'; }
+
+  function renderManualTrafficResult(result) {
+    const host=byId('traffic-test-target-result'); if(!host)return;
+    const verdict=String(result?.verdict||'not_blocked'), rows=Array.isArray(result?.results)?result.results:[];
+    const summary=verdict==='blocked'?'Every usable resolved address matches this policy’s live block rule.':verdict==='partial'?'Some resolved addresses are blocked while others are currently allowed.':verdict==='not_applicable'?'The resolved address family is not used by this WireGuard peer.':'No usable resolved address matches this policy’s live block rule.';
+    host.hidden=false;host.style.display='block';
+    host.innerHTML=`<div class="traffic-manual-verdict is-${escapeHtml(verdict)}"><span><i class="fa-solid ${manualVerdictIcon(verdict)}"></i></span><div><b>${escapeHtml(manualVerdictText(verdict))}</b><small>${escapeHtml(summary)}</small></div><em>${escapeHtml(String(result?.target||''))}</em></div><div class="traffic-manual-resolved">${rows.length?rows.map(row=>`<div class="traffic-manual-resolved__row ${row.applicable===false?'is-skip':row.blocked?'is-blocked':'is-allowed'}"><span><i class="fa-solid ${row.applicable===false?'fa-circle-minus':row.blocked?'fa-ban':'fa-circle-check'}"></i><b>${escapeHtml(row.ip||'')}</b><small>IPv${escapeHtml(String(row.version||''))}</small></span><span>${Array.isArray(row.matches)&&row.matches.length?row.matches.map(m=>`<code>${escapeHtml(m.label||m.kind||'Matched rule')}</code>`).join(' '):`<small>${escapeHtml(row.note||(row.applicable===false?'Not used by this peer':'No matching block rule'))}</small>`}</span><em>${row.applicable===false?'Not used':row.blocked?'Blocked':'Allowed'}</em></div>`).join(''):'<div class="traffic-manual-resolved__empty">No usable destination address was resolved.</div>'}</div><div class="traffic-manual-foot"><i class="fa-solid fa-shield-halved"></i><span>${escapeHtml(result?.scope||'')}</span><small>Prediction from the live kernel rules; this does not generate traffic as the peer.</small></div>`;
+  }
+
+  function manualSuggestions(policy, query) {
+    const q=String(query||'').trim().toLowerCase();
+    let values=uniq([
+      ...(policy?.domains||[]),
+      ...(policy?.cidrs||[]).filter(v=>!String(v).includes('/')),
+    ]);
+    if(q) values=values.filter(v=>String(v).toLowerCase().includes(q));
+    return uniq(values).slice(0,8);
+  }
+
+  function renderManualAutocomplete(query) {
+    const box=byId('traffic-test-autocomplete'), policy=activeTrafficTestIndex==null?null:policies[activeTrafficTestIndex]; if(!box||!policy)return;
+    const rows=manualSuggestions(policy,query);
+    if(!String(query||'').trim()||!rows.length){box.hidden=true;box.style.display='none';box.innerHTML='';return;}
+    box.innerHTML=rows.map(v=>`<button type="button" data-traffic-manual-suggestion="${escapeHtml(v)}"><i class="fa-solid ${/^\d/.test(v)?'fa-network-wired':'fa-globe'}"></i><span>${escapeHtml(v)}</span><small>Saved in this policy</small></button>`).join('');
+    box.hidden=false;box.style.display='grid';
+  }
+
+  function renderManualQuickTargets(policy) {
+    const host=byId('traffic-test-quick'); if(!host)return;
+    const domains=uniq(policy?.domains||[]), exact=uniq((policy?.cidrs||[]).filter(v=>!String(v).includes('/'))), countries=uniq(policy?.countries||[]);
+    const buttons=[...domains,...exact].slice(0,8).map(value=>`<button type="button" data-traffic-quick-target="${escapeHtml(value)}"><i class="fa-solid ${/^\d/.test(value)?'fa-network-wired':'fa-globe'}"></i>${escapeHtml(value)}</button>`).join('');
+    const geo=countries.slice(0,5).map(code=>{const row=COUNTRY_BY_CODE.get(String(code).toUpperCase());return `<span class="traffic-quick-geo"><i class="fa-solid fa-earth-asia"></i>${escapeHtml(row?`${row.name} · ${row.code}`:`Geo ${String(code).toUpperCase()}`)}</span>`;}).join('');
+    host.innerHTML=(buttons||geo)?`<span>Quick fill from this policy</span>${buttons}${geo}`:'<span>Type any domain or IP to see whether this policy would block it.</span>';
+  }
+
+  function openManualDestinationTest(index) {
+    const p=policies[index]; if(!p)return;
+    if(dirty){toast('Traffic Control is still applying the latest change. Try again in a moment.','warning');return;}
+    if(p.enabled===false){toast('This policy is disabled, so there is no live block rule to test.','info');return;}
+    activeTrafficTestIndex=index; closeVerify();
+    byId('traffic-manual-heading').textContent=`Test destination · ${p.name||'Traffic policy'}`;
+    byId('traffic-manual-selected').innerHTML=`<div><b>Testing this policy</b><small>The target is checked only against this policy’s live rules.</small></div><div>${policyScopeChips(p).map(c=>`<span class="traffic-lock-chip is-${c.kind}"><i class="fa-solid ${c.icon}"></i>${escapeHtml(c.text)}</span>`).join('')}${policyTargetChips(p,6).all.map(c=>`<span class="traffic-lock-chip is-${c.kind}"><i class="fa-solid ${c.icon}"></i>${escapeHtml(c.text)}</span>`).join('')}</div>`;
+    renderManualQuickTargets(p);
+    const result=byId('traffic-test-target-result'); if(result){result.hidden=true;result.style.display='none';result.innerHTML='';}
+    const input=byId('traffic-test-target'); if(input){input.value=(p.domains||[])[0]||(p.cidrs||[]).find(v=>!String(v).includes('/'))||'';}
+    renderManualAutocomplete(''); setHidden(byId('traffic-manual-card'),false);
+    byId('traffic-manual-card')?.scrollIntoView({behavior:'smooth',block:'center'}); setTimeout(()=>{input?.focus();input?.select?.();},20);
+  }
+
+  async function manualTestDestination() {
+    if(activeTrafficTestIndex==null){toast('Choose Test destination on a policy first.','warning');return;}
+    const policy=policies[activeTrafficTestIndex]; if(!policy)return;
+    if(dirty){toast('Traffic Control is still applying the latest change. Try again in a moment.','warning');return;}
+    const input=byId('traffic-test-target'), target=(input?.value||'').trim(); if(!target){toast('Enter a domain, URL or IP to test.','warning');input?.focus();return;}
+    const button=byId('traffic-test-target-run'); if(button)button.disabled=true;
+    try{const result=await trafficFetch('/api/traffic-control/test-destination',{method:'POST',body:{policy_id:policy.id,target}});renderManualTrafficResult(result);}
+    catch(e){toast('Destination test failed: '+(e?.message||'unknown'),'error');} finally{if(button)button.disabled=false;}
+  }
+
+  async function testPolicy(index) {
+    const p=policies[index]; if(!p)return;
+    if(dirty){toast('Traffic Control is still applying the latest change. Try again in a moment.','warning');return;}
+    if(p.enabled===false){toast('This policy is disabled and is intentionally not loaded.','info');return;}
+    closeManual(); const button=document.querySelector(`[data-traffic-verify="${index}"]`); if(button)button.disabled=true;
+    try{toast(`Checking “${p.name||'Traffic policy'}”…`,'info');const result=await trafficFetch('/api/traffic-control/test',{method:'POST',body:{policy_id:p.id}});renderTrafficTest(result,p);toast(result?.ok?'Live policy setup is ready.':'This policy needs attention.',result?.ok?'success':'warning');await loadTraffic({preservePanels:true});}
+    catch(e){toast('Policy check failed: '+(e?.message||'unknown'),'error');} finally{if(button)button.disabled=false;}
+  }
+
+  async function persistTrafficAutomatically(successMessage='Traffic Control updated.') {
+    setDirty(true);
+    try {
+      await trafficFetch('/api/traffic-control',{method:'POST',body:{enabled:true,policies}});
+      await trafficFetch('/api/traffic-control/apply',{method:'POST',body:{}});
+      await loadTraffic();
+      toast(successMessage,'success');
+      return true;
+    } catch (e) {
+      setDirty(false);
+      toast('Could not save/apply Traffic Control: '+(e?.message||'unknown error'),'error');
+      return false;
+    }
+  }
+
+  async function addOrUpdatePolicy() {
+    const before=policies.map(p=>({...p,domains:[...(p.domains||[])],cidrs:[...(p.cidrs||[])],countries:[...(p.countries||[])]}));
+    try {
+      const p=policyFromEditor();
+      const existingIndex=p.id?policies.findIndex(x=>x.id===p.id):-1;
+      if(existingIndex>=0) policies[existingIndex]=p;
+      else { p.id=`p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,8)}`; policies.push(p); }
+      renderPolicies();
+      const ok=await persistTrafficAutomatically(existingIndex>=0?'Policy updated and applied.':'Policy added and applied.');
+      if(ok) closePolicyEditor();
+      else { policies=before; renderPolicies(); }
+    } catch(e) { toast(e.message||'Invalid traffic policy','error'); }
+  }
+
+  async function loadTraffic(options={}) {
+    try{payload=await trafficFetch('/api/traffic-control');policies=Array.isArray(payload?.policies)?payload.policies.map(p=>({...p})):[];targets=Array.isArray(payload?.targets)?payload.targets:[];fillNodeSelect();syncScopeUI();fillInterfaceSelect();renderCapability();renderPolicies();setDirty(false);}
+    catch(e){toast('Traffic Control load failed: '+(e?.message||'unknown'),'error');const engine=byId('traffic-engine-state');if(engine){engine.className='traffic-state danger';engine.innerHTML='<i class="fa-solid fa-circle"></i> Backend unavailable';}}
+  }
+
+  async function saveTraffic({apply=false}={}) {
+    const button=byId(apply?'traffic-save-apply':'traffic-save');if(button)button.disabled=true;
+    try{await trafficFetch('/api/traffic-control',{method:'POST',body:{enabled:true,policies}});if(apply){toast('Applying Traffic Control rules…','info');await trafficFetch('/api/traffic-control/apply',{method:'POST',body:{}});toast('Traffic Control rules are active.','success');}else toast('Policy configuration saved. Live rules were not changed.','info');await loadTraffic();}
+    catch(e){toast((apply?'Apply failed: ':'Save failed: ')+(e?.message||'unknown'),'error');}finally{if(button)button.disabled=false;}
+  }
+
+  function setTrafficHowOpen(open) {
+    const pop=byId('traffic-how-popover'), trigger=byId('traffic-how-trigger');
+    if(!pop || !trigger) return;
+    pop.hidden=!open;
+    trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  byId('traffic-add-policy')?.addEventListener('click',()=>openPolicyEditor());
+  byId('traffic-policy-close')?.addEventListener('click',closePolicyEditor);byId('traffic-policy-cancel')?.addEventListener('click',closePolicyEditor);
+  byId('traffic-policy-modal')?.addEventListener('click',e=>{if(e.target.closest('[data-traffic-editor-close]'))closePolicyEditor();});
+  byId('traffic-how-trigger')?.addEventListener('click',e=>{e.stopPropagation(); const pop=byId('traffic-how-popover'); setTrafficHowOpen(!!pop?.hidden);});
+  byId('traffic-how-close')?.addEventListener('click',()=>setTrafficHowOpen(false));
+  byId('traffic-how-popover')?.addEventListener('click',e=>e.stopPropagation());
+  document.addEventListener('click',e=>{const pop=byId('traffic-how-popover'), trigger=byId('traffic-how-trigger'); if(!pop || pop.hidden) return; if(e.target.closest('#traffic-how-trigger') || e.target.closest('#traffic-how-popover')) return; setTrafficHowOpen(false);});
+  byId('traffic-location')?.addEventListener('change',()=>{syncScopeUI();fillNodeSelect();fillInterfaceSelect();});byId('traffic-node')?.addEventListener('change',()=>fillInterfaceSelect());byId('traffic-interface')?.addEventListener('change',()=>fillPeerSelect());byId('traffic-source-mode')?.addEventListener('change',()=>{syncScopeUI();fillPeerSelect();});byId('traffic-peer')?.addEventListener('change',()=>{const note=byId('traffic-peer-address');if(note)note.textContent=byId('traffic-peer')?.value?`WireGuard source: ${byId('traffic-peer').value}`:'';});
+  byId('traffic-policy-save')?.addEventListener('click',addOrUpdatePolicy);byId('traffic-refresh')?.addEventListener('click',loadTraffic);
+  byId('traffic-verify-close')?.addEventListener('click',closeVerify);byId('traffic-manual-close')?.addEventListener('click',closeManual);
+  byId('traffic-test-target-run')?.addEventListener('click',manualTestDestination);byId('traffic-test-target')?.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();manualTestDestination();}});byId('traffic-test-target')?.addEventListener('input',e=>renderManualAutocomplete(e.target.value));byId('traffic-test-target')?.addEventListener('focus',e=>renderManualAutocomplete(e.target.value));
+  byId('traffic-test-autocomplete')?.addEventListener('click',e=>{const b=e.target.closest('[data-traffic-manual-suggestion]');if(!b)return;const input=byId('traffic-test-target');if(input)input.value=b.dataset.trafficManualSuggestion||'';renderManualAutocomplete('');});
+  byId('traffic-test-quick')?.addEventListener('click',e=>{const b=e.target.closest('[data-traffic-quick-target]');if(!b)return;const input=byId('traffic-test-target');if(input)input.value=b.dataset.trafficQuickTarget||'';manualTestDestination();});
+
+  const tokenInputMap={domains:'traffic-domain-entry',cidrs:'traffic-cidr-entry',countries:'traffic-country-entry'};
+  Object.entries(tokenInputMap).forEach(([kind,id])=>{const input=byId(id);input?.addEventListener('input',e=>showTokenSuggestions(kind,e.target.value));input?.addEventListener('focus',e=>showTokenSuggestions(kind,e.target.value));input?.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===','){e.preventDefault();addEditorTag(kind,e.target.value);}});});
+  document.querySelectorAll('[data-traffic-token-add]').forEach(button=>button.addEventListener('click',()=>{const kind=button.dataset.trafficTokenAdd,input=byId(tokenInputMap[kind]);addEditorTag(kind,input?.value||'');input?.focus();}));
+  document.querySelectorAll('.traffic-token-suggestions').forEach(box=>box.addEventListener('click',e=>{const b=e.target.closest('[data-traffic-token-suggestion]');if(!b)return;addEditorTag(b.dataset.trafficTokenSuggestion,b.dataset.value||'');byId(tokenInputMap[b.dataset.trafficTokenSuggestion])?.focus();}));
+  document.querySelector('.traffic-policy-dialog')?.addEventListener('click',e=>{const b=e.target.closest('[data-traffic-token-remove]');if(!b)return;const kind=b.dataset.trafficTokenRemove,index=Number(b.dataset.index);if(editorTags[kind]&&Number.isInteger(index)){editorTags[kind].splice(index,1);renderEditorTags(kind);}});
+
+  byId('traffic-policy-list')?.addEventListener('click',async e=>{const toggle=e.target.closest('[data-traffic-chip-toggle]'),closeChip=e.target.closest('[data-traffic-chip-close]'),verify=e.target.closest('[data-traffic-verify]'),manual=e.target.closest('[data-traffic-manual]'),edit=e.target.closest('[data-traffic-edit]'),del=e.target.closest('[data-traffic-delete]');if(toggle){const id=String(toggle.dataset.trafficChipToggle||'');document.querySelectorAll('.traffic-chip-popover').forEach(pop=>{if(pop.id!==`traffic-chip-popover-${id}`)pop.hidden=true;});document.querySelectorAll('[data-traffic-chip-toggle]').forEach(btn=>{if(btn!==toggle)btn.setAttribute('aria-expanded','false');});const pop=byId(`traffic-chip-popover-${id}`);if(pop){const open=pop.hidden;pop.hidden=!open;toggle.setAttribute('aria-expanded',open?'true':'false');}return;}if(closeChip){const id=String(closeChip.dataset.trafficChipClose||'');const pop=byId(`traffic-chip-popover-${id}`),btn=document.querySelector(`[data-traffic-chip-toggle="${id}"]`);if(pop)pop.hidden=true;if(btn)btn.setAttribute('aria-expanded','false');return;}if(verify){await testPolicy(Number(verify.dataset.trafficVerify));return;}if(manual){openManualDestinationTest(Number(manual.dataset.trafficManual));return;}if(edit){const p=policies[Number(edit.dataset.trafficEdit)];if(p)openPolicyEditor(p);return;}if(del){const index=Number(del.dataset.trafficDelete),p=policies[index];if(!p)return;const ok=await window.confirmDialog?.({title:'Delete traffic policy?',body:`Remove “${p.name||'Traffic policy'}”? This will also remove its live rule immediately.`,okText:'Delete',cancelText:'Cancel'});if(!ok)return;const before=policies.map(row=>({...row,domains:[...(row.domains||[])],cidrs:[...(row.cidrs||[])],countries:[...(row.countries||[])]}));policies.splice(index,1);renderPolicies();closeVerify();closeManual();const saved=await persistTrafficAutomatically('Policy deleted and live rules updated.');if(!saved){policies=before;renderPolicies();}}});
+
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!byId('traffic-policy-modal')?.hidden)closePolicyEditor();});
+  document.addEventListener('click',e=>{if(!e.target.closest('.traffic-token-card'))['domains','cidrs','countries'].forEach(hideTokenSuggestions);if(!e.target.closest('.traffic-autocomplete-field')){const box=byId('traffic-test-autocomplete');if(box){box.hidden=true;box.style.display='none';}}});
+  document.getElementById('set-tabs')?.addEventListener('click',e=>{if(e.target.closest('.tab')?.dataset?.tab==='traffic')loadTraffic();});
+  if(document.documentElement.getAttribute('data-tab')==='traffic')loadTraffic();
 })();
