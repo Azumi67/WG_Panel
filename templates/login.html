@@ -7,36 +7,11 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark">
 
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="preload" href="{{ url_for('static', filename='img/wireguard-badge.svg') }}" as="image">
 
     <style>
-
-:root{
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
-               "Apple Color Emoji","Segoe UI Emoji";
-  --font-display: var(--font-sans);
-}
-
-html, body{
-  font-family: var(--font-sans);
-  font-size: 15px;
-  line-height: 1.45;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
-}
-
-input, button, textarea, select{
-  font-family: inherit;
-  font-size: 15px;
-}
-
-.field.has-icon{
-  position: relative;
-  overflow: hidden;        
-  border-radius: 10px;    
-}
-
+.field.has-icon { position: relative; }
 .field.has-icon .input { padding-right: 44px; }
 .pwd-toggle{
   position: absolute;
@@ -121,24 +96,16 @@ input, button, textarea, select{
     margin-bottom: 12px;
 }
 
-.auth-header h2{
-  font-family: var(--font-display);
-  font-size: 30px;
-  font-weight: 750;
-  letter-spacing: -0.02em;
-  margin: 6px 0 4px;
+.auth-header h2 {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: .2px;
+    margin: 6px 0 4px;
 }
-
-.form-group label{
-  font-size: 14px;
-  letter-spacing: .01em;
-}
-
 
 .auth-header .muted {
     color: var(--muted, #64748b);
     font-size: 14px;
-    letter-spacing: .01em;
 }
 
 .form-grid {
@@ -161,16 +128,6 @@ input, button, textarea, select{
     border-radius: 10px;
     padding: 11px 12px;
     transition: border-color .15s, box-shadow .15s;
-}
-input[type="password"]::-ms-reveal,
-input[type="password"]::-ms-clear{
-  display: none;
-}
-
-input[type="password"]::-webkit-credentials-auto-fill-button{
-  visibility: hidden;
-  pointer-events: none;
-  position: absolute;
 }
 
 .input::placeholder {
@@ -304,6 +261,7 @@ input:-webkit-autofill {
     }
 }
 </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/auth-native.css') }}">
 </head>
 
 <body>
