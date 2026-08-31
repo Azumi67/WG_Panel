@@ -1,0 +1,1535 @@
+@media (max-width: 760px) {
+
+  .peer-context-workspace,
+  .peer-context-toolbar,
+  .peer-context-server,
+  .peer-context-interface,
+  .peer-scope-picker,
+  .peer-interface-selector-row,
+  .iface-status-picker {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
+  }
+
+  .peer-context-toolbar {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+    align-items: stretch !important;
+  }
+
+  .peer-context-separator { display: none !important; }
+
+  .peer-context-server {
+    position: relative !important;
+    z-index: 60 !important;
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 7px !important;
+    width: 100% !important;
+  }
+
+  .peer-context-interface {
+    position: relative !important;
+    z-index: 20 !important;
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    grid-template-areas: "selector" "active" !important;
+    gap: 7px !important;
+    width: 100% !important;
+  }
+
+  .peer-interface-selector-row {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 7px !important;
+    width: 100% !important;
+  }
+
+  .peer-context-key,
+  .peer-interface-selector-row > .peer-context-key {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    height: 36px !important;
+    min-height: 36px !important;
+    flex: none !important;
+  }
+
+  .peer-scope-picker,
+  .iface-status-picker {
+    position: relative !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    flex: none !important;
+  }
+
+  .peer-scope-trigger,
+  .iface-status-trigger {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .peer-scope-menu {
+    position: absolute !important;
+    z-index: 5000 !important;
+    top: calc(100% + 6px) !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .iface-status-menu {
+    position: absolute !important;
+    z-index: 3000 !important;
+    top: calc(100% + 6px) !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  #peer-modal.modal,
+  #edit-peer-modal.modal,
+  #bulk-modal.modal,
+  #iface-create-modal.modal,
+  .sidebar.sb2 ~ .main #peer-modal.modal,
+  .sidebar.sb2 ~ .main #edit-peer-modal.modal,
+  .sidebar.sb2 ~ .main #bulk-modal.modal,
+  .sidebar.sb2 ~ .main #iface-create-modal.modal,
+  .sidebar.sb2.is-collapsed ~ .main #peer-modal.modal,
+  .sidebar.sb2.is-collapsed ~ .main #edit-peer-modal.modal,
+  .sidebar.sb2.is-collapsed ~ .main #bulk-modal.modal,
+  .sidebar.sb2.is-collapsed ~ .main #iface-create-modal.modal {
+    position: fixed !important;
+    inset: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100dvh !important;
+    margin: 0 !important;
+    padding: 8px !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+  }
+
+  #peer-modal .peerx-dialog,
+  #edit-peer-modal .peerx-dialog,
+  #bulk-modal .peerx-dialog,
+  #bulk-modal .peerx-bulk-dialog,
+  #iface-create-modal .iface-create-card,
+  html body #peer-modal.peerx-form-modal .peerx-dialog,
+  html body #edit-peer-modal.peerx-form-modal .peerx-dialog,
+  html body #bulk-modal.peerx-form-modal .peerx-dialog,
+  html body #bulk-modal.peerx-form-modal .peerx-bulk-dialog {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: calc(100dvh - 16px) !important;
+    max-height: calc(100dvh - 16px) !important;
+    margin: 0 !important;
+    border-radius: 18px !important;
+    box-sizing: border-box !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain !important;
+    scrollbar-gutter: auto !important;
+  }
+
+  #peer-modal .peerx-modal-head,
+  #edit-peer-modal .peerx-modal-head,
+  #bulk-modal .peerx-modal-head {
+    display: grid !important;
+    grid-template-columns: 40px minmax(0, 1fr) !important;
+    align-items: start !important;
+    gap: 10px !important;
+    padding-right: 42px !important;
+    min-width: 0 !important;
+  }
+
+  #peer-modal .peerx-modal-head > div:last-child,
+  #edit-peer-modal .peerx-modal-head > div:last-child,
+  #bulk-modal .peerx-modal-head > div:last-child {
+    min-width: 0 !important;
+  }
+
+  #peer-modal .peerx-modal-head h2,
+  #edit-peer-modal .peerx-modal-head h2,
+  #bulk-modal .peerx-modal-head h2 {
+    font-size: 19px !important;
+    line-height: 1.15 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  #peer-modal .peerx-modal-head p,
+  #edit-peer-modal .peerx-modal-head p,
+  #bulk-modal .peerx-modal-head p {
+    max-width: 100% !important;
+    font-size: 11.5px !important;
+    line-height: 1.38 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  #peer-modal .peerx-smart-form,
+  #edit-peer-modal .peerx-smart-form,
+  #bulk-modal .peerx-smart-form,
+  html body #peer-modal.peerx-form-modal #create-peer-form,
+  html body #edit-peer-modal.peerx-form-modal #edit-peer-form,
+  html body #bulk-modal.peerx-form-modal #bulk-form {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 10px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    padding: 8px !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
+  }
+
+  #peer-modal .peerx-column,
+  #edit-peer-modal .peerx-column,
+  #bulk-modal .peerx-column {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 10px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+
+  #peer-modal .peerx-form-card,
+  #edit-peer-modal .peerx-form-card,
+  #bulk-modal .peerx-form-card {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 11px !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
+  }
+
+  .peerx-section-head,
+  .peerx-section-head-endpoint,
+  .peerx-section-head-main {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .peerx-section-head > div,
+  .peerx-section-head-main > div {
+    min-width: 0 !important;
+  }
+
+  .peerx-section-head b,
+  .peerx-section-head small {
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  #peer-modal .peerx-form-grid,
+  #edit-peer-modal .peerx-form-grid,
+  #bulk-modal .peerx-form-grid,
+  #peer-modal .peerx-form-grid.two,
+  #edit-peer-modal .peerx-form-grid.two,
+  #bulk-modal .peerx-form-grid.two,
+  #peer-modal .peerx-form-grid.limits,
+  #edit-peer-modal .peerx-form-grid.limits,
+  #bulk-modal .peerx-form-grid.limits,
+  #peer-modal .peerx-wireguard-grid,
+  #edit-peer-modal .peerx-wireguard-grid,
+  #bulk-modal .peerx-wireguard-grid,
+  #peer-modal .peerx-inline-wireguard,
+  #edit-peer-modal .peerx-inline-wireguard,
+  #bulk-modal .peerx-inline-wireguard {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 9px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  #peer-modal .form-group,
+  #edit-peer-modal .form-group,
+  #bulk-modal .form-group,
+  #peer-modal .form-group.wide,
+  #edit-peer-modal .form-group.wide,
+  #bulk-modal .form-group.wide,
+  #peer-modal .peerx-endpoint-field,
+  #edit-peer-modal .peerx-endpoint-field,
+  #bulk-modal .peerx-endpoint-field,
+  #peer-modal .peerx-fixed-endpoint-field,
+  #edit-peer-modal .peerx-fixed-endpoint-field,
+  #bulk-modal .peerx-fixed-endpoint-field {
+    grid-column: 1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  #peer-modal input,
+  #peer-modal select,
+  #peer-modal textarea,
+  #edit-peer-modal input,
+  #edit-peer-modal select,
+  #edit-peer-modal textarea,
+  #bulk-modal input,
+  #bulk-modal select,
+  #bulk-modal textarea {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  #peer-modal .peerx-profile-row {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 9px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    padding: 9px !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
+  }
+
+  #peer-modal .peerx-profile-row .toggle.mini.black {
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 40px !important;
+    display: grid !important;
+    grid-template-columns: 32px minmax(0, 1fr) !important;
+    align-items: center !important;
+    gap: 9px !important;
+    padding: 5px 2px !important;
+    white-space: normal !important;
+  }
+
+  #peer-modal .peerx-profile-row .toggle .label {
+    min-width: 0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  #peer-modal .peerx-profile-row .profile-picker {
+    display: grid !important;
+    grid-template-columns: 28px minmax(0, 1fr) 34px 34px !important;
+    align-items: center !important;
+    gap: 6px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    padding: 6px !important;
+    border-radius: 13px !important;
+    box-sizing: border-box !important;
+  }
+
+  #peer-modal .peerx-profile-row .profile-picker > i {
+    width: 28px !important;
+    min-width: 28px !important;
+    text-align: center !important;
+  }
+
+  #peer-modal .peerx-profile-row select {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: 38px !important;
+    padding-left: 9px !important;
+    padding-right: 28px !important;
+  }
+
+  #peer-modal .peerx-profile-row .icon-btn {
+    width: 34px !important;
+    height: 34px !important;
+    min-width: 34px !important;
+    max-width: 34px !important;
+    padding: 0 !important;
+  }
+
+  #peer-modal .peerx-profile-menu {
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    z-index: 6000 !important;
+  }
+
+  #peer-modal .peerx-limit-switch-row,
+  #edit-peer-modal .peerx-limit-switch-row,
+  #bulk-modal .peerx-limit-switch-row {
+    grid-column: 1 !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 8px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  #peer-modal .peerx-limit-switch-row > .peerx-switch,
+  #edit-peer-modal .peerx-limit-switch-row > .peerx-switch,
+  #bulk-modal .peerx-limit-switch-row > .peerx-switch,
+  #edit-peer-modal .peerx-internal-switch {
+    display: grid !important;
+    grid-template-columns: 40px minmax(0, 1fr) !important;
+    align-items: center !important;
+    gap: 10px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    min-height: 50px !important;
+    padding: 9px 10px !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
+  }
+
+  #peer-modal .peerx-limit-switch-row > .peerx-switch > span,
+  #edit-peer-modal .peerx-limit-switch-row > .peerx-switch > span,
+  #bulk-modal .peerx-limit-switch-row > .peerx-switch > span {
+    width: 40px !important;
+    min-width: 40px !important;
+    max-width: 40px !important;
+    height: 23px !important;
+    min-height: 23px !important;
+  }
+
+  #peer-modal .peerx-limit-switch-row > .peerx-switch > span::after,
+  #edit-peer-modal .peerx-limit-switch-row > .peerx-switch > span::after,
+  #bulk-modal .peerx-limit-switch-row > .peerx-switch > span::after {
+    width: 17px !important;
+    height: 17px !important;
+  }
+
+  #peer-modal .peerx-limit-switch-row > .peerx-switch > input:checked + span::after,
+  #edit-peer-modal .peerx-limit-switch-row > .peerx-switch > input:checked + span::after,
+  #bulk-modal .peerx-limit-switch-row > .peerx-switch > input:checked + span::after {
+    transform: translateX(17px) !important;
+  }
+
+  #peer-modal .peerx-limit-switch-row > .peerx-switch > b,
+  #edit-peer-modal .peerx-limit-switch-row > .peerx-switch > b,
+  #bulk-modal .peerx-limit-switch-row > .peerx-switch > b,
+  #edit-peer-modal .peerx-internal-switch b {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    font-size: 11.5px !important;
+    line-height: 1.35 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    word-break: normal !important;
+  }
+
+  .auto-network-toggle,
+  .subx-auto-network-toggle {
+    display: grid !important;
+    grid-template-columns: 38px minmax(0, 1fr) !important;
+    align-items: center !important;
+    gap: 9px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    min-height: 54px !important;
+    padding: 9px 10px !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
+  }
+
+  .auto-network-switch,
+  .subx-auto-network-switch {
+    width: 38px !important;
+    min-width: 38px !important;
+    max-width: 38px !important;
+    height: 21px !important;
+  }
+
+  .auto-network-copy,
+  .subx-auto-network-copy {
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .auto-network-copy b,
+  .auto-network-copy small,
+  .subx-auto-network-copy b,
+  .subx-auto-network-copy small {
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  .peerx-endpoint-label {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 6px !important;
+    align-items: start !important;
+  }
+
+  .peerx-endpoint-label-title {
+    min-width: 0 !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  .peerx-endpoint-label-meta {
+    justify-self: start !important;
+    max-width: 100% !important;
+  }
+
+  .endpoint-effective,
+  .field-hint,
+  .hint,
+  .auto-network-copy small,
+  .peer-ip-address-hint {
+    min-width: 0 !important;
+    max-width: 100% !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  .endpoint-effective {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 4px 6px !important;
+  }
+
+  #peer-modal .peerx-form-actions,
+  #edit-peer-modal .peerx-form-actions,
+  #bulk-modal .peerx-form-actions {
+    position: static !important;
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 8px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 4px 0 2px !important;
+    box-sizing: border-box !important;
+  }
+
+  #peer-modal .peerx-form-actions .btn,
+  #edit-peer-modal .peerx-form-actions .btn,
+  #bulk-modal .peerx-form-actions .btn {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+}
+
+@media (max-width: 390px) {
+  #peer-modal .peerx-dialog,
+  #edit-peer-modal .peerx-dialog,
+  #bulk-modal .peerx-dialog,
+  #bulk-modal .peerx-bulk-dialog,
+  #iface-create-modal .iface-create-card {
+    border-radius: 14px !important;
+  }
+
+  #peer-modal .peerx-smart-form,
+  #edit-peer-modal .peerx-smart-form,
+  #bulk-modal .peerx-smart-form {
+    padding: 6px !important;
+  }
+
+  #peer-modal .peerx-form-card,
+  #edit-peer-modal .peerx-form-card,
+  #bulk-modal .peerx-form-card {
+    padding: 9px !important;
+  }
+
+  #peer-modal .peerx-profile-row .profile-picker {
+    grid-template-columns: 24px minmax(0, 1fr) 32px 32px !important;
+    gap: 4px !important;
+    padding: 5px !important;
+  }
+
+  #peer-modal .peerx-profile-row .icon-btn {
+    width: 32px !important;
+    height: 32px !important;
+    min-width: 32px !important;
+    max-width: 32px !important;
+  }
+
+  #peer-modal .peerx-form-actions,
+  #edit-peer-modal .peerx-form-actions,
+  #bulk-modal .peerx-form-actions {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 760px) {
+  #peer-modal #create-peer-form > .peerx-left-col,
+  #peer-modal #create-peer-form > .peerx-right-col,
+  #edit-peer-modal #edit-peer-form > .peerx-left-col,
+  #edit-peer-modal #edit-peer-form > .peerx-right-col,
+  #bulk-modal #bulk-form > .peerx-left-col,
+  #bulk-modal #bulk-form > .peerx-right-col {
+    grid-area: auto !important;
+    grid-column: 1 / -1 !important;
+    grid-row: auto !important;
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-auto-rows: max-content !important;
+    align-content: start !important;
+    align-self: start !important;
+    justify-self: stretch !important;
+    position: static !important;
+    transform: none !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: auto !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    gap: 10px !important;
+    overflow: visible !important;
+  }
+
+  #peer-modal #create-peer-form,
+  #edit-peer-modal #edit-peer-form,
+  #bulk-modal #bulk-form {
+    grid-template-areas: none !important;
+    grid-auto-flow: row !important;
+    grid-auto-rows: max-content !important;
+    align-content: start !important;
+  }
+
+  #peer-modal #create-peer-form > .peerx-left-col { order: 1 !important; }
+  #peer-modal #create-peer-form > .peerx-right-col { order: 2 !important; }
+  #edit-peer-modal #edit-peer-form > .peerx-left-col { order: 1 !important; }
+  #edit-peer-modal #edit-peer-form > .peerx-right-col { order: 2 !important; }
+  #bulk-modal #bulk-form > .peerx-left-col { order: 1 !important; }
+  #bulk-modal #bulk-form > .peerx-right-col { order: 2 !important; }
+
+  #peer-modal .peerx-right-col > .peerx-form-card:first-child,
+  #edit-peer-modal .peerx-right-col > .peerx-form-card:first-child,
+  #bulk-modal .peerx-right-col > .peerx-form-card:first-child {
+    min-height: 0 !important;
+    height: auto !important;
+  }
+}
+
+@media (max-width: 760px) {
+  #peer-modal .peerx-switch > input[type="checkbox"],
+  #edit-peer-modal .peerx-switch > input[type="checkbox"],
+  #bulk-modal .peerx-switch > input[type="checkbox"],
+  #peer-modal .toggle > input[type="checkbox"],
+  #edit-peer-modal .toggle > input[type="checkbox"],
+  #bulk-modal .toggle > input[type="checkbox"],
+  #peer-modal .auto-network-toggle > input[type="checkbox"],
+  #edit-peer-modal .auto-network-toggle > input[type="checkbox"],
+  #bulk-modal .auto-network-toggle > input[type="checkbox"] {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    min-width: 1px !important;
+    max-width: 1px !important;
+    margin: -1px !important;
+    padding: 0 !important;
+    opacity: 0 !important;
+    overflow: hidden !important;
+    clip: rect(0 0 0 0) !important;
+    clip-path: inset(50%) !important;
+    pointer-events: none !important;
+  }
+}
+
+@media (max-width: 760px) {
+  #peer-modal.modal,
+  #edit-peer-modal.modal,
+  #bulk-modal.modal,
+  #iface-create-modal.modal {
+    z-index: 20000 !important;
+  }
+}
+
+.peer-manage-mobile-head { display: none; }
+.peer-manage-section { display: contents; }
+
+@media (max-width: 760px) {
+  .peer-manage-section {
+    display: block !important;
+    width: auto !important;
+    min-width: 0 !important;
+    margin: 10px 12px 12px !important;
+    padding: 10px !important;
+    border: 1px solid var(--pw-border, #d7e0ea) !important;
+    border-radius: 16px !important;
+    background: var(--pw-surface, #fff) !important;
+    box-shadow: var(--pw-shadow, 0 5px 16px rgba(23,34,53,.055)) !important;
+    box-sizing: border-box !important;
+  }
+
+  .peer-manage-mobile-head {
+    display: grid !important;
+    grid-template-columns: 34px minmax(0,1fr) !important;
+    align-items: center !important;
+    gap: 9px !important;
+    padding: 1px 2px 9px !important;
+    margin-bottom: 8px !important;
+    border-bottom: 1px solid var(--pw-border, #d7e0ea) !important;
+  }
+
+  .peer-manage-mobile-icon {
+    width: 32px !important;
+    height: 32px !important;
+    display: grid !important;
+    place-items: center !important;
+    border: 1px solid var(--pw-border, #d7e0ea) !important;
+    border-radius: 10px !important;
+    background: var(--pw-soft, #f7f9fc) !important;
+    color: var(--pw-text-2, #46566a) !important;
+  }
+
+  .peer-manage-mobile-icon i { font-size: 12px !important; }
+  .peer-manage-mobile-head > div { min-width: 0 !important; }
+  .peer-manage-mobile-head strong {
+    display: block !important;
+    color: var(--pw-text, #172235) !important;
+    font-size: 12.5px !important;
+    line-height: 1.15 !important;
+    font-weight: 900 !important;
+  }
+  .peer-manage-mobile-head small {
+    display: block !important;
+    margin-top: 2px !important;
+    color: var(--pw-muted, #758498) !important;
+    font-size: 10.2px !important;
+    line-height: 1.3 !important;
+    font-weight: 700 !important;
+    white-space: normal !important;
+  }
+
+  .peer-manage-section .peer-page-actions {
+    display: grid !important;
+    grid-template-columns: minmax(0,1fr) minmax(0,1fr) !important;
+    gap: 7px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+  }
+
+  .peer-manage-section .peer-page-actions .btn {
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 38px !important;
+    height: 38px !important;
+    margin: 0 !important;
+    padding: 0 9px !important;
+    border-radius: 11px !important;
+    font-size: 11.5px !important;
+    gap: 6px !important;
+    white-space: nowrap !important;
+  }
+
+  .peer-manage-section #create-peer-btn {
+    grid-column: 1 / -1 !important;
+  }
+
+  .peer-manage-section .peer-page-actions .btn i {
+    font-size: 11px !important;
+  }
+}
+
+@media (max-width: 350px) {
+  .peer-manage-section .peer-page-actions {
+    grid-template-columns: 1fr !important;
+  }
+  .peer-manage-section #create-peer-btn { grid-column: auto !important; }
+}
+
+.peer-mobile-manage{display:none!important}
+.peer-mobile-action-sheet{display:none}
+
+@media (max-width:820px){
+  .peer-card > .peer-actions-row{display:none!important;height:0!important;min-height:0!important;max-height:0!important;padding:0!important;margin:0!important;border:0!important;overflow:hidden!important;opacity:0!important;visibility:hidden!important;pointer-events:none!important}
+
+  .peer-card > .peer-mobile-manage{
+    width:calc(100% - 24px)!important;
+    min-height:46px!important;
+    margin:0 12px 12px!important;
+    padding:0 12px!important;
+    display:flex!important;
+    align-items:center!important;
+    justify-content:space-between!important;
+    gap:10px!important;
+    border:1px solid var(--pw-border,#d7e0ea)!important;
+    border-radius:13px!important;
+    background:var(--pw-soft,#f7f9fc)!important;
+    color:var(--pw-text,#172235)!important;
+    box-shadow:none!important;
+    appearance:none!important;
+    -webkit-appearance:none!important;
+    font:inherit!important;
+    cursor:pointer!important;
+  }
+  .peer-mobile-manage-main{display:inline-flex!important;align-items:center!important;gap:9px!important;min-width:0!important}
+  .peer-mobile-manage-main > i{width:28px!important;height:28px!important;display:grid!important;place-items:center!important;border-radius:9px!important;background:var(--pw-surface,#fff)!important;border:1px solid var(--pw-border,#d7e0ea)!important;font-size:11px!important;color:var(--pw-text-2,#46566a)!important}
+  .peer-mobile-manage-main b{font-size:12px!important;font-weight:900!important;line-height:1!important}
+  .peer-mobile-manage-arrow{display:grid!important;place-items:center!important;width:26px!important;height:26px!important;border-radius:8px!important;color:var(--pw-muted,#758498)!important}
+  .peer-mobile-manage-arrow i{font-size:10px!important}
+
+  .peer-mobile-action-sheet{
+    position:fixed!important;inset:0!important;z-index:30000!important;display:block!important;
+    opacity:0!important;visibility:hidden!important;pointer-events:none!important;
+    transition:opacity .18s ease,visibility .18s ease!important;
+  }
+  .peer-mobile-action-sheet[hidden]{display:none!important}
+  .peer-mobile-action-sheet.open{opacity:1!important;visibility:visible!important;pointer-events:auto!important}
+  .peer-mobile-action-backdrop{position:absolute!important;inset:0!important;background:rgba(2,6,23,.62)!important;backdrop-filter:blur(3px)!important;-webkit-backdrop-filter:blur(3px)!important}
+  .peer-mobile-action-panel{
+    position:absolute!important;left:8px!important;right:8px!important;bottom:8px!important;
+    max-height:min(82dvh,720px)!important;overflow:auto!important;
+    padding:8px 10px 12px!important;border:1px solid var(--pw-border,#d7e0ea)!important;
+    border-radius:20px!important;background:var(--pw-surface,#fff)!important;color:var(--pw-text,#172235)!important;
+    box-shadow:0 24px 70px rgba(2,6,23,.35)!important;
+    transform:translateY(18px)!important;transition:transform .2s ease!important;
+  }
+  .peer-mobile-action-sheet.open .peer-mobile-action-panel{transform:translateY(0)!important}
+  .peer-mobile-action-handle{width:38px!important;height:4px!important;margin:2px auto 8px!important;border-radius:999px!important;background:var(--pw-border-strong,#c5d1dd)!important}
+  .peer-mobile-action-header{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;padding:4px 2px 10px!important;border-bottom:1px solid var(--pw-border,#d7e0ea)!important}
+  .peer-mobile-action-header small{display:block!important;color:var(--pw-muted,#758498)!important;font-size:9.5px!important;font-weight:800!important;text-transform:uppercase!important;letter-spacing:.06em!important}
+  .peer-mobile-action-header h3{margin:2px 0 0!important;font-size:16px!important;line-height:1.1!important;font-weight:900!important}
+  .peer-mobile-action-close{width:34px!important;height:34px!important;display:grid!important;place-items:center!important;border:1px solid var(--pw-border,#d7e0ea)!important;border-radius:10px!important;background:var(--pw-soft,#f7f9fc)!important;color:var(--pw-text,#172235)!important}
+  .peer-mobile-action-list{display:grid!important;grid-template-columns:1fr 1fr!important;gap:7px!important;padding-top:10px!important}
+  .peer-mobile-action-item{min-width:0!important;min-height:64px!important;padding:9px!important;display:grid!important;grid-template-columns:30px minmax(0,1fr) 12px!important;align-items:center!important;gap:8px!important;text-align:left!important;border:1px solid var(--pw-border,#d7e0ea)!important;border-radius:13px!important;background:var(--pw-soft,#f7f9fc)!important;color:var(--pw-text,#172235)!important;font:inherit!important}
+  .peer-mobile-action-item-icon{width:30px!important;height:30px!important;display:grid!important;place-items:center!important;border-radius:9px!important;background:var(--pw-surface,#fff)!important;border:1px solid var(--pw-border,#d7e0ea)!important;color:var(--pw-text-2,#46566a)!important}
+  .peer-mobile-action-item-icon i{font-size:11px!important}
+  .peer-mobile-action-item-copy{min-width:0!important;display:grid!important;gap:2px!important}
+  .peer-mobile-action-item-copy b{font-size:11.5px!important;line-height:1.15!important;font-weight:900!important}
+  .peer-mobile-action-item-copy small{font-size:9px!important;line-height:1.25!important;color:var(--pw-muted,#758498)!important;font-weight:700!important;white-space:normal!important}
+  .peer-mobile-action-item-arrow{font-size:9px!important;color:var(--pw-muted,#758498)!important}
+  .peer-mobile-action-item.danger{border-color:color-mix(in srgb,#ef4444 35%,var(--pw-border,#d7e0ea))!important}
+  body.peer-mobile-sheet-open{overflow:hidden!important}
+}
+
+@media (max-width:350px){.peer-mobile-action-list{grid-template-columns:1fr!important}}
+
+html[data-theme="dark"] .peer-mobile-manage,
+html[data-theme="dark"] .peer-mobile-action-panel,
+html[data-theme="dark"] .peer-mobile-action-item,
+html[data-theme="dark"] .peer-mobile-action-close,
+html[data-theme="dark"] .peer-mobile-action-item-icon,
+html[data-theme="dark"] .peer-mobile-manage-main>i{background:#111b25!important;border-color:#2a3b49!important;color:#e7edf4!important}
+
+@media (max-width: 760px) {
+  #peer-modal .peerx-right-col,
+  #edit-peer-modal .peerx-right-col,
+  #bulk-modal .peerx-right-col,
+  #peer-modal .peerx-wireguard-card,
+  #edit-peer-modal .peerx-wireguard-card,
+  #bulk-modal .peerx-wireguard-card,
+  #peer-modal .peerx-wireguard-grid,
+  #edit-peer-modal .peerx-wireguard-grid,
+  #bulk-modal .peerx-wireguard-grid {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    justify-self: stretch !important;
+    align-self: stretch !important;
+    box-sizing: border-box !important;
+  }
+
+  #edit-peer-modal #edit-peer-form > .peerx-right-col,
+  #edit-peer-modal #edit-peer-form > .peerx-right-col > .peerx-wireguard-card {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    margin-inline: 0 !important;
+  }
+
+  #peer-modal .endpoint-presets-compact,
+  #edit-peer-modal .endpoint-presets-compact,
+  #bulk-modal .endpoint-presets-compact,
+  #peer-modal .ep-row,
+  #edit-peer-modal .ep-row,
+  #bulk-modal .ep-row {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    margin: 8px 0 0 !important;
+    padding: 9px !important;
+    box-sizing: border-box !important;
+    overflow: visible !important;
+  }
+
+  #peer-modal .endpoint-presets-compact,
+  #edit-peer-modal .endpoint-presets-compact,
+  #bulk-modal .endpoint-presets-compact {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) repeat(3, 38px) !important;
+    grid-template-areas:
+      "copy copy copy copy"
+      "select apply save delete" !important;
+    gap: 8px 6px !important;
+    align-items: center !important;
+  }
+
+  #peer-modal .endpoint-presets-copy,
+  #edit-peer-modal .endpoint-presets-copy,
+  #bulk-modal .endpoint-presets-copy {
+    grid-area: copy !important;
+    min-width: 0 !important;
+    width: 100% !important;
+    display: grid !important;
+    grid-template-columns: 28px minmax(0, 1fr) !important;
+    gap: 8px !important;
+    align-items: start !important;
+  }
+
+  #peer-modal .endpoint-presets-copy > span,
+  #edit-peer-modal .endpoint-presets-copy > span,
+  #bulk-modal .endpoint-presets-copy > span {
+    min-width: 0 !important;
+  }
+
+  #peer-modal .endpoint-presets-copy b,
+  #peer-modal .endpoint-presets-copy small,
+  #edit-peer-modal .endpoint-presets-copy b,
+  #edit-peer-modal .endpoint-presets-copy small,
+  #bulk-modal .endpoint-presets-copy b,
+  #bulk-modal .endpoint-presets-copy small {
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  #peer-modal .endpoint-presets-compact select,
+  #edit-peer-modal .endpoint-presets-compact select,
+  #bulk-modal .endpoint-presets-compact select,
+  #peer-modal .endpoint-presets-compact #ep-saved,
+  #edit-peer-modal .endpoint-presets-compact #ep-saved,
+  #bulk-modal .endpoint-presets-compact #ep-saved {
+    grid-area: select !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: 42px !important;
+    min-height: 42px !important;
+    padding-inline: 11px 32px !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    white-space: nowrap !important;
+  }
+
+  #peer-modal .endpoint-presets-compact > #ep-apply,
+  #edit-peer-modal .endpoint-presets-compact > #ep-apply,
+  #bulk-modal .endpoint-presets-compact > #ep-apply { grid-area: apply !important; }
+  #peer-modal .endpoint-presets-compact > #ep-save,
+  #edit-peer-modal .endpoint-presets-compact > #ep-save,
+  #bulk-modal .endpoint-presets-compact > #ep-save { grid-area: save !important; }
+  #peer-modal .endpoint-presets-compact > #ep-del,
+  #edit-peer-modal .endpoint-presets-compact > #ep-del,
+  #bulk-modal .endpoint-presets-compact > #ep-del { grid-area: delete !important; }
+
+  #peer-modal .endpoint-presets-compact > #ep-apply,
+  #peer-modal .endpoint-presets-compact > #ep-save,
+  #peer-modal .endpoint-presets-compact > #ep-del,
+  #edit-peer-modal .endpoint-presets-compact > #ep-apply,
+  #edit-peer-modal .endpoint-presets-compact > #ep-save,
+  #edit-peer-modal .endpoint-presets-compact > #ep-del,
+  #bulk-modal .endpoint-presets-compact > #ep-apply,
+  #bulk-modal .endpoint-presets-compact > #ep-save,
+  #bulk-modal .endpoint-presets-compact > #ep-del {
+    width: 38px !important;
+    min-width: 38px !important;
+    max-width: 38px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: grid !important;
+    place-items: center !important;
+  }
+
+  #peer-modal .peerx-endpoint-field,
+  #edit-peer-modal .peerx-endpoint-field,
+  #bulk-modal .peerx-endpoint-field,
+  #peer-modal .peerx-fixed-endpoint-field,
+  #edit-peer-modal .peerx-fixed-endpoint-field,
+  #bulk-modal .peerx-fixed-endpoint-field,
+  #peer-modal .auto-network-field,
+  #edit-peer-modal .auto-network-field,
+  #bulk-modal .auto-network-field,
+  #peer-modal .peer-route-editor,
+  #edit-peer-modal .peer-route-editor,
+  #bulk-modal .peer-route-editor {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    justify-self: stretch !important;
+    box-sizing: border-box !important;
+  }
+
+  #peer-modal .peerx-fixed-endpoint-field,
+  #edit-peer-modal .peerx-fixed-endpoint-field,
+  #bulk-modal .peerx-fixed-endpoint-field {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 8px !important;
+    padding: 10px !important;
+  }
+
+  #peer-modal .peerx-fixed-endpoint-field > *,
+  #edit-peer-modal .peerx-fixed-endpoint-field > *,
+  #bulk-modal .peerx-fixed-endpoint-field > * {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .endpoint-presets-compact,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-presets-compact,
+  html[data-theme="light"] body #bulk-modal .endpoint-presets-compact,
+  html[data-theme="light"] body #peer-modal .peerx-fixed-endpoint-field,
+  html[data-theme="light"] body #edit-peer-modal .peerx-fixed-endpoint-field,
+  html[data-theme="light"] body #bulk-modal .peerx-fixed-endpoint-field,
+  html[data-theme="light"] body #peer-modal .peerx-internal-switch,
+  html[data-theme="light"] body #edit-peer-modal .peerx-internal-switch,
+  html[data-theme="light"] body #bulk-modal .peerx-internal-switch,
+  html[data-theme="light"] body #peer-modal .auto-network-toggle,
+  html[data-theme="light"] body #edit-peer-modal .auto-network-toggle,
+  html[data-theme="light"] body #bulk-modal .auto-network-toggle,
+  html[data-theme="light"] body #peer-modal .peer-route-editor,
+  html[data-theme="light"] body #edit-peer-modal .peer-route-editor,
+  html[data-theme="light"] body #bulk-modal .peer-route-editor {
+    background: #f8fafc !important;
+    color: #172235 !important;
+    border-color: #d9e2ec !important;
+    box-shadow: none !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .endpoint-presets-compact select,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-presets-compact select,
+  html[data-theme="light"] body #bulk-modal .endpoint-presets-compact select,
+  html[data-theme="light"] body #peer-modal .endpoint-presets-compact #ep-saved,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-presets-compact #ep-saved,
+  html[data-theme="light"] body #bulk-modal .endpoint-presets-compact #ep-saved,
+  html[data-theme="light"] body #peer-modal .peerx-fixed-endpoint-field .input,
+  html[data-theme="light"] body #edit-peer-modal .peerx-fixed-endpoint-field .input,
+  html[data-theme="light"] body #bulk-modal .peerx-fixed-endpoint-field .input {
+    background: #fff !important;
+    color: #172235 !important;
+    -webkit-text-fill-color: #172235 !important;
+    border-color: #cfd9e5 !important;
+    color-scheme: light !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .endpoint-presets-copy b,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-presets-copy b,
+  html[data-theme="light"] body #bulk-modal .endpoint-presets-copy b,
+  html[data-theme="light"] body #peer-modal .peerx-fixed-endpoint-field .peerx-endpoint-label-title,
+  html[data-theme="light"] body #edit-peer-modal .peerx-fixed-endpoint-field .peerx-endpoint-label-title,
+  html[data-theme="light"] body #bulk-modal .peerx-fixed-endpoint-field .peerx-endpoint-label-title,
+  html[data-theme="light"] body #peer-modal .peerx-internal-switch b,
+  html[data-theme="light"] body #edit-peer-modal .peerx-internal-switch b,
+  html[data-theme="light"] body #bulk-modal .peerx-internal-switch b,
+  html[data-theme="light"] body #peer-modal .auto-network-copy b,
+  html[data-theme="light"] body #edit-peer-modal .auto-network-copy b,
+  html[data-theme="light"] body #bulk-modal .auto-network-copy b {
+    color: #172235 !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .endpoint-presets-copy small,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-presets-copy small,
+  html[data-theme="light"] body #bulk-modal .endpoint-presets-copy small,
+  html[data-theme="light"] body #peer-modal .peerx-fixed-endpoint-field .field-hint,
+  html[data-theme="light"] body #edit-peer-modal .peerx-fixed-endpoint-field .field-hint,
+  html[data-theme="light"] body #bulk-modal .peerx-fixed-endpoint-field .field-hint,
+  html[data-theme="light"] body #peer-modal .peerx-internal-switch small,
+  html[data-theme="light"] body #edit-peer-modal .peerx-internal-switch small,
+  html[data-theme="light"] body #bulk-modal .peerx-internal-switch small,
+  html[data-theme="light"] body #peer-modal .auto-network-copy small,
+  html[data-theme="light"] body #edit-peer-modal .auto-network-copy small,
+  html[data-theme="light"] body #bulk-modal .auto-network-copy small {
+    color: #718096 !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .endpoint-effective,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-effective,
+  html[data-theme="light"] body #bulk-modal .endpoint-effective {
+    background: #fff7ed !important;
+    border-color: #fed7aa !important;
+    color: #9a5a13 !important;
+  }
+  html[data-theme="light"] body #peer-modal .endpoint-effective b,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-effective b,
+  html[data-theme="light"] body #bulk-modal .endpoint-effective b,
+  html[data-theme="light"] body #peer-modal .endpoint-effective span,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-effective span,
+  html[data-theme="light"] body #bulk-modal .endpoint-effective span {
+    color: #9a5a13 !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .endpoint-presets-compact > #ep-apply,
+  html[data-theme="light"] body #peer-modal .endpoint-presets-compact > #ep-save,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-presets-compact > #ep-apply,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-presets-compact > #ep-save,
+  html[data-theme="light"] body #bulk-modal .endpoint-presets-compact > #ep-apply,
+  html[data-theme="light"] body #bulk-modal .endpoint-presets-compact > #ep-save {
+    background: #fff !important;
+    border-color: #cfd9e5 !important;
+    color: #172235 !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .endpoint-presets-compact > #ep-del,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-presets-compact > #ep-del,
+  html[data-theme="light"] body #bulk-modal .endpoint-presets-compact > #ep-del {
+    background: #fff5f5 !important;
+    border-color: #fecaca !important;
+    color: #b42333 !important;
+  }
+
+  html[data-theme="dark"] body #peer-modal .endpoint-presets-compact,
+  html[data-theme="dark"] body #edit-peer-modal .endpoint-presets-compact,
+  html[data-theme="dark"] body #bulk-modal .endpoint-presets-compact,
+  html[data-theme="dark"] body #peer-modal .peerx-fixed-endpoint-field,
+  html[data-theme="dark"] body #edit-peer-modal .peerx-fixed-endpoint-field,
+  html[data-theme="dark"] body #bulk-modal .peerx-fixed-endpoint-field,
+  html[data-theme="dark"] body #peer-modal .peerx-internal-switch,
+  html[data-theme="dark"] body #edit-peer-modal .peerx-internal-switch,
+  html[data-theme="dark"] body #bulk-modal .peerx-internal-switch,
+  html[data-theme="dark"] body #peer-modal .auto-network-toggle,
+  html[data-theme="dark"] body #edit-peer-modal .auto-network-toggle,
+  html[data-theme="dark"] body #bulk-modal .auto-network-toggle,
+  html[data-theme="dark"] body #peer-modal .peer-route-editor,
+  html[data-theme="dark"] body #edit-peer-modal .peer-route-editor,
+  html[data-theme="dark"] body #bulk-modal .peer-route-editor {
+    background: #111b25 !important;
+    color: #e7edf4 !important;
+    border-color: #2a3b49 !important;
+    box-shadow: none !important;
+  }
+
+  html[data-theme="dark"] body #peer-modal .endpoint-presets-compact select,
+  html[data-theme="dark"] body #edit-peer-modal .endpoint-presets-compact select,
+  html[data-theme="dark"] body #bulk-modal .endpoint-presets-compact select,
+  html[data-theme="dark"] body #peer-modal .endpoint-presets-compact #ep-saved,
+  html[data-theme="dark"] body #edit-peer-modal .endpoint-presets-compact #ep-saved,
+  html[data-theme="dark"] body #bulk-modal .endpoint-presets-compact #ep-saved,
+  html[data-theme="dark"] body #peer-modal .peerx-fixed-endpoint-field .input,
+  html[data-theme="dark"] body #edit-peer-modal .peerx-fixed-endpoint-field .input,
+  html[data-theme="dark"] body #bulk-modal .peerx-fixed-endpoint-field .input {
+    background: #0b151d !important;
+    color: #e7edf4 !important;
+    -webkit-text-fill-color: #e7edf4 !important;
+    border-color: #314552 !important;
+    color-scheme: dark !important;
+  }
+
+  html[data-theme="dark"] body #peer-modal .endpoint-presets-copy small,
+  html[data-theme="dark"] body #edit-peer-modal .endpoint-presets-copy small,
+  html[data-theme="dark"] body #bulk-modal .endpoint-presets-copy small,
+  html[data-theme="dark"] body #peer-modal .peerx-fixed-endpoint-field .field-hint,
+  html[data-theme="dark"] body #edit-peer-modal .peerx-fixed-endpoint-field .field-hint,
+  html[data-theme="dark"] body #bulk-modal .peerx-fixed-endpoint-field .field-hint {
+    color: #97a7b5 !important;
+  }
+}
+
+@media (max-width: 360px) {
+
+  #peer-modal .endpoint-presets-compact,
+  #edit-peer-modal .endpoint-presets-compact,
+  #bulk-modal .endpoint-presets-compact {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    grid-template-areas:
+      "copy copy copy"
+      "select select select"
+      "apply save delete" !important;
+  }
+  #peer-modal .endpoint-presets-compact > #ep-apply,
+  #peer-modal .endpoint-presets-compact > #ep-save,
+  #peer-modal .endpoint-presets-compact > #ep-del,
+  #edit-peer-modal .endpoint-presets-compact > #ep-apply,
+  #edit-peer-modal .endpoint-presets-compact > #ep-save,
+  #edit-peer-modal .endpoint-presets-compact > #ep-del,
+  #bulk-modal .endpoint-presets-compact > #ep-apply,
+  #bulk-modal .endpoint-presets-compact > #ep-save,
+  #bulk-modal .endpoint-presets-compact > #ep-del {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+}
+
+@media (max-width: 760px) {
+  html[data-theme="light"] body #peer-modal .peerx-profile-row,
+  html[data-theme="light"] body #peer-modal .peerx-profile-row .profile-picker,
+  html[data-theme="light"] body #peer-modal .peerx-profile-menu {
+    background: #f8fafc !important;
+    color: #172235 !important;
+    border-color: #d9e2ec !important;
+    box-shadow: none !important;
+  }
+  html[data-theme="light"] body #peer-modal .peerx-profile-row .profile-picker select {
+    background: #fff !important;
+    color: #172235 !important;
+    -webkit-text-fill-color: #172235 !important;
+    border-color: #cfd9e5 !important;
+    color-scheme: light !important;
+  }
+  html[data-theme="light"] body #peer-modal .peerx-profile-row .profile-picker .icon-btn {
+    background: #fff !important;
+    color: #172235 !important;
+    border-color: #cfd9e5 !important;
+  }
+  html[data-theme="light"] body #peer-modal .peerx-profile-row .toggle.mini.black {
+    background: #f8fafc !important;
+    color: #172235 !important;
+    border-color: #d9e2ec !important;
+  }
+  html[data-theme="dark"] body #peer-modal .peerx-profile-row,
+  html[data-theme="dark"] body #peer-modal .peerx-profile-row .profile-picker,
+  html[data-theme="dark"] body #peer-modal .peerx-profile-menu {
+    background: #111b25 !important;
+    color: #e7edf4 !important;
+    border-color: #2a3b49 !important;
+  }
+}
+
+@media (max-width: 760px) {
+  html body #peer-modal #create-peer-form .peerx-wireguard-grid,
+  html body #edit-peer-modal #edit-peer-form .peerx-wireguard-grid,
+  html body #bulk-modal #bulk-form .peerx-wireguard-grid {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    inline-size: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  html body #peer-modal #create-peer-form .peerx-wireguard-grid > *,
+  html body #edit-peer-modal #edit-peer-form .peerx-wireguard-grid > *,
+  html body #bulk-modal #bulk-form .peerx-wireguard-grid > * {
+    flex: 0 0 auto !important;
+    align-self: stretch !important;
+    justify-self: stretch !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    inline-size: 100% !important;
+    max-inline-size: none !important;
+    margin-inline: 0 !important;
+    box-sizing: border-box !important;
+  }
+
+  html body #peer-modal .peerx-endpoint-field,
+  html body #edit-peer-modal .peerx-endpoint-field,
+  html body #bulk-modal .peerx-endpoint-field,
+  html body #peer-modal .peerx-fixed-endpoint-field,
+  html body #edit-peer-modal .peerx-fixed-endpoint-field,
+  html body #bulk-modal .peerx-fixed-endpoint-field,
+  html body #peer-modal .auto-network-field,
+  html body #edit-peer-modal .auto-network-field,
+  html body #bulk-modal .auto-network-field,
+  html body #peer-modal .peer-route-editor,
+  html body #edit-peer-modal .peer-route-editor,
+  html body #bulk-modal .peer-route-editor,
+  html body #peer-modal .endpoint-presets-compact,
+  html body #edit-peer-modal .endpoint-presets-compact,
+  html body #bulk-modal .endpoint-presets-compact {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    inline-size: 100% !important;
+    max-inline-size: none !important;
+    box-sizing: border-box !important;
+  }
+
+  html body #peer-modal .endpoint-presets-compact,
+  html body #edit-peer-modal .endpoint-presets-compact,
+  html body #bulk-modal .endpoint-presets-compact {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 40px 40px 40px !important;
+    grid-template-areas:
+      "copy copy copy copy"
+      "select apply save delete" !important;
+    column-gap: 6px !important;
+    row-gap: 9px !important;
+    padding: 10px !important;
+    overflow: visible !important;
+  }
+
+  html body #peer-modal .endpoint-presets-copy,
+  html body #edit-peer-modal .endpoint-presets-copy,
+  html body #bulk-modal .endpoint-presets-copy {
+    grid-area: copy !important;
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  html body #peer-modal .endpoint-presets-compact select,
+  html body #edit-peer-modal .endpoint-presets-compact select,
+  html body #bulk-modal .endpoint-presets-compact select {
+    grid-area: select !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+
+  html body #peer-modal .peerx-fixed-endpoint-field,
+  html body #edit-peer-modal .peerx-fixed-endpoint-field,
+  html body #bulk-modal .peerx-fixed-endpoint-field {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 8px !important;
+    padding: 11px !important;
+  }
+  html body #peer-modal .peerx-fixed-endpoint-field .peerx-endpoint-label,
+  html body #edit-peer-modal .peerx-fixed-endpoint-field .peerx-endpoint-label,
+  html body #bulk-modal .peerx-fixed-endpoint-field .peerx-endpoint-label {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 7px !important;
+    width: 100% !important;
+  }
+  html body #peer-modal .field-optional,
+  html body #edit-peer-modal .field-optional,
+  html body #bulk-modal .field-optional {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    white-space: nowrap !important;
+    word-break: keep-all !important;
+    overflow-wrap: normal !important;
+    min-height: 22px !important;
+    padding: 3px 8px !important;
+    border-radius: 999px !important;
+    font-size: 9.5px !important;
+    line-height: 1 !important;
+    font-style: normal !important;
+    font-weight: 900 !important;
+    vertical-align: middle !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .peerx-dialog,
+  html[data-theme="light"] body #edit-peer-modal .peerx-dialog,
+  html[data-theme="light"] body #bulk-modal .peerx-dialog,
+  html[data-theme="light"] body #iface-create-modal .iface-create-card {
+    background: #f8fafc !important;
+    color: #172235 !important;
+    border-color: #d8e1eb !important;
+    color-scheme: light !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .peerx-form-card,
+  html[data-theme="light"] body #edit-peer-modal .peerx-form-card,
+  html[data-theme="light"] body #bulk-modal .peerx-form-card,
+  html[data-theme="light"] body #peer-modal .peerx-profile-row,
+  html[data-theme="light"] body #bulk-modal .peerx-profile-row,
+  html[data-theme="light"] body #peer-modal .peerx-limit-switch-row > .peerx-switch,
+  html[data-theme="light"] body #edit-peer-modal .peerx-limit-switch-row > .peerx-switch,
+  html[data-theme="light"] body #bulk-modal .peerx-limit-switch-row > .peerx-switch,
+  html[data-theme="light"] body #peer-modal .peerx-switch,
+  html[data-theme="light"] body #edit-peer-modal .peerx-switch,
+  html[data-theme="light"] body #bulk-modal .peerx-switch,
+  html[data-theme="light"] body #peer-modal .peerx-fixed-endpoint-field,
+  html[data-theme="light"] body #edit-peer-modal .peerx-fixed-endpoint-field,
+  html[data-theme="light"] body #bulk-modal .peerx-fixed-endpoint-field,
+  html[data-theme="light"] body #peer-modal .endpoint-presets-compact,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-presets-compact,
+  html[data-theme="light"] body #bulk-modal .endpoint-presets-compact,
+  html[data-theme="light"] body #peer-modal .auto-network-toggle,
+  html[data-theme="light"] body #edit-peer-modal .auto-network-toggle,
+  html[data-theme="light"] body #bulk-modal .auto-network-toggle,
+  html[data-theme="light"] body #peer-modal .peerx-internal-switch,
+  html[data-theme="light"] body #edit-peer-modal .peerx-internal-switch,
+  html[data-theme="light"] body #bulk-modal .peerx-internal-switch,
+  html[data-theme="light"] body #peer-modal .peer-route-editor,
+  html[data-theme="light"] body #edit-peer-modal .peer-route-editor,
+  html[data-theme="light"] body #bulk-modal .peer-route-editor {
+    background: #ffffff !important;
+    color: #172235 !important;
+    border-color: #d8e1eb !important;
+    box-shadow: none !important;
+    color-scheme: light !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .peerx-limit-switch-row > .peerx-switch:hover,
+  html[data-theme="light"] body #edit-peer-modal .peerx-limit-switch-row > .peerx-switch:hover,
+  html[data-theme="light"] body #bulk-modal .peerx-limit-switch-row > .peerx-switch:hover {
+    background: #f8fafc !important;
+    border-color: #c7d2df !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .peerx-limit-switch-row > .peerx-switch > b,
+  html[data-theme="light"] body #edit-peer-modal .peerx-limit-switch-row > .peerx-switch > b,
+  html[data-theme="light"] body #bulk-modal .peerx-limit-switch-row > .peerx-switch > b,
+  html[data-theme="light"] body #peer-modal .peerx-switch > b,
+  html[data-theme="light"] body #edit-peer-modal .peerx-switch > b,
+  html[data-theme="light"] body #bulk-modal .peerx-switch > b {
+    color: #172235 !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .peerx-limit-switch-row > .peerx-switch > span,
+  html[data-theme="light"] body #edit-peer-modal .peerx-limit-switch-row > .peerx-switch > span,
+  html[data-theme="light"] body #bulk-modal .peerx-limit-switch-row > .peerx-switch > span,
+  html[data-theme="light"] body #peer-modal .peerx-switch > span,
+  html[data-theme="light"] body #edit-peer-modal .peerx-switch > span,
+  html[data-theme="light"] body #bulk-modal .peerx-switch > span {
+    background: #cbd5e1 !important;
+  }
+  html[data-theme="light"] body #peer-modal .peerx-switch > input:checked + span,
+  html[data-theme="light"] body #edit-peer-modal .peerx-switch > input:checked + span,
+  html[data-theme="light"] body #bulk-modal .peerx-switch > input:checked + span {
+    background: #0f766e !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .peerx-endpoint-label-title,
+  html[data-theme="light"] body #edit-peer-modal .peerx-endpoint-label-title,
+  html[data-theme="light"] body #bulk-modal .peerx-endpoint-label-title,
+  html[data-theme="light"] body #peer-modal .endpoint-presets-copy b,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-presets-copy b,
+  html[data-theme="light"] body #bulk-modal .endpoint-presets-copy b {
+    color: #172235 !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .endpoint-presets-copy small,
+  html[data-theme="light"] body #edit-peer-modal .endpoint-presets-copy small,
+  html[data-theme="light"] body #bulk-modal .endpoint-presets-copy small,
+  html[data-theme="light"] body #peer-modal .field-hint,
+  html[data-theme="light"] body #edit-peer-modal .field-hint,
+  html[data-theme="light"] body #bulk-modal .field-hint {
+    color: #718096 !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .field-optional,
+  html[data-theme="light"] body #edit-peer-modal .field-optional,
+  html[data-theme="light"] body #bulk-modal .field-optional {
+    background: #fff7ed !important;
+    border: 1px solid #fed7aa !important;
+    color: #9a5a13 !important;
+    -webkit-text-fill-color: #9a5a13 !important;
+  }
+
+  html[data-theme="light"] body #peer-modal .peerx-inline-help-endpoint > summary,
+  html[data-theme="light"] body #edit-peer-modal .peerx-inline-help-endpoint > summary,
+  html[data-theme="light"] body #bulk-modal .peerx-inline-help-endpoint > summary,
+  html[data-theme="light"] body #peer-modal .peerx-endpoint-help-pop,
+  html[data-theme="light"] body #edit-peer-modal .peerx-endpoint-help-pop,
+  html[data-theme="light"] body #bulk-modal .peerx-endpoint-help-pop {
+    background: #ffffff !important;
+    color: #334155 !important;
+    border-color: #d7e0ec !important;
+    color-scheme: light !important;
+  }
+
+  html[data-theme="light"] body #iface-create-modal .iface-create-card > h2,
+  html[data-theme="light"] body #iface-create-modal .iface-create-card > p,
+  html[data-theme="light"] body #iface-create-modal .iface-create-grid,
+  html[data-theme="light"] body #iface-create-modal .form-group,
+  html[data-theme="light"] body #iface-create-modal .iface-auto-up,
+  html[data-theme="light"] body #iface-create-modal .iface-auto-up-toggle {
+    background: #ffffff !important;
+    color: #172235 !important;
+    border-color: #d8e1eb !important;
+    color-scheme: light !important;
+  }
+
+  html[data-theme="light"] body #iface-create-modal .form-group label,
+  html[data-theme="light"] body #iface-create-modal .form-group > label,
+  html[data-theme="light"] body #iface-create-modal .iface-auto-up-copy b {
+    color: #172235 !important;
+  }
+  html[data-theme="light"] body #iface-create-modal .small-text,
+  html[data-theme="light"] body #iface-create-modal .iface-auto-up-copy small,
+  html[data-theme="light"] body #iface-create-modal > .iface-create-card > p.muted {
+    color: #718096 !important;
+  }
+
+  html[data-theme="light"] body #iface-create-modal .input,
+  html[data-theme="light"] body #iface-create-modal input:not([type="checkbox"]),
+  html[data-theme="light"] body #iface-create-modal select,
+  html[data-theme="light"] body #iface-create-modal textarea {
+    background: #ffffff !important;
+    color: #172235 !important;
+    -webkit-text-fill-color: #172235 !important;
+    border-color: #cfd9e5 !important;
+    color-scheme: light !important;
+  }
+  html[data-theme="light"] body #iface-create-modal .input::placeholder,
+  html[data-theme="light"] body #iface-create-modal input::placeholder {
+    color: #94a3b8 !important;
+    -webkit-text-fill-color: #94a3b8 !important;
+    opacity: 1 !important;
+  }
+
+  html[data-theme="light"] body #iface-create-modal .btn.secondary,
+  html[data-theme="light"] body #iface-create-modal #iface-create-cancel {
+    background: #ffffff !important;
+    color: #334155 !important;
+    border-color: #cfd9e5 !important;
+  }
+  html[data-theme="light"] body #iface-create-modal .iface-create-actions .btn:not(.secondary) {
+    background: #0f766e !important;
+    color: #ffffff !important;
+    border-color: #0f766e !important;
+  }
+  html[data-theme="light"] body #iface-create-modal .modal-close {
+    background: #ffffff !important;
+    color: #172235 !important;
+    border-color: #cfd9e5 !important;
+  }
+
+  html[data-theme="dark"] body #peer-modal .field-optional,
+  html[data-theme="dark"] body #edit-peer-modal .field-optional,
+  html[data-theme="dark"] body #bulk-modal .field-optional {
+    background: #352918 !important;
+    border: 1px solid #72562d !important;
+    color: #f4cd79 !important;
+    -webkit-text-fill-color: #f4cd79 !important;
+  }
+}
+
+@media (max-width: 390px) {
+  html body #peer-modal .endpoint-presets-compact,
+  html body #edit-peer-modal .endpoint-presets-compact,
+  html body #bulk-modal .endpoint-presets-compact {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    grid-template-areas:
+      "copy copy copy"
+      "select select select"
+      "apply save delete" !important;
+  }
+  html body #peer-modal .endpoint-presets-compact > #ep-apply,
+  html body #peer-modal .endpoint-presets-compact > #ep-save,
+  html body #peer-modal .endpoint-presets-compact > #ep-del,
+  html body #edit-peer-modal .endpoint-presets-compact > #ep-apply,
+  html body #edit-peer-modal .endpoint-presets-compact > #ep-save,
+  html body #edit-peer-modal .endpoint-presets-compact > #ep-del,
+  html body #bulk-modal .endpoint-presets-compact > #ep-apply,
+  html body #bulk-modal .endpoint-presets-compact > #ep-save,
+  html body #bulk-modal .endpoint-presets-compact > #ep-del {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+}
