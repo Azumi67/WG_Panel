@@ -1,1698 +1,6649 @@
+
 (() => {
-  const $ = (s, p = document) => p.querySelector(s);
-  const $$ = (s, p = document) => Array.from(p.querySelectorAll(s));
+  function getCookie(name) {
+    return document.cookie
+      .split('; ')
+      .map(v => v.split('='))
+      .find(p => p[0] === name)?.[1] || '';
+  }
+  window.addEventListener('hashchange', () => {
+  document.querySelectorAll('.modal.open').forEach(m => m.classList.remove('open'));
+  document.body.classList.remove('modal-open');
+});
 
-  const csrfHeaders = (json = false) => {
-    const h = typeof window.csrfHeaders === "function" ? window.csrfHeaders(json) : {};
-    if (json) h["Content-Type"] = "application/json";
+const API_BASE = document.documentElement.getAttribute('data-api-base') || '';
+const api = (p) => (API_BASE + p).replace(/\/{2,}/g, '/');
 
-    const apiKey = document.querySelector('meta[name="api-key"]')?.content?.trim();
-    if (apiKey && !h["Authorization"]) {
-      h["Authorization"] = `Bearer ${apiKey}`;
-      h["X-API-KEY"] = apiKey;
-    }
-    return h;
-  };
+function peerKey(p) {
+  const hasNodeScope = (typeof getScopeId === 'function' && !!getScopeId()) || !!window.NODE_ID;
+  return hasNodeScope ? (p.public_key || p.id) : p.id;
+}
 
-  function fallbackToast(msg, type = "info") {
-    const cls = type === "success" ? "ok" : type === "error" ? "err" : type;
-    let stack = document.querySelector(".bk-toast-stack");
-    if (!stack) {
-      stack = document.createElement("div");
-      stack.className = "bk-toast-stack";
-      document.body.appendChild(stack);
-    }
-    const t = document.createElement("div");
-    t.className = `bk-toast ${cls}`;
-    t.textContent = String(msg || "");
-    stack.appendChild(t);
-    setTimeout(() => {
-      t.style.opacity = "0";
-      t.style.transform = "translateY(-6px)";
-      setTimeout(() => t.remove(), 220);
-    }, 3200);
+function peerDomKey(p) {
+  return String(peerKey(p) ?? p?.id ?? p?.public_key ?? '');
+}
+function apiPeerPath(idOrPeer, suffix = '') {
+  const key = (typeof idOrPeer === 'object') ? peerKey(idOrPeer) : idOrPeer;
+  const scopeId = (typeof getScopeId === 'function' && getScopeId()) ? getScopeId() : '';
+  const nodeId = window.NODE_ID || scopeId;
+  if (nodeId) {
+    return `/api/nodes/${encodeURIComponent(String(nodeId))}/peer/${encodeURIComponent(String(key))}${suffix}`;
+  }
+  return `/api/peer/${encodeURIComponent(String(key))}${suffix}`;
+}
+function fmtDaysHours(d) {
+  const n = Number(d);
+  if (!Number.isFinite(n) || n <= 0) return '–';
+  const days = Math.floor(n);
+  let hours = Math.round((n - days) * 24);
+  let dd = days, hh = hours;
+  if (hours === 24) { dd += 1; hh = 0; }
+  const parts = [];
+  if (dd) parts.push(`${dd}d`);
+  if (hh) parts.push(`${hh}h`);
+  return parts.length ? parts.join(' ') : '0d';
+}
+
+function fmtDaysOrHours(d) { return fmtDaysHours(d); }
+
+
+  const $  = (sel, r = document) => r.querySelector(sel);
+  const $$ = (sel, r = document) => Array.from(r.querySelectorAll(sel));
+  const q  = (sel) => (typeof sel === 'string' && sel) ? document.querySelector(sel) : null;
+  const qs = (sel) => Array.from(document.querySelectorAll(sel));
+  const setVal = (sel, v) => { const el = q(sel); if (el) el.value = (v ?? ''); };
+  const getVal = (sel) => (q(sel)?.value ?? '').trim();
+  const setChecked = (sel, on) => { const el = q(sel); if (el) el.checked = !!on; };
+  const intOrZero = (x) => { const n = parseInt(x, 10); return Number.isFinite(n) ? n : 0; };
+  const numOrNull = (x) => { const n = Number(x); return (x === '' || Number.isNaN(n)) ? null : n; };
+  const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+  const cap = s => s ? s[0].toUpperCase() + s.slice(1) : '';
+  const statusIcon = s => (
+  s === 'online' ? 'fa-signal' :
+  s === 'enabled' ? 'fa-toggle-on' :
+  s === 'disabled' ? 'fa-toggle-off' :
+  s === 'blocked' ? 'fa-ban' :
+  s === 'depleting' ? 'fa-hourglass-half' :
+  'fa-times-circle'
+);
+
+function panelStatus(p) {
+  return String(p.panel_status || p.status || 'offline').toLowerCase();
+}
+
+function connStatus(p) {
+  return String(p.conn_status || p.connection_status || 'offline').toLowerCase() === 'online'
+    ? 'online'
+    : 'offline';
+}
+
+function isBlocked(p) {
+  return panelStatus(p) === 'blocked';
+}
+
+function isEnabled(p) {
+  return panelStatus(p) === 'online';
+}
+
+function isDisabled(p) {
+  return !isEnabled(p);
+}
+
+function isDepleting(p) {
+  if (isBlocked(p) || p.unlimited) return false;
+
+  const remMiB = remainingMiB(p);
+  const limMiB = toMiB(p.data_limit, p.limit_unit);
+
+  const dataLow =
+    Number.isFinite(remMiB) &&
+    Number.isFinite(limMiB) &&
+    limMiB > 0 &&
+    remMiB <= Math.max(50, limMiB * 0.15);
+
+  const ttl = Number(p.ttl_seconds);
+  const timeLow =
+    Number.isFinite(ttl) &&
+    ttl > 0 &&
+    ttl <= 24 * 3600;
+
+  return dataLow || timeLow;
+}
+
+function peerTagsHTML(p) {
+  const c = connStatus(p);
+  const pStatus = panelStatus(p);
+  const reason = String(p.conn_reason || '').replace(/_/g, ' ');
+
+  const tags = [
+    `<span class="peer-tag live-tag live-${c}" title="Live connection: ${cap(c)}${reason ? ' · ' + reason : ''}">
+      <span class="live-dot" aria-hidden="true"></span>
+      <span class="live-word">Live</span>
+      <b>${c === 'online' ? 'Online' : 'Offline'}</b>
+    </span>`
+  ];
+
+  if (pStatus === 'online') {
+    tags.push(`
+      <span class="peer-tag enabled" title="Panel state: enabled">
+        <i class="fas ${statusIcon('enabled')}"></i> Enabled
+      </span>
+    `);
+  } else if (pStatus === 'blocked') {
+    tags.push(`
+      <span class="peer-tag blocked" title="Panel state: blocked">
+        <i class="fas ${statusIcon('blocked')}"></i> Blocked
+      </span>
+    `);
+  } else {
+    tags.push(`
+      <span class="peer-tag disabled" title="Panel state: disabled">
+        <i class="fas ${statusIcon('disabled')}"></i> Disabled
+      </span>
+    `);
   }
 
-  const toast = {
-    success: (m) => window.toastSuccess ? window.toastSuccess(m) : fallbackToast(m, "success"),
-    info: (m) => window.toastInfo ? window.toastInfo(m) : fallbackToast(m, "info"),
-    warn: (m) => window.toastWarn ? window.toastWarn(m) : fallbackToast(m, "warn"),
-    error: (m) => window.toastError ? window.toastError(m) : fallbackToast(m, "error"),
+  if (isDepleting(p)) {
+    tags.push(`
+      <span class="peer-tag depleting" title="Depleting: low data or time remaining">
+        <i class="fas ${statusIcon('depleting')}" aria-hidden="true"></i>
+        <span>Near limit</span>
+      </span>
+    `);
+  }
+
+  return tags.join('');
+}
+
+const pick = (keys) => Array.isArray(keys) ? (keys.find(sel => !!q(sel)) || keys[0]) : keys;
+
+const SEL = {
+  use_profile_toggle: [
+    '#use-profile-toggle',
+    '[name="use_profile"]',
+    '[name="use_profile_toggle"]'
+  ],
+
+  save_profile_btn: [
+    '#save-profile-btn',
+    '#profile-save-btn',
+    '[data-profile-save]'
+  ],
+
+  profile_select: [
+    '#profile-select',
+    '[name="profile"]',
+    '[name="profile_select"]'
+  ],
+
+  allowed_ips: [
+    '#peer-allowed-ips',
+    '#peer-allowed_ips',
+    '#peer-modal [name="allowed_ips"]'
+  ],
+
+  endpoint: [
+    '#peer-endpoint',
+    '#peer-modal [name="endpoint"]'
+  ],
+
+  dns: [
+    '#peer-dns',
+    '#peer-modal [name="dns"]'
+  ],
+
+  mtu: [
+    '#peer-mtu',
+    '#peer-modal [name="mtu"]'
+  ],
+
+  keepalive: [
+    '#peer-keepalive',
+    '#peer-modal [name="persistent_keepalive"]'
+  ],
+
+  data_limit_value: [
+    '#peer-data-limit-value',
+    '#peer-modal [name="data_limit"]',
+    '#peer-modal [name="data_limit_value"]'
+  ],
+
+  data_limit_unit: [
+    '#peer-data-limit-unit',
+    '#peer-modal [name="limit_unit"]',
+    '#peer-modal [name="data_limit_unit"]'
+  ],
+
+  start_on_first_use: [
+    '#peer-start-first-use',
+    '#peer-modal [name="start_on_first_use"]'
+  ],
+
+  unlimited: [
+    '#peer-unlimited',
+    '#peer-modal [name="unlimited"]'
+  ],
+
+  time_days: [
+    '#time_limit_days',
+    '#peer-time-days',
+    '#peer-modal [name="time_limit_days"]'
+  ],
+
+  time_hours: [
+    '#time_limit_hours',
+    '#peer-time-hours',
+    '#peer-modal [name="time_limit_hours"]'
+  ]
+};
+
+let __profileCache = null;
+let __profileSnapshot = null;
+
+function snapForm() {
+  return {
+    allowed_ips: getVal(pick(SEL.allowed_ips)),
+    endpoint:    getVal(pick(SEL.endpoint)),
+    dns:         getVal(pick(SEL.dns)),
+    mtu:         getVal(pick(SEL.mtu)),
+    keepalive:   getVal(pick(SEL.keepalive)),
+    data_limit_value: getVal(pick(SEL.data_limit_value)),
+    data_limit_unit:  getVal(pick(SEL.data_limit_unit)),
+    start_on_first_use: !!q(pick(SEL.start_on_first_use))?.checked,
+    unlimited:          !!q(pick(SEL.unlimited))?.checked,
+    time_days:   getVal(pick(SEL.time_days)),
+    time_hours:  getVal(pick(SEL.time_hours)),
+  };
+}
+
+function restoreForm(s) {
+   if (!s) return;
+  setVal(pick(SEL.allowed_ips), s.allowed_ips);
+  setVal(pick(SEL.endpoint),    s.endpoint);
+  setVal(pick(SEL.dns),         s.dns);
+  setVal(pick(SEL.mtu),         s.mtu);
+  setVal(pick(SEL.keepalive),   s.keepalive);
+  setVal(pick(SEL.data_limit_value), s.data_limit_value);
+  setVal(pick(SEL.data_limit_unit),  s.data_limit_unit || 'Mi');
+  setChecked(pick(SEL.start_on_first_use), !!s.start_on_first_use);
+  setChecked(pick(SEL.unlimited),          !!s.unlimited);
+  setVal(pick(SEL.time_days),  s.time_days);
+  setVal(pick(SEL.time_hours), s.time_hours);
+}
+
+async function loadProfile(name = null, force = false) {
+  if (!force && __profileCache && (__profileCache.__name || 'Default') === (name || 'Default')) {
+    return __profileCache;
+  }
+  const url = name
+    ? `/api/peer_profile?name=${encodeURIComponent(name)}`
+    : `/api/peer_profile`;
+  const r = await fetch(url, { credentials: 'same-origin' });
+  if (!r.ok) return (__profileCache = {});
+  const prof = await r.json();
+  prof.__name = name || (prof.name || 'Default');
+  return (__profileCache = prof);
+}
+
+
+function keepaliveMtu(profile) {
+  const kaEl = q('#peer-keepalive');
+  const mtuEl = q('#peer-mtu');
+
+  if (kaEl) {
+    const ka = profile?.persistent_keepalive;
+    kaEl.placeholder = (ka == null || ka === '') ? '—' : String(ka);
+  }
+  if (mtuEl) {
+    const mtu = profile?.mtu;
+    mtuEl.placeholder = (mtu == null || mtu === '') ? '—' : String(mtu);
+  }
+}
+
+function applyProfile(p) {
+  setVal(pick(SEL.allowed_ips), p.allowed_ips);
+  setVal(pick(SEL.endpoint),    p.endpoint);
+  setVal(pick(SEL.dns),         p.dns);
+  setVal(pick(SEL.mtu),         p.mtu ?? '');
+  setVal(pick(SEL.keepalive),   p.persistent_keepalive ?? '');
+  setVal(pick(SEL.data_limit_value), p.data_limit_value ?? 0);
+  setVal(pick(SEL.data_limit_unit),  p.data_limit_unit || 'Mi');
+  setChecked(pick(SEL.start_on_first_use), !!p.start_on_first_use);
+  setChecked(pick(SEL.unlimited),          !!p.unlimited);
+  setVal(pick(SEL.time_days),  p.time_limit_days ?? 0);
+  setVal(pick(SEL.time_hours), p.time_limit_hours ?? 0);
+}
+
+function clearProfile() {
+  setVal(pick(SEL.allowed_ips), '');
+  setVal(pick(SEL.endpoint),    '');
+  setVal(pick(SEL.dns),         '');
+  setVal(pick(SEL.mtu),         '');
+  setVal(pick(SEL.keepalive),   '');
+  setVal(pick(SEL.data_limit_value), '');
+  setVal(pick(SEL.data_limit_unit),  'Mi');
+  setChecked(pick(SEL.start_on_first_use), false);
+  setChecked(pick(SEL.unlimited),          false);
+  setVal(pick(SEL.time_days),  '');
+  setVal(pick(SEL.time_hours), '');
+}
+
+async function profileToggle() {
+  const tog = q(pick(SEL.use_profile_toggle));
+  const on  = !!tog?.checked;
+
+  if (on) {
+    if (!__profileSnapshot) __profileSnapshot = snapForm();
+    const name = q(pick(SEL.profile_select))?.value || 'Default';
+    const p = await loadProfile(name, /*force*/true);
+    applyProfile(p);
+  } else {
+    if (__profileSnapshot) {
+      restoreForm(__profileSnapshot);
+      __profileSnapshot = null;
+    }
+  }
+}
+
+async function saveProfile(saveAsName = null) {
+  const name = saveAsName || (q('#profile-select')?.value || 'Default');
+
+  const payload = {
+    name,  
+    allowed_ips: getVal(pick(SEL.allowed_ips)),
+    endpoint:    getVal(pick(SEL.endpoint)),
+    dns:         getVal(pick(SEL.dns)),
+    mtu:         numOrNull(getVal(pick(SEL.mtu))),
+    persistent_keepalive: numOrNull(getVal(pick(SEL.keepalive))),
+    data_limit_value: intOrZero(getVal(pick(SEL.data_limit_value))),
+    data_limit_unit: getVal(pick(SEL.data_limit_unit)) || 'Mi',
+    start_on_first_use: !!q(pick(SEL.start_on_first_use))?.checked,
+    unlimited:          !!q(pick(SEL.unlimited))?.checked,
+    time_limit_days:  intOrZero(getVal(pick(SEL.time_days))),
+    time_limit_hours: intOrZero(getVal(pick(SEL.time_hours))),
   };
 
-  const pillStatus = $("#status-pill");
-  const pillNext = $("#next-run-pill") || $("#next-pill");
-  const pillFull = $("#full-last");
-  const pillDb = $("#db-last");
-  const pillSettings = $("#settings-last");
-  const pillAuto = $("#schedule-state") || $("#auto-state");
+  const r = await fetch('/api/peer_profile', {
+    method: 'POST',
+    headers: Object.assign({'Content-Type':'application/json'}, window.csrfHeaders?.(true) || {}),
+    credentials: 'same-origin',
+    body: JSON.stringify(payload),
+  });
 
-  const btnFull = $("#btn-full");
-  const btnDb = $("#btn-db");
-  const btnSettings = $("#btn-settings");
-  const optWG = $("#include-wg") || $("#opt-wg");
-  const optTG = $("#send-telegram") || $("#opt-tg");
-  const livePreview = $("#live-preview-grid") || $("#backup-live-preview");
-  const livePreviewWrap = $("#live-backup-preview") || $("#backup-live-preview");
-  const livePreviewSubtitle = $("#live-preview-subtitle");
+  if (r.ok) {
+    const j = await r.json().catch(() => ({}));
+    __profileCache = (j.saved || payload);
+    __profileCache.__name = name;
+    await populateProfile(name);      
+    toastSafe(`Profile “${name}” saved`, 'success');
+  } else {
+    toastSafe('Could not save profile', 'error');
+  }
+}
 
-  const autoEnabled = $("#schedule-enabled") || $("#auto-enabled");
-  const selFreq = $("#freq");
-  const inpTime = $("#time");
-  const selTz = $("#tz") || $("#timezone");
-  const inpKeep = $("#keep");
-  const autoWG = $("#schedule-include-wg") || $("#auto-wg");
-  const autoTG = $("#schedule-send-telegram") || $("#auto-tg");
-  const btnSave = $("#save-schedule") || $("#save");
-  const btnSaveRun = $("#save-run-schedule");
-  const autoFilesList = $("#auto-files-list");
-  const autoFilesCount = $("#auto-files-count");
-  const autoRunLoader = $("#auto-run-loader");
-  const autoRunLoaderTitle = $("#auto-run-loader-title");
-  const autoRunLoaderText = $("#auto-run-loader-text");
-  const autoTelegramWrap = $("#auto-telegram-target-wrap");
-  const autoTelegramAdmin = $("#auto-telegram-admin");
-  const autoTelegramHelp = $("#auto-telegram-help");
-  const autoInspectBox = $("#auto-inspect-box");
-  const autoInspectGrid = $("#auto-inspect-grid");
-  const autoInspectSubtitle = $("#auto-inspect-subtitle");
-  const autoInspectFiles = $("#auto-inspect-files");
-  const autoInspectModal = $("#auto-inspect-modal");
-  const autoInspectModalSubtitle = $("#auto-inspect-modal-subtitle");
-  const autoInspectModalGrid = $("#auto-inspect-modal-grid");
-  const autoInspectModalFiles = $("#auto-inspect-modal-files");
-  const autoInspectDownload = $("#auto-inspect-download");
+async function populateProfile(preselect = null) {
+  const sel = q('#profile-select');
+  if (!sel) return;
+  try {
+    const r = await fetch('/api/peer_profiles', { credentials: 'same-origin' });
+    if (!r.ok) throw 0;
+    const j = await r.json();
+    const names  = (j.profiles && j.profiles.length) ? j.profiles : ['Default'];
+    const active = j.active || 'Default';
+    const chosen = preselect || sel.value || active;
 
-  const restoreFile = $("#restore-file");
-  const restoreBtn = $("#btn-restore");
-  const restoreTrigger = $("#restore-file-trigger");
-  const restoreName = $("#restore-file-name");
-  const restoreHint = $("#restore-file-hint");
-  const restoreWGBox = $("#restore-wg");
-  const restorePreviewGrid = $("#restore-preview-grid");
-  const restorePreviewSubtitle = $("#restore-preview-subtitle");
-  const restoreNodeList = $("#restore-node-list");
-  const restoreFileList = $("#restore-file-list");
-  const restoreResult = $("#restore-result");
+    sel.innerHTML = names.map(n => {
+      const star = (n === active) ? ' ★' : '';
+      return `<option value="${n}" ${n === chosen ? 'selected' : ''}>${n}${star}</option>`;
+    }).join('');
 
-  const serverModeInputs = $$('input[name="server-settings-mode"]');
-  const serverPill = $("#server-settings-pill");
-  const savedServerBox = $("#saved-server-settings");
-  const savedServerGrid = $("#saved-server-settings-grid");
-  const customServerBox = $("#custom-server-settings");
+    await loadProfile(sel.value, /*force*/true);
+  } catch (_) {
+    sel.innerHTML = `<option value="Default" selected>Default</option>`;
+  }
+}
 
-  const nodeState = $("#node-restore-state");
-  const nodeLines = $("#node-status-lines");
-  const nodeGuideToggle = $("#node-guide-toggle");
-  const nodeCommandBox = $("#node-command-box");
-  const nodeInstallCommand = $("#node-install-command");
-  const copyNodeCommand = $("#copy-node-command");
+function closeProfileMenu(){ const m = q('#profile-menu'); if (m) m.style.display='none'; }
+function openProfileMenu(){ const m = q('#profile-menu'); if (m) m.style.display='block'; }
 
-  let lastSchedule = null;
-  let lastInspect = null;
-  let cachedInstallCommand = "";
-  const autoInspectCache = new Map();
-  let activeAutoInspectFilename = "";
+async function prompt(title, def='') {
+  if (typeof inputText === 'function') {
+    return await inputText(title, def);
+  }
+  const v = window.prompt(title, def);
+  return v == null ? null : v.trim();
+}
 
-  const safe = (s) => String(s ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+async function profileAction(act){
+  const sel = q('#profile-select');
+  if (!sel) return;
+  const current = sel.value || 'Default';
 
-  function setBusy(btn, busy, text) {
-    if (!btn) return;
-    if (busy) {
-      btn.dataset.oldHtml = btn.innerHTML;
-      btn.disabled = true;
-      btn.classList.add("is-loading");
-      if (text) btn.innerHTML = `<i class="fas fa-circle-notch"></i> ${safe(text)}`;
+  if (act === 'new') {
+    const name = await prompt('New profile name', '');
+    if (!name) return;
+    await saveProfile(name);            
+    await populateProfile(name);
+    toastSafe(`Profile “${name}” created`, 'success');
+  }
+
+  if (act === 'saveas') {
+    const name = await prompt('Save current values as…', `${current}-copy`);
+    if (!name) return;
+    await saveProfile(name);
+    await populateProfile(name);
+    toastSafe(`Saved as “${name}”`, 'success');
+  }
+
+  if (act === 'activate') {
+    const r = await fetch('/api/peer_profile/activate', {
+      method: 'POST',
+      headers: Object.assign({'Content-Type':'application/json'}, window.csrfHeaders?.(true) || {}),
+      credentials: 'same-origin',
+      body: JSON.stringify({ name: current })
+    });
+    if (r.ok) {
+      await populateProfile(current);
+      toastSafe(`“${current}” set active`, 'success');
     } else {
-      btn.disabled = false;
-      btn.classList.remove("is-loading");
-      if (btn.dataset.oldHtml) btn.innerHTML = btn.dataset.oldHtml;
+      toastSafe('Could not activate profile', 'error');
     }
   }
 
-  function setRunStep(name, state = "") {
-    const el = $(`#auto-run-step-${name}`);
-    if (!el) return;
-    el.classList.remove("active", "done");
-    if (state) el.classList.add(state);
-    const icon = el.querySelector("i");
-    if (icon && state === "done") {
-      icon.className = "fas fa-check-circle";
+  if (act === 'rename') {
+    const name = await prompt('Rename profile', current);
+    if (!name || name === current) return;
+    const r = await fetch('/api/peer_profile/rename', {
+      method: 'POST',
+      headers: Object.assign({'Content-Type':'application/json'}, window.csrfHeaders?.(true) || {}),
+      credentials: 'same-origin',
+      body: JSON.stringify({ old: current, new: name })
+    });
+    if (r.ok) {
+      await populateProfile(name);
+      toastSafe(`Renamed to “${name}”`, 'success');
+    } else {
+      const j = await r.json().catch(()=>({}));
+      toastSafe(j.error || 'Rename failed', 'error');
     }
   }
 
-  function showRunLoader(title, text) {
-    ["save", "build", "telegram", "refresh"].forEach((name) => setRunStep(name, ""));
-    if (autoRunLoaderTitle) autoRunLoaderTitle.textContent = title || "Creating complete backup";
-    if (autoRunLoaderText) autoRunLoaderText.textContent = text || "Please keep this page open.";
-    if (autoRunLoader) autoRunLoader.hidden = false;
+  if (act === 'delete') {
+    if (current === 'Default') {
+      toastSafe('Cannot delete “Default”', 'error');
+      return;
+    }
+    if (!(await confirmBox(`Delete profile “${current}”?`))) return;
+    const r = await fetch(`/api/peer_profile?name=${encodeURIComponent(current)}`, {
+      method: 'DELETE', credentials: 'same-origin'
+    });
+    if (r.ok) {
+      await populateProfile('Default');
+      toastSafe(`Deleted “${current}”`, 'success');
+    } else {
+      const j = await r.json().catch(()=>({}));
+      toastSafe(j.error || 'Delete failed', 'error');
+    }
+  }
+}
+
+
+async function createPeerModal() {
+  const togSel = pick(SEL.use_profile_toggle);
+  const btnSel = pick(SEL.save_profile_btn);
+  const selSel = pick(SEL.profile_select);
+  const tog = q(togSel);
+  const btn = q(btnSel);
+  const sel = q(selSel);
+
+  if (tog && !tog.__wired) { tog.addEventListener('change', profileToggle); tog.__wired = true; }
+  if (btn && !btn.__wired) { btn.addEventListener('click', saveProfile);   btn.__wired = true; }
+
+  if (sel && !sel.__wired) {
+    sel.addEventListener('change', async () => {
+      const name = sel.value || 'Default';
+      const prof = await loadProfile(name, /*force*/true);
+      if (q(togSel)?.checked) {
+        applyProfile(prof);     
+      }
+      keepaliveMtu(prof);  
+    });
+    sel.__wired = true;
+  }
+  if (!window.__profile_menu_wired) {
+  const btn = q('#profile-menu-btn');
+  const menu = q('#profile-menu');
+  if (btn && menu) {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const open = menu.style.display === 'block';
+      if (open) closeProfileMenu(); else openProfileMenu();
+    });
+    menu.addEventListener('click', async (e) => {
+      const b = e.target.closest('button[data-act]');
+      if (!b) return;
+      closeProfileMenu();
+      await profileAction(b.dataset.act);
+    });
+    document.addEventListener('click', (e) => {
+      if (!menu.contains(e.target) && e.target !== btn) closeProfileMenu();
+    });
+    window.__profile_menu_wired = true;
+  }
+}
+  __profileSnapshot = null;
+
+  await populateProfile();
+  setChecked(togSel, false);
+
+  const activeName = q(selSel)?.value || 'Default';
+  const prof = await loadProfile(activeName);
+  keepaliveMtu(prof);
+}
+
+window.createPeerModal = createPeerModal;
+
+
+async function afterPeerCreated() {
+  const tog = q(pick(SEL.use_profile_toggle));
+  if (tog?.checked) {
+    await saveProfile();
+  }
+}
+window.afterPeerCreated = afterPeerCreated;
+  function peerEsc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
-  function updateRunLoader(title, text) {
-    if (title && autoRunLoaderTitle) autoRunLoaderTitle.textContent = title;
-    if (text && autoRunLoaderText) autoRunLoaderText.textContent = text;
-  }
+  function toastSafe(msg, type = 'info', flag = false) {
+    const kind = (type === 'warning' || type === 'warn') ? 'warn'
+      : (type === 'ok' || type === 'good') ? 'success'
+      : (type === 'bad') ? 'error'
+      : (type || 'info');
 
-  function hideRunLoader() {
-    if (autoRunLoader) autoRunLoader.hidden = true;
-  }
+    const loading = !!flag && kind === 'info';
+    const persist = !!flag;
 
-  function schedTZ() {
-    return String(
-      lastSchedule?.timezone ||
-      selTz?.value ||
-      "UTC"
-    ).trim() || "UTC";
-  }
-
-  function autoTelegramEnabled() {
-    return !!autoTG?.checked;
-  }
-
-  function setAutoTelegramEnabled(enabled) {
-    if (autoTG) autoTG.checked = !!enabled;
-    updateTelegramTargetVisibility();
-  }
-
-  function fmtISO(iso, withSeconds = false) {
-    if (!iso) return "—";
-    try {
-      const zone = schedTZ();
-      const d = new Date(iso);
-      const text = d.toLocaleString("en-GB", {
-        hour12: false,
-        timeZone: zone,
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        ...(withSeconds ? { second: "2-digit" } : {}),
+    if (typeof window.toast === 'function') {
+      return window.toast(String(msg ?? ''), kind, {
+        loading,
+        persist,
+        duration: persist ? 0 : 3000,
+        source: 'peers'
       });
-      return `${text} · ${zone}`;
-    } catch {
-      return iso;
     }
+
+    const fn = kind === 'error' ? console.error
+      : kind === 'warn' ? console.warn
+      : console.log;
+    fn.call(console, msg);
+    return null;
   }
 
-  function fmtEpoch(ts) {
-    if (!ts) return "—";
-    try { return fmtISO(new Date(ts * 1000).toISOString(), true).replace(",", " ·"); }
-    catch { return String(ts); }
-  }
-
-  function autoSize(bytes) {
-    if (!bytes || bytes <= 0) return "0 B";
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    let i = 0, val = Number(bytes);
-    while (val >= 1024 && i < units.length - 1) { val /= 1024; i++; }
-    return `${val.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-  }
-
-  function setLast(pill, iso) {
-    if (!pill) return;
-    if (iso) {
-      pill.textContent = "Last: " + fmtISO(iso, false);
-      pill.className = pill.id === "full-last" ? "bk-pill ok" : "bk-subline";
-    } else {
-      pill.textContent = "Last: No backup";
-      pill.className = pill.id === "full-last" ? "bk-pill muted" : "bk-subline";
-    }
-  }
-
-  function setNext(iso) {
-    if (!pillNext) return;
-    pillNext.textContent = "Next: " + (iso ? fmtISO(iso, false) : "—");
-  }
-
-  function updateStatus() {
-    if (!pillStatus) return;
-    const any = [pillFull, pillDb, pillSettings].some((p) => p && !p.textContent.includes("No backup"));
-    pillStatus.textContent = any ? "Status: Ready" : "Status: No backup";
-    pillStatus.className = "bk-pill " + (any ? "ok" : "muted");
-  }
-
-  function card(label, value, sub, state = "ok", icon = "fa-check") {
-    return `<div class="bk-content-card ${state}">
-      <div class="label">${safe(label)}</div>
-      <div class="value"><i class="fas ${icon}"></i><span>${safe(value)}</span></div>
-      <div class="sub">${safe(sub || "")}</div>
-    </div>`;
-  }
-
-  function getSavedServerSettings(j) {
-    const manifest = j?.manifest || {};
-    const app = manifest.app || j?.app || {};
-    const runtime = manifest.runtime || j?.runtime || {};
-    const panel = manifest.panel_settings || j?.panel_settings || {};
-    const metaApp = j?.app_meta || j?.meta_app || {};
-    return {
-      port: runtime.port || runtime.bind?.split(":").pop() || panel.http_port || app.port || "—",
-      bind: runtime.bind || (runtime.port ? `0.0.0.0:${runtime.port}` : "—"),
-      domain: panel.domain || app.domain || "—",
-      tls: panel.tls_enabled === true ? "Enabled" : panel.tls_enabled === false ? "Disabled" : "—",
-      http_port: panel.http_port || "—",
-      https_port: panel.https_port || "—",
-      wg_path: app.wg_conf_path || metaApp.wg_conf_path || "—",
-    };
-  }
-
-  function renderServerSettings(j) {
-    const s = getSavedServerSettings(j || {});
-    if (savedServerGrid) {
-      savedServerGrid.innerHTML = [
-        ["Port", s.port], ["Bind", s.bind], ["Domain/IP", s.domain], ["TLS", s.tls],
-        ["HTTP", s.http_port], ["HTTPS", s.https_port], ["WG path", s.wg_path],
-      ].map(([k, v]) => `<div class="bk-kv"><div class="k">${safe(k)}</div><div class="v" title="${safe(v)}">${safe(v)}</div></div>`).join("");
-    }
-  }
-
-  function currentServerMode() {
-    return ($('input[name="server-settings-mode"]:checked')?.value || "keep");
-  }
-
-  function updateServerModeUI() {
-    const mode = currentServerMode();
-    if (savedServerBox) {
-      savedServerBox.hidden = mode !== "saved";
-      savedServerBox.style.display = mode === "saved" ? "grid" : "none";
-    }
-    if (customServerBox) {
-      customServerBox.hidden = mode !== "custom";
-      customServerBox.style.display = mode === "custom" ? "grid" : "none";
-    }
-    if (serverPill) {
-      serverPill.textContent = mode === "keep" ? "Protected" : mode === "saved" ? "Saved settings" : "Custom";
-      serverPill.className = "bk-pill " + (mode === "keep" ? "ok" : mode === "saved" ? "warn" : "muted");
-    }
-  }
-  serverModeInputs.forEach((i) => i.addEventListener("change", updateServerModeUI));
-  updateServerModeUI();
-
-  function renderInspect(j, target = "restore") {
-    const counts = j.counts || {};
-    const contains = j.contains || {};
-    const nodeResults = j.node_wg_backup || j.manifest?.node_wg_backup || [];
-    const hasNode = !!(j.has_node_wg || contains.remote_node_wireguard_conf || counts.node_wg_files);
-    const hasLocal = !!(j.has_wg || contains.local_wireguard_conf || counts.local_wg_files);
-    const hasPanelEnv = !!(j.has_env || contains.env_file);
-    const hasNodeEnv = !!(j.has_node_env || contains.remote_node_env || counts.node_env_files);
-    const nodeEnvNodes = counts.node_env_nodes || Object.keys(j.node_env_nodes || {}).length || 0;
-    const html = [
-      card("Backup type", (j.kind || "unknown").toUpperCase(), j.created ? `Created ${j.created}` : "Detected from ZIP", j.kind === "unknown" ? "warn" : "ok", "fa-file-zipper"),
-      card("Database", j.has_db || contains.database ? "Included" : "Missing", `${counts.db_files || 0} DB file(s)`, j.has_db || contains.database ? "ok" : "bad", "fa-database"),
-      card("Settings", j.has_settings || contains.settings ? "Included" : "Missing", `${counts.instance_files || 0} setting file(s)`, j.has_settings || contains.settings ? "ok" : "warn", "fa-sliders"),
-      card("Panel .env", hasPanelEnv ? "Included" : "Missing", hasPanelEnv ? "Panel secrets/migration key included" : "FERNET/API secrets not detected", hasPanelEnv ? "ok" : "warn", "fa-key"),
-      card("WireGuard", hasLocal ? "Local configs" : "No local configs", `${counts.local_wg_files || 0} local file(s)`, hasLocal ? "ok" : "warn", "fa-network-wired"),
-      card("Node configs", hasNode ? "Node configs" : "No node configs", `${counts.node_wg_files || 0} file(s) · ${counts.node_wg_nodes || 0} node(s)`, hasNode ? "ok" : "warn", "fa-server"),
-      card("Node .env", hasNodeEnv ? "Included" : "Missing", `${counts.node_env_files || 0} env file(s) · ${nodeEnvNodes} node(s)`, hasNodeEnv ? "ok" : "warn", "fa-shield-halved"),
-      card("Short links", contains.short_links ? "Included" : "Not detected", "Public user links/settings", contains.short_links ? "ok" : "warn", "fa-link"),
-    ].join("");
-
-    const grid = target === "backup"
-      ? livePreview
-      : target === "restore"
-        ? restorePreviewGrid
-        : null;
-    if (grid) {
-      grid.classList.remove("empty", "direct-notice");
-      grid.style.display = "";
-      grid.style.gridTemplateColumns = "";
-      grid.style.width = "";
-      grid.innerHTML = html;
-    }
-    if (target === "backup" && livePreviewSubtitle) {
-      const label = j.kind && j.kind !== "unknown" ? `${j.kind.toUpperCase()} backup inspected` : "Backup inspected";
-      livePreviewSubtitle.textContent = `${label}${j.created ? ` · Created ${j.created}` : ""}`;
-    }
-    if (target === "backup" && livePreviewWrap) livePreviewWrap.classList.add("has-content");
-
-    if (target === "restore" && restorePreviewSubtitle) {
-      restorePreviewSubtitle.textContent = `Detected ${j.kind || "backup"}. Review contents before restore.`;
-    }
-
-    if (target === "restore") { renderServerSettings(j); updateServerModeUI(); }
-
-    const files = [
-      ...(j.has_env ? ["env/.env"] : []),
-      ...(j.local_wg_files || []).map((f) => `wg/${f}`),
-      ...(j.node_wg_files || []).map((x) => x.path || `nodes/${x.node_id}/wg/${x.file}`),
-      ...(j.node_env_files || []).map((x) => x.path || `nodes/${x.node_id}/env/.env`),
-    ];
-    if (target === "restore" && restoreFileList) {
-      restoreFileList.innerHTML = files.length ? files.map((f) => `<span><i class="fas fa-file-code"></i>${safe(f)}</span>`).join("") : '<span><i class="fas fa-circle-info"></i>No WG config files detected</span>';
-    }
-
-    if (target === "restore") renderNodeStatus(j, nodeResults);
-  }
-
-  function renderNodeStatus(j, results) {
-    const nodes = j.node_wg_nodes || {};
-    const nodeEnvNodes = j.node_env_nodes || {};
-    const nodeCount = Object.keys(nodes).length;
-    const nodeEnvCount = Object.keys(nodeEnvNodes).length;
-    const files = j.counts?.node_wg_files || 0;
-    const envFiles = j.counts?.node_env_files || 0;
-    const totalNodeCount = Math.max(nodeCount, nodeEnvCount);
-    if (nodeState) {
-      nodeState.textContent = totalNodeCount ? `${totalNodeCount} node(s)` : "No node data";
-      nodeState.className = "bk-pill " + (totalNodeCount ? "ok" : "muted");
-    }
-    if (!nodeLines) return;
-    const lines = [];
-    if (!nodeCount) {
-      lines.push(`<div class="bk-node-line warn"><i class="fas fa-circle-info"></i><span>No node WireGuard configs were found in this backup.</span></div>`);
-    } else {
-      lines.push(`<div class="bk-node-line ok"><i class="fas fa-check-circle"></i><span>Backup contains ${files} node WireGuard config file(s) for ${nodeCount} node(s).</span></div>`);
-    }
-    if (!nodeEnvCount) {
-      lines.push(`<div class="bk-node-line warn"><i class="fas fa-key"></i><span>No node .env files were found. Update node_agent.py on each node if you need full migration secrets.</span></div>`);
-    } else {
-      lines.push(`<div class="bk-node-line ok"><i class="fas fa-shield-halved"></i><span>Backup contains ${envFiles} node .env file(s) for ${nodeEnvCount} node(s).</span></div>`);
-    }
-    if (Array.isArray(results) && results.length) {
-      const failed = results.filter((r) => !r.ok);
-      const ok = results.filter((r) => r.ok);
-      if (ok.length) lines.push(`<div class="bk-node-line ok"><i class="fas fa-cloud-arrow-down"></i><span>${ok.length} node backup request(s) succeeded.</span></div>`);
-      if (failed.length) lines.push(`<div class="bk-node-line bad"><i class="fas fa-triangle-exclamation"></i><span>${failed.length} node backup request(s) failed. Use the install command if the agent is missing.</span></div>`);
-    }
-    nodeLines.innerHTML = lines.join("");
-  }
-
-  async function blobLooksLikeZip(blob) {
-    if (!blob || !Number.isFinite(blob.size) || blob.size < 4) return false;
+  async function copyTo(text) {
+    try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return true; } } catch {}
     try {
-      const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
-      return head[0] === 0x50 && head[1] === 0x4b && (
-        (head[2] === 0x03 && head[3] === 0x04) ||
-        (head[2] === 0x05 && head[3] === 0x06) ||
-        (head[2] === 0x07 && head[3] === 0x08)
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.setAttribute('readonly',''); ta.style.position = 'fixed'; ta.style.left = '-9999px';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+      return true;
+    } catch { return false; }
+  }
+
+function apiPath(p) {
+  const nid = getScopeId();
+  return nid ? `/api/nodes/${encodeURIComponent(nid)}${p}` : `/api${p}`;
+}
+function itStarted(p) {
+  return !p.start_on_first_use || !!p.first_used_at_ts; 
+}
+function fmtDurShort(sec) {
+  if (sec == null) return '–';
+  sec = Math.max(0, Math.floor(sec));
+  const d = Math.floor(sec / 86400); sec -= d * 86400;
+  const h = Math.floor(sec / 3600);  sec -= h * 3600;
+  const m = Math.floor(sec / 60);
+  if (d > 0) return `${d}d${h ? ` ${h}h` : ''}`;
+  if (h > 0) return `${h}h${m ? ` ${m}m` : ''}`;
+  return `${m}m`;
+}
+function ipv4NetworkFromCidr(cidr) {
+  const raw = String(cidr || '')
+    .split(',')[0]
+    .trim();
+
+  const match = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/.exec(raw);
+
+  if (!match) return '';
+
+  const octets = match[1]
+    .split('.')
+    .map(Number);
+
+  const prefix = Number(match[2]);
+
+  if (
+    octets.length !== 4 ||
+    octets.some(x => !Number.isInteger(x) || x < 0 || x > 255) ||
+    prefix < 0 ||
+    prefix > 32
+  ) {
+    return '';
+  }
+
+  const ip =
+    (
+      ((octets[0] << 24) >>> 0) |
+      (octets[1] << 16) |
+      (octets[2] << 8) |
+      octets[3]
+    ) >>> 0;
+
+  const mask = prefix === 0
+    ? 0
+    : (0xffffffff << (32 - prefix)) >>> 0;
+
+  const network = (ip & mask) >>> 0;
+
+  return [
+    (network >>> 24) & 255,
+    (network >>> 16) & 255,
+    (network >>> 8) & 255,
+    network & 255,
+  ].join('.') + `/${prefix}`;
+}
+
+
+function appendAllowedIp(current, subnet) {
+  const values = String(current || '')
+    .split(',')
+    .map(x => x.trim())
+    .filter(Boolean);
+
+  const normalizedSubnet = String(
+    subnet || ''
+  ).trim();
+
+  if (
+    !normalizedSubnet ||
+    values.includes(normalizedSubnet)
+  ) {
+    return values.join(', ');
+  }
+
+  values.push(normalizedSubnet);
+
+  return values.join(', ');
+}
+
+
+function selectedInterfaceObject() {
+  const all = Array.isArray(window.IFACES)
+    ? window.IFACES
+    : (
+        Array.isArray(IFACES)
+          ? IFACES
+          : []
       );
-    } catch {
+
+  return all.find(iface => {
+    const idMatch =
+      SELECTED_IFACE_ID != null &&
+      String(iface.id ?? '') ===
+      String(SELECTED_IFACE_ID);
+
+    const nameMatch =
+      !!SELECTED_IFACE_NAME &&
+      String(iface.name || '') ===
+      String(SELECTED_IFACE_NAME);
+
+    return idMatch || nameMatch;
+  }) || null;
+}
+
+
+function interfaceDefaultEndpoint(ifaceOverride = null) {
+  const iface = ifaceOverride || selectedInterfaceObject();
+  if (!iface) return '';
+
+  const direct = [
+    iface.default_endpoint,
+    iface.client_endpoint,
+    iface.server_endpoint,
+    iface.endpoint,
+    iface.public_endpoint,
+    iface.endpoint_default
+  ].map(v => String(v || '').trim()).find(Boolean);
+  if (direct) return direct;
+
+  const host = [
+    iface.endpoint_host,
+    iface.default_endpoint_host,
+    iface.client_endpoint_host,
+    iface.public_endpoint_host,
+    iface.server_public_ip,
+    iface.public_ip,
+    iface.host
+  ].map(v => String(v || '').trim()).find(Boolean);
+
+  const port = [
+    iface.endpoint_port,
+    iface.default_endpoint_port,
+    iface.client_endpoint_port,
+    iface.public_endpoint_port,
+    iface.listen_port
+  ].map(v => String(v ?? '').trim()).find(Boolean);
+
+  if (!host) return '';
+  if (!port) return host;
+  return host.includes(':') && !host.startsWith('[') ? `[${host}]:${port}` : `${host}:${port}`;
+}
+
+function updateEndpointInheritanceUI() {
+  const inherited = interfaceDefaultEndpoint();
+  const targets = [
+    ['#peer-endpoint', '#peer-endpoint-effective', '#peer-endpoint-effective-value'],
+    ['#edit-peer-form [name="endpoint"]', '#edit-endpoint-effective', '#edit-endpoint-effective-value'],
+    ['#bulk-endpoint', '#bulk-endpoint-effective', '#bulk-endpoint-effective-value']
+  ];
+
+  for (const [inputSel, boxSel, valueSel] of targets) {
+    const input = document.querySelector(inputSel);
+    const box = document.querySelector(boxSel);
+    const value = document.querySelector(valueSel);
+    if (!input || !box || !value) continue;
+
+    const refresh = () => {
+      const custom = String(input.value || '').trim();
+      if (custom) {
+        box.dataset.state = 'override';
+        box.querySelector('span').textContent = 'Custom override:';
+        value.textContent = custom;
+      } else if (inherited) {
+        box.dataset.state = 'inherited';
+        box.querySelector('span').textContent = 'Using interface default:';
+        value.textContent = inherited;
+      } else {
+        box.dataset.state = 'missing';
+        box.querySelector('span').textContent = 'Interface default:';
+        value.textContent = 'Not configured';
+      }
+    };
+
+    if (input.dataset.endpointPreviewWired !== '1') {
+      input.addEventListener('input', refresh);
+      input.addEventListener('change', refresh);
+      input.dataset.endpointPreviewWired = '1';
+    }
+    refresh();
+  }
+}
+window.updateEndpointInheritanceUI = updateEndpointInheritanceUI;
+
+
+function applyInternalNetworkToAllowedIps(
+  allowedInput,
+  checkbox,
+  ifaceOverride = null
+) {
+  if (
+    !allowedInput ||
+    !checkbox ||
+    !checkbox.checked
+  ) {
+    return true;
+  }
+
+  const iface =
+    ifaceOverride ||
+    selectedInterfaceObject();
+
+  if (!iface) {
+    toastSafe(
+      'No WireGuard interface is selected.',
+      'warning'
+    );
+    return false;
+  }
+
+  const interfaceCidr = String(
+    iface.address ||
+    iface.server_cidr ||
+    iface.interface_address ||
+    iface.cidr ||
+    ''
+  ).trim();
+
+  const subnet = ipv4NetworkFromCidr(
+    interfaceCidr
+  );
+
+  if (!subnet) {
+    toastSafe(
+      `Could not detect the internal network for ${iface.name || 'the selected interface'}.`,
+      'warning'
+    );
+    return false;
+  }
+
+  const currentValues = String(
+    allowedInput.value || ''
+  )
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+
+  if (currentValues.includes('0.0.0.0/0')) {
+    return true;
+  }
+
+  allowedInput.value = appendAllowedIp(
+    allowedInput.value,
+    subnet
+  );
+
+  allowedInput.dispatchEvent(
+    new Event(
+      'input',
+      { bubbles: true }
+    )
+  );
+
+  allowedInput.dispatchEvent(
+    new Event(
+      'change',
+      { bubbles: true }
+    )
+  );
+
+  return true;
+}
+  
+
+function routingModeValue(prefix) {
+  return document.querySelector(`input[name="${prefix}_routing_mode"]:checked`)?.value || 'full';
+}
+
+function routingInterfaceNetwork(ifaceOverride = null) {
+  const iface = ifaceOverride || selectedInterfaceObject();
+  if (!iface) return '';
+  return ipv4NetworkFromCidr(
+    iface.address || iface.server_cidr || iface.interface_address || iface.cidr || ''
+  );
+}
+
+function updateRoutingControl(prefix, allowedInput, ifaceOverride = null) {
+  const mode = routingModeValue(prefix);
+  const customToggle = document.getElementById(`${prefix}-routing-custom-toggle`);
+  const preview = document.getElementById(`${prefix}-routing-preview`);
+  const help = document.getElementById(`${prefix}-routing-help`);
+  const subnet = routingInterfaceNetwork(ifaceOverride);
+
+  if (customToggle) customToggle.hidden = mode !== 'custom';
+
+  if (allowedInput) {
+    allowedInput.readOnly = mode !== 'custom';
+    allowedInput.classList.toggle('routing-readonly', mode !== 'custom');
+  }
+
+  if (mode === 'full') {
+    if (allowedInput) allowedInput.value = '0.0.0.0/0, ::/0';
+    if (preview) preview.textContent = 'Full tunnel';
+    if (help) help.textContent = 'Internet access and the internal WireGuard network are already included.';
+    return true;
+  }
+
+  if (mode === 'internal') {
+    if (!subnet) {
+      if (allowedInput) allowedInput.value = '';
+      if (preview) preview.textContent = 'Network unavailable';
+      if (help) help.textContent = 'Select a WireGuard interface so its internal network can be detected.';
       return false;
     }
+    if (allowedInput) allowedInput.value = subnet;
+    if (preview) preview.textContent = subnet;
+    if (help) help.textContent = `Detected from the selected interface: ${subnet}`;
+    return true;
   }
 
-  async function inspectBlob(blob, filename, target = "restore") {
-    if (!(await blobLooksLikeZip(blob))) {
-      throw new Error("This file is not a readable ZIP. Choose a backup created by this panel, not an HTML/error download.");
+  if (preview) preview.textContent = subnet || 'Custom routes';
+  if (help) help.textContent = subnet
+    ? `Enter custom routes. Optional detected network: ${subnet}`
+    : 'Enter one or more comma-separated routes.';
+  return true;
+}
+
+function applyRoutingMode(prefix, allowedInput, ifaceOverride = null) {
+  const mode = routingModeValue(prefix);
+  const subnet = routingInterfaceNetwork(ifaceOverride);
+
+  if (!allowedInput) return false;
+
+  if (mode === 'full') {
+    allowedInput.value = '0.0.0.0/0, ::/0';
+    return true;
+  }
+
+  if (mode === 'internal') {
+    if (!subnet) {
+      toastSafe('The selected WireGuard interface network could not be detected.', 'warning');
+      return false;
+    }
+    allowedInput.value = subnet;
+    return true;
+  }
+
+  if (document.getElementById(`${prefix}-custom-add-internal`)?.checked) {
+    if (!subnet) {
+      toastSafe('The selected WireGuard interface network could not be detected.', 'warning');
+      return false;
+    }
+    allowedInput.value = appendAllowedIp(allowedInput.value, subnet);
+  }
+
+  if (!String(allowedInput.value || '').trim()) {
+    toastSafe('Enter at least one custom AllowedIPs route.', 'warning');
+    return false;
+  }
+
+  return true;
+}
+
+function wireRoutingControl(prefix, allowedSelector, ifaceProvider = null) {
+  const allowedInput = document.querySelector(allowedSelector);
+  const update = () => updateRoutingControl(
+    prefix,
+    allowedInput,
+    typeof ifaceProvider === 'function' ? ifaceProvider() : null
+  );
+
+  document.querySelectorAll(`input[name="${prefix}_routing_mode"]`).forEach(radio => {
+    if (radio.dataset.routingWired === '1') return;
+    radio.addEventListener('change', update);
+    radio.dataset.routingWired = '1';
+  });
+
+  update();
+}
+
+
+function ensureInternalNetworkRoute(
+  allowedInput,
+  ifaceOverride = null
+) {
+  if (!allowedInput) return true;
+
+  const current = String(
+    allowedInput.value || ''
+  )
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+
+  if (
+    current.includes('0.0.0.0/0') ||
+    current.includes('::/0')
+  ) {
+    return true;
+  }
+
+  const iface =
+    ifaceOverride ||
+    selectedInterfaceObject();
+
+  if (!iface) {
+    toastSafe(
+      'Select a WireGuard interface before creating the peer.',
+      'warning'
+    );
+    return false;
+  }
+
+  const subnet = ipv4NetworkFromCidr(
+    iface.address ||
+    iface.server_cidr ||
+    iface.interface_address ||
+    iface.cidr ||
+    ''
+  );
+
+  if (!subnet) {
+    toastSafe(
+      `Could not detect the WireGuard network for ${iface.name || 'the selected interface'}.`,
+      'warning'
+    );
+    return false;
+  }
+
+  allowedInput.value = appendAllowedIp(
+    allowedInput.value,
+    subnet
+  );
+
+  return true;
+}
+
+
+function peerRouteList(value){
+  return String(value || '').split(',').map(v => v.trim()).filter(Boolean);
+}
+function peerUniqueRoutes(value){
+  return [...new Set(peerRouteList(value))];
+}
+function peerScopeNetworks(ifaceOverride=null){
+  const interfaces = Array.isArray(window.IFACES)
+    ? window.IFACES
+    : (typeof IFACES !== 'undefined' && Array.isArray(IFACES) ? IFACES : []);
+  const out = [];
+  const add = value => {
+    const n = ipv4NetworkFromCidr(value);
+    if(n && !out.includes(n)) out.push(n);
+  };
+  for(const iface of interfaces){
+    const scope = iface?.scope_networks;
+    if(Array.isArray(scope)) scope.forEach(add);
+    else if(scope) String(scope).split(',').forEach(add);
+    add(iface?.address || iface?.server_cidr || iface?.interface_address || iface?.cidr || '');
+  }
+  if(!out.length && ifaceOverride){
+    const scope = ifaceOverride?.scope_networks;
+    if(Array.isArray(scope)) scope.forEach(add);
+    else if(scope) String(scope).split(',').forEach(add);
+    add(ifaceOverride?.address || ifaceOverride?.server_cidr || ifaceOverride?.interface_address || ifaceOverride?.cidr || '');
+  }
+  return out;
+}
+function setDetectedInternalNetwork(prefix,ifaceOverride=null){
+  const input=document.getElementById(`${prefix}-internal-network`);
+  if(!input)return'';
+  const networks=peerScopeNetworks(ifaceOverride||selectedInterfaceObject());
+  input.value=networks.join(', ');
+  return input.value;
+}
+function applyInternalNetworks(prefix,allowedInput,ifaceOverride=null){
+  if(!allowedInput)return false;
+  const hidden=document.getElementById(`${prefix}-internal-network`);
+  const toggle=document.getElementById(`${prefix}-include-internal-network`);
+  if(!hidden)return true;
+
+  setDetectedInternalNetwork(prefix,ifaceOverride);
+  const previouslyAdded=peerUniqueRoutes(allowedInput.dataset.autoInternalNetworks||'');
+  let current=peerUniqueRoutes(allowedInput.value);
+
+  if(prefix === 'peer' && current.length === 0){
+    current = ['0.0.0.0/0', '::/0'];
+  }
+
+  if(previouslyAdded.length){
+    const remove=new Set(previouslyAdded);
+    current=current.filter(route=>!remove.has(route));
+  }
+
+  const enabled=!!toggle?.checked;
+  const networks=[];
+  if(enabled){
+    for(const raw of peerRouteList(hidden.value)){
+      const norm=ipv4NetworkFromCidr(raw);
+      if(norm&&!networks.includes(norm))networks.push(norm);
+    }
+    for(const network of networks){
+      if(!current.includes(network))current.push(network);
+    }
+  }
+
+  allowedInput.dataset.autoInternalNetworks=enabled?networks.join(', '):'';
+  allowedInput.value=current.join(', ');
+  allowedInput.dispatchEvent(new Event('input',{bubbles:true}));
+  allowedInput.dispatchEvent(new Event('change',{bubbles:true}));
+  return true;
+}
+function applyEditInternalNetworks() {
+  const allowedInput = document.querySelector(
+    '#edit-peer-form [name="allowed_ips"], #edit-peer-allowed-ips'
+  );
+  const toggle = document.getElementById('edit-include-internal-network');
+
+  if (!allowedInput || !toggle) return true;
+
+  const previouslyAdded = peerUniqueRoutes(
+    allowedInput.dataset.autoInternalNetworks || ''
+  );
+  let current = peerUniqueRoutes(allowedInput.value);
+
+  if (current.length === 0) {
+    current = ['0.0.0.0/0', '::/0'];
+  }
+
+  if (previouslyAdded.length) {
+    const remove = new Set(previouslyAdded);
+    current = current.filter(route => !remove.has(route));
+  }
+
+  const networks = toggle.checked
+    ? peerScopeNetworks(selectedInterfaceObject())
+    : [];
+
+  for (const network of networks) {
+    if (!current.includes(network)) current.push(network);
+  }
+
+  allowedInput.dataset.autoInternalNetworks = toggle.checked
+    ? networks.join(', ')
+    : '';
+  allowedInput.value = current.join(', ');
+  allowedInput.dispatchEvent(new Event('input', { bubbles: true }));
+  allowedInput.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
+
+function getScopeId() {
+  const el = document.getElementById('peer-scope');
+  const v = el && el.value;
+  return (v && v !== 'local') ? v : '';
+}
+
+  const unitName = u => ({ Ki: 'KiB', Mi: 'MiB', Gi: 'GiB', Ti: 'TiB', Pi: 'PiB' }[u] || (u || ''));
+  const toMiB = (v, u) => {
+    const n = Number(v) || 0;
+    if (u === 'Gi') return n * 1024;
+    if (u === 'Mi') return n;
+    return n;
+  };
+  const fmtAmountMiB = (mib, preferUnit) => {
+    if (mib === Infinity) return 'Unlimited';
+    if (!isFinite(mib))   return '–';
+    const useGi = mib >= 1024 || preferUnit === 'Gi';
+    if (useGi) {
+      const x = mib / 1024;
+      let s = x.toFixed(x >= 10 ? 1 : 2).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
+      return `${s} GiB`;
+    }
+    return `${Math.max(0, Math.round(mib))} MiB`;
+  };
+  const fmtLimit = p => {
+    if (p.unlimited) return 'Unlimited';
+    if (p.data_limit !== null && p.data_limit !== undefined && p.data_limit !== '')
+      return `${p.data_limit} ${unitName(p.limit_unit)}`.trim();
+    return '–';
+  };
+  const usedBytes = p => {
+  return Math.max(
+    0,
+    Number(
+      p.used_effective_bytes ??
+      p.used_bytes_total ??
+      p.used_bytes ??
+      p.used_bytes_db ??
+      0
+    ) || 0
+  );
+};
+  const remainingMiB = p => {
+  if (p.unlimited) return Infinity;
+
+  const limMiB = toMiB(p.data_limit, p.limit_unit);
+
+  if (!Number.isFinite(limMiB) || limMiB <= 0) {
+    return 0;
+  }
+
+  const usedMiB = usedBytes(p) / 1048576;
+  return Math.max(0, limMiB - usedMiB);
+};
+
+  const nowSec = () => Math.floor(Date.now() / 1000);
+  const normEpoch = x => (x > 1e12 ? Math.floor(x / 1000) : Math.floor(x));
+  function tsFrom(v) {
+    if (v == null) return null;
+    if (typeof v === 'number') return normEpoch(v);
+    const s = String(v).trim();
+    if (/^\d{10,13}$/.test(s)) return normEpoch(Number(s));
+    const d = new Date(s);
+    return isNaN(d) ? null : Math.floor(d.getTime() / 1000);
+  }
+  function fmtLocalTs(ts) {
+    if (ts == null) return '–';
+    const d = new Date(ts * 1000); const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  function leftTtl(ttl) {
+    const s = Math.max(0, Math.floor(ttl || 0));
+    return { total: s, days: Math.floor(s/86400), hours: Math.floor((s%86400)/3600), minutes: Math.floor((s%3600)/60), seconds: s%60 };
+  }
+  function prettyTtl(ttl) {
+    const p = leftTtl(ttl);
+    if (p.total === 0) return 'expired';
+    if (p.days  > 0)   return `${p.days}d ${p.hours}h`;
+    if (p.hours > 0)   return `${p.hours}h ${p.minutes}m`;
+    return `${Math.max(1, p.minutes)}m ${p.seconds}s`;
+  }
+  function timeLimitCapSeconds(p) {
+    const d = Number(p.time_limit_days ?? p.time_days ?? 0) || 0;
+    const h = Number(p.time_limit_hours ?? p.time_hours ?? 0) || 0;
+    const m = Number(p.time_limit_minutes ?? p.time_minutes ?? 0) || 0;
+    return Math.max(0, Math.floor(d * 86400 + h * 3600 + m * 60));
+  }
+
+  function fmtCapDuration(sec) {
+    sec = Math.max(0, Math.floor(Number(sec) || 0));
+    if (!sec) return '';
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const parts = [];
+    if (d) parts.push(`${d}d`);
+    if (h) parts.push(`${h}h`);
+    if (!d && !h && m) parts.push(`${m}m`);
+    return parts.join(' ');
+  }
+
+  function timeBadge(p) {
+    if (p.unlimited) {
+      const firstTs =
+        p.first_used_at_ts != null
+          ? Number(p.first_used_at_ts)
+          : tsFrom(p.first_used_at);
+
+      if (firstTs) {
+        return `Active since ${fmtLocalTs(firstTs)}`;
+      }
+
+      const createdTs = p.created_at_ts != null ? Number(p.created_at_ts) : tsFrom(p.created_at);
+      return createdTs ? `Active since ${fmtLocalTs(createdTs)}` : 'Unlimited';
     }
 
-    const fd = new FormData();
-    fd.append("file", blob, filename || "backup.zip");
-    const headers = csrfHeaders();
-    delete headers["Content-Type"];
-    const r = await fetch("/api/backup/inspect", { method: "POST", headers, body: fd, credentials: "same-origin" });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok) throw new Error(j.message || "Could not inspect backup.");
-    if (target === "restore") lastInspect = j;
-    renderInspect(j, target);
-    return j;
-  }
+    const started = itStarted(p);
+    const capSec = timeLimitCapSeconds(p);
+    const capTxt = fmtCapDuration(capSec);
+    let ttl = null;
 
-  async function inspectSelectedBackup(file) {
-    if (!file) return;
-    try {
-      await inspectBlob(file, file.name, "restore");
-    } catch (e) {
-      console.error(e);
-      lastInspect = null;
-      renderInspect({ ok: false, kind: "invalid", contains: {}, counts: {}, local_wg_files: [], node_wg_files: [], node_env_files: [] }, "restore");
-      if (restorePreviewSubtitle) restorePreviewSubtitle.textContent = e.message || "Could not inspect backup.";
-      if (restoreHint) restoreHint.textContent = "Choose a valid backup ZIP created from this panel.";
-      toast.error(e.message || "Could not inspect this backup.");
+    if (started) {
+      if (p.ttl_seconds != null && p.ttl_seconds !== '') {
+        ttl = Number(p.ttl_seconds);
+      } else if (p.expires_at_ts != null && p.expires_at_ts !== '') {
+        ttl = Math.max(0, Number(p.expires_at_ts) - nowSec());
+      } else if (p.expires_at) {
+        const ts = tsFrom(p.expires_at);
+        ttl = ts ? Math.max(0, ts - nowSec()) : null;
+      }
     }
-  }
 
-  async function savePrefs() {
-    try {
-      await fetch("/api/backup/prefs", {
-        method: "POST", headers: csrfHeaders(true),
-        body: JSON.stringify({ include_wg: !!optWG?.checked, send_to_telegram: !!optTG?.checked }),
-      });
-    } catch {}
-  }
-
-  function filenameFromResponse(resp, fallback) {
-    const cd = resp.headers.get("content-disposition") || "";
-    const m = cd.match(/filename\*?=(?:UTF-8''|\")?([^";]+)/i);
-    return m ? decodeURIComponent(m[1].replaceAll('"', '').trim()) : fallback;
-  }
-
-  async function responsePreviewText(resp, blob) {
-    try {
-      const txt = await blob.text();
-      const clean = txt.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-      if (clean) return clean.slice(0, 240);
-    } catch {}
-    try {
-      return `HTTP ${resp.status || "?"} ${resp.statusText || ""}`.trim();
-    } catch {
-      return "The server returned a non-ZIP response.";
+    if (!started) {
+      return capTxt ? `Starts on use · ${capTxt}` : 'Starts on use';
     }
-  }
 
-  function downloadBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename || "backup.zip";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1500);
-  }
-
-  function backupEndpoint(kind) {
-    return {
-      full: `/api/backup/full?wg=${optWG?.checked ? "1" : "0"}&tg=${optTG?.checked ? "1" : "0"}`,
-      db: "/api/backup/db",
-      settings: "/api/backup/settings",
-    }[kind];
-  }
-
-  function appendQuery(url, key, value) {
-    const sep = url.includes("?") ? "&" : "?";
-    return `${url}${sep}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
-  }
-
-  function withCacheBuster(url) {
-    return appendQuery(url, "_download", Date.now());
-  }
-
-  function withDirectAuth(url) {
-    const apiKey = document.querySelector('meta[name="api-key"]')?.content?.trim();
-    return apiKey ? appendQuery(url, "api_key", apiKey) : url;
-  }
-
-  function isIDMIntercept(resp, preview = "") {
-    const text = `${resp?.status || ""} ${resp?.statusText || ""} ${preview || ""}`.toLowerCase();
-    return text.includes("idm") || text.includes("internet download manager") || text.includes("advanced integration") || text.includes("intercepted by");
-  }
-
-  function directBrowserDownload(url, filename) {
-    const a = document.createElement("a");
-    a.href = withCacheBuster(withDirectAuth(url));
-    a.download = filename || "backup.zip";
-    a.rel = "noopener";
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  }
-
-  function showDirectDownloadNotice(kind) {
-    const label = kind === "full" ? "Full" : kind === "db" ? "Database" : "Settings";
-    if (livePreviewSubtitle) {
-      livePreviewSubtitle.textContent = "Download started in the browser. To inspect it, select the saved ZIP file below.";
+    if (ttl == null || !Number.isFinite(ttl)) {
+      const remMiB = remainingMiB(p);
+      const looksTimeBlocked = isBlocked(p) && (capSec > 0 || (Number.isFinite(remMiB) && remMiB > 1));
+      if (looksTimeBlocked) return 'Expired';
+      return capTxt ? `${capTxt} cap` : 'No timer';
     }
-    if (livePreview) {
-      livePreview.classList.remove("empty");
-      livePreview.classList.add("direct-notice");
-      livePreview.style.display = "block";
-      livePreview.style.gridTemplateColumns = "1fr";
-      livePreview.style.width = "100%";
 
-      livePreview.innerHTML = `
-        <div class="bk-idm-notice" style="width:100%;box-sizing:border-box;display:flex;align-items:flex-start;gap:12px;padding:13px 14px;border:1px solid #f59e0b55;background:#fffbeb;border-radius:14px;color:#111827;min-width:0;">
-          <div style="width:38px;height:38px;border-radius:12px;background:#111827;color:#fff;display:grid;place-items:center;flex:0 0 38px;">
-            <i class="fas fa-download"></i><span class="bk-action-label">Download</span>
-          </div>
-          <div style="min-width:0;flex:1 1 auto;">
-            <div style="font-weight:950;font-size:13.5px;line-height:1.25;white-space:normal;overflow-wrap:normal;word-break:normal;">${safe(label)} backup download started</div>
-            <div style="margin-top:4px;color:#64748b;font-size:12.5px;line-height:1.45;white-space:normal;overflow-wrap:normal;word-break:normal;">IDM Advanced Integration intercepted the background ZIP check, so the panel used a direct browser download instead.</div>
-            <button type="button" class="bk-btn" id="bk-direct-pick" style="margin-top:10px;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;">
-              <i class="fas fa-file-zipper"></i> Inspect saved ZIP
-            </button>
+    if (ttl <= 0 || (isBlocked(p) && capSec > 0 && Number(ttl) === 0)) return 'Expired';
+    const d = Math.floor(ttl / 86400);
+    const h = Math.floor((ttl % 86400) / 3600);
+    const m = Math.floor((ttl % 3600) / 60);
+    if (d > 0) return `${d}d ${h}h left`;
+    if (h > 0) return `${h}h ${m}m left`;
+    return `${Math.max(1, m)}m left`;
+  }
+
+  function endpointDisplay(p) {
+    if (p.endpoint && p.endpoint.trim()) return p.endpoint;
+    if (p.server_public_ip && p.listen_port) return `${p.server_public_ip}:${p.listen_port}`;
+    return '';
+  }
+  function getEndpoint(v) {
+    v = (v || '').trim(); if (!v) return null;
+    if (v.startsWith('[')) {
+      const m = /^\[([^\]]+)\](?::(\d+))?$/.exec(v);
+      if (!m) return null;
+      return { host: m[1], port: m[2] ? parseInt(m[2], 10) : null };
+    }
+    let host = '', port = '';
+    if (v.includes(':')) { const parts = v.split(':'); host = parts.slice(0, -1).join(':'); port = parts.slice(-1)[0]; }
+    else host = v;
+    if (port && !/^\d+$/.test(port)) return null;
+    return { host, port: port ? parseInt(port, 10) : null };
+  }
+
+  let endpointPresets = [];
+
+async function getPresets() {
+  try {
+    const r = await fetch(api('/api/endpoint_presets'), { credentials: 'same-origin' });
+    if (!r.ok) return;
+    const j = await r.json();
+    endpointPresets = j.presets || [];
+    document.dispatchEvent(new CustomEvent('endpoint-presets-updated', { detail: endpointPresets }));
+  } catch {}
+}
+
+  function inputText(message, defText = '') {
+    return new Promise(resolve => {
+      const modal = document.createElement('div'); modal.className = 'modal open';
+      modal.innerHTML = `
+        <div class="modal-content" style="max-width:420px">
+          <h3 style="margin:0 0 .5rem 0">${message}</h3>
+          <input id="dlg-input" class="input" placeholder="${defText.replace(/"/g, '&quot;')}" style="width:100%;margin:.25rem 0 .75rem 0">
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button id="dlg-cancel" class="btn secondary">Cancel</button>
+            <button id="dlg-ok" class="btn">OK</button>
           </div>
         </div>`;
-      $("#bk-direct-pick")?.addEventListener("click", () => restoreFile?.click());
-    }
-    toast.info(`${label} backup download started. If IDM opens, let it save the ZIP file.`);
+      document.body.appendChild(modal);
+      const inp = modal.querySelector('#dlg-input');
+      const ok  = modal.querySelector('#dlg-ok');
+      const no  = modal.querySelector('#dlg-cancel');
+      const close = v => { modal.classList.remove('open'); setTimeout(() => modal.remove(), 120); resolve(v); };
+      ok.onclick = () => close((inp.value || '').trim() || defText);
+      no.onclick = () => close(null);
+      modal.addEventListener('click', e => { if (e.target === modal) close(null); });
+      setTimeout(() => inp && inp.focus(), 10);
+    });
   }
+  
+  function attachEndpoint(modalEl) {
+    if (!modalEl) return;
+    const input = modalEl.querySelector('input[name="endpoint"], #bulk-endpoint');
+    if (!input || input.dataset.enhanced === '1') return;
+    input.dataset.enhanced = '1';
 
-  async function downloadBackup(kind, button) {
-    await savePrefs();
-    const endpoint = backupEndpoint(kind);
-    setBusy(button, true, kind === "full" ? "Creating" : "Preparing");
-    try {
-      const resp = await fetch(endpoint, {
-        headers: { ...csrfHeaders(), "Accept": "application/zip, application/octet-stream, */*" },
-        credentials: "same-origin",
-        cache: "no-store",
-      });
-      const blob = await resp.blob();
-      if (!resp.ok) {
-        let msg = "";
-        try {
-          const errText = await blob.text();
-          const errJson = JSON.parse(errText);
-          msg = errJson.message || errJson.error || "";
-        } catch {}
-        throw new Error(msg || `Backup failed (${resp.status})`);
-      }
-      const filename = filenameFromResponse(resp, `wgpanel_${kind}_backup.zip`);
-      if (!(await blobLooksLikeZip(blob))) {
-        const preview = await responsePreviewText(resp, blob);
-        if (isIDMIntercept(resp, preview)) {
-          directBrowserDownload(endpoint, filename);
-          showDirectDownloadNotice(kind);
-          setTimeout(loadAll, 1200);
-          return;
-        }
-        throw new Error(`The backup route returned a page/message instead of a ZIP. ${preview ? "Response: " + preview : ""}`);
-      }
-      if (livePreviewSubtitle) livePreviewSubtitle.textContent = "Inspecting downloaded ZIP…";
+    const row = document.createElement('div');
+    row.className = 'ep-row endpoint-presets-compact';
+    row.innerHTML = `
+      <div class="endpoint-presets-copy">
+        <i class="fas fa-bookmark" aria-hidden="true"></i>
+        <span><b>Saved endpoint</b><small>Select a preset only when this peer should override the interface default.</small></span>
+      </div>
+      <select id="ep-saved" class="input" aria-label="Saved endpoint">
+        <option value="">No override — use interface default</option>
+      </select>
+      <button type="button" class="btn secondary" id="ep-apply" title="Use selected endpoint" aria-label="Use selected endpoint"><i class="fas fa-check"></i></button>
+      <button type="button" class="btn secondary endpoint-preset-action" id="ep-save" title="Save current endpoint" aria-label="Save current endpoint"><i class="fas fa-save"></i></button>
+      <button type="button" class="btn secondary danger endpoint-preset-action" id="ep-del" title="Delete selected endpoint" aria-label="Delete selected endpoint"><i class="fas fa-trash"></i></button>`;
+    input.parentElement.appendChild(row);
+    updateEndpointInheritanceUI();
+
+
+    const fire = () => { input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true })); };
+
+    row.querySelector('#ep-save').addEventListener('click', async () => {
+      const parsed = getEndpoint(input.value);
+      if (!parsed || !parsed.host || !parsed.port) { toastSafe('Use host:port to save', 'error'); return; }
+      const def = `${parsed.host}:${parsed.port}`;
+      const label = await inputText('Label for this endpoint', def);
+      if (label === null) return;
       try {
-        await inspectBlob(blob, filename, "backup");
-      } catch (e) {
-        console.debug("inspect after download failed", e);
-        if (livePreviewSubtitle) livePreviewSubtitle.textContent = e.message || "Downloaded, but the ZIP could not be inspected.";
-        if (livePreview) {
-          livePreview.innerHTML = card("Inspection", "Not available", "Download completed, but contents could not be read by the inspect API.", "warn", "fa-triangle-exclamation");
-        }
-      }
-      downloadBlob(blob, filename);
-      toast.success(`${kind === "full" ? "Full" : kind === "db" ? "Database" : "Settings"} backup downloaded.`);
-      setTimeout(loadAll, 1200);
-    } catch (e) {
-      console.error(e);
-      toast.error(e.message || "Backup failed.");
-    } finally {
-      setBusy(button, false);
-    }
-  }
+        const r = await fetch(api('/api/endpoint_presets'), {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+          body: JSON.stringify({ host: parsed.host, port: parsed.port, label })
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json(); endpointPresets = j.presets || [];
+        refreshSavedOptions(); toastSafe('Saved', 'success');
+      } catch { toastSafe('Save failed', 'error'); }
+    });
+  function refreshSavedOptions() {
+  const sel = row.querySelector('#ep-saved');
+  const opts = (endpointPresets || []).map((p, idx) =>
+    `<option value="${idx}">${(p.label || `${p.host}:${p.port}`)} (${p.host}:${p.port})</option>`).join('');
+  sel.innerHTML = `<option value="">No override — use interface default</option>${opts}`;
+}
+refreshSavedOptions();
 
-  function updateTelegramTargetVisibility() {
-    const enabled = !!autoTG?.checked;
-    if (autoTelegramWrap) autoTelegramWrap.hidden = !enabled;
-  }
+document.addEventListener('endpoint-presets-updated', refreshSavedOptions);
 
-  async function loadTelegramAdmins(selectedId = "") {
-    if (!autoTelegramAdmin) return;
-
-    autoTelegramAdmin.disabled = true;
-    autoTelegramAdmin.classList.remove("is-error", "is-ready");
-    autoTelegramAdmin.innerHTML =
-      '<option value="">Loading active Telegram admins…</option>';
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-
-    try {
-      const response = await fetch("/api/telegram/admins", {
-        headers: csrfHeaders(),
-        credentials: "same-origin",
-        cache: "no-store",
-        signal: controller.signal,
-      });
-
-      const payload = await response.json().catch(() => ({}));
-
-      if (!response.ok) {
-        throw new Error(
-          payload.message ||
-          payload.error ||
-          (
-            response.status === 401 || response.status === 403
-              ? "Telegram admin access was denied. Allow logged-in panel users to read /api/telegram/admins."
-              : `Could not load Telegram admins (HTTP ${response.status}).`
-          )
-        );
-      }
-
-      const rawAdmins = Array.isArray(payload)
-        ? payload
-        : Array.isArray(payload.admins)
-          ? payload.admins
-          : [];
-
-      const admins = rawAdmins.filter((admin) => {
-        const id = String(
-          admin.id ??
-          admin.tg_id ??
-          admin.chat_id ??
-          ""
-        ).trim();
-
-        return id && !Boolean(admin.muted);
-      });
-
-      if (!admins.length) {
-        autoTelegramAdmin.innerHTML =
-          '<option value="">No active Telegram admins</option>';
-        autoTelegramAdmin.disabled = true;
-        autoTelegramAdmin.classList.add("is-error");
-
-        if (autoTelegramHelp) {
-          autoTelegramHelp.textContent =
-            "No active recipient was found. Add or unmute an admin in Settings → Telegram.";
-        }
-        return;
-      }
-
-      autoTelegramAdmin.innerHTML = admins.map((admin) => {
-        const id = String(
-          admin.id ??
-          admin.tg_id ??
-          admin.chat_id ??
-          ""
-        ).trim();
-
-        const username = String(
-          admin.username ??
-          admin.user ??
-          ""
-        ).replace(/^@/, "").trim();
-
-        const note = String(
-          admin.note ??
-          admin.name ??
-          ""
-        ).trim();
-
-        const label = [
-          username ? `@${username}` : "",
-          id,
-          note ? `— ${note}` : "",
-        ].filter(Boolean).join(" ");
-
-        return `<option value="${safe(id)}">${safe(label)}</option>`;
-      }).join("");
-
-      autoTelegramAdmin.disabled = false;
-      autoTelegramAdmin.classList.add("is-ready");
-
-      const wanted = String(selectedId || "").trim();
-
-      if (
-        wanted &&
-        admins.some((admin) => String(
-          admin.id ??
-          admin.tg_id ??
-          admin.chat_id ??
-          ""
-        ).trim() === wanted)
-      ) {
-        autoTelegramAdmin.value = wanted;
-      }
-
-      if (autoTelegramHelp) {
-        autoTelegramHelp.textContent =
-          "Each new automatic backup will be sent once to this active Telegram admin.";
-      }
-    } catch (error) {
-      console.error("Telegram admin loading failed:", error);
-
-      const message =
-        error?.name === "AbortError"
-          ? "Telegram admin request timed out."
-          : (
-              error.message ||
-              "Could not load Telegram admins."
-            );
-
-      autoTelegramAdmin.innerHTML =
-        `<option value="">${safe(message)}</option>`;
-      autoTelegramAdmin.disabled = true;
-      autoTelegramAdmin.classList.add("is-error");
-
-      if (autoTelegramHelp) {
-        autoTelegramHelp.textContent =
-          `${message} Check the panel Telegram admin API.`;
-      }
-
-      toast.error(message);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-
-  function closeAutoInspectModal() {
-    if (autoInspectModal) {
-      autoInspectModal.hidden = true;
-    }
-    activeAutoInspectFilename = "";
-  }
-
-  function renderAutoInspectModal(result, filename) {
-    const counts = result?.counts || {};
-    const contains = result?.contains || {};
-
-    const hasLocal = !!(
-      result?.has_wg ||
-      contains.local_wireguard_conf ||
-      counts.local_wg_files
-    );
-
-    const hasNode = !!(
-      result?.has_node_wg ||
-      contains.remote_node_wireguard_conf ||
-      counts.node_wg_files
-    );
-
-    const hasPanelEnv = !!(
-      result?.has_env ||
-      contains.env_file
-    );
-
-    const hasNodeEnv = !!(
-      result?.has_node_env ||
-      contains.remote_node_env ||
-      counts.node_env_files
-    );
-
-    activeAutoInspectFilename = filename;
-
-    if (autoInspectModalSubtitle) {
-      autoInspectModalSubtitle.textContent =
-        `${filename}${result?.created ? ` · Created ${result.created}` : ""}`;
-    }
-
-    if (autoInspectModalGrid) {
-      autoInspectModalGrid.innerHTML = [
-        card(
-          "Backup type",
-          String(result?.kind || "unknown").toUpperCase(),
-          "Detected from saved ZIP",
-          result?.kind === "unknown" ? "warn" : "ok",
-          "fa-file-zipper"
-        ),
-        card(
-          "Database",
-          result?.has_db || contains.database ? "Included" : "Missing",
-          `${counts.db_files || 0} file(s)`,
-          result?.has_db || contains.database ? "ok" : "bad",
-          "fa-database"
-        ),
-        card(
-          "Settings",
-          result?.has_settings || contains.settings ? "Included" : "Missing",
-          `${counts.instance_files || 0} file(s)`,
-          result?.has_settings || contains.settings ? "ok" : "warn",
-          "fa-sliders"
-        ),
-        card(
-          "Panel .env",
-          hasPanelEnv ? "Included" : "Missing",
-          "Panel migration secrets",
-          hasPanelEnv ? "ok" : "warn",
-          "fa-key"
-        ),
-        card(
-          "Local WG",
-          hasLocal ? "Included" : "Missing",
-          `${counts.local_wg_files || 0} file(s)`,
-          hasLocal ? "ok" : "warn",
-          "fa-network-wired"
-        ),
-        card(
-          "Node WG",
-          hasNode ? "Included" : "Missing",
-          `${counts.node_wg_files || 0} file(s)`,
-          hasNode ? "ok" : "warn",
-          "fa-server"
-        ),
-        card(
-          "Node .env",
-          hasNodeEnv ? "Included" : "Missing",
-          `${counts.node_env_files || 0} file(s)`,
-          hasNodeEnv ? "ok" : "warn",
-          "fa-shield-halved"
-        ),
-      ].join("");
-    }
-
-    const files = [
-      ...(result?.has_env ? ["env/.env"] : []),
-      ...(result?.local_wg_files || []).map((name) => `wg/${name}`),
-      ...(result?.node_wg_files || []).map(
-        (item) => item.path || `nodes/${item.node_id}/wg/${item.file}`
-      ),
-      ...(result?.node_env_files || []).map(
-        (item) => item.path || `nodes/${item.node_id}/env/.env`
-      ),
-    ];
-
-    if (autoInspectModalFiles) {
-      autoInspectModalFiles.innerHTML = files.length
-        ? files.map(
-            (name) =>
-              `<span><i class="fas fa-file-code"></i>${safe(name)}</span>`
-          ).join("")
-        : (
-            '<span><i class="fas fa-circle-info"></i>' +
-            "No WG or environment files detected</span>"
-          );
-    }
-  }
-
-  async function inspectAutoBackup(filename) {
-    if (!filename) {
-      toast.error("Backup filename is missing.");
-      return;
-    }
-
-    if (!autoInspectModal) {
-      toast.error("Inspection window is unavailable.");
-      return;
-    }
-
-    autoInspectModal.hidden = false;
-    activeAutoInspectFilename = filename;
-
-    if (autoInspectModalSubtitle) {
-      autoInspectModalSubtitle.textContent = `Inspecting ${filename}…`;
-    }
-
-    if (autoInspectModalGrid) {
-      autoInspectModalGrid.innerHTML = card(
-        "Inspection",
-        "Loading",
-        "Reading the saved ZIP on the panel server.",
-        "warn",
-        "fa-circle-notch"
-      );
-    }
-
-    if (autoInspectModalFiles) {
-      autoInspectModalFiles.innerHTML = "";
-    }
-
-    try {
-      let result = autoInspectCache.get(filename);
-
-      if (!result) {
-        const response = await fetch(
-          `/api/backups/inspect/${encodeURIComponent(filename)}`,
-          {
-            headers: csrfHeaders(),
-            credentials: "same-origin",
-            cache: "no-store",
-          }
-        );
-
-        result = await response.json().catch(() => ({}));
-
-        if (!response.ok || !result.ok) {
-          throw new Error(
-            result.message ||
-            result.error ||
-            `Could not inspect automatic backup (${response.status}).`
-          );
-        }
-
-        autoInspectCache.set(filename, result);
-      }
-
-      renderAutoInspectModal(result, filename);
-    } catch (error) {
-      console.error(error);
-
-      if (autoInspectModalSubtitle) {
-        autoInspectModalSubtitle.textContent =
-          error.message || "Inspection failed.";
-      }
-
-      if (autoInspectModalGrid) {
-        autoInspectModalGrid.innerHTML = card(
-          "Inspection",
-          "Failed",
-          error.message || "Could not inspect this backup.",
-          "bad",
-          "fa-triangle-exclamation"
-        );
-      }
-
-      toast.error(
-        error.message ||
-        "Could not inspect automatic backup."
-      );
-    }
-  }
-
-  function downloadAutoBackup(filename) {
-    if (!filename) return;
-
-    const link = document.createElement("a");
-    link.href =
-      `/api/backups/file/${encodeURIComponent(filename)}` +
-      `?download=1&_=${Date.now()}`;
-    link.download = filename;
-    link.rel = "noopener";
-    link.style.display = "none";
-
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-  }
-
-  async function deleteAutoBackup(filename) {
-    if (!filename) return;
-
-    const confirmed = await confirmAction({
-      title: "Delete automatic backup",
-      message: `
-        <div>
-          Permanently delete
-          <code>${safe(filename)}</code>?
-        </div>
-        <div class="bk-small bk-muted" style="margin-top:8px">
-          This removes the ZIP from the panel server. Telegram copies are not deleted.
-        </div>
-      `,
-      confirmText: "Delete",
-      danger: true,
+    row.querySelector('#ep-apply').addEventListener('click', () => {
+      const sel = row.querySelector('#ep-saved'); if (!sel.value) return;
+      const p = endpointPresets[parseInt(sel.value, 10)]; if (!p) return;
+      input.value = `${p.host}:${p.port}`; fire();
     });
 
-    if (!confirmed) return;
+    row.querySelector('#ep-del').addEventListener('click', async () => {
+      const sel = row.querySelector('#ep-saved'); if (!sel.value) { toastSafe('Pick a saved endpoint', 'error'); return; }
+      const p = endpointPresets[parseInt(sel.value, 10)]; if (!p) return;
+      const name = p.label || (p.host + ':' + p.port);
+      if (!(await confirmBoxIn(modalEl, `Delete endpoint preset “${name}”?`))) return;
+      try {
+        const r = await fetch(api('/api/endpoint_presets'), {
+          method: 'DELETE', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+          body: JSON.stringify({ host: p.host, port: p.port })
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const j = await r.json(); endpointPresets = j.presets || [];
+        refreshSavedOptions(); sel.value = ''; toastSafe('Deleted', 'success');
+      } catch { toastSafe('Delete failed', 'error'); }
+    });
+  }
+const openMore = new Set();
 
-    const response = await fetch(
-      `/api/backups/file/${encodeURIComponent(filename)}`,
-      {
-        method: "DELETE",
-        headers: csrfHeaders(),
-        credentials: "same-origin",
-        cache: "no-store",
-      }
-    );
+function closeSections(exceptId = null) {
+  document.querySelectorAll('.peer-card').forEach(card => {
+    const id = String(card.dataset.id || '');
+    if (!id) return;
+    if (exceptId != null && String(exceptId) == id) return;
 
-    const result = await response.json().catch(() => ({}));
+    const sec = card.querySelector('.peer-more-section');
+    if (sec && !sec.hasAttribute('hidden')) sec.setAttribute('hidden', '');
 
-    if (!response.ok || !result.ok) {
-      throw new Error(
-        result.message ||
-        result.error ||
-        `Could not delete backup (${response.status}).`
-      );
+    const btn = card.querySelector('.more-toggle');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+
+    openMore.delete(id);
+    card.classList.remove('peer-more-open');
+  });
+}
+function wireContainedSelect(select) {
+  if (!select || select.dataset.containedSelect === '1') return;
+  select.dataset.containedSelect = '1';
+
+  const collapse = () => {
+    select.size = 1;
+    select.classList.remove('is-expanded');
+  };
+
+  const expand = () => {
+    const count = Math.max(1, Math.min(select.options.length || 1, 8));
+    select.size = count;
+    select.classList.add('is-expanded');
+  };
+
+  select.addEventListener('mousedown', e => {
+    if (select.size > 1) return;
+    e.preventDefault();
+    expand();
+    select.focus({ preventScroll: true });
+  });
+
+  select.addEventListener('focus', () => {
+    if (select.matches(':hover')) expand();
+  });
+
+  select.addEventListener('change', () => {
+    collapse();
+    const hiddenAddr = document.getElementById('create-address');
+    if (select.id === 'create-address-select' && hiddenAddr) {
+      hiddenAddr.value = select.value || '';
     }
+  });
 
-    autoInspectCache.delete(filename);
+  select.addEventListener('blur', collapse);
+  select.addEventListener('keydown', e => {
+    if (e.key === 'Escape' || e.key === 'Enter') collapse();
+  });
+}
 
-    if (activeAutoInspectFilename === filename) {
-      closeAutoInspectModal();
-    }
+function wireContainedPickers() {
+  wireContainedSelect(document.querySelector('#peer-modal #create-address-select'));
+  wireContainedSelect(document.querySelector('#bulk-modal #bulk-iface'));
+}
 
-    toast.success("Automatic backup deleted.");
-    await loadAutoFiles();
+function peerDetailInner(icon, label, value) {
+  return `
+    <span class="peer-detail-icon"><i class="fas fa-${icon}" aria-hidden="true"></i></span>
+    <span class="peer-detail-copy">
+      <span class="peer-detail-label">${label}</span>
+      <span class="peer-detail-value">${value}</span>
+    </span>`;
+}
+
+function peerDetailItem(cls, icon, label, value) {
+  return `<div class="peer-detail-item ${cls}">${peerDetailInner(icon, label, value)}</div>`;
+}
+
+function peerProgressBar(p, ttl, started) {
+  if (p.unlimited) return '';
+
+  const limitMiB = toMiB(p.data_limit, p.limit_unit);
+  const remainMiB = remainingMiB(p);
+  const dataPct = Number.isFinite(limitMiB) && limitMiB > 0
+    ? Math.max(0, Math.min(100, (remainMiB / limitMiB) * 100))
+    : 0;
+
+  let timePct = null;
+  const totalSec = timeLimitCapSeconds(p);
+  if (started && Number.isFinite(ttl) && totalSec > 0) {
+    timePct = Math.max(0, Math.min(100, (ttl / totalSec) * 100));
   }
 
-  async function loadAutoFiles() {
-    if (!autoFilesList) return;
+  return `
+    <div class="peer-more-bars" aria-label="Peer limits">
+      <div class="peer-limit-bar">
+        <span>Data remaining</span>
+        <div class="bar"><i class="data-bar" style="width:${dataPct.toFixed(1)}%"></i></div>
+        <b>${dataPct.toFixed(0)}%</b>
+      </div>
+      <div class="peer-limit-bar time-progress">
+        <span>Time remaining</span>
+        <div class="bar"><i class="time-bar" style="width:${timePct == null ? 0 : timePct.toFixed(1)}%"></i></div>
+        <b>${timePct == null ? '—' : `${timePct.toFixed(0)}%`}</b>
+      </div>
+    </div>`;
+}
 
-    autoFilesList.innerHTML =
-      '<div class="bk-small bk-muted">Loading…</div>';
+function cardHTML(p, i) {
+  const limitStr = fmtLimit(p);
+  const usedStr = fmtAmountMiB(usedBytes(p) / 1048576,'Mi');
+  const remainStr = p.unlimited? `${usedStr} used`: fmtAmountMiB(remainingMiB(p),p.limit_unit);
+  const timerStr   = timeBadge(p);
+  const epStr      = endpointDisplay(p);
 
-    try {
-      const response = await fetch("/api/backups/auto", {
-        headers: csrfHeaders(),
-        credentials: "same-origin",
-        cache: "no-store",
-      });
+  const first      = (p.first_used_at_ts != null) ? fmtLocalTs(p.first_used_at_ts)
+                   : (p.first_used_at ? fmtLocalTs(tsFrom(p.first_used_at)) : '–');
+  const created    = (p.created_at_ts != null) ? fmtLocalTs(p.created_at_ts)
+                   : (p.created_at ? fmtLocalTs(tsFrom(p.created_at)) : '–');
 
-      const result = await response.json().catch(() => ({}));
+  const expTs      = (p.expires_at_ts != null) ? p.expires_at_ts : tsFrom(p.expires_at);
+  const exp        = expTs ? fmtLocalTs(expTs) : '–';
+  const ttl        = (p.ttl_seconds != null) ? p.ttl_seconds : (expTs ? Math.max(0, expTs - nowSec()) : null);
+  const activeSince = first !== '–' ? first : created;
+  const remainTime = p.unlimited ? (activeSince !== '–' ? `Active since ${activeSince}` : 'Unlimited') : (ttl != null ? prettyTtl(ttl) : '–');
 
-      if (!response.ok) {
-        throw new Error(
-          result.message ||
-          result.error ||
-          `Could not load automatic backups (${response.status}).`
-        );
-      }
+  const totalBytes = usedBytes(p);
+  const totalMiB   = Math.round(totalBytes / 1048576);
+  const totalStr   = fmtAmountMiB(totalMiB, 'Mi');
 
-      const files = Array.isArray(result.files)
-        ? result.files
-        : [];
+  const started    = (!p.start_on_first_use) || (p.first_used_at_ts != null) || (!!p.first_used_at);
+  const capLabel = 'Time limit';
+  const capTail =
+    (!started && p.start_on_first_use)
+      ? ' (starts on first use)'
+      : '';
 
-      if (autoFilesCount) {
-        autoFilesCount.textContent =
-          `${files.length} file${files.length === 1 ? "" : "s"}`;
-      }
+  const isOpen     = openMore.has(peerDomKey(p));
 
-      if (!files.length) {
-        autoFilesList.innerHTML =
-          '<div class="bk-small bk-muted">No automatic backups found.</div>';
-        return;
-      }
+  const cStatus    = connStatus(p);
+  const pStatus    = panelStatus(p);
+  const depleted   = isDepleting(p);
+  const blocked    = isBlocked(p);
+  const pKey       = peerEsc(peerKey(p) ?? p.id ?? p.public_key ?? '');
 
-      autoFilesList.innerHTML = files.map((file) => `
-        <div class="bk-auto-item" data-file="${safe(file.name)}">
-          <div class="bk-auto-meta">
-            <div class="bk-auto-date">${safe(fmtEpoch(file.ts))}</div>
-            <div class="bk-small bk-muted">
-              ${safe(file.name)} · ${safe(autoSize(file.size))}
-            </div>
-          </div>
+  return `
+  <div class="peer-card"
+       data-id="${pKey}"
+       data-status="${cStatus}"
+       data-panel-status="${pStatus}"
+       data-blocked="${blocked ? '1' : '0'}"
+       data-depleting="${depleted ? '1' : '0'}"
+       data-name="${(p.name||'').toLowerCase()}"
+       data-phone="${(p.phone_number||'').toLowerCase()}"
+       data-tg="${(p.telegram_id||'').toLowerCase()}"
+       data-iface="${p.iface || ''}">
 
-          <div class="bk-auto-actions">
-            <button
-              type="button"
-              class="bk-auto-action inspect"
-              data-auto-action="inspect"
-              data-file="${safe(file.name)}"
-              title="Inspect backup"
-              aria-label="Inspect backup"
-            >
-              <i class="fas fa-magnifying-glass"></i>
-              <span>Inspect</span>
-            </button>
+    <div class="peer-main peer-main-nowrap">
+      <span class="peer-index">${i + 1})</span>
 
-            <button
-              type="button"
-              class="bk-auto-action download"
-              data-auto-action="download"
-              data-file="${safe(file.name)}"
-              title="Download backup"
-              aria-label="Download backup"
-            >
-              <i class="fas fa-download"></i>
-              <span>Download</span>
-            </button>
+      <div class="peer-identity-block">
+        <span class="peer-name" title="${peerEsc(p.name || '')}">${p.name || ''}</span>
+        <span class="peer-iface-line"><i class="fas fa-network-wired"></i>${p.iface || '—'}</span>
+      </div>
 
-            <button
-              type="button"
-              class="bk-auto-action restore"
-              data-auto-action="restore"
-              data-file="${safe(file.name)}"
-              title="Restore backup"
-              aria-label="Restore backup"
-            >
-              <i class="fas fa-rotate-left"></i>
-              <span>Restore</span>
-            </button>
-
-            <button
-              type="button"
-              class="bk-auto-action delete"
-              data-auto-action="delete"
-              data-file="${safe(file.name)}"
-              title="Delete backup"
-              aria-label="Delete backup"
-            >
-              <i class="fas fa-trash-can"></i>
-              <span>Delete</span>
-            </button>
-          </div>
+      <div class="peer-live-block">
+        <div class="peer-tags">${peerTagsHTML(p)}</div>
+        <div class="peer-traffic">
+          <span><i class="fas fa-download"></i><b class="rx">${String(p.rx || '0')}</b> MB</span>
+          <span><i class="fas fa-upload"></i><b class="tx">${String(p.tx || '0')}</b> MB</span>
         </div>
-      `).join("");
-    } catch (error) {
-      console.error(error);
-      autoFilesList.innerHTML =
-        '<div class="bk-small bk-muted">Could not load automatic backups.</div>';
+      </div>
 
-      if (autoFilesCount) {
-        autoFilesCount.textContent = "0 files";
-      }
+      <div class="peer-usage-block">
+        <div class="peer-data" title="${p.unlimited ? `${usedStr} used · No data cap` : `${remainStr} remaining · ${limitStr} limit`}">
+          <i class="fas fa-database"></i>
+          <span class="data-summary">${p.unlimited ? `${usedStr} used · No data cap` : `${remainStr} left · ${limitStr} limit`}</span>
+        </div>
+        <div class="peer-timer" title="${
+          p.unlimited && activeSince !== '–'
+            ? `Active since ${activeSince}`
+            : timerStr
+        }">
+          <i class="fas fa-clock"></i>
+          <span class="timer-text">${timerStr}</span>
+        </div>
+      </div>
 
-      toast.error(
-        error.message ||
-        "Could not load automatic backups."
-      );
-    }
-  }
+      <div class="peer-network-block">
+        <div class="peer-address-line" title="${peerEsc(p.address || '')}">
+          <i class="fas fa-network-wired"></i><span class="address">${p.address || '—'}</span>
+        </div>
+        <div class="endpoint-wrap"${epStr ? '' : ' style="display:none"'} title="${peerEsc(epStr)}">
+          <i class="fas fa-globe"></i><span class="endpoint">${epStr}</span>
+        </div>
+      </div>
 
-  autoFilesList?.addEventListener("click", async (event) => {
-    const button = event.target.closest(
-      "button[data-auto-action]"
-    );
+      <div class="peer-info-wrap" data-id="${pKey}">
+        <button
+          type="button"
+          class="more-toggle icon-only"
+          data-id="${pKey}"
+          title="More information"
+          aria-label="More information"
+          aria-expanded="${isOpen ? 'true' : 'false'}"
+        >
+          <i class="fas fa-info-circle" aria-hidden="true"></i>
+          <span class="sr-only">More information</span>
+        </button>
+      </div>
+    </div>
 
-    if (!button || !autoFilesList.contains(button)) {
+    <div class="peer-more-section" ${isOpen ? '' : 'hidden'}>
+      <div class="peer-more-hdr">
+        <div class="peer-more-title"><i class="fas fa-info-circle" aria-hidden="true"></i> More information</div>
+        <button type="button" class="more-close icon-only" data-id="${pKey}" title="Close" aria-label="Close">
+          <i class="fas fa-times" aria-hidden="true"></i>
+        </button>
+      </div>
+
+      ${peerProgressBar(p, ttl, started)}
+
+      <div class="peer-more-grid">
+        ${peerDetailItem('mi-limit', 'database', 'Limit', limitStr)}
+        ${peerDetailItem('mi-remain', 'hourglass-half', 'Time remaining', remainTime)}
+        ${peerDetailItem('mi-days', 'calendar-alt', capLabel, `${fmtDaysOrHours(p.time_limit_days)}${capTail}`)}
+        ${peerDetailItem('mi-first', 'play-circle', 'First used', first)}
+        ${peerDetailItem('mi-created', 'calendar-plus', 'Created', created)}
+        ${peerDetailItem('mi-exp', 'calendar-times', 'Expires', exp)}
+        ${peerDetailItem('mi-total', 'exchange-alt', 'Total usage', totalStr)}
+        ${peerDetailItem('mi-phone', 'phone', 'Phone', p.phone_number || '–')}
+        ${peerDetailItem('mi-tg', 'paper-plane', 'Telegram', p.telegram_id || '–')}
+        ${peerDetailItem('mi-iface', 'network-wired', 'Interface', `<span class="mi-iface-name">${p.iface || '–'}</span>`)}
+      </div>
+    </div>
+
+    <div class="peer-actions-row">
+      <div class="peer-actions peer-action-dock" role="group" aria-label="Peer actions">
+        <button type="button" class="peer-action-button" data-peer-action="edit" title="Edit peer" aria-label="Edit peer" data-id="${pKey}"><i class="fas fa-edit" aria-hidden="true"></i><span class="peer-action-label">Edit</span></button>
+        <button type="button" class="peer-action-button" data-peer-action="logs" title="Peer logs" aria-label="Peer logs" data-id="${pKey}"><i class="fas fa-list" aria-hidden="true"></i><span class="peer-action-label">Logs</span></button>
+        <button type="button" class="peer-action-button" data-peer-action="download" title="Download config" aria-label="Download config" data-id="${pKey}"><i class="fas fa-download" aria-hidden="true"></i><span class="peer-action-label">Download</span></button>
+        <button type="button" class="peer-action-button" data-peer-action="qr" title="Show QR and download" aria-label="Show QR and download" data-id="${pKey}"><i class="fas fa-qrcode" aria-hidden="true"></i><span class="peer-action-label">QR code</span></button>
+        <button type="button" class="peer-action-button" data-peer-action="link" title="Copy user link" aria-label="Copy user link" data-id="${pKey}"><i class="fas fa-link" aria-hidden="true"></i><span class="peer-action-label">User link</span></button>
+        <button type="button" class="peer-action-button" data-peer-action="enable" title="Enable peer" aria-label="Enable peer" data-id="${pKey}" ${pStatus==='online' ? 'hidden' : ''}><i class="fas fa-play" aria-hidden="true"></i><span class="peer-action-label">Enable</span></button>
+        <button type="button" class="peer-action-button" data-peer-action="disable" title="Disable peer" aria-label="Disable peer" data-id="${pKey}" ${pStatus==='online' ? '' : 'hidden'}><i class="fas fa-ban" aria-hidden="true"></i><span class="peer-action-label">Disable</span></button>
+        <button type="button" class="peer-action-button" data-peer-action="reset-data" title="Reset data" aria-label="Reset data" data-id="${pKey}"><i class="fas fa-tachometer-alt" aria-hidden="true"></i><span class="peer-action-label">Reset data</span></button>
+        <button type="button" class="peer-action-button" data-peer-action="reset-timer" title="Reset timer" aria-label="Reset timer" data-id="${pKey}"><i class="fas fa-history" aria-hidden="true"></i><span class="peer-action-label">Reset timer</span></button>
+        <button type="button" class="peer-action-button" data-peer-action="delete" title="Delete peer" aria-label="Delete peer" data-id="${pKey}"><i class="fas fa-trash" aria-hidden="true"></i><span class="peer-action-label">Delete</span></button>
+      </div>
+    </div>
+
+    <button type="button" class="peer-mobile-manage" data-peer-manage="${pKey}" aria-label="Manage peer ${peerEsc(p.name || '')}">
+      <span class="peer-mobile-manage-main"><i class="fas fa-sliders" aria-hidden="true"></i><b>Manage peer</b></span>
+      <span class="peer-mobile-manage-arrow" aria-hidden="true"><i class="fas fa-chevron-down"></i></span>
+    </button>
+
+  </div>`;
+}
+
+
+function ensureMobilePeerActionSheet() {
+  let sheet = document.getElementById('peer-mobile-action-sheet');
+  if (sheet) return sheet;
+
+  sheet = document.createElement('div');
+  sheet.id = 'peer-mobile-action-sheet';
+  sheet.className = 'peer-mobile-action-sheet';
+  sheet.hidden = true;
+  sheet.innerHTML = `
+    <div class="peer-mobile-action-backdrop" data-peer-sheet-close></div>
+    <section class="peer-mobile-action-panel" role="dialog" aria-modal="true" aria-labelledby="peer-mobile-action-title">
+      <div class="peer-mobile-action-handle" aria-hidden="true"></div>
+      <header class="peer-mobile-action-header">
+        <div>
+          <small>Peer actions</small>
+          <h3 id="peer-mobile-action-title">Manage peer</h3>
+        </div>
+        <button type="button" class="peer-mobile-action-close" data-peer-sheet-close aria-label="Close peer actions"><i class="fas fa-xmark"></i></button>
+      </header>
+      <div class="peer-mobile-action-list"></div>
+    </section>`;
+  document.body.appendChild(sheet);
+
+  const close = () => {
+    sheet.hidden = true;
+    sheet.classList.remove('open');
+    document.body.classList.remove('peer-mobile-sheet-open');
+    delete sheet.dataset.peerId;
+  };
+
+  sheet.addEventListener('click', async (event) => {
+    if (event.target.closest('[data-peer-sheet-close]')) {
+      event.preventDefault();
+      close();
       return;
     }
+
+    const item = event.target.closest('button[data-mobile-peer-action]');
+    if (!item) return;
 
     event.preventDefault();
     event.stopPropagation();
-    event.stopImmediatePropagation();
 
-    const action = button.dataset.autoAction || "";
-    const filename = button.dataset.file || "";
+    const peerId = sheet.dataset.peerId || '';
+    const action = item.dataset.mobilePeerAction || '';
+    if (!peerId || !action) return;
 
-    if (!filename) {
-      toast.error("Backup filename is missing.");
+    const card = document.querySelector(`.peer-card[data-id="${CSS.escape(peerId)}"]`);
+    const source = card?.querySelector(`button[data-peer-action="${CSS.escape(action)}"]`);
+    if (!source) {
+      toastSafe('That peer action is not available right now.', 'warning');
       return;
     }
 
-    try {
-      if (action === "inspect") {
-        await inspectAutoBackup(filename);
-      } else if (action === "download") {
-        downloadAutoBackup(filename);
-      } else if (action === "restore") {
-        await restoreAutoBackup(filename);
-      } else if (action === "delete") {
-        button.disabled = true;
-        await deleteAutoBackup(filename);
-      }
-    } catch (error) {
-      console.error(error);
-      toast.error(
-        error.message ||
-        `Could not ${action || "process"} backup.`
-      );
-    } finally {
-      if (button.isConnected) {
-        button.disabled = false;
-      }
-    }
+    close();
+
+    await new Promise(resolve => setTimeout(resolve, action === 'delete' ? 180 : 80));
+
+    await clickList({
+      target: source,
+      preventDefault() {},
+      stopPropagation() {},
+      stopImmediatePropagation() {},
+      ctrlKey: false,
+      metaKey: false,
+      button: 0,
+    });
   });
 
-  async function loadAll() {
-    try {
-      const sched = await fetch("/api/backup/schedule", {
-        headers: csrfHeaders(),
-        credentials: "same-origin",
-        cache: "no-store",
-      }).then((r) => r.json());
+  sheet.closeSheet = close;
+  return sheet;
+}
 
-      lastSchedule = sched || {};
+function openMobilePeerActionSheet(card) {
+  if (!card) return;
+  const sheet = ensureMobilePeerActionSheet();
+  const peerId = String(card.dataset.id || '');
+  const peer = findPeer(peerId) || {};
+  const list = sheet.querySelector('.peer-mobile-action-list');
+  const title = sheet.querySelector('#peer-mobile-action-title');
+  if (!list) return;
 
-      const zone = String(sched?.timezone || "UTC").trim() || "UTC";
-      if (selTz) selTz.value = zone;
-      const tzDisplay = $("#tz-display");
-      if (tzDisplay) tzDisplay.textContent = zone;
+  sheet.dataset.peerId = peerId;
+  if (title) title.textContent = peer.name ? `Manage ${peer.name}` : 'Manage peer';
 
-      if (autoEnabled) autoEnabled.checked = !!sched.enabled;
-      if (pillAuto) {
-        pillAuto.textContent = sched.enabled ? "Enabled" : "Disabled";
-        pillAuto.className = "bk-pill " + (sched.enabled ? "ok" : "warn");
+  const defs = [
+    ['edit','fa-pen-to-square','Edit','Change peer settings'],
+    ['logs','fa-list','Logs','View peer activity'],
+    ['download','fa-download','Download','Download WireGuard config'],
+    ['qr','fa-qrcode','QR code','Show QR and config tools'],
+    ['link','fa-link','User link','Copy the public user link'],
+    [panelStatus(peer) === 'online' ? 'disable' : 'enable', panelStatus(peer) === 'online' ? 'fa-ban' : 'fa-play', panelStatus(peer) === 'online' ? 'Disable' : 'Enable', panelStatus(peer) === 'online' ? 'Disable this peer' : 'Enable this peer'],
+    ['reset-data','fa-gauge-high','Reset data','Clear used traffic counter'],
+    ['reset-timer','fa-clock-rotate-left','Reset timer','Restart peer time allowance'],
+    ['delete','fa-trash','Delete','Permanently remove this peer'],
+  ];
+
+  list.innerHTML = defs.map(([action, icon, label, hint]) => `
+    <button type="button" class="peer-mobile-action-item${action === 'delete' ? ' danger' : ''}" data-mobile-peer-action="${action}">
+      <span class="peer-mobile-action-item-icon"><i class="fas ${icon}" aria-hidden="true"></i></span>
+      <span class="peer-mobile-action-item-copy"><b>${label}</b><small>${hint}</small></span>
+      <i class="fas fa-chevron-right peer-mobile-action-item-arrow" aria-hidden="true"></i>
+    </button>`).join('');
+
+  sheet.hidden = false;
+  requestAnimationFrame(() => sheet.classList.add('open'));
+  document.body.classList.add('peer-mobile-sheet-open');
+}
+
+document.addEventListener('click', (event) => {
+  const manage = event.target.closest('.peer-mobile-manage');
+  if (!manage) return;
+  if (!window.matchMedia('(max-width: 820px)').matches) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  openMobilePeerActionSheet(manage.closest('.peer-card'));
+}, true);
+
+function ensureStablePeerActionDockStyle() {
+  if (document.getElementById('peer-action-dock-stable-style')) return;
+
+  const style = document.createElement('style');
+  style.id = 'peer-action-dock-stable-style';
+  style.textContent = `
+    /*
+     * Keep a permanent geometry slot for the peer action dock.
+     * Only visibility changes. The card height never changes on hover,
+     * preventing pointerleave/pointerenter oscillation.
+     */
+    .peer-card {
+      position: relative !important;
+    }
+
+    .peer-card .peer-actions-row {
+      display: flex !important;
+      width: 100% !important;
+      min-height: 42px !important;
+      height: 42px !important;
+      max-height: 42px !important;
+      margin: 0 !important;
+      padding: 5px 8px !important;
+      overflow: visible !important;
+
+      opacity: 0 !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+      transform: none !important;
+
+      transition:
+        opacity 120ms ease,
+        visibility 0s linear 120ms !important;
+    }
+
+    .peer-card:hover .peer-actions-row,
+    .peer-card:focus-within .peer-actions-row,
+    .peer-card.peer-actions-open .peer-actions-row,
+    .peer-card.peer-actions-locked .peer-actions-row {
+      opacity: 1 !important;
+      visibility: visible !important;
+      pointer-events: auto !important;
+      transform: none !important;
+      transition:
+        opacity 120ms ease,
+        visibility 0s !important;
+    }
+
+    .peer-card .peer-action-dock {
+      display: flex !important;
+      width: 100% !important;
+      min-height: 32px !important;
+      align-items: center !important;
+      justify-content: flex-end !important;
+      flex-wrap: nowrap !important;
+      gap: 6px !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      overflow-x: auto !important;
+      overflow-y: hidden !important;
+      scrollbar-width: thin;
+    }
+
+    .peer-card .peer-action-dock > button {
+      flex: 0 0 auto !important;
+    }
+
+    @media (max-width: 980px), (hover: none), (pointer: coarse) {
+      .peer-card .peer-action-dock > button {
+        position: static !important;
+        inset: auto !important;
+        top: auto !important;
+        right: auto !important;
+        bottom: auto !important;
+        left: auto !important;
+        transform: none !important;
+        translate: none !important;
+        z-index: auto !important;
+        pointer-events: auto !important;
+        touch-action: manipulation !important;
       }
-      if (selFreq) selFreq.value = sched.freq || "daily";
-      if (inpTime) inpTime.value = sched.time || "03:00";
-      if (inpKeep) inpKeep.value = sched.keep || 7;
-      if (autoWG) autoWG.checked = !!sched.include_wg;
-      setAutoTelegramEnabled(!!sched.send_to_telegram);
-      updateTelegramTargetVisibility();
-      await loadTelegramAdmins(sched.telegram_chat_id || "");
-      setNext(sched.next_run);
+    }
 
-      const status = await fetch("/api/backup/status", {
-        headers: csrfHeaders(),
-        credentials: "same-origin",
-        cache: "no-store",
-      }).then((r) => r.json());
+    .peer-card.peer-action-busy .peer-actions-row {
+      opacity: 1 !important;
+      visibility: visible !important;
+      pointer-events: auto !important;
+    }
 
-      setLast(pillFull, status.full_last);
-      setLast(pillDb, status.db_last);
-      setLast(pillSettings, status.settings_last);
-      updateStatus();
+    .peer-card.peer-action-busy .peer-action-dock > button {
+      pointer-events: none !important;
+    }
 
-      const prefs = await fetch("/api/backup/prefs", {
-        headers: csrfHeaders(),
-        credentials: "same-origin",
-        cache: "no-store",
-      }).then((r) => r.json());
+    @media (hover: none), (pointer: coarse) {
+      .peer-card .peer-actions-row {
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+      }
+    }
 
-      if (optWG) optWG.checked = !!prefs.include_wg;
-      if (optTG) optTG.checked = !!prefs.send_to_telegram;
+    @media (max-width: 820px) {
+      .peer-card .peer-actions-row {
+        height: auto !important;
+        max-height: none !important;
+        min-height: 0 !important;
+        padding: 7px 8px 9px !important;
+        overflow: visible !important;
+        opacity: 1 !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+      }
+      .peer-card .peer-action-dock {
+        display: grid !important;
+        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+        gap: 6px !important;
+        min-height: 0 !important;
+        overflow: visible !important;
+      }
+      .peer-card .peer-action-dock > button {
+        width: 100% !important;
+        min-width: 0 !important;
+        height: 42px !important;
+      }
+    }
+    .peer-card .peer-action-dock > button > i,
+    .peer-card .peer-action-dock > button > .peer-action-label {
+      pointer-events: none !important;
+    }
+    .peer-action-label { display: none; }
+    @media (max-width: 820px), (hover: none) and (pointer: coarse) {
+      .peer-action-label {
+        display: inline !important;
+        min-width: 0 !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        white-space: nowrap !important;
+        font-size: 10px !important;
+        font-weight: 800 !important;
+      }
+      .peer-card .peer-action-dock > button {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        gap: 7px !important;
+        padding: 0 9px !important;
+      }
+    }
+    @media (max-width: 520px) {
+      .peer-card .peer-action-dock {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+      }
+    }
+  `;
 
-      await loadAutoFiles();
-    } catch (e) {
-      console.error(e);
-      toast.error("Failed to load backup state.");
+  document.head.appendChild(style);
+
+  if (!document.getElementById('peer-mobile-action-mode-style')) {
+    const mobileStyle = document.createElement('style');
+    mobileStyle.id = 'peer-mobile-action-mode-style';
+    mobileStyle.textContent = `
+      .peer-mobile-manage { display: none !important; }
+      @media (max-width: 820px) {
+        .peer-card > .peer-actions-row {
+          display: none !important;
+          height: 0 !important; min-height: 0 !important; max-height: 0 !important;
+          padding: 0 !important; margin: 0 !important; border: 0 !important;
+          opacity: 0 !important; visibility: hidden !important; pointer-events: none !important;
+          overflow: hidden !important;
+        }
+        .peer-card > .peer-mobile-manage { display: flex !important; }
+      }
+    `;
+    document.head.appendChild(mobileStyle);
+  }
+}
+
+function unlockPeerActionCards() {
+  document.querySelectorAll(
+    '.peer-card.peer-actions-locked, .peer-card.peer-action-busy'
+  ).forEach(card => {
+    card.classList.remove('peer-actions-locked', 'peer-action-busy');
+
+    if (!card.matches(':hover') && !card.contains(document.activeElement)) {
+      card.classList.remove('peer-actions-open');
+    }
+  });
+}
+
+function hover(card) {
+  if (!card) return;
+
+  ensureStablePeerActionDockStyle();
+
+  if (card.dataset.enhancedToolbar === '1') return;
+  card.dataset.enhancedToolbar = '1';
+
+  let closeTimer = null;
+
+  const cancelClose = () => {
+    if (closeTimer) {
+      clearTimeout(closeTimer);
+      closeTimer = null;
+    }
+  };
+
+  const keepOpen = () => {
+    cancelClose();
+    card.classList.add('peer-actions-open');
+  };
+
+  const mayClose = () => {
+    cancelClose();
+
+    closeTimer = setTimeout(() => {
+      const locked =
+        card.classList.contains('peer-actions-locked') ||
+        card.classList.contains('peer-action-busy');
+
+      const modalOpen = !!document.querySelector(
+        '.modal.open, .peer-confirm-overlay.open, .peer-confirm-overlay[style*="display: flex"]'
+      );
+
+      const pointerInside = card.matches(':hover');
+      const focusInside = card.contains(document.activeElement);
+
+      if (!locked && !modalOpen && !pointerInside && !focusInside) {
+        card.classList.remove('peer-actions-open');
+      }
+    }, 350);
+  };
+
+  card.addEventListener('pointerenter', keepOpen);
+  card.addEventListener('pointermove', keepOpen);
+  card.addEventListener('pointerleave', mayClose);
+
+  card.addEventListener('focusin', keepOpen);
+  card.addEventListener('focusout', mayClose);
+
+  card.addEventListener('pointerdown', event => {
+    const action = event.target.closest(
+      '.peer-actions-row button[data-peer-action], .peer-info-wrap button'
+    );
+
+    if (!action) return;
+
+    keepOpen();
+    card.classList.add('peer-actions-locked');
+
+    /*
+     * Do not unlock immediately after click. Some actions open a modal
+     * asynchronously and some refresh the peer list.
+     */
+    setTimeout(() => {
+      const modalOpen = !!document.querySelector(
+        '.modal.open, .peer-confirm-overlay.open, .peer-confirm-overlay[style*="display: flex"]'
+      );
+
+      if (!modalOpen && !card.classList.contains('peer-action-busy')) {
+        card.classList.remove('peer-actions-locked');
+        mayClose();
+      }
+    }, 900);
+  }, true);
+
+  card.addEventListener('click', event => {
+    if (event.target.closest('.peer-actions-row, .peer-info-wrap')) {
+      keepOpen();
+    }
+  });
+}
+
+function updateCard(card, p, i) {
+  const cStatus  = connStatus(p);
+  const pStatus  = panelStatus(p);
+  const depleted = isDepleting(p);
+  const blocked  = isBlocked(p);
+
+  card.dataset.status = cStatus;
+  card.dataset.panelStatus = pStatus;
+  card.dataset.blocked = blocked ? '1' : '0';
+  card.dataset.depleting = depleted ? '1' : '0';
+  card.dataset.name   = (p.name || '').toLowerCase();
+  card.dataset.phone  = (p.phone_number || '').toLowerCase();
+  card.dataset.tg     = (p.telegram_id || '').toLowerCase();
+  card.dataset.iface  = p.iface || '';
+
+  const set = (sel, txt) => { const el = card.querySelector(sel); if (el) el.textContent = txt; };
+  const setHTML = (sel, html) => { const el = card.querySelector(sel); if (el) el.innerHTML = html; };
+  const started = (!p.start_on_first_use) || !!p.first_used_at_ts;
+
+  set('.peer-index', `${i + 1})`);
+  set('.peer-name', p.name || '');
+
+  const tagsEl = card.querySelector('.peer-tags');
+  if (tagsEl) tagsEl.innerHTML = peerTagsHTML(p);
+
+  set('.peer-traffic .rx', String(p.rx || '0'));
+  set('.peer-traffic .tx', String(p.tx || '0'));
+  set('.peer-address-line .address', p.address || '');
+
+  const epStr = endpointDisplay(p);
+  const wrap  = card.querySelector('.peer-network-block .endpoint-wrap');
+  if (wrap) {
+    if (epStr) {
+      wrap.style.removeProperty('display');
+      set('.peer-network-block .endpoint', epStr);
+    } else {
+      wrap.style.display = 'none';
     }
   }
 
-  async function saveSchedule(wantEnabled = null, options = {}) {
-    const quiet = !!options.quiet;
-    const payload = {
-      enabled: wantEnabled === null ? !!autoEnabled?.checked : !!wantEnabled,
-      freq: selFreq?.value || "daily",
-      time: inpTime?.value || "03:00",
-      keep: parseInt(inpKeep?.value || "7", 10),
-      include_wg: !!autoWG?.checked,
-      send_to_telegram: autoTelegramEnabled(),
-      telegram_chat_id: autoTelegramEnabled() ? (autoTelegramAdmin?.value || "") : "",
+  const remMiB = remainingMiB(p);
+  const currentUsedStr = fmtAmountMiB(usedBytes(p) / 1048576, 'Mi');
+  const currentDataText = p.unlimited
+    ? `${currentUsedStr} used · No data cap`
+    : `${fmtAmountMiB(remMiB, p.limit_unit)} left · ${fmtLimit(p)} limit`;
+  set('.peer-data .data-summary', currentDataText);
+  set('.peer-timer .timer-text', timeBadge(p));
+
+  const en = card.querySelector('[data-peer-action="enable"]');
+  const di = card.querySelector('[data-peer-action="disable"]');
+  if (en && di) {
+    en.hidden = pStatus === 'online';
+    di.hidden = pStatus !== 'online';
+    en.style.removeProperty('display');
+    di.style.removeProperty('display');
+  }
+
+  const first = (p.first_used_at_ts != null)
+      ? fmtLocalTs(p.first_used_at_ts)
+      : (p.start_on_first_use ? '—' : 'n/a');
+
+  const created = (p.created_at_ts != null)
+      ? fmtLocalTs(p.created_at_ts)
+      : (p.created_at ? fmtLocalTs(tsFrom(p.created_at)) : '—');
+
+  const expTs = (p.expires_at_ts != null) ? p.expires_at_ts : tsFrom(p.expires_at);
+  const ttl   = started
+      ? ((p.ttl_seconds != null) ? Number(p.ttl_seconds)
+         : (expTs ? Math.max(0, expTs - nowSec()) : null))
+      : null;
+
+  const exp   = (started && expTs) ? fmtLocalTs(expTs) : '—';
+  const remainTime = p.unlimited ? 'Unlimited' : (started && ttl != null ? prettyTtl(ttl) : '—');
+
+  const totalBytes = usedBytes(p);
+  const totalMiB   = Math.round(totalBytes / 1048576);
+  const totalStr   = fmtAmountMiB(totalMiB, 'Mi');
+
+  const capDays = (p.time_limit_days != null) ? p.time_limit_days : null;
+  const capTail  = (!started && p.start_on_first_use) ? ' (starts on first use)' : '';
+  const capStr   = p.unlimited
+    ? 'Unlimited'
+    : `${capDays != null ? fmtDaysOrHours(capDays) : '–'}${capTail}`;
+
+  setHTML('.mi-limit',   peerDetailInner('database', 'Limit', fmtLimit(p)));
+  setHTML('.mi-days',    peerDetailInner('play-circle', 'Started', first));
+  setHTML('.mi-first',   peerDetailInner('calendar-alt', 'Time limit', capStr));
+  setHTML('.mi-created', peerDetailInner('calendar-plus', 'Created', created));
+  setHTML('.mi-exp',     peerDetailInner('calendar-times', 'Expires', exp));
+  setHTML('.mi-remain',  peerDetailInner('hourglass-half', 'Time remaining', remainTime));
+  setHTML('.mi-total',   peerDetailInner('exchange-alt', 'Total usage', totalStr));
+  setHTML('.mi-phone',   peerDetailInner('phone', 'Phone', p.phone_number || '–'));
+  setHTML('.mi-tg',      peerDetailInner('paper-plane', 'Telegram', p.telegram_id || '–'));
+  setHTML('.mi-iface',   peerDetailInner('network-wired', 'Interface', `<span class="mi-iface-name">${p.iface || '–'}</span>`));
+
+  const totalSec = timeLimitCapSeconds(p);
+  const timePct = started && Number.isFinite(ttl) && totalSec > 0
+    ? Math.max(0, Math.min(100, (ttl / totalSec) * 100))
+    : null;
+  const timeBar = card.querySelector('.time-bar');
+  const timeText = card.querySelector('.time-progress b');
+  if (timeBar) timeBar.style.width = `${timePct == null ? 0 : timePct.toFixed(1)}%`;
+  if (timeText) timeText.textContent = timePct == null ? '—' : `${timePct.toFixed(0)}%`;
+  const dataBar = card.querySelector('.data-bar');
+  const dataText = card.querySelector('.peer-limit-bar:first-child b');
+  if (dataBar || dataText) {
+    const limitMiB = toMiB(p.data_limit, p.limit_unit);
+    const remainMiB = remainingMiB(p);
+    const pct = Number.isFinite(limitMiB) && limitMiB > 0
+      ? Math.max(0, Math.min(100, (remainMiB / limitMiB) * 100))
+      : 0;
+    if (dataBar) dataBar.style.width = `${pct.toFixed(1)}%`;
+    if (dataText) dataText.textContent = `${pct.toFixed(0)}%`;
+  }
+
+  hover(card);
+}
+function peerTagCounts(peers) {
+  const out = {
+    total: 0,
+    online: 0,
+    offline: 0,
+    enabled: 0,
+    disabled: 0,
+    blocked: 0,
+    depleting: 0
+  };
+
+  for (const p of peers || []) {
+    out.total += 1;
+
+    const c = connStatus(p);
+    const ps = panelStatus(p);
+
+    if (c === 'online') out.online += 1;
+    else out.offline += 1;
+
+    if (ps === 'online') out.enabled += 1;
+    else out.disabled += 1;
+
+    if (ps === 'blocked') out.blocked += 1;
+    if (isDepleting(p)) out.depleting += 1;
+  }
+
+  return out;
+}
+
+function ensurePeerSummary() {
+  let box = document.getElementById('peer-tag-summary');
+  if (box) return box;
+
+  box = document.createElement('div');
+  box.id = 'peer-tag-summary';
+  box.className = 'peer-summary-card peer-summary-v16';
+  box.innerHTML = `
+    <div class="peer-summary-head">
+      <div class="peer-summary-title">
+        <span class="peer-summary-icon"><i class="fas fa-chart-simple" aria-hidden="true"></i></span>
+        <div>
+          <strong>Peer summary</strong>
+          <small><b id="sum-total-head">0</b> peers</small>
+        </div>
+      </div>
+      <button type="button" class="peer-summary-reset" data-summary-filter="all" title="Show all peers" aria-label="Show all peers">
+        <i class="fas fa-rotate-left" aria-hidden="true"></i><span>All</span>
+      </button>
+    </div>
+
+    <div class="peer-summary-groups">
+      <section class="peer-summary-group" aria-label="Connection status">
+        <div class="peer-summary-group-title"><i class="fas fa-wifi" aria-hidden="true"></i><span>Connection</span></div>
+        <div class="peer-summary-group-metrics">
+          <button type="button" class="summary-stat online" data-summary-filter="online" title="Recent WireGuard handshake">
+            <span class="stat-dot" aria-hidden="true"></span><b id="sum-online">0</b><span>Online</span>
+          </button>
+          <button type="button" class="summary-stat offline" data-summary-filter="offline" title="No recent WireGuard handshake">
+            <span class="stat-dot" aria-hidden="true"></span><b id="sum-offline">0</b><span>Offline</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="peer-summary-group" aria-label="Panel state">
+        <div class="peer-summary-group-title"><i class="fas fa-power-off" aria-hidden="true"></i><span>Panel state</span></div>
+        <div class="peer-summary-group-metrics">
+          <button type="button" class="summary-stat enabled" data-summary-filter="enabled" title="Enabled in the panel">
+            <i class="fas fa-circle-check" aria-hidden="true"></i><b id="sum-enabled">0</b><span>Enabled</span>
+          </button>
+          <button type="button" class="summary-stat disabled" data-summary-filter="disabled" title="Disabled in the panel">
+            <i class="fas fa-circle-pause" aria-hidden="true"></i><b id="sum-disabled">0</b><span>Disabled</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="peer-summary-group" aria-label="Limits and blocks">
+        <div class="peer-summary-group-title"><i class="fas fa-gauge-high" aria-hidden="true"></i><span>Limits</span></div>
+        <div class="peer-summary-group-metrics">
+          <button type="button" class="summary-stat depleting" data-summary-filter="depleting" title="Near data or time limit">
+            <i class="fas fa-triangle-exclamation" aria-hidden="true"></i><b id="sum-depleting">0</b><span>Near limit</span>
+          </button>
+          <button type="button" class="summary-stat blocked" data-summary-filter="blocked" title="Blocked, expired, or out of data">
+            <i class="fas fa-ban" aria-hidden="true"></i><b id="sum-blocked">0</b><span>Blocked</span>
+          </button>
+        </div>
+      </section>
+    </div>`;
+
+  const filtersBox = document.querySelector('.peer-filters');
+  const list = document.querySelector('.peers-container');
+  if (filtersBox) filtersBox.before(box);
+  else if (list) list.before(box);
+
+  box.addEventListener('click', e => {
+    const pill = e.target.closest('[data-summary-filter]');
+    if (!pill) return;
+    let val = pill.getAttribute('data-summary-filter') || '';
+    if (val === 'all') val = '';
+    filters.status = val;
+    const statusSel = document.getElementById('peer-filter-status');
+    if (statusSel) statusSel.value = val;
+    box.querySelectorAll('[data-summary-filter]').forEach(x => x.classList.remove('is-active'));
+    pill.classList.add('is-active');
+    applyFilters?.();
+  });
+  return box;
+}
+
+function renderPeerSummary(peers) {
+  const box = ensurePeerSummary();
+  if (!box) return;
+
+  const c = peerTagCounts(peers || []);
+
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = String(val ?? 0);
+  };
+
+  set('sum-total', c.total);
+  set('sum-total-head', c.total);
+  set('sum-online', c.online);
+  set('sum-offline', c.offline);
+  set('sum-enabled', c.enabled);
+  set('sum-disabled', c.disabled);
+  set('sum-depleting', c.depleting);
+  set('sum-blocked', c.blocked);
+
+  const active = String(filters.status || '');
+  box.querySelectorAll('[data-summary-filter]').forEach(el => {
+    el.classList.toggle('is-active', (el.getAttribute('data-summary-filter') || '') === active);
+  });
+}
+const filters = { q: '', status: '' };
+const pagination = { page: 1, pageSize: 8 };
+
+function loadFilters() {
+  try {
+    const s = JSON.parse(localStorage.getItem('peer_filters') || '{}');
+    if (typeof s.q === 'string') filters.q = s.q;
+    if (typeof s.status === 'string') filters.status = s.status;
+  } catch {}
+}
+
+function saveFilters() {
+  localStorage.setItem('peer_filters', JSON.stringify(filters));
+}
+
+function loadPagination() {
+  try {
+    const s = JSON.parse(localStorage.getItem('peer_pagination') || '{}');
+    if (Number.isInteger(s.page)) pagination.page = s.page;
+    if (Number.isInteger(s.pageSize)) pagination.pageSize = s.pageSize;
+  } catch {}
+  if (![5, 8, 12, 20, 50].includes(Number(pagination.pageSize))) pagination.pageSize = 8;
+}
+
+function savePagination() {
+  localStorage.setItem('peer_pagination', JSON.stringify(pagination));
+}
+
+function buildFilters() {
+  let host = $('.peer-filters');
+  if (!host) {
+    host = document.createElement('div');
+    host.className = 'peer-filters';
+    host.innerHTML = `
+      <div style="display:flex; gap:8px; align-items:center; margin:10px 0; flex-wrap:wrap;">
+        <input id="peer-filter-q" class="input" placeholder="Search name, phone, @telegram" style="flex:1 1 420px; min-width:260px;">
+
+        <select id="peer-filter-status" class="input" style="width:190px;">
+        <option value="">All tags</option>
+        <option value="online">Online</option>
+        <option value="offline">Offline</option>
+        <option value="enabled">Enabled</option>
+        <option value="disabled">Disabled</option>
+        <option value="depleting">Depleting</option>
+        <option value="blocked">Blocked</option>
+        </select>
+
+        <label style="display:flex; align-items:center; gap:6px;">
+          <span>Page size</span>
+          <select id="peer-page-size" class="input" style="width:90px;">
+            <option value="10">10</option>
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </select>
+        </label>
+
+        <button id="peer-filter-clear" class="btn secondary">Clear</button>
+      </div>`;
+
+    const list = $('.peers-container');
+    if (list) list.before(host);
+  }
+
+  const q = $('#peer-filter-q', host);
+  const s = $('#peer-filter-status', host);
+  const c = $('#peer-filter-clear', host);
+  const ps = $('#peer-page-size', host);
+
+  q.value = filters.q || '';
+  s.value = filters.status || '';
+  ps.value = String(pagination.pageSize);
+
+  q.addEventListener('input', debounce(() => {
+    filters.q = q.value.trim().toLowerCase();
+    saveFilters();
+    pagination.page = 1;
+    savePagination();
+    applyPagi();
+  }, 150));
+
+  s.addEventListener('change', () => {
+    filters.status = s.value;
+    saveFilters();
+    pagination.page = 1;
+    savePagination();
+    applyPagi();
+  });
+
+  c.addEventListener('click', () => {
+    filters.q = '';
+    filters.status = '';
+    q.value = '';
+    s.value = '';
+    saveFilters();
+    pagination.page = 1;
+    savePagination();
+    applyPagi();
+  });
+
+  ps.addEventListener('change', () => {
+    pagination.pageSize = parseInt(ps.value, 10) || 10;
+    pagination.page = 1;
+    savePagination();
+    applyPagi();
+  });
+}
+
+function matchPeer(card) {
+  if (SELECTED_IFACE_NAME) {
+    const name = card.querySelector('.mi-iface-name')?.textContent || card.dataset.iface || '';
+    if (name !== SELECTED_IFACE_NAME) return false;
+  }
+
+  const st = filters.status;
+  const status = card.dataset.status;
+  const panel = card.dataset.panelStatus;
+
+  const statusOK =
+    !st ||
+    (st === 'online' && status === 'online') ||
+    (st === 'offline' && status === 'offline') ||
+    (st === 'depleting' && card.dataset.depleting === '1') ||
+    (st === 'blocked' && card.dataset.blocked === '1') ||
+    (st === 'enabled' && panel === 'online') ||
+    (st === 'disabled' && panel !== 'online');
+
+  if (!statusOK) return false;
+
+  const q = filters.q;
+  if (!q) return true;
+
+  const name = card.dataset.name || '';
+  const phone = card.dataset.phone || '';
+  const tg = card.dataset.tg || '';
+
+  return name.includes(q) || phone.includes(q) || tg.includes(q);
+}
+
+  function applyPagi() {
+    const cont = $('.peers-container'); if (!cont) return;
+    const cards = $$('.peer-card', cont);
+    for (const c of cards) c.dataset._match = matchPeer(c) ? '1' : '0';
+    const filtered = cards.filter(c => c.dataset._match === '1');
+    const total = Math.max(1, Math.ceil(filtered.length / pagination.pageSize));
+    if (pagination.page > total) { pagination.page = total; savePagination(); }
+    const start = (pagination.page - 1) * pagination.pageSize, end = start + pagination.pageSize;
+    filtered.forEach((c, idx) => { c.style.display = (idx >= start && idx < end) ? '' : 'none'; });
+    cards.forEach(c => { if (c.dataset._match === '0') c.style.display = 'none'; });
+    renderPager(total);
+  }
+
+  function renderPager(total) {
+  let bar = $('#peer-pagination');
+
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'peer-pagination';
+    bar.className = 'peerx-pagination subx-pagination';
+
+    const list = $('.peers-container');
+    if (list) list.after(bar);
+
+    bar.addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (!b) return;
+
+      const maxPage = parseInt(bar.dataset.total || '1', 10) || 1;
+      const nav = b.dataset.nav || '';
+
+      if (nav === 'first') pagination.page = 1;
+      else if (nav === 'prev') pagination.page = Math.max(1, pagination.page - 1);
+      else if (nav === 'next') pagination.page = Math.min(maxPage, pagination.page + 1);
+      else if (nav === 'last') pagination.page = maxPage;
+      else return;
+
+      savePagination();
+      applyPagi();
+    });
+
+    bar.addEventListener('change', e => {
+      const size = e.target.closest('#peer-page-size-pager');
+      if (!size) return;
+
+      pagination.pageSize = parseInt(size.value, 10) || 8;
+      if (![5, 8, 12, 20, 50].includes(Number(pagination.pageSize))) pagination.pageSize = 8;
+      pagination.page = 1;
+      const oldTop = document.querySelector('.peer-filters #peer-page-size');
+      if (oldTop) oldTop.value = String(pagination.pageSize);
+      savePagination();
+      applyPagi();
+    });
+  } else {
+    bar.className = 'peerx-pagination subx-pagination';
+  }
+
+  const cur = Math.max(1, Math.min(total, pagination.page));
+  pagination.page = cur;
+  bar.dataset.total = String(total);
+
+  const cards = $$('.peer-card', $('.peers-container') || document);
+  const matched = cards.filter(c => c.dataset._match === '1').length;
+  const from = matched ? ((cur - 1) * pagination.pageSize) + 1 : 0;
+  const to = Math.min(matched, cur * pagination.pageSize);
+
+  const sizeOptions = [5, 8, 12, 20, 50].map(n =>
+    `<option value="${n}" ${Number(pagination.pageSize) === n ? 'selected' : ''}>${n} / page</option>`
+  ).join('');
+
+  bar.innerHTML = `
+    <div class="subx-page-info">${from}-${to} of ${matched} peers</div>
+    <div class="subx-page-controls" aria-label="Peer pagination">
+      <button type="button" data-nav="first" ${cur <= 1 ? 'disabled' : ''} title="First page" aria-label="First page"><i class="fas fa-angles-left"></i></button>
+      <button type="button" data-nav="prev" ${cur <= 1 ? 'disabled' : ''} title="Previous page" aria-label="Previous page"><i class="fas fa-chevron-left"></i></button>
+      <span>Page <b>${cur}</b> of <b>${total}</b></span>
+      <button type="button" data-nav="next" ${cur >= total ? 'disabled' : ''} title="Next page" aria-label="Next page"><i class="fas fa-chevron-right"></i></button>
+      <button type="button" data-nav="last" ${cur >= total ? 'disabled' : ''} title="Last page" aria-label="Last page"><i class="fas fa-angles-right"></i></button>
+      <select id="peer-page-size-pager" class="input" aria-label="Peers per page">${sizeOptions}</select>
+    </div>
+  `;
+}
+
+
+let refreshTimer = null,
+    isRefreshing = false,
+    firstLoad = false,
+    refreshDelay = 5000,
+    lastErrorAt = 0,
+    peersFetchCtrl = null,
+    peersLoadingSeq = 0,
+    peersLoadingSince = 0;
+
+const REFRESH_TIMEOUT_MS_LOCAL = 15000;
+const REFRESH_TIMEOUT_MS_NODE  = 25000;
+const MAX_BACKOFF_MS = 60000;
+
+function nextSchedule(ms) {
+  if (refreshTimer) clearTimeout(refreshTimer);
+
+  refreshTimer = setTimeout(() => refreshPeers({ quiet: true }), ms);
+}
+
+function findPeer(id) {
+  const key = String(id ?? '');
+  return (window._peers || []).find(x =>
+    String(peerKey(x)) === key ||
+    String(x.id ?? '') === key ||
+    String(x.public_key ?? '') === key
+  );
+}
+
+function peersLoading(on, title, sub) {
+  const el = document.getElementById('spinner-peers');
+  if (!el) return;
+
+  if (!el.dataset.enhanced) {
+    el.dataset.enhanced = '1';
+    el.innerHTML = `
+      <div class="peers-loading-card" role="status" aria-live="polite">
+        <span class="peers-loading-orb"><i class="fas fa-circle-notch" aria-hidden="true"></i></span>
+        <span class="peers-loading-copy">
+          <b id="peers-loading-title">Loading peers…</b>
+          <small id="peers-loading-sub">Fetching latest state.</small>
+        </span>
+      </div>`;
+  }
+
+  const t = document.getElementById('peers-loading-title');
+  const s = document.getElementById('peers-loading-sub');
+
+  if (on) {
+    peersLoadingSeq += 1;
+    peersLoadingSince = Date.now();
+    if (t) t.textContent = title || 'Loading peers…';
+    if (s) s.textContent = sub || 'Fetching latest state.';
+    el.hidden = false;
+    el.style.setProperty('display', 'flex', 'important');
+    el.setAttribute('aria-busy', 'true');
+    document.body.classList.add('peers-is-loading');
+    return;
+  }
+
+  const seq = peersLoadingSeq;
+  const elapsed = Date.now() - peersLoadingSince;
+  const delay = Math.max(0, 520 - elapsed);
+
+  setTimeout(() => {
+    if (seq !== peersLoadingSeq) return;
+    el.hidden = true;
+    el.style.setProperty('display', 'none', 'important');
+    el.setAttribute('aria-busy', 'false');
+    document.body.classList.remove('peers-is-loading');
+  }, delay);
+}
+function renderPeers(container, count = 2) {
+  if (!container) return;
+  if (container.dataset.skeleton === '1') return;
+  container.dataset.skeleton = '1';
+
+  const parts = [];
+  for (let i = 0; i < count; i++) {
+    parts.push(`
+      <div class="peer-skeleton-card">
+        <div class="peer-skel-row">
+          <div class="peer-skel-line" style="width:120px"></div>
+          <div class="peer-skel-line" style="width:90px"></div>
+          <div class="peer-skel-line" style="width:180px"></div>
+          <div class="peer-skel-line" style="width:140px"></div>
+        </div>
+        <div style="height:10px"></div>
+        <div class="peer-skel-line" style="width:60%"></div>
+      </div>
+    `);
+  }
+  container.innerHTML = parts.join('');
+}
+
+function clearPeers(container) {
+  if (!container) return;
+
+  container.querySelectorAll('.peer-skeleton-card').forEach(el => el.remove());
+
+  if (container.dataset.skeleton === '1') {
+    delete container.dataset.skeleton;
+  }
+}
+
+async function refreshPeers(opts = {}) {
+  const ifaceId   = (opts.ifaceId ?? SELECTED_IFACE_ID);
+  const abortPrev = !!opts.abortPrev;
+  const quiet    = !!opts.quiet;
+  if (isRefreshing && !abortPrev) return;
+  if (abortPrev && peersFetchCtrl) {
+  try { peersFetchCtrl.abort('superseded-by-newer-request'); } catch {}
+}
+
+  const ctrl = new AbortController();
+  peersFetchCtrl = ctrl;
+  const { signal } = ctrl;
+
+  const scopeId = getScopeId();
+  const container = $('.peers-container');
+  const title = scopeId ? 'Loading peers from node…' : 'Loading peers…';
+  const sub   = scopeId ? 'Contacting node and syncing runtime.' : 'Fetching latest peers list.';
+
+  let showTimer = null;
+
+if (!quiet && opts.forceLoading) {
+  peersLoading(true, title, sub);
+  if (container) {
+    container.innerHTML = '';
+    renderPeers(container, 2);
+  }
+} else if (!quiet) {
+  showTimer = setTimeout(() => {
+    peersLoading(true, title, sub);
+
+    if (container && (!container.children || container.children.length === 0)) {
+      renderPeers(container, 2);
+    }
+  }, 250);
+}
+
+  isRefreshing = true;
+
+  const timeoutMs = scopeId ? REFRESH_TIMEOUT_MS_NODE : REFRESH_TIMEOUT_MS_LOCAL;
+    const killer = setTimeout(() => {
+    try { ctrl.abort('refresh-timeout'); } catch {}
+  }, timeoutMs);
+
+
+  try {
+    const base = scopeId
+      ? `/api/nodes/${encodeURIComponent(scopeId)}/peers`
+      : '/api/peers';
+
+    const url = new URL(base, window.location.origin);
+
+    if (scopeId) {
+      if (typeof SELECTED_IFACE_NAME === 'string' && SELECTED_IFACE_NAME) {
+        url.searchParams.set('iface', SELECTED_IFACE_NAME);
+      }
+    } else {
+      if (ifaceId) url.searchParams.set('iface_id', String(ifaceId));
+    }
+
+    const res = await fetch(url.toString(), {
+      method: 'GET',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { 'Accept': 'application/json' },
+      signal
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+
+    const data = await res.json();
+    const peers = data?.peers || [];
+    window._peers = peers;
+    renderPeerSummary(peers);
+
+    if (!container) return;
+
+    clearPeers(container);
+
+    const existing = new Map(
+      $$('.peer-card', container).map(c => [String(c.dataset.id || ''), c])
+    );
+
+    if (peers.length === 0) {
+      container.innerHTML = `
+        <div class="empty-peers empty-peers-pro">
+          <span class="empty-peers-icon"><i class="fas fa-user-plus" aria-hidden="true"></i></span>
+          <div class="empty-peers-copy">
+            <strong>No peers in this interface</strong>
+            <small>Create a peer or switch interface/scope to view existing peers.</small>
+          </div>
+        </div>`;
+    } else {
+      container.querySelector('.empty-peers')?.remove();
+
+      peers.forEach((p, i) => {
+
+        const idStr = peerDomKey(p);
+
+        let card = existing.get(idStr);
+
+        if (!card) {
+          const wrap = document.createElement('div');
+          wrap.innerHTML = cardHTML(p, i);
+          card = wrap.firstElementChild;
+          container.appendChild(card);
+        } else {
+          const expected = container.children[i];
+          if (expected !== card) container.insertBefore(card, expected || null);
+        }
+
+        updateCard(card, p, i);
+        existing.delete(idStr);
+      });
+
+      for (const [, leftover] of existing) leftover.remove();
+    }
+
+    applyPagi?.();
+    refreshDelay = 5000;
+
+  } catch (err) {
+  const msg = String(err?.message || err || '');
+  const abortMsg = msg.toLowerCase();
+  const isRefreshTimeout =
+  abortMsg.includes('refresh-timeout') ||
+  signal?.reason === 'refresh-timeout';
+
+  const benignAbort =
+  err?.name === 'AbortError' ||
+  abortMsg.includes('superseded-by-newer-request') ||
+  abortMsg.includes('superseded-by-newer-poll');
+
+if (benignAbort && !isRefreshTimeout) return;
+
+if (isRefreshTimeout) {
+  const now = Date.now();
+
+  if (now - lastErrorAt > 60000) {
+    console.warn(
+      `Peers refresh timed out after ${timeoutMs}ms`,
+      {
+        ifaceId,
+        scopeId,
+        url: typeof url !== 'undefined' ? url.toString() : ''
+      }
+    );
+
+    toastSafe?.(
+      'Peer status refresh took too long. The panel will retry automatically.',
+      'warning'
+    );
+
+    lastErrorAt = now;
+  }
+
+  refreshDelay = Math.min(
+    MAX_BACKOFF_MS,
+    Math.max(10000, Math.round(refreshDelay * 1.7))
+  );
+
+  return;
+}
+
+    const now = Date.now();
+    if (now - lastErrorAt > 60000) {
+      console.warn('Peers refresh failed:', msg);
+      toastSafe?.('Temporary connection hiccup while refreshing peers. Retrying…', 'warning');
+      lastErrorAt = now;
+    }
+
+    const next = Math.min(MAX_BACKOFF_MS, Math.max(7500, Math.round(refreshDelay * 1.7)));
+    refreshDelay = next;
+
+  } finally {
+    clearTimeout(killer);
+
+    if (showTimer) clearTimeout(showTimer);
+    peersLoading(false);
+    if (container) clearPeers(container);
+
+    firstLoad = true;
+    isRefreshing = false;
+
+    const jitter = Math.floor(Math.random() * 800);
+    nextSchedule(refreshDelay + jitter);
+
+    if (peersFetchCtrl && peersFetchCtrl.signal === signal) {
+      peersFetchCtrl = null;
+    }
+  }
+}
+
+async function postEdit(path, okMsg, failMsg) {
+  const pathId =
+    (String(path).match(/\/peer\/([^/]+)/) || [])[1];
+
+  const actionCard = pathId
+    ? document.querySelector(
+        `.peer-card[data-id="${CSS.escape(
+          decodeURIComponent(pathId)
+        )}"]`
+      )
+    : null;
+
+  if (actionCard) {
+    actionCard.classList.add(
+      'peer-actions-open',
+      'peer-actions-locked',
+      'peer-action-busy'
+    );
+  }
+
+  const loader = toastSafe(
+    okMsg.replace('Peer ', '') + '…',
+    'info',
+    true
+  );
+
+  try {
+    const response = await fetch(apiPath(path), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json'
+      }
+    });
+
+    const contentType = String(
+      response.headers.get('content-type') || ''
+    ).toLowerCase();
+
+    let payload = {};
+
+    if (contentType.includes('application/json')) {
+      payload = await response.json().catch(() => ({}));
+    } else {
+      const text = await response.text().catch(() => '');
+
+      if (text) {
+        payload = {
+          detail: text
+        };
+      }
+    }
+
+    if (!response.ok) {
+      const message =
+        payload.detail ||
+        payload.message ||
+        payload.error ||
+        payload.hint ||
+        `HTTP ${response.status}`;
+
+      const error = new Error(message);
+      error.status = response.status;
+      error.payload = payload;
+
+      throw error;
+    }
+
+    toastSafe(
+      payload.message || okMsg,
+      'success'
+    );
+
+    if (/\/reset_data$/.test(path)) {
+      const id =
+        (path.match(/\/peer\/([^/]+)/) || [])[1];
+
+      const peer = id
+        ? findPeer(decodeURIComponent(id))
+        : null;
+
+      if (peer) {
+        peer.used_effective_bytes = 0;
+        peer.used_bytes_total = 0;
+        peer.used_bytes = 0;
+        peer.used_bytes_db = 0;
+      }
+    }
+
+    await refreshPeers({
+      abortPrev: true
+    });
+
+    return payload;
+
+  } catch (error) {
+    console.error('Peer action failed:', {
+      path,
+      status: error?.status,
+      payload: error?.payload,
+      error
+    });
+
+    const message =
+      error?.payload?.detail ||
+      error?.payload?.message ||
+      error?.payload?.error ||
+      error?.message ||
+      failMsg;
+
+    toastSafe(
+      `${failMsg}: ${message}`,
+      'error'
+    );
+
+    return null;
+
+  } finally {
+    if (loader) {
+      loader.classList.add('hide');
+
+      setTimeout(() => {
+        try {
+          loader.remove();
+        } catch (_) {}
+      }, 500);
+    }
+
+    if (actionCard) {
+      actionCard.classList.remove(
+        'peer-action-busy'
+      );
+
+      setTimeout(() => {
+        actionCard.classList.remove(
+          'peer-actions-locked'
+        );
+
+        if (
+          !actionCard.matches(':hover') &&
+          !actionCard.contains(document.activeElement)
+        ) {
+          actionCard.classList.remove(
+            'peer-actions-open'
+          );
+        }
+      }, 500);
+    }
+  }
+}
+
+async function getShortLink(idOrPeer) {
+  const peer =
+    typeof idOrPeer === 'object'
+      ? idOrPeer
+      : (typeof findPeer === 'function' ? findPeer(idOrPeer) : null);
+
+  if (peer?.shortlink) {
+    return peer.shortlink;
+  }
+
+  const apiKey = document.querySelector('meta[name="api-key"]')?.content?.trim() || '';
+
+  const headers = {};
+  if (apiKey) headers['X-API-KEY'] = apiKey;
+
+  const path =
+    typeof apiPeerPath === 'function'
+      ? apiPeerPath(peer || idOrPeer, '/shortlink')
+      : `/api/peer/${encodeURIComponent(String(idOrPeer))}/shortlink`;
+
+  const r = await fetch(api(path), {
+    method: 'GET',
+    credentials: 'same-origin',
+    headers
+  });
+
+  if (!r.ok) {
+    const txt = await r.text().catch(() => '');
+    throw new Error(`HTTP ${r.status}: ${txt}`);
+  }
+
+  const j = await r.json();
+  return j.url;
+}
+
+  async function userLink(e, id) {
+    try {
+      const peer = typeof findPeer === 'function' ? findPeer(id) : null;
+      const url = await getShortLink(peer || id);
+      if (e.ctrlKey || e.metaKey) {
+        window.open(url, '_blank', 'noopener');
+        toastSafe('Opened user link', 'success');
+      } else {
+        const ok = await copyTo(url);
+        toastSafe(ok ? 'User link copied' : 'Copy failed (blocked by browser)', ok ? 'success' : 'error');
+      }
+    } catch (err) {
+      console.error(err);
+      toastSafe('Failed to get user link', 'error');
+    }
+  }
+  async function handleClick(e) {
+    const btn = e.target.closest('button[data-peer-action="link"]'); if (!btn) return;
+    if (e.button !== 1) return;
+    const id = btn.dataset.id || btn.closest('.peer-card')?.dataset.id; if (!id) return;
+    e.preventDefault();
+    try {
+      const peer = typeof findPeer === 'function' ? findPeer(id) : null;
+      const url = await getShortLink(peer || id);
+      window.open(url, '_blank', 'noopener');
+      toastSafe('Opened user link', 'success');
+    } catch (err) {
+      console.error(err);
+      toastSafe('Failed to get user link', 'error');
+    }
+  }
+
+  let editModal, editForm;
+  function openEdit(id) {
+    const p = findPeer(id); if (!p) return;
+    if (!editModal) editModal = $('#edit-peer-modal');
+    if (!editForm)  editForm  = $('#edit-peer-form');
+    if (!editForm) return;
+
+    editForm.dataset.id = id;
+    editForm.name && (editForm.name.value = p.name || '');
+    const sel = editForm.querySelector('select[name="address"]'); if (sel) sel.innerHTML = `<option value="${p.address}">${p.address}</option>`;
+    editForm.allowed_ips && (editForm.allowed_ips.value = p.allowed_ips || '0.0.0.0/0, ::/0');
+    if (editForm.allowed_ips) editForm.allowed_ips.dataset.autoInternalNetworks = '';
+    const editInternalToggle = document.getElementById('edit-include-internal-network');
+    if (editInternalToggle) editInternalToggle.checked = false;
+
+    if (editForm.endpoint) {
+      editForm.endpoint.value = p.endpoint_saved || '';
+      editForm.endpoint.placeholder = p.endpoint || 'Leave empty to use interface default';
+    }
+    editForm.peer_endpoint && (editForm.peer_endpoint.value = p.peer_endpoint || '');
+    editForm.persistent_keepalive && (editForm.persistent_keepalive.value = p.persistent_keepalive || '');
+    editForm.mtu && (editForm.mtu.value = p.mtu || '');
+    editForm.dns && (editForm.dns.value = p.dns || '');
+    editForm.data_limit_value && (editForm.data_limit_value.value = p.data_limit || '');
+    editForm.data_limit_unit && (editForm.data_limit_unit.value = p.limit_unit || 'Mi');
+
+    const raw = parseFloat(p.time_limit_days || 0);
+    let d = 0, h = 0;
+    if (isFinite(raw) && raw > 0) { d = Math.floor(raw); h = Math.floor((raw - d) * 24 + 1e-9); h = Math.max(0, Math.min(23, h)); }
+    if (editForm.time_limit_days)  editForm.time_limit_days.value  = d || '';
+    if (editForm.time_limit_hours) editForm.time_limit_hours.value = h || '';
+
+    if (editForm.start_on_first_use) editForm.start_on_first_use.checked = !!p.start_on_first_use;
+    if (editForm.unlimited)          editForm.unlimited.checked          = !!p.unlimited;
+    if (editForm.phone_number)       editForm.phone_number.value         = p.phone_number || '';
+    if (editForm.telegram_id)        editForm.telegram_id.value          = p.telegram_id || '';
+
+    $('#edit-close')?.addEventListener('click', () => closeModal(editModal), { once: true });
+    openModal(editModal);
+    attachEndpoint(editModal);
+  }
+
+  async function subEdit(e) {
+  e.preventDefault();
+
+  const id = editForm.dataset.id;
+
+  applyEditInternalNetworks();
+
+  const form = new FormData(editForm);
+  const data = Object.fromEntries(form.entries());
+
+  if (editForm.start_on_first_use) {
+    data.start_on_first_use = !!editForm.start_on_first_use.checked;
+  }
+
+  if (editForm.unlimited) {
+    data.unlimited = !!editForm.unlimited.checked;
+  }
+
+  const loader = toastSafe(
+    'Updating peer…',
+    'info',
+    true
+  );
+
+  try {
+    const r = await fetch(
+      api(`/api/peer/${id}`),
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify(data)
+      }
+    );
+
+    /*
+     * Always try to read the backend response.
+     *
+     * This is important because app.py can return useful
+     * errors such as:
+     *
+     *   invalid_fixed_endpoint
+     *   invalid_endpoint
+     *   duplicate_address
+     *   ...
+     *
+     * Previously the UI discarded this information and only
+     * displayed "HTTP 400".
+     */
+    const result = await r.json().catch(() => ({}));
+
+    if (!r.ok) {
+      const detail =
+        result?.detail ||
+        result?.message ||
+        result?.error ||
+        `HTTP ${r.status}`;
+
+      const err = new Error(detail);
+
+      err.status = r.status;
+      err.payload = result;
+
+      throw err;
+    }
+
+    toastSafe(
+      result?.message || 'Peer updated',
+      'success'
+    );
+
+    closeModal(editModal);
+
+    await refreshPeers({
+      abortPrev: true
+    });
+
+  } catch (err) {
+    console.error(
+      'Peer edit failed:',
+      err,
+      err?.payload || ''
+    );
+
+    let message =
+      err?.message ||
+      'Unknown error';
+
+    /*
+     * Give the most common peer-edit validation errors
+     * clearer wording.
+     */
+    const code = err?.payload?.error;
+
+    if (code === 'invalid_fixed_endpoint') {
+      message =
+        err?.payload?.detail ||
+        'Invalid fixed client endpoint. Use host:port format.';
+    }
+
+    else if (code === 'invalid_endpoint') {
+      message =
+        err?.payload?.detail ||
+        'Invalid endpoint. Use host:port format.';
+    }
+
+    else if (
+      code === 'duplicate_address' ||
+      code === 'address_in_use'
+    ) {
+      message =
+        err?.payload?.detail ||
+        'That peer IP address is already in use.';
+    }
+
+    else if (code === 'invalid_address') {
+      message =
+        err?.payload?.detail ||
+        'The selected peer IP address is invalid.';
+    }
+
+    toastSafe(
+      `Update failed: ${message}`,
+      'error',
+      true
+    );
+
+  } finally {
+    if (loader) {
+      loader.classList.add('hide');
+
+      setTimeout(
+        () => loader.remove(),
+        500
+      );
+    }
+  }
+}
+
+  // QR & logs 
+  let qrModal;
+  function itsQR() {
+    if (qrModal) return qrModal;
+    qrModal = document.createElement('div'); qrModal.className = 'modal peer-qr-modal'; qrModal.id = 'qr-modal';
+    qrModal.setAttribute('aria-hidden', 'true');
+    qrModal.innerHTML = `
+      <div class="modal-content qr-modal-card" role="dialog" aria-modal="true" aria-labelledby="qr-modal-title">
+        <button class="modal-close" id="qr-close" aria-label="Close" type="button">&times;</button>
+        <div class="qr-modal-head">
+          <span class="qr-modal-icon"><i class="fas fa-qrcode" aria-hidden="true"></i></span>
+          <div>
+            <h2 id="qr-modal-title">Peer QR</h2>
+            <small>Scan in WireGuard or download the PNG.</small>
+          </div>
+        </div>
+        <div id="qr-img-wrap" class="qr-img-wrap"><span class="qr-loading"><i class="fas fa-circle-notch fa-spin"></i> Generating…</span></div>
+        <div class="qr-actions">
+          <a id="qr-download" class="btn" download="peer.png"><i class="fas fa-download"></i> Download</a>
+          <button id="qr-copy-text" class="btn secondary" type="button"><i class="fas fa-clipboard"></i> Copy config</button>
+        </div>
+      </div>`;
+    document.body.appendChild(qrModal);
+    $('#qr-close', qrModal)?.addEventListener('click', () => closeModal(qrModal));
+  }
+  async function openQR(id) {
+    itsQR(); openModal(qrModal);
+    const wrap = $('#qr-img-wrap', qrModal); wrap.innerHTML = '<span class="qr-loading"><i class="fas fa-circle-notch fa-spin"></i> Generating…</span>';
+    const dl = $('#qr-download', qrModal); dl.removeAttribute('href'); dl.removeAttribute('download');
+    try {
+      let r = await fetch(apiPeerPath(id, '/config_qr'), { credentials: 'same-origin' });
+      if (r.status === 501) r = await fetch(apiPeerPath(id, '/config_qr?install=1'), { credentials: 'same-origin' });
+      if (r.ok) {
+        const blob = await r.blob(); const url = URL.createObjectURL(blob);
+        wrap.innerHTML = `<img src="${url}" alt="Peer WireGuard QR code">`;
+        dl.href = url; dl.download = `peer-${id}.png`;
+        $('#qr-copy-text', qrModal).onclick = async () => {
+          const txt = await (await fetch(apiPeerPath(id, '/config'), { credentials: 'same-origin' })).text();
+          await copyTo(txt); toastSafe('Config copied to clipboard', 'success');
+        };
+        return;
+      }
+      const txt = await (await fetch(apiPeerPath(id, '/config'), { credentials: 'same-origin' })).text();
+      wrap.innerHTML = `<textarea readonly style="width:100%;height:260px;border:0;outline:none;background:#f9fafb;border-radius:8px;padding:8px">${txt}</textarea>`;
+      dl.style.display = 'none';
+      $('#qr-copy-text', qrModal).onclick = async () => { await copyTo(txt); toastSafe('Config copied to clipboard', 'success'); };
+      toastSafe('Server QR not available. Installed? Try again.', 'error');
+    } catch {
+      wrap.innerHTML = '<span style="color:#e11d48">Failed to generate QR</span>';
+    }
+  }
+
+  let logsModal;
+  const eventIcon = { created:'fa-plus-circle', enabled:'fa-play', disabled:'fa-ban', expired:'fa-hourglass-end', limit_reached:'fa-gauge-high', edited:'fa-edit', reset_data:'fa-tachometer-alt', reset_timer:'fa-history', first_use:'fa-bolt' };
+  function itsLogs() {
+    if (logsModal) return logsModal;
+    logsModal = document.createElement('div'); logsModal.className = 'modal'; logsModal.id = 'logs-modal';
+    logsModal.innerHTML = `
+      <div class="modal-content logs">
+        <button type="button" class="modal-close" id="logs-close" aria-label="Close peer logs" title="Close" style="position:absolute;top:10px;right:10px">&times;</button>
+        <div class="logs-header" style="display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem;">
+          <i class="fas fa-list"></i><h2 style="margin:0">Peer Logs</h2>
+        </div>
+        <div class="logs-chips" id="logs-chips" style="display:flex;gap:.5rem;flex-wrap:wrap;margin:.25rem 0 .5rem;"></div>
+        <div class="logs-tabs" style="display:flex;gap:6px;margin:.5rem 0 .25rem;border-bottom:1px solid #e5e7eb;">
+          <button class="logs-tab active" data-tab="overview" style="background:transparent;border:0;cursor:pointer;padding:8px 12px;border-radius:8px 8px 0 0;font-weight:600;">Overview</button>
+          <button class="logs-tab" data-tab="events" style="background:transparent;border:0;cursor:pointer;padding:8px 12px;border-radius:8px 8px 0 0;font-weight:600;">Events</button>
+        </div>
+        <div class="tab-panel active" data-panel="overview" style="padding-top:.75rem;">
+          <div id="logs-overview" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;"></div>
+        </div>
+        <div class="tab-panel" data-panel="events" style="padding-top:.75rem;display:none;">
+          <div class="logs-tools" style="display:flex;gap:8px;align-items:center;margin:4px 0 8px;">
+            <input id="logs-search" class="input" placeholder="Search events/details…" style="height:34px;">
+            <select id="logs-type" class="input" style="height:34px;width:160px">
+              <option value="">All events</option>
+              <option value="created">created</option>
+              <option value="edited">edited</option>
+              <option value="enabled">enabled</option>
+              <option value="disabled">disabled</option>
+              <option value="expired">expired</option>
+              <option value="limit_reached">limit_reached</option>
+              <option value="reset_data">reset_data</option>
+              <option value="reset_timer">reset_timer</option>
+              <option value="first_use">first_use</option>
+            </select>
+            <button id="logs-export" class="btn secondary xs" title="Export CSV">
+          <i class="fas fa-file-arrow-down"></i> CSV
+          </button>
+          <button id="logs-clear" class="btn danger xs" title="Clear events">
+          <i class="fas fa-eraser"></i> Clear
+          </button>
+          </div>
+          <div class="logs-table-wrap" style="max-height:360px;overflow:auto;border:1px solid #e5e7eb;border-radius:8px;">
+            <table class="logs-table" style="width:100%;border-collapse:separate;border-spacing:0;font-size:.95em;">
+              <thead>
+                <tr>
+                  <th style="position:sticky;top:0;background:#f8fafc;text-align:left;padding:.55rem .5rem;border-bottom:1px solid #e5e7eb;">Time</th>
+                  <th style="position:sticky;top:0;background:#f8fafc;text-align:left;padding:.55rem .5rem;border-bottom:1px solid #e5e7eb;">Event</th>
+                  <th style="position:sticky;top:0;background:#f8fafc;text-align:left;padding:.55rem .5rem;border-bottom:1px solid #e5e7eb;">Details</th>
+                  <th style="position:sticky;top:0;background:#f8fafc;text-align:left;padding:.55rem .5rem;border-bottom:1px solid #e5e7eb;">When</th>
+                </tr>
+              </thead>
+              <tbody id="logs-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(logsModal);
+    $('#logs-close', logsModal)?.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      closeModal(logsModal);
+    });
+    logsModal.addEventListener('click', e => {
+      const closeButton = e.target.closest('#logs-close, .modal-close');
+      if (closeButton && logsModal.contains(closeButton)) {
+        e.preventDefault();
+        e.stopPropagation();
+        closeModal(logsModal);
+        return;
+      }
+      if (e.target === logsModal) closeModal(logsModal);
+      const t = e.target.closest('.logs-tab'); if (!t) return;
+      $$('.logs-tab', logsModal).forEach(b => b.classList.toggle('active', b === t));
+      $$('.tab-panel', logsModal).forEach(p => p.style.display = p.dataset.panel === t.dataset.tab ? 'block' : 'none');
+    });
+  }
+function openLogs(id) {
+  itsLogs();
+  openModal(logsModal);
+
+  logsModal.dataset.peerId = String(id);
+
+  const $in = (sel, root = document) => root.querySelector(sel);
+
+  const renderChips = () => {
+    const pid  = logsModal.dataset.peerId;
+    const peer = findPeer(pid) || {};
+
+    const liveMiB  = Math.round(((Number(peer.used_bytes)    || 0)) / 1048576);
+    const dbMiB    = Math.round(((Number(peer.used_bytes_db) || 0)) / 1048576);
+    const totalMiB = dbMiB + Math.max(0, liveMiB);
+
+    const limit  = peer ? fmtLimit(peer) : '–';
+    const remain = peer
+      ? (peer.unlimited ? 'Unlimited' : fmtAmountMiB(remainingMiB(peer), peer.limit_unit))
+      : '–';
+
+    const chips = $in('#logs-chips', logsModal);
+    if (!chips) return;
+    chips.innerHTML = `
+      <span class="logs-chip"><i class="fas fa-gauge"></i> Usage: ${fmtAmountMiB(liveMiB, 'Mi')} used</span>
+      <span class="logs-chip"><i class="fas fa-database"></i> Remaining: ${remain}</span>
+      <span class="logs-chip"><i class="fas fa-layer-group"></i> Limit: ${limit}</span>
+      <span class="logs-chip">
+        <i class="fas fa-chart-column"></i>
+        Total usage: ${fmtAmountMiB(totalMiB, 'Mi')}
+        <button id="logs-clear-total" class="chip-btn" title="Clear lifetime total">
+          <i class="fas fa-eraser"></i>
+        </button>
+      </span>
+    `;
+  };
+
+  renderChips();
+  if (logsModal._chipsTimer) clearInterval(logsModal._chipsTimer);
+  logsModal._chipsTimer = setInterval(renderChips, 2000);
+
+  if (!logsModal._hideObs) {
+    logsModal._hideObs = new MutationObserver(() => {
+      const hidden = logsModal.getAttribute('aria-hidden') === 'true';
+      if (hidden && logsModal._chipsTimer) {
+        clearInterval(logsModal._chipsTimer);
+        logsModal._chipsTimer = null;
+      }
+    });
+    logsModal._hideObs.observe(logsModal, { attributes: true, attributeFilter: ['aria-hidden'] });
+  }
+
+  const peer = findPeer(id) || {};
+  const epStr = endpointDisplay(peer);
+  $in('#logs-overview', logsModal).innerHTML = `
+    <div class="logs-pill"><i class="fas fa-user"></i><strong>Name:</strong>&nbsp;${peer.name ?? '–'}</div>
+    <div class="logs-pill"><i class="fas fa-network-wired"></i><strong>Address:</strong>&nbsp;${peer.address ?? '–'}</div>
+    <div class="logs-pill"><i class="fas fa-globe"></i><strong>Endpoint:</strong>&nbsp;${epStr || '–'}</div>
+    <div class="logs-pill"><i class="fas fa-shield-halved"></i><strong>Interface:</strong>&nbsp;${peer.iface ?? '–'}</div>
+    <div class="logs-pill"><i class="fas fa-clock"></i><strong>Status:</strong>&nbsp;${cap(peer.status ?? '–')}</div>
+  `;
+
+  const logsFetchUrl = api(apiPeerPath(id, '/logs'));
+  const logsTbodyLoading = $in('#logs-tbody', logsModal);
+  if (logsTbodyLoading) {
+    logsTbodyLoading.innerHTML = `<tr><td colspan="4" class="logs-empty"><i class="fas fa-circle-notch fa-spin"></i><span>Loading peer events…</span></td></tr>`;
+  }
+
+  fetch(logsFetchUrl, { credentials: 'same-origin' })
+    .then(async r => {
+      if (!r.ok) {
+        const txt = await r.text().catch(() => '');
+        throw new Error(`HTTP ${r.status}: ${txt.slice(0, 160)}`);
+      }
+      return r.json();
+    })
+    .then(({ logs }) => {
+      const overview = $in('#logs-overview', logsModal);
+      const toLocalStr = (val) => {
+        if (val == null) return null;
+        if (typeof val === 'number') return fmtLocalTs(normEpoch(val));
+        const t = tsFrom(val); return t ? fmtLocalTs(t) : String(val);
+      };
+
+      const createdEvt  = (logs || []).find(l => l.event === 'created');
+      const createdWhen = toLocalStr(createdEvt?.time) || (peer.created_at ? toLocalStr(peer.created_at) : null);
+      if (createdWhen) overview.innerHTML += `<div class="logs-pill"><i class="fas fa-calendar-plus"></i><strong>Created:</strong>&nbsp;${createdWhen}</div>`;
+
+      const firstUsedEvt  = (logs || []).find(l => l.event === 'first_use');
+      const firstUsedWhen = peer.first_used_at ? toLocalStr(peer.first_used_at) : toLocalStr(firstUsedEvt?.time);
+      if (firstUsedWhen) overview.innerHTML += `<div class="logs-pill"><i class="fas fa-bolt"></i><strong>First used:</strong>&nbsp;${firstUsedWhen}</div>`;
+
+      const expiresWhen = peer.expires_at ? toLocalStr(peer.expires_at) : null;
+      if (expiresWhen) overview.innerHTML += `<div class="logs-pill"><i class="fas fa-hourglass-end"></i><strong>Expires:</strong>&nbsp;${expiresWhen}</div>`;
+
+      const tbody = $in('#logs-tbody', logsModal);
+      const draw = () => {
+        const q    = ($in('#logs-search', logsModal).value || '').toLowerCase();
+        const type = $in('#logs-type',   logsModal).value || '';
+        const rows = (logs || [])
+          .filter(l => (!type || l.event === type))
+          .filter(l =>
+            !q ||
+            (l.event || '').toLowerCase().includes(q) ||
+            (l.details || '').toLowerCase().includes(q) ||
+            String(l.time || '').toLowerCase().includes(q)
+          )
+          .map(l => {
+            const ic = eventIcon[l.event] || 'fa-info-circle';
+            const t  = (typeof l.time === 'number') ? normEpoch(l.time) : tsFrom(l.time);
+            const when = t ? fmtLocalTs(t) : (l.time || '');
+            const whenRel = (() => {
+              const s = Math.max(0, nowSec() - (t ?? nowSec()));
+              const r = (n,u) => `${n} ${u}${n>1?'s':''} ago`;
+              if (s < 60) return r(s,'sec');
+              const m = Math.floor(s/60); if (m < 60) return r(m,'min');
+              const h = Math.floor(m/60); if (h < 24) return r(h,'hour');
+              const d = Math.floor(h/24); if (d < 30) return r(d,'day');
+              const mo = Math.floor(d/30); if (mo < 12) return r(mo,'month');
+              return r(Math.floor(mo/12),'year');
+            })();
+            return `
+              <tr>
+                <td style="padding:.5rem .5rem;border-bottom:1px solid #f1f5f9;white-space:nowrap">${when}</td>
+                <td style="padding:.5rem .5rem;border-bottom:1px solid #f1f5f9;">
+                  <span style="display:inline-flex;align-items:center;gap:.45rem;font-weight:600;">
+                    <i class="fas ${ic}"></i>${l.event.replace(/_/g,' ')}
+                  </span>
+                </td>
+                <td style="padding:.5rem .5rem;border-bottom:1px solid #f1f5f9;">${(l.details || '').replace(/\n/g, '<br>')}</td>
+                <td style="padding:.5rem .5rem;border-bottom:1px solid #f1f5f9;white-space:nowrap;color:#64748b">${whenRel}</td>
+              </tr>`;
+          }).join('');
+        tbody.innerHTML = rows || `<tr><td colspan="4" class="logs-empty"><i class="fas fa-inbox"></i><span>No events yet</span><small>New actions for this peer will appear here.</small></td></tr>`;
+      };
+      draw();
+      $in('#logs-search', logsModal).oninput = debounce(draw, 120);
+      $in('#logs-type',   logsModal).onchange = draw;
+
+      const btnExport = $in('#logs-export', logsModal);
+      if (btnExport) {
+        btnExport.onclick = () => {
+          const csv = ['time,event,details'].concat((logs || []).map(l => {
+            const det = (l.details || '').replaceAll('"', '""').replaceAll('\n', '; ');
+            return `"${l.time}","${l.event}","${det}"`;
+          })).join('\n');
+          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a'); a.href = url; a.download = `peer-${id}-logs.csv`;
+          document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+        };
+      }
+
+      const btnClear = $in('#logs-clear', logsModal);
+      if (btnClear) {
+        btnClear.onclick = async () => {
+          const ok = await confirmBoxIn(logsModal, 'Clear all events for this peer?', {
+            title: 'Clear peer events',
+            yesText: 'Clear',
+            noText: 'Cancel'
+          });
+          if (!ok) return;
+          try {
+            const r = await fetch(api(apiPeerPath(id, '/logs')), { method: 'DELETE', credentials: 'same-origin' });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            toastSafe('Events cleared', 'success');
+            $in('#logs-tbody', logsModal).innerHTML = `<tr><td colspan="4" class="logs-empty"><i class="fas fa-inbox"></i><span>No events yet</span><small>New actions for this peer will appear here.</small></td></tr>`;
+          } catch {
+            toastSafe('Failed to clear events', 'error');
+          }
+        };
+      }
+    })
+    .catch((err) => {
+      console.error('Peer logs failed:', err);
+      const tbody = $in('#logs-tbody', logsModal);
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="4" class="logs-empty error"><i class="fas fa-triangle-exclamation"></i><span>Could not load peer logs</span><small>${String(err.message || err).replace(/[<>]/g, '')}</small></td></tr>`;
+      }
+      toastSafe('Failed to load logs', 'error');
+    });
+
+  if (!logsModal._bindClearTotal) {
+    logsModal.addEventListener('click', async (ev) => {
+      const btn = ev.target.closest('#logs-clear-total');
+      if (!btn) return;
+
+      const pid = logsModal.dataset.peerId;
+      const ok = await confirmBoxIn(logsModal, 'Clear lifetime total usage for this peer?', {
+        title: 'Clear total usage',
+        yesText: 'Clear',
+        noText: 'Cancel'
+      });
+      if (!ok) return;
+
+      try {
+        const r = await fetch(api(apiPeerPath(pid, '/clear_total')), {
+          method: 'POST',
+          credentials: 'same-origin'
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+
+        const p = findPeer(pid);
+        if (p) p.used_bytes_db = 0;  
+        renderChips();               
+        toastSafe('Lifetime total cleared', 'success');
+      } catch {
+        toastSafe('Failed to clear lifetime total', 'error');
+      }
+    });
+    logsModal._bindClearTotal = true;
+  }
+}
+
+let confirmModal, confirmText, confirmYes, confirmNo;
+
+function uiConfirm() {
+  if (confirmModal) return;
+
+  confirmModal = document.createElement('div');
+  confirmModal.className = 'peer-confirm-overlay';
+  confirmModal.innerHTML = `
+    <div class="peer-confirm-card" role="dialog" aria-modal="true" aria-labelledby="peer-confirm-title">
+      <div class="peer-confirm-icon" id="peer-confirm-icon"><i class="fas fa-circle-question"></i></div>
+      <div class="peer-confirm-copy">
+        <h3 id="peer-confirm-title">Confirm action</h3>
+        <p id="confirm-text"></p>
+      </div>
+      <div class="peer-confirm-actions">
+        <button id="confirm-no" class="btn secondary" type="button">Cancel</button>
+        <button id="confirm-yes" class="btn" type="button">Continue</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(confirmModal);
+
+  confirmText = confirmModal.querySelector('#confirm-text');
+  confirmYes  = confirmModal.querySelector('#confirm-yes');
+  confirmNo   = confirmModal.querySelector('#confirm-no');
+}
+
+  function ensureModalBackdrop(m) {
+  if (!m) return null;
+  let bd = m.querySelector(':scope > .modal-backdrop');
+  if (!bd) {
+    bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    m.prepend(bd);
+  }
+  if (!bd.__peerBackdropBound) {
+    bd.addEventListener('click', () => closeModal(m));
+    bd.__peerBackdropBound = true;
+  }
+  return bd;
+}
+
+let modalOpenEpoch = 0;
+
+function beginModalOpenRequest() {
+  modalOpenEpoch += 1;
+  return modalOpenEpoch;
+}
+
+function modalOpenRequestIsCurrent(ticket) {
+  return ticket === modalOpenEpoch;
+}
+
+  function openModal(m) {
+  document.querySelectorAll('.modal.open').forEach(el => el.classList.remove('open'));
+  if (m) {
+    ensureModalBackdrop(m);
+    m.classList.add('open');
+    document.body.classList.add('modal-open');
+
+    if (document.documentElement.classList.contains('wg-mobile-shell')) {
+      const scrollers = [
+        m.querySelector('#create-peer-form'),
+        m.querySelector('#edit-peer-form'),
+        m.querySelector('#bulk-form'),
+        m.querySelector('.peerx-dialog'),
+        m.querySelector('.modal-content')
+      ].filter(Boolean);
+      requestAnimationFrame(() => {
+        scrollers.forEach(el => {
+          try { el.scrollTop = 0; el.scrollLeft = 0; } catch (_) {}
+        });
+      });
+    }
+  }
+}
+
+function closeModal(m) {
+  modalOpenEpoch += 1;
+
+  if (m) m.classList.remove('open');
+  if (!document.querySelector('.modal.open')) {
+    document.body.classList.remove('modal-open');
+  }
+}
+
+function confirmBox(msg, opts = {}) {
+  uiConfirm();
+  return new Promise(resolve => {
+    const danger = /delete|remove|clear|blocked|stop/i.test(String(msg || '') + ' ' + String(opts.title || ''));
+    const titleEl = confirmModal.querySelector('#peer-confirm-title');
+    const iconBox = confirmModal.querySelector('#peer-confirm-icon');
+    const icon = iconBox?.querySelector('i');
+
+    titleEl.textContent = opts.title || (danger ? 'Confirm dangerous action' : 'Confirm action');
+    confirmText.textContent = msg || '';
+    confirmYes.textContent = opts.yesText || (danger ? 'Continue' : 'Yes');
+    confirmNo.textContent = opts.noText || 'Cancel';
+    confirmYes.classList.toggle('danger', danger);
+    iconBox?.classList.toggle('danger', danger);
+    confirmModal.classList.toggle('is-danger', danger);
+    if (icon) icon.className = `fas ${danger ? 'fa-trash-can' : 'fa-circle-question'}`;
+
+    confirmModal.classList.add('open');
+    document.body.classList.add('modal-open');
+
+    const y = () => done(true), n = () => done(false);
+    function done(ans) {
+      confirmModal.classList.remove('open');
+      confirmModal.classList.remove('is-danger');
+      if (!document.querySelector('.modal.open')) document.body.classList.remove('modal-open');
+      confirmYes.removeEventListener('click', y);
+      confirmNo.removeEventListener('click', n);
+      document.removeEventListener('keydown', keyHandler);
+      resolve(ans);
+    }
+    function keyHandler(e) {
+      if (e.key === 'Escape') { e.preventDefault(); done(false); }
+      if (e.key === 'Enter')  { e.preventDefault(); done(true); }
+    }
+    confirmYes.addEventListener('click', y);
+    confirmNo.addEventListener('click', n);
+    document.addEventListener('keydown', keyHandler);
+    confirmModal.addEventListener('click', e => { if (e.target === confirmModal) done(false); }, { once: true });
+    setTimeout(() => confirmYes?.focus?.({preventScroll:true}), 30);
+  });
+}
+
+function confirmBoxIn(container, msg, opts = {}) {
+  const {
+    title   = 'Confirm action',
+    yesText = 'Continue',
+    noText  = 'Cancel'
+  } = opts;
+
+  return new Promise(resolve => {
+    const host = (container?.querySelector?.('.modal-content')) || container || document.body;
+    if (host && getComputedStyle(host).position === 'static') host.style.position = 'relative';
+
+    host.querySelectorAll('.cbi-wrap').forEach(w => w.remove());
+
+    const danger = /delete|remove|clear|danger/i.test(String(title) + ' ' + String(msg));
+    const wrap = document.createElement('div');
+    wrap.className = 'cbi-wrap';
+    Object.assign(wrap.style, {
+      position: 'absolute',
+      inset: '0',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 80,
+      padding: '16px'
+    });
+
+    wrap.innerHTML = `
+      <div class="cbi-card" role="dialog" aria-modal="true" aria-label="${peerEsc(title)}" tabindex="-1">
+        <div class="cbi-icon ${danger ? 'danger' : ''}"><i class="fas ${danger ? 'fa-triangle-exclamation' : 'fa-circle-question'}"></i></div>
+        <div class="cbi-copy">
+          <h3>${peerEsc(title)}</h3>
+          <p>${peerEsc(msg || '')}</p>
+        </div>
+        <div class="cbi-actions">
+          <button class="btn secondary" id="cbi-no" type="button">${peerEsc(noText)}</button>
+          <button class="btn ${danger ? 'danger' : ''}" id="cbi-yes" type="button">${peerEsc(yesText)}</button>
+        </div>
+      </div>
+    `;
+
+    host.appendChild(wrap);
+
+    const inner = wrap.querySelector('.cbi-card');
+    const yes = wrap.querySelector('#cbi-yes');
+    const no  = wrap.querySelector('#cbi-no');
+
+    setTimeout(() => { inner?.focus(); yes?.focus(); }, 10);
+
+    const done = (ans) => {
+      try { wrap.remove(); } catch {}
+      resolve(ans);
     };
 
-    if (payload.send_to_telegram && !payload.telegram_chat_id) {
-      throw new Error("Choose an active Telegram recipient before saving.");
-    }
+    yes.addEventListener('click', () => done(true),  { once:true });
+    no .addEventListener('click', () => done(false), { once:true });
 
-    const resp = await fetch("/api/backup/schedule", {
-      method: "POST",
-      headers: csrfHeaders(true),
-      body: JSON.stringify(payload),
-      credentials: "same-origin",
-      cache: "no-store",
+    wrap.addEventListener('click', (e) => {
+      if (e.target === wrap) done(false);
     });
 
-    const j = await resp.json().catch(() => ({}));
-    if (!resp.ok || !j.ok) {
-      throw new Error(j.error || j.message || "Could not save schedule.");
-    }
+    inner.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); done(false); }
+      if (e.key === 'Enter' && document.activeElement !== no) {
+        e.preventDefault(); done(true);
+      }
+    });
+  });
+}
 
-    lastSchedule = j;
-    if (selTz) selTz.value = j.timezone || "UTC";
-    const tzDisplay = $("#tz-display");
-    if (tzDisplay) tzDisplay.textContent = j.timezone || "UTC";
-    setNext(j.next_run);
+function modalOpen(el) {
+  return !!(el && getComputedStyle(el).display !== 'none' && el.classList.contains('open'));
+}
+function refreshDefaultIface(iface) {
+  applyInternalNetworks('peer', document.getElementById('peer-allowed-ips'), iface);
+  const ep = document.querySelector('#peer-modal input[name="endpoint"]');
+  if (!ep || !iface) return;
+  if (ep.dataset.lastIface !== String(SELECTED_IFACE_ID)) ep.dataset.userEdited = '0';
+  if (ep.dataset.userEdited === '1') return;
 
-    if (!quiet) {
-      toast.success("Auto-backup schedule saved.");
-      await loadAll();
-    }
+  ep.value = '';
+  ep.placeholder = 'Leave empty to use interface default';
+  ep.dataset.lastIface = String(SELECTED_IFACE_ID);
 
-    return j;
+  ep.addEventListener('input', () => { ep.dataset.userEdited = '1'; }, { once: true });
+}
+
+function refreshBulkIface(iface) {
+  applyInternalNetworks('bulk', document.getElementById('bulk-allowed_ips'), iface);
+  const input = document.querySelector('#bulk-endpoint');
+  if (!input || !iface) return;
+  if (input.dataset.lastIface !== String(SELECTED_IFACE_ID)) input.dataset.userEdited = '0';
+  if (input.dataset.userEdited === '1') return;
+
+  input.value = '';
+  input.placeholder = 'Leave empty to use interface default';
+  input.dataset.lastIface = String(SELECTED_IFACE_ID);
+
+  input.addEventListener('input', () => { input.dataset.userEdited = '1'; }, { once: true });
+}
+
+function renderInterfaceDropdown() {
+  const trigger = document.getElementById('iface-picker-trigger');
+  const menu = document.getElementById('iface-picker-menu');
+  const label = document.getElementById('iface-picker-label');
+  const selectedDot = document.getElementById('iface-picker-dot');
+
+  if (!trigger || !menu || !label) {
+    return;
   }
 
-  async function saveAndRunSchedule() {
-    showRunLoader(
-      "Saving schedule",
-      "The schedule and selected Telegram recipient are being saved."
+  const interfaces = Array.isArray(window.IFACES)
+    ? window.IFACES
+    : [];
+
+  const selected = typeof findIfaceById === 'function'
+    ? findIfaceById(SELECTED_IFACE_ID)
+    : interfaces.find(
+        iface => String(iface.id) === String(SELECTED_IFACE_ID)
+      );
+
+  if (selected) {
+    label.textContent = selected.name || 'Interface';
+
+    if (selectedDot) {
+      selectedDot.className = [
+        'iface-dot',
+        selected.is_up === true
+          ? 'up'
+          : selected.is_up === false
+            ? 'down'
+            : ''
+      ].filter(Boolean).join(' ');
+    }
+  } else {
+    label.textContent = interfaces.length
+      ? 'Select interface'
+      : 'No interfaces';
+
+    if (selectedDot) {
+      selectedDot.className = 'iface-dot';
+    }
+  }
+
+  menu.replaceChildren();
+
+  if (!interfaces.length) {
+    const empty = document.createElement('div');
+    empty.className = 'iface-picker-empty';
+
+    const icon = document.createElement('i');
+    icon.className = 'fas fa-circle-info';
+    icon.setAttribute('aria-hidden', 'true');
+
+    const copy = document.createElement('span');
+    copy.textContent = 'No WireGuard interfaces available';
+
+    empty.append(icon, copy);
+    menu.appendChild(empty);
+
+    trigger.disabled = true;
+    setIfacePickerOpen(false);
+    return;
+  }
+
+  trigger.disabled = false;
+
+  const fragment = document.createDocumentFragment();
+
+  for (const iface of interfaces) {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'iface-picker-option';
+    option.setAttribute('role', 'option');
+
+    const active =
+      String(iface.id) ===
+      String(SELECTED_IFACE_ID);
+
+    option.classList.toggle('is-active', active);
+    option.setAttribute(
+      'aria-selected',
+      active ? 'true' : 'false'
     );
-    setRunStep("save", "active");
 
-    await saveSchedule(null, { quiet: true });
-    setRunStep("save", "done");
-    setRunStep("build", "active");
+    const stateClass =
+      iface.is_up === true
+        ? 'up'
+        : iface.is_up === false
+          ? 'down'
+          : '';
 
-    await triggerAutoBackup({ useLoader: true });
-  }
+    const stateLabel =
+      iface.is_up === true
+        ? 'Online'
+        : iface.is_up === false
+          ? 'Offline'
+          : 'Unknown';
 
-  async function triggerAutoBackup(options = {}) {
-    const useLoader = !!options.useLoader;
-    const telegramEnabled = autoTelegramEnabled();
-    const telegramChatId = autoTelegramAdmin?.value || "";
+    const main = document.createElement('span');
+    main.className = 'iface-picker-option-main';
 
-    if (telegramEnabled && !telegramChatId) {
-      throw new Error("Choose an active Telegram recipient first.");
+    const dot = document.createElement('span');
+    dot.className = [
+      'iface-dot',
+      stateClass
+    ].filter(Boolean).join(' ');
+    dot.setAttribute('aria-hidden', 'true');
+
+    const copy = document.createElement('span');
+    copy.className = 'iface-picker-option-copy';
+
+    const top = document.createElement('span');
+    top.className = 'iface-picker-option-top';
+
+    const name = document.createElement('strong');
+    name.textContent =
+      String(iface.name || iface.id || 'Interface');
+
+    const state = document.createElement('span');
+    state.className = [
+      'iface-picker-state',
+      stateClass
+    ].filter(Boolean).join(' ');
+    state.textContent = stateLabel;
+
+    top.append(name, state);
+
+    const meta = document.createElement('small');
+
+    const details = [];
+
+    if (iface.address) {
+      details.push(String(iface.address));
     }
 
-    const params = new URLSearchParams({
-      auto: "1",
-      wg: autoWG?.checked ? "1" : "0",
-      tg: telegramEnabled ? "1" : "0",
-      chat_id: telegramChatId,
+    if (iface.listen_port) {
+      details.push(`UDP ${iface.listen_port}`);
+    }
+
+    meta.textContent = details.length
+      ? details.join('  •  ')
+      : 'WireGuard interface';
+
+    copy.append(top, meta);
+    main.append(dot, copy);
+    option.appendChild(main);
+
+    if (active) {
+      const check = document.createElement('span');
+      check.className = 'iface-picker-check';
+      check.setAttribute('aria-label', 'Selected');
+      check.innerHTML =
+        '<i class="fas fa-check" aria-hidden="true"></i>';
+
+      option.appendChild(check);
+    }
+
+    option.addEventListener('click', () => {
+      setIfacePickerOpen(false);
+
+      setIfaceById(
+        iface.id,
+        {
+          fromUser: true,
+          force: true
+        }
+      );
     });
 
-    if (useLoader) {
-      updateRunLoader(
-        "Creating complete backup",
-        "Collecting database, panel settings, local WireGuard configs, and reachable node configs."
+    fragment.appendChild(option);
+  }
+
+  menu.appendChild(fragment);
+}
+
+function setIfacePickerOpen(open) {
+  const picker = document.getElementById('iface-picker');
+  const trigger = document.getElementById('iface-picker-trigger');
+  const menu = document.getElementById('iface-picker-menu');
+
+  if (!trigger || !menu) return;
+
+  const next = !!open && !trigger.disabled;
+  trigger.setAttribute('aria-expanded', next ? 'true' : 'false');
+  menu.hidden = !next;
+  picker?.classList.toggle('is-open', next);
+
+  if (next) {
+    const active = menu.querySelector('.iface-picker-option.is-active');
+    (active || menu.querySelector('.iface-picker-option'))?.focus({ preventScroll: true });
+  }
+}
+
+
+function toggleIfacePicker() {
+  const trigger =
+    document.getElementById(
+      'iface-picker-trigger'
+    );
+
+  if (!trigger) {
+    return;
+  }
+
+  const open =
+    trigger.getAttribute(
+      'aria-expanded'
+    ) === 'true';
+
+  setIfacePickerOpen(!open);
+}
+
+
+document.getElementById('iface-picker-trigger')?.addEventListener('click', event => {
+  event.preventDefault();
+  event.stopPropagation();
+  toggleIfacePicker();
+});
+
+document.getElementById('iface-picker-trigger')?.addEventListener('keydown', event => {
+  if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    setIfacePickerOpen(true);
+  }
+});
+
+document.getElementById('iface-picker-menu')?.addEventListener('keydown', event => {
+  const options = Array.from(
+    document.querySelectorAll('#iface-picker-menu .iface-picker-option')
+  );
+  if (!options.length) return;
+
+  const index = Math.max(0, options.indexOf(document.activeElement));
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    options[(index + 1) % options.length].focus();
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    options[(index - 1 + options.length) % options.length].focus();
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    setIfacePickerOpen(false);
+    document.getElementById('iface-picker-trigger')?.focus();
+  }
+});
+
+
+document.addEventListener(
+  'click',
+  event => {
+    if (
+      !event.target.closest(
+        '.iface-picker'
+      )
+    ) {
+      setIfacePickerOpen(false);
+    }
+  }
+);
+
+let interfaceListCache = {
+  scope: null,
+  at: 0,
+  data: null
+};
+
+async function refreshInterfacesUI({
+  keepSelection = true,
+  updateCreate = true,
+  updateBulk = true,
+  force = false
+} = {}) {
+  const prevScope = window._lastScopeId ?? '';
+  const scopeId   = getScopeId();
+
+  let interfaces = [];
+
+  try {
+    const now = Date.now();
+    const cacheFresh =
+      !force &&
+      interfaceListCache.data &&
+      interfaceListCache.scope === scopeId &&
+      now - interfaceListCache.at < 2500;
+
+    let raw;
+
+    if (cacheFresh) {
+      raw = interfaceListCache.data;
+    } else {
+      const path = scopeId
+        ? `/api/nodes/${encodeURIComponent(scopeId)}/interfaces`
+        : `/api/get-interfaces`;
+
+      const r = await fetch(
+        path,
+        {
+          credentials: 'same-origin',
+          cache: 'no-store'
+        }
+      );
+
+      if (!r.ok) {
+        throw new Error(`HTTP ${r.status}`);
+      }
+
+      const j = await r.json();
+
+      raw = Array.isArray(j.interfaces)
+        ? j.interfaces
+        : [];
+
+      interfaceListCache = {
+        scope: scopeId,
+        at: now,
+        data: raw
+      };
+    }
+
+    interfaces = raw
+      .map((it, idx) => {
+        const syntheticId = scopeId
+          ? `n${scopeId}:${it.name || idx}`
+          : String(it.id ?? idx);
+
+        return {
+          ...it,
+          id: it.id != null
+            ? String(it.id)
+            : syntheticId,
+          name: it.name || it.id || `wg${idx}`
+        };
+      })
+      .sort((a, b) =>
+        String(a.name || '').localeCompare(
+          String(b.name || ''),
+          undefined,
+          {
+            numeric: true,
+            sensitivity: 'base'
+          }
+        )
+      );
+  } catch (e) {
+    console.warn(
+      'refreshInterfacesUI: failed to fetch interfaces',
+      e
+    );
+
+    return;
+  }
+
+  IFACES = interfaces;
+  window.IFACES = interfaces;
+
+  const scopeChanged = (scopeId !== prevScope);
+  const keepId = (!scopeChanged && keepSelection) ? SELECTED_IFACE_ID : null;
+  const stillThere = keepId && IFACES.some(i => String(i.id) === String(keepId));
+  const newSel = stillThere ? keepId : (IFACES[0]?.id ?? null);
+
+  if (newSel != null) {
+    SELECTED_IFACE_ID = String(newSel); 
+    if (typeof setIfaceById === 'function') {
+      setIfaceById(SELECTED_IFACE_ID);
+    }
+  }
+
+  window._lastScopeId = scopeId;
+
+  const getIfaceById = (id) => {
+    if (typeof findIfaceById === 'function') return findIfaceById(id);
+    return IFACES.find(i => String(i.id) === String(id));
+  };
+
+  if (updateCreate) {
+    const createModal = document.querySelector('#peer-modal');
+    if (createModal) {
+      const ifaceIdForCreate = SELECTED_IFACE_ID ?? newSel;
+      const iface = getIfaceById(ifaceIdForCreate);
+
+      if (iface) {
+        const addrSel = createModal.querySelector('#create-address-select')
+                       || createModal.querySelector('select[name="address"]');
+        if (addrSel) {
+          const prevAddr = addrSel.value;
+          const options = (iface.available_ips || []).map(ip => `<option value="${ip}">${ip}</option>`).join('');
+          addrSel.innerHTML = options;
+
+          if (prevAddr && [...addrSel.options].some(o => o.value === prevAddr)) {
+            addrSel.value = prevAddr;
+          }
+
+          const hiddenAddr = document.getElementById('create-address');
+          if (hiddenAddr) hiddenAddr.value = addrSel.value || '';
+        }
+
+        if (typeof refreshDefaultIface === 'function') {
+          refreshDefaultIface(iface);
+        }
+      }
+
+      const hiddenIface = document.getElementById('create-iface-id');
+      if (hiddenIface) hiddenIface.value = scopeId ? '' : String(SELECTED_IFACE_ID ?? '');
+    }
+  }
+
+  if (updateBulk) {
+    const bulkModal = document.getElementById('bulk-modal');
+    const bulkIfaceSel =
+      document.getElementById('bulk-iface') ||
+      bulkModal?.querySelector('select[name="iface"]') ||
+      bulkModal?.querySelector('select[name="iface_id"]');
+
+    if (bulkIfaceSel) {
+      const prev = bulkIfaceSel.value || (SELECTED_IFACE_ID != null ? String(SELECTED_IFACE_ID) : null);
+
+      bulkIfaceSel.innerHTML = IFACES
+        .map(i => `<option value="${i.id}">${i.name ?? i.id}</option>`)
+        .join('');
+
+      const chosen =
+        (prev && [...bulkIfaceSel.options].some(o => o.value === String(prev))) ? String(prev) :
+        (newSel != null) ? String(newSel) :
+        (bulkIfaceSel.options[0]?.value || '');
+
+      if (chosen) bulkIfaceSel.value = chosen;
+
+      bulkIfaceSel.addEventListener('change', () => {
+        const iface = getIfaceById(bulkIfaceSel.value);
+        if (iface && typeof refreshBulkIface === 'function') {
+          refreshBulkIface(iface);
+        }
+      });
+
+      const iface0 = getIfaceById(bulkIfaceSel.value);
+      if (iface0 && typeof refreshBulkIface === 'function') {
+        refreshBulkIface(iface0);
+      }
+    }
+
+        if (
+      typeof bulkAvailability === 'function'
+    ) {
+      bulkAvailability();
+    }
+  }
+
+  /*
+   * Render once, after selection and modal helpers are synchronized.
+   * This avoids the old startup sequence rendering the same interface
+   * controls several times.
+   */
+  if (typeof renderInterfaceDropdown === 'function') {
+    renderInterfaceDropdown();
+  }
+}
+
+window.refreshInterfacesUI = refreshInterfacesUI;
+  let IFACES = [];               
+  let SELECTED_IFACE_ID = null;   
+  let SELECTED_IFACE_NAME = null; 
+  let peersFetchAbort = null;
+
+  function findIfaceById(id) { return IFACES.find(i => String(i.id) === String(id)); }
+  function setIfaceById(id, opts = {}) {
+  const o = opts || {};
+  const fromUser = !!o.fromUser;
+  const force    = !!o.force;
+
+  const key = String(id);
+  const wasSame = (SELECTED_IFACE_ID != null && String(SELECTED_IFACE_ID) === key);
+
+  if (wasSame && fromUser && !force) {
+  if (
+    typeof updateActiveInterface === 'function'
+  ) {
+    updateActiveInterface();
+  }
+
+  if (
+    typeof renderInterfaceDropdown === 'function'
+  ) {
+    renderInterfaceDropdown();
+  }
+
+  return;
+}
+
+  SELECTED_IFACE_ID = key;
+
+  const iface = (typeof findIfaceById === 'function')
+    ? findIfaceById(key)
+    : (Array.isArray(IFACES) ? IFACES.find(i => String(i.id) === key) : null);
+
+  SELECTED_IFACE_NAME = iface ? (iface.name || null) : null;
+
+  try { localStorage.setItem('selected_iface_id', String(SELECTED_IFACE_ID)); } catch (_) {}
+
+  if (typeof updateActiveInterface === 'function') updateActiveInterface();
+
+  try { pagination.page = 1; savePagination?.(); } catch (_) {}
+
+  const hiddenIface = document.getElementById('create-iface-id');
+  if (hiddenIface) hiddenIface.value = getScopeId() ? '' : String(SELECTED_IFACE_ID);
+
+  if (iface && typeof refreshDefaultIface === 'function') {
+    const ep = document.querySelector('#peer-modal input[name="endpoint"]');
+    if (ep && ep.dataset.userEdited !== '1') refreshDefaultIface(iface);
+  }
+
+  if (iface && typeof refreshBulkIface === 'function') {
+    const epBulk = document.querySelector('#bulk-endpoint');
+    if (epBulk && epBulk.dataset.userEdited !== '1') refreshBulkIface(iface);
+  }
+
+  const addrSel = document.querySelector('#peer-modal #create-address-select, #peer-modal select[name="address"]');
+  if (addrSel && iface?.available_ips) {
+    setCreateAddressOptions(iface.available_ips || []);
+  }
+
+    if (fromUser && typeof refreshPeers === 'function') {
+    const cont =
+      document.querySelector(
+        '.peers-container'
+      );
+
+    peersLoading(
+      true,
+      `Loading ${iface?.name || 'interface'}…`,
+      'Refreshing peers for the selected interface.'
+    );
+
+    if (cont) {
+      cont.innerHTML = '';
+
+      renderPeers(
+        cont,
+        1
       );
     }
 
-    const r = await fetch(`/api/backup/full?${params.toString()}`, {
-      headers: csrfHeaders(),
-      credentials: "same-origin",
-      cache: "no-store",
+    refreshPeers({
+      abortPrev: true,
+      forceLoading: true
     });
-    if (!r.ok) throw new Error("Could not create auto backup.");
 
-    if (useLoader) {
-      setRunStep("build", "done");
-      if (telegramEnabled) {
-        setRunStep("telegram", "active");
-        updateRunLoader(
-          "Finalizing Telegram delivery",
-          "The backup was created. Waiting for Telegram delivery confirmation."
+  } else {
+    applyPagi?.();
+  }
+
+  /*
+   * Synchronize the visible custom dropdown
+   * with SELECTED_IFACE_ID / SELECTED_IFACE_NAME.
+   */
+  if (
+    typeof renderInterfaceDropdown === 'function'
+  ) {
+    renderInterfaceDropdown();
+  }
+}
+
+function makeIfaceBar() {
+  /*
+   * Legacy compatibility hook.
+   *
+   * The visible interface selector is now #iface-picker.
+   * Keep #iface-bar in the DOM for older helper code, but do not build a
+   * second set of interface buttons or call setIfaceById() from here.
+   */
+  const host = document.getElementById('iface-bar');
+
+  if (host && host.childNodes.length) {
+    host.replaceChildren();
+  }
+}
+
+function updateActiveInterface() {
+  const chip = $('#active-iface-chip');
+  const iface = findIfaceById(SELECTED_IFACE_ID);
+
+  document.querySelectorAll('.iface-btn').forEach(btn => {
+    const on = iface && String(btn.dataset.id) === String(iface.id);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btn.classList.toggle('is-active', !!on);
+  });
+
+  if (chip && iface) {
+    const isUp = (typeof iface.is_up === 'boolean') ? iface.is_up : null;
+    const dot = isUp != null
+      ? `<span class="iface-dot ${isUp ? 'up' : 'down'}" title="${isUp ? 'Interface up' : 'Interface down'}"></span>`
+      : `<span class="iface-dot" title="Interface status unknown"></span>`;
+    const state = isUp == null ? 'Unknown' : (isUp ? 'Up' : 'Down');
+    const port = iface.listen_port ?? '–';
+
+    chip.innerHTML = `
+      ${dot}
+      <span class="iface-active-copy">
+        <strong>${state}</strong>
+        <small>UDP :${port}</small>
+      </span>
+    `;
+    chip.style.display = 'inline-flex';
+
+    const row = chip.parentElement;
+    if (row) {
+      row.classList.add('iface-active-row');
+      let tgl = row.querySelector('#iface-toggle-btn');
+      if (!tgl) {
+        tgl = document.createElement('button');
+        tgl.id = 'iface-toggle-btn';
+        tgl.type = 'button';
+        tgl.className = 'iface-action-btn';
+        row.appendChild(tgl);
+      }
+
+      tgl.innerHTML = iface.is_up
+        ? `<i class="fas fa-power-off" aria-hidden="true"></i><span>Disable</span>`
+        : `<i class="fas fa-play" aria-hidden="true"></i><span>Enable</span>`;
+      tgl.dataset.intent = iface.is_up ? 'down' : 'up';
+      tgl.disabled = false;
+
+      let del = row.querySelector('#iface-delete-btn');
+      if (!del) {
+        del = document.createElement('button');
+        del.id = 'iface-delete-btn';
+        del.className = 'iface-action-btn danger';
+        del.type = 'button';
+        row.appendChild(del);
+      }
+
+      del.innerHTML = `<i class="fas fa-trash" aria-hidden="true"></i><span>Delete</span>`;
+      del.disabled = false;
+      del.title = `Delete interface ${iface.name}`;
+    }
+  } else if (chip) {
+    chip.style.display = 'none';
+    const row = chip.parentElement;
+    row?.classList.remove('iface-active-row');
+    row?.querySelector('#iface-toggle-btn')?.remove();
+    row?.querySelector('#iface-delete-btn')?.remove();
+  }
+
+  const createBtn = $('#create-peer-btn');
+  if (createBtn && iface) {
+    createBtn.innerHTML = `<i class="fas fa-plus"></i> Create peer <span class="btn-mini-on">${iface.name}</span>`;
+  }
+}
+async function ifaceToggle(e) {
+  const btn = e.target.closest('#iface-toggle-btn');
+  if (!btn) return;
+
+  const iface = findIfaceById(SELECTED_IFACE_ID);
+  if (!iface) return;
+
+  const goingDown = (btn.dataset.intent === 'down');
+  btn.disabled = true;
+
+  const scopeId = getScopeId();
+  let path;
+  if (scopeId) {
+
+    path = `/api/nodes/${encodeURIComponent(scopeId)}/iface/${encodeURIComponent(iface.name)}/${goingDown ? 'down' : 'up'}`;
+  } else {
+    
+    path = `/api/iface/${encodeURIComponent(iface.id)}/${goingDown ? 'disable' : 'enable'}`;
+  }
+
+  const loader = toastSafe((goingDown ? 'Disabling' : 'Enabling') + ' interface…', 'info', true);
+  try {
+    const r = await fetch(path, { method: 'POST', credentials: 'same-origin' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+
+    await refreshInterfacesUI({ keepSelection: true, updateCreate: true, updateBulk: true });
+    updateActiveInterface?.();
+    bulkOptions?.();
+    bulkAvailability?.();
+    refreshPeers?.({ abortPrev: true });
+
+    toastSafe(goingDown ? 'Interface disabled' : 'Interface enabled', 'success');
+  } catch (err) {
+    console.error(err);
+    toastSafe('Interface toggle failed', 'error');
+  } finally {
+    loader?.classList?.add('hide');
+    setTimeout(() => loader?.remove?.(), 500);
+    btn.disabled = false;
+  }
+}
+async function ifaceDelete(e) {
+  const btn = e.target.closest('#iface-delete-btn');
+  if (!btn) return;
+
+  const iface = findIfaceById(SELECTED_IFACE_ID);
+  if (!iface) {
+    toastSafe('No interface selected.', 'error');
+    return;
+  }
+
+  const scopeId = getScopeId();
+  const isNode = !!scopeId;
+
+  btn.disabled = true;
+
+  const loader = toastSafe(
+    'Checking interface before deletion…',
+    'info',
+    true
+  );
+
+  async function sendDelete(deletePeers = false) {
+    const url = isNode
+      ? `/api/nodes/${encodeURIComponent(scopeId)}/iface/${encodeURIComponent(iface.name)}`
+      : `/api/iface/${encodeURIComponent(iface.id)}`;
+
+    const response = await fetch(url, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify({
+        delete_peers: !!deletePeers,
+        force: !!deletePeers,
+      }),
+    });
+
+    const payload = await response
+      .json()
+      .catch(() => ({}));
+
+    return {
+      response,
+      payload,
+    };
+  }
+
+  try {
+    /*
+     * First request is intentionally non-destructive.
+     *
+     * If peers are attached, the server returns HTTP 409
+     * with interface_has_peers.
+     */
+    const check = await sendDelete(false);
+
+    if (
+      check.response.status === 409 &&
+      check.payload?.error === 'interface_has_peers'
+    ) {
+      const peerCount = Number(
+        check.payload.peer_count || 0
+      );
+
+      const subscriptionLinks = Number(
+        check.payload.subscription_link_count || 0
+      );
+
+      const scopeLabel = isNode
+        ? 'node interface'
+        : 'interface';
+
+      const message =
+        `Delete ${scopeLabel} "${iface.name}"?\n\n` +
+        `This interface currently has ${peerCount} peer` +
+        `${peerCount === 1 ? '' : 's'}.` +
+        (
+          subscriptionLinks > 0
+            ? `\n${subscriptionLinks} subscription link` +
+              `${subscriptionLinks === 1 ? '' : 's'} ` +
+              `will also be affected.`
+            : ''
+        ) +
+        `\n\nDeleting the interface will permanently delete ` +
+        `all peers assigned to it and remove its WireGuard configuration.` +
+        `\n\nThis cannot be undone.`;
+
+      const confirmed = await confirmBox(message);
+
+      if (!confirmed) {
+        toastSafe(
+          'Interface deletion cancelled',
+          'info'
+        );
+        return;
+      }
+
+      const deleted = await sendDelete(true);
+
+      if (!deleted.response.ok) {
+        throw new Error(
+          deleted.payload?.detail ||
+          deleted.payload?.message ||
+          deleted.payload?.error ||
+          `HTTP ${deleted.response.status}`
+        );
+      }
+
+    } else if (check.response.ok) {
+      /*
+       * An interface with zero peers was already deleted
+       * by the first DELETE request.
+       */
+    } else {
+      throw new Error(
+        check.payload?.detail ||
+        check.payload?.message ||
+        check.payload?.error ||
+        `HTTP ${check.response.status}`
+      );
+    }
+
+    toastSafe(
+      `Interface ${iface.name} deleted`,
+      'success'
+    );
+
+    SELECTED_IFACE_ID = null;
+    SELECTED_IFACE_NAME = null;
+
+    try {
+      localStorage.removeItem(
+        isNode
+          ? `peer_iface_node_${scopeId}`
+          : 'peer_iface_local'
+      );
+    } catch (_) {}
+
+    await refreshInterfacesUI({
+      keepSelection: false,
+      updateCreate: true,
+      updateBulk: true,
+    });
+
+    updateActiveInterface?.();
+    bulkOptions?.();
+    bulkAvailability?.();
+
+    refreshPeers?.({
+      abortPrev: true,
+    });
+
+  } catch (error) {
+    console.error(
+      'Interface deletion failed',
+      error
+    );
+
+    toastSafe(
+      `Interface delete failed: ${
+        error?.message || String(error)
+      }`,
+      'error'
+    );
+
+  } finally {
+    loader?.classList?.add('hide');
+
+    setTimeout(
+      () => loader?.remove?.(),
+      400
+    );
+
+    btn.disabled = false;
+  }
+}
+//  BULK 
+let bulkModal = null, bulkForm = null;
+
+function bulkOptions() {
+  if (!bulkModal) return;
+  const sel = bulkModal.querySelector('#bulk-iface');
+  if (!sel) return;
+
+  let html = '';
+  if (Array.isArray(window.IFACES) && IFACES.length) {
+    html = IFACES.map(i => `<option value="${i.id}">${i.name}</option>`).join('');
+  } else {
+    const src = document.querySelector('#create-iface-id') ||
+                document.querySelector('#peer-modal select[name="iface"]') ||
+                document.querySelector('#peer-modal select[name="iface_id"]');
+    if (src) html = src.innerHTML;
+  }
+
+  const newHash = html;
+  if (sel.dataset.lastHash !== newHash) {
+    const prevValue = sel.value;
+    sel.innerHTML = html;
+    sel.dataset.lastHash = newHash;
+    if (SELECTED_IFACE_ID != null) sel.value = String(SELECTED_IFACE_ID);
+    else if (prevValue) sel.value = prevValue;
+  } else {
+    if (SELECTED_IFACE_ID != null) sel.value = String(SELECTED_IFACE_ID);
+  }
+}
+
+function bulkAvailability() {
+  if (!bulkModal) return;
+  const iface = (typeof findIfaceById === 'function')
+    ? findIfaceById(SELECTED_IFACE_ID)
+    : (Array.isArray(IFACES) ? IFACES.find(i => String(i.id) === String(SELECTED_IFACE_ID)) : null);
+  if (!iface) return;
+
+  const cntEl = bulkModal.querySelector('#bulk-available-ips');
+  const free  = Array.isArray(iface.available_ips) ? iface.available_ips.length : 0;
+  if (cntEl) cntEl.textContent = String(free);
+
+  const countInput = bulkModal.querySelector('#bulk-count');
+  if (countInput) {
+    if (free > 0) countInput.setAttribute('max', String(free));
+    else countInput.removeAttribute('max');
+  }
+
+  if (typeof refreshBulkDefaults === 'function') {
+    refreshBulkDefaults(iface);
+  }
+
+  const bulkIfaceSel = bulkModal.querySelector('#bulk-iface');
+  if (bulkIfaceSel && SELECTED_IFACE_ID != null) {
+    bulkIfaceSel.value = String(SELECTED_IFACE_ID);
+  }
+}
+
+function resolveBulkModal() {
+  if (!bulkModal) bulkModal = document.querySelector('#bulk-modal');
+  if (!bulkForm)  bulkForm  = document.querySelector('#bulk-form');
+
+  if (bulkModal && !bulkModal.dataset.wired) {
+    bulkModal.querySelector('#bulk-close')?.addEventListener('click', () => closeModal(bulkModal));
+    bulkModal.querySelector('#bulk-close-btn')?.addEventListener('click', () => closeModal(bulkModal));
+    if (!bulkForm) bulkForm = bulkModal.querySelector('#bulk-form');
+    if (bulkForm) bulkForm.onsubmit = submitBulk;
+    if (typeof attachEndpoint === 'function') attachEndpoint(bulkModal);
+    bulkModal.dataset.wired = '1';
+  }
+
+  bulkOptions();
+  bulkAvailability();
+}
+
+function itsBulkModal() {
+  if (bulkModal && bulkForm) return;
+  resolveBulkModal();
+}
+
+async function refreshBulkDefaults(iface) {
+  const countEl = $('#bulk-available-ips');
+  const count = Array.isArray(iface.available_ips) ? iface.available_ips.length : 0;
+  if (countEl) countEl.textContent = String(count);
+
+  const countInp = $('#bulk-count');
+  if (countInp) {
+    if (count > 0) countInp.setAttribute('max', String(count));
+    else countInp.removeAttribute('max');
+  }
+
+  const epBulkPreset = $('#bulk-endpoint');
+  if (epBulkPreset && !epBulkPreset.value.trim()) {
+    epBulkPreset.placeholder = 'Leave empty to use interface default';
+  }
+  const mtu = $('#bulk-mtu'); if (mtu && iface.mtu != null) mtu.value = iface.mtu;
+  const dns = $('#bulk-dns'); if (dns && iface.dns) dns.value = iface.dns;
+}
+
+async function openBulk() {
+  itsBulkModal();
+
+  if (typeof refreshInterfacesUI === 'function') {
+    await refreshInterfacesUI({ keepSelection: true, updateCreate: false, updateBulk: true });
+  }
+
+  resolveBulkModal?.();
+  if (typeof bulkOptions === 'function') bulkOptions();
+  if (typeof bulkAvailability === 'function') bulkAvailability();
+
+  if (!bulkModal) {
+    console.error('Bulk modal not found');
+    toastSafe('Bulk dialog not found on page.', 'error');
+    return;
+  }
+
+  const bulkIfaceSel = bulkModal.querySelector('#bulk-iface, select[name="iface"], select[name="iface_id"]');
+  if (bulkIfaceSel && typeof SELECTED_IFACE_ID !== 'undefined' && SELECTED_IFACE_ID != null) {
+    bulkIfaceSel.value = String(SELECTED_IFACE_ID);
+  }
+
+  const iface = (typeof findIfaceById === 'function') ? findIfaceById(SELECTED_IFACE_ID) : null;
+  if (iface && typeof refreshBulkDefaults === 'function') {
+    refreshBulkDefaults(iface); 
+  }
+
+  openModal(bulkModal);
+  wireContainedPickers();
+  if (typeof attachEndpoint === 'function') attachEndpoint(bulkModal);
+}
+
+function updateBulkChange() {
+  if (!bulkModal || getComputedStyle(bulkModal).display === 'none') return;
+  const iface = findIfaceById(SELECTED_IFACE_ID);
+  if (!iface) return;
+  const cntEl = bulkModal.querySelector('#bulk-available-ips');
+  const free = Array.isArray(iface.available_ips) ? iface.available_ips.length : 0;
+  if (cntEl) cntEl.textContent = String(free);
+  const bulkIfaceSel = bulkModal.querySelector('#bulk-iface');
+  if (bulkIfaceSel) bulkIfaceSel.value = String(SELECTED_IFACE_ID);
+}
+
+async function submitBulk(ev) {
+  ev.preventDefault();
+
+  const fd = new FormData(bulkForm);
+const scopeId = getScopeId();
+
+const ifaceSel = document.querySelector('#bulk-iface, #bulk-modal select[name="iface"], #bulk-modal select[name="iface_id"]');
+const rawIfaceId = (ifaceSel && ifaceSel.value) || (typeof SELECTED_IFACE_ID !== 'undefined' ? SELECTED_IFACE_ID : '');
+
+const iface = typeof findIfaceById === 'function' ? findIfaceById(rawIfaceId) : null;
+
+if (!iface) {
+  toastSafe('No interface selected.', 'error');
+  return;
+}
+
+const ifaceId = scopeId ? rawIfaceId : Number(rawIfaceId);
+
+if (!scopeId && !ifaceId) {
+  toastSafe('No interface selected.', 'error');
+  return;
+}
+
+  const avail = Array.isArray(iface.available_ips) ? iface.available_ips.length : 0;
+  const asked = Number(document.querySelector('#bulk-count')?.value || 0);
+  if (!asked || asked < 1) { toastSafe('Please enter how many peers to create.', 'error'); return; }
+  let finalCount = asked;
+  if (avail && asked > avail) {
+    if (!(await confirmBox(`Only ${avail} IPs available on ${iface.name}. Create ${avail} instead?`))) return;
+    finalCount = avail;
+  }
+
+  const prefixEl = document.querySelector('#bulk-prefix, #bulk-modal input[name="prefix"], #bulk-modal input[name="base_name"]');
+  const prefix   = (prefixEl?.value || 'b').trim() || 'b';
+  const startIdxEl = document.querySelector('#bulk-start-index, #bulk-modal input[name="start_index"]');
+  const startIdx   = startIdxEl && startIdxEl.value !== '' ? Number(startIdxEl.value) : 1;
+
+  const parseListByName = (name, legacyId) => {
+    const el = document.querySelector(`#bulk-modal [name="${name}"], ${legacyId || ''}`);
+    if (!el) return [];
+    const raw = String(el.value || '').trim();
+    if (!raw) return [];
+    return raw.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+  };
+
+  const phoneNumbers = parseListByName('phone_numbers', '#bulk-phones');
+  const telegramIds  = parseListByName('telegram_ids',  '#bulk-telegrams');
+  const val = q =>
+  document.querySelector(q)?.value || '';
+
+  const num = q =>
+  document.querySelector(q)?.value
+    ? Number(document.querySelector(q).value)
+    : null;
+
+  const bool = q =>
+  !!document.querySelector(q)?.checked;
+
+  const bulkAllowedInput = document.querySelector(
+  '#bulk-allowed_ips, ' +
+  '#bulk-allowed-ips, ' +
+  '#bulk-modal [name="allowed_ips"]');
+
+  const internalRouteOk = applyInternalNetworks('bulk', bulkAllowedInput, iface);
+
+  if (!internalRouteOk) {return;}
+
+  const payload = {
+    scope: scopeId ? 'node' : 'local',
+    node_id: scopeId || null,
+    iface_id: scopeId ? null : ifaceId,
+    iface_name: iface.name,
+    count: finalCount,
+    prefix,             
+    name_prefix: prefix,  
+    base_name: prefix,   
+    start_index: startIdx,
+    allowed_ips: val('#bulk-allowed_ips, ' +'#bulk-allowed-ips, ' +'#bulk-modal [name="allowed_ips"]'),
+    endpoint:    val('#bulk-endpoint,     #bulk-modal [name="endpoint"]'),
+    persistent_keepalive: num('#bulk-keepalive, #bulk-modal [name="persistent_keepalive"]'),
+    mtu:         num('#bulk-mtu,          #bulk-modal [name="mtu"]'),
+    dns:         val('#bulk-dns,          #bulk-modal [name="dns"]'),
+
+    data_limit_value: num('#bulk-data_limit_value, #bulk-modal [name="data_limit_value"]'),
+    data_limit_unit:  val('#bulk-data_limit_unit,  #bulk-modal [name="data_limit_unit"]') || null,
+    time_limit_days:  num('#bulk-time-days,        #bulk-modal [name="time_limit_days"]') || 0,
+    time_limit_hours: num('#bulk-time-hours,       #bulk-modal [name="time_limit_hours"]') || 0,
+    start_on_first_use: bool('#bulk-start-first,   #bulk-modal [name="start_on_first_use"]'),
+    unlimited:          bool('#bulk-unlimited,     #bulk-modal [name="unlimited"]'),
+    name: (fd.get('name') || '').trim(),
+
+    phone_numbers: phoneNumbers,
+    phones:        phoneNumbers, 
+    telegram_ids:  telegramIds,
+    telegrams:     telegramIds   
+  };
+
+  let loader;
+  try {
+    loader = toastSafe('Creating peers…', 'info', true);
+    const res = await fetch(api('/api/peers/bulk'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${res.status}`);
+    }
+
+    const json = await res.json().catch(() => null);
+    toastSafe(`Created ${json?.created ?? finalCount} peers`, 'success');
+
+    const bulkModal = document.getElementById('bulk-modal');
+    if (bulkModal) bulkModal.classList.remove('open');
+
+    if (typeof refreshInterfacesUI === 'function') {
+      await refreshInterfacesUI({ keepSelection: true, updateCreate: true, updateBulk: true });
+    }
+
+    refreshPeers();
+
+    if (json?.peers?.length) {
+      console.table(json.peers.map(p => ({
+        name: p.name, address: p.address, phone: p.phone_number, telegram: p.telegram_id
+      })));
+    }
+  } catch (e) {
+    console.error(e);
+    toastSafe(`Bulk create failed: ${e.message || e}`, 'error');
+  } finally {
+    if (loader) { loader.classList.add('hide'); setTimeout(() => loader.remove(), 500); }
+  }
+}
+
+if (typeof window.notify !== 'function') {
+  window.notify = function (msg, type = 'info', ms = 2200) {
+    if (typeof window.toast === 'function') {
+      return window.toast(String(msg ?? ''), type, { duration: ms });
+    }
+    return null;
+  };
+}
+
+function bulkVisible() {
+  return !!(bulkModal && window.getComputedStyle(bulkModal).display !== 'none');
+}
+function setCreateAddressOptions(list) {
+  const addrSel = document.querySelector('#peer-modal #create-address-select, #peer-modal select[name="address"]');
+  if (!addrSel) return;
+
+  const ips = Array.isArray(list) ? list : [];
+
+  addrSel.innerHTML = ips
+    .map(ip => {
+      const safe = peerEsc(ip);
+      return `<option value="${safe}">${safe}</option>`;
+    })
+    .join('');
+
+  addrSel.selectedIndex = ips.length ? 0 : -1;
+
+  const hiddenAddr = document.getElementById('create-address');
+  if (hiddenAddr) hiddenAddr.value = addrSel.value || '';
+}
+async function refreshAddressOptions() {
+  const addrSel = document.querySelector('#peer-modal #create-address-select, #peer-modal select[name="address"]');
+  if (!addrSel) return;
+
+  const scopeId = getScopeId();          
+  const iface   = typeof findIfaceById === 'function' ? findIfaceById(SELECTED_IFACE_ID) : null;
+
+  if (scopeId) {
+    const list = Array.isArray(iface?.available_ips) ? iface.available_ips : [];
+    setCreateAddressOptions(list);
+    return;
+  }
+
+  const idNum = Number(SELECTED_IFACE_ID);
+  if (idNum) {
+    const r = await fetch(api(`/api/iface/${idNum}/available_ips`), { credentials: 'same-origin', cache: 'no-store' });
+    if (r.ok) {
+      const { available_ips } = await r.json();
+      setCreateAddressOptions(available_ips || []);
+    }
+  }
+}
+
+async function clickList(e) {
+  const control = e.target.closest('button');
+  if (!control) return;
+  let btn = control;
+
+  if (btn.classList.contains('more-close')) {
+    const card = btn.closest('.peer-card');
+    if (!card) return;
+
+    const id = String(card.dataset.id || '');
+    const section = card.querySelector('.peer-more-section');
+    if (section) section.setAttribute('hidden', '');
+
+    const toggle = card.querySelector('.more-toggle');
+    if (toggle) toggle.setAttribute('aria-expanded', 'false');
+
+    openMore.delete(id);
+    card.classList.remove('peer-more-open');
+
+    try { btn.blur?.(); } catch {}
+    try { document.activeElement?.blur?.(); } catch {}
+
+    card.classList.add('force-hide-actions');
+
+    const onLeave = () => {
+      card.classList.remove('force-hide-actions');
+      card.removeEventListener('mouseleave', onLeave);
+    };
+    card.addEventListener('mouseleave', onLeave);
+
+    setTimeout(() => card.classList.remove('force-hide-actions'), 250);
+
+    e.stopPropagation();
+    return;
+  }
+
+  if (btn.classList.contains('more-toggle')) {
+    const card = btn.closest('.peer-card');
+    if (!card) return;
+
+    const id = String(card.dataset.id || '');
+    const section = card.querySelector('.peer-more-section');
+    if (!section) return;
+
+    const willOpen = section.hasAttribute('hidden');
+
+    if (willOpen) closeSections(id);
+
+    if (willOpen) {
+      section.removeAttribute('hidden');
+      openMore.add(id);
+      card.classList.add('peer-more-open');
+    } else {
+      section.setAttribute('hidden', '');
+      openMore.delete(id);
+      card.classList.remove('peer-more-open');
+    }
+
+    btn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+
+    void section.offsetHeight;
+
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+
+  const actionBtn = e.target.closest('button[data-peer-action]');
+  if (!actionBtn) return;
+
+  /* Handle peer actions as one isolated command. This prevents any legacy
+     bubbling listener or visually overlapping old action geometry from
+     turning an Edit tap into a reset/enable/etc. */
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+
+  btn = actionBtn;
+  const action = btn.dataset.peerAction || '';
+  const id = btn.dataset.id || btn.closest('.peer-card')?.dataset.id;
+  if (!id || !action) return;
+
+  const scopeId = getScopeId();
+  const p = findPeer(id);
+
+  const nodeFunc = act => {
+    if (!p || !p.public_key) { toastSafe('Missing peer key', 'error'); return null; }
+    return `/peer/${encodeURIComponent(p.public_key)}/${act}`; 
+  };
+  const localFunc = act => `/peer/${id}/${act}`;
+
+  if (action === 'link') return userLink(e, id);
+  if (action === 'edit') return openEdit(id);
+  if (action === 'logs') return openLogs(id);
+
+  if (action === 'download') {
+    const a = document.createElement('a');
+    a.href = apiPeerPath(id, '/config?download=1');
+    a.target = '_blank';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    return;
+  }
+
+  if (action === 'qr') return openQR(id);
+
+  if (action === 'enable') {
+    const path = scopeId ? nodeFunc('enable') : localFunc('enable');
+    if (!path) return;
+    return postEdit(path, 'Peer enabled', 'Enable failed');
+  }
+
+  if (action === 'disable') {
+    const path = scopeId ? nodeFunc('disable') : localFunc('disable');
+    if (!path) return;
+    return postEdit(path, 'Peer disabled', 'Disable failed');
+  }
+
+  if (action === 'reset-data') {
+    const path = scopeId
+      ? nodeFunc('reset_data')
+      : localFunc('reset_data');
+
+    if (!path) return;
+
+    btn.disabled = true;
+
+    try {
+      const r = await fetch(apiPath(path), {
+        method: 'POST',
+        credentials: 'same-origin'
+      });
+
+      const payload = await r.json().catch(() => ({}));
+
+      if (!r.ok) {
+        throw new Error(
+          payload.detail ||
+          payload.message ||
+          payload.error ||
+          `HTTP ${r.status}`
+        );
+      }
+
+      toastSafe('Data reset', 'success');
+
+      await refreshPeers?.({
+        abortPrev: true
+      });
+
+    } catch (err) {
+      console.error('Reset data failed:', err);
+
+      toastSafe(
+        `Reset data failed: ${err.message || 'Unknown error'}`,
+        'error'
+      );
+
+    } finally {
+      btn.disabled = false;
+    }
+
+    return;
+  }
+
+  if (action === 'reset-timer') {
+    const path = scopeId
+      ? nodeFunc('reset_timer')
+      : localFunc('reset_timer');
+
+    if (!path) return;
+
+    btn.disabled = true;
+
+    try {
+      const r = await fetch(apiPath(path), {
+        method: 'POST',
+        credentials: 'same-origin'
+      });
+
+      const payload = await r.json().catch(() => ({}));
+
+      if (!r.ok) {
+        throw new Error(
+          payload.detail ||
+          payload.message ||
+          payload.error ||
+          `HTTP ${r.status}`
+        );
+      }
+
+      toastSafe('Timer reset', 'success');
+
+      await refreshPeers?.({
+        abortPrev: true
+      });
+
+    } catch (err) {
+      console.error('Reset timer failed:', err);
+
+      toastSafe(
+        `Reset timer failed: ${err.message || 'Unknown error'}`,
+        'error'
+      );
+
+    } finally {
+      btn.disabled = false;
+    }
+
+    return;
+  }
+
+  if (action === 'delete') {
+    const card = btn.closest('.peer-card');
+    const peerName = String(p?.name || '').trim();
+
+    const confirmed = await confirmBox(
+      peerName
+        ? `Delete “${peerName}”? Its configuration, QR code, usage records, and related access will be permanently removed.`
+        : 'Delete this peer? Its configuration, QR code, usage records, and related access will be permanently removed.',
+      {
+        title: 'Delete peer?',
+        yesText: 'Delete peer',
+        noText: 'Cancel',
+      }
+    );
+
+    if (!confirmed) return;
+
+    const loader = toastSafe('Deleting peer…', 'info', true);
+    try {
+      if (!p) throw new Error('Peer could not be resolved from the current list. Refresh the page and try again.');
+
+      const url = apiPeerPath(p);
+      btn.disabled = true;
+
+      const r = await fetch(url, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: {
+          'Accept': 'application/json',
+          ...(window.csrfHeaders?.(false) || {})
+        }
+      });
+
+      const result = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        throw new Error(
+          result.detail || result.message || result.error || `HTTP ${r.status}`
+        );
+      }
+
+      if (card?.isConnected) card.remove();
+      toastSafe(result.message || 'Peer deleted', 'success');
+
+      await refreshInterfacesUI?.({ keepSelection: true, updateCreate: true, updateBulk: true });
+      resolveBulkModal?.();
+      bulkOptions?.();
+      bulkAvailability?.();
+      refreshPeers?.({ abortPrev: true });
+    } catch (err) {
+      console.error(err);
+      toastSafe(`Delete failed: ${err?.message || 'Unknown error'}`, 'error');
+      if (btn?.isConnected) {
+        const label = btn.querySelector('.peer-action-label');
+        if (label) label.textContent = 'Delete';
+        const icon = btn.querySelector('i');
+        if (icon) icon.className = 'fas fa-trash';
+      }
+    } finally {
+      if (btn?.isConnected) btn.disabled = false;
+      if (loader) {
+        loader.classList.add('hide');
+        setTimeout(() => loader.remove(), 500);
+      }
+    }
+    return;
+  }
+}
+
+function attachOpen(container) { container.addEventListener('auxclick', (e) => handleClick(e)); }
+
+document.addEventListener('click', event => {
+  if (event.target.closest(
+    '.modal-close, [data-modal-close], #edit-close, #logs-close, #qr-close, #confirm-no, #confirm-yes'
+  )) {
+    setTimeout(unlockPeerActionCards, 180);
+  }
+}, true);
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    setTimeout(unlockPeerActionCards, 180);
+  }
+}, true);
+
+window.addEventListener('DOMContentLoaded', async () => {
+
+  let modalClosedAt = 0;
+  const closeSelectors = [
+    '.modal-close', '#modal-close', '#edit-close', '#bulk-close',
+    '#bulk-close-btn', '#iface-create-close', '#iface-create-cancel',
+    '[data-modal-close]'
+  ].join(',');
+  const openSelectors = [
+    '#create-peer-btn', '#bulk-btn', '#create-iface-btn', '[data-open-modal]'
+  ].join(',');
+
+  document.addEventListener('pointerdown', (event) => {
+    if (event.target.closest?.(closeSelectors)) modalClosedAt = Date.now();
+  }, true);
+
+  document.addEventListener('click', (event) => {
+    if (Date.now() - modalClosedAt > 450) return;
+    if (!event.target.closest?.(openSelectors)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }, true);
+  try { if (window.peerScopeReady) await window.peerScopeReady; } catch (_) {}
+  await getPresets(); 
+(function wireCreateFormSubmit(){
+  const form = document.querySelector('#create-peer-form'); 
+  if (!form) return;
+
+  const selectEl  = document.querySelector('#create-address-select');
+  const hiddenAddr = document.querySelector('#create-address');
+
+  if (selectEl && hiddenAddr) {
+    selectEl.addEventListener('change', () => hiddenAddr.value = selectEl.value);
+    setTimeout(() => { hiddenAddr.value = selectEl.value || ''; }, 0);
+  }
+
+  form.addEventListener('submit', async (e) => {
+  const allowedInput = document.querySelector(
+    '#peer-allowed-ips, ' +
+    '#peer-modal [name="allowed_ips"]'
+  );
+
+  const internalRouteOk = applyInternalNetworks('peer', allowedInput);
+
+  if (!internalRouteOk) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    return;
+  }
+
+  const scopeId = getScopeId();
+
+    if (!scopeId) {
+      return;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+
+    if (form.dataset.nodeSubmitting === '1') return;
+    form.dataset.nodeSubmitting = '1';
+
+    const submitBtn = form.querySelector('button[type="submit"], .btn[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;                 
+
+    const iface = findIfaceById(SELECTED_IFACE_ID);
+    if (!iface) { toastSafe('No interface selected', 'error'); return; }
+
+    const fd = new FormData(form);
+
+    const loader = toastSafe('Creating peer on node…', 'info', true);
+    
+    try {
+      const addrSel = document.querySelector('#create-address-select, #peer-modal select[name="address"]');
+
+      const r = await fetch(api('/api/peers'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          scope: 'node',
+          node_id: scopeId,
+          name: (fd.get('name') || '').trim(),
+          iface_name: SELECTED_IFACE_NAME,
+          address: addrSel ? addrSel.value : '', 
+          endpoint: (fd.get('endpoint') || '').trim(),
+          peer_endpoint: (fd.get('peer_endpoint') || '').trim(),
+          persistent_keepalive: fd.get('persistent_keepalive') || 0,
+          mtu: fd.get('mtu') || null,
+          dns: (fd.get('dns') || '').trim(),
+          allowed_ips: (fd.get('allowed_ips') || '0.0.0.0/0, ::/0').trim(),
+          data_limit_value: Number(fd.get('data_limit') || 0),
+          data_limit_unit:  fd.get('limit_unit') || 'Mi',
+          time_limit_days:  Number(fd.get('time_limit_days') || 0),
+          time_limit_hours: Number(fd.get('time_limit_hours') || 0),
+          start_on_first_use: !!fd.get('start_on_first_use'),
+          unlimited: !!fd.get('unlimited'),
+          phone_number: (fd.get('phone_number') || '').trim(),
+          telegram_id: (fd.get('telegram_id') || '').trim()
+          }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(()=> ({}));
+        throw new Error(j.error || ('HTTP ' + r.status));
+      }
+
+      toastSafe('Peer created', 'success');
+      if (window.afterPeerCreated) { 
+        await window.afterPeerCreated();
+      }
+      closeModal?.(document.getElementById('peer-modal'));
+
+      await refreshInterfacesUI({ keepSelection: true, updateCreate: true, updateBulk: true });
+      refreshPeers?.({ abortPrev: true });
+    } catch (err) {
+      console.error(err);
+      toastSafe('Create failed: ' + (err.message || err), 'error');
+    } finally {
+  form.dataset.nodeSubmitting = '0';
+  const submitBtn = form.querySelector('button[type="submit"], .btn[type="submit"]');
+  if (submitBtn) submitBtn.disabled = false;
+
+  loader?.classList.add('hide');
+  setTimeout(() => loader?.remove(), 400);
+}
+  }, true);
+})();
+
+const scopeEl = document.getElementById('peer-scope');
+if (scopeEl) {
+  scopeEl.addEventListener('change', async () => {
+    modalOpenEpoch += 1;
+    SELECTED_IFACE_ID = null;
+    SELECTED_IFACE_NAME = null;
+    try { localStorage.removeItem('selected_iface_id'); } catch {}
+    const epBulk = document.querySelector('#bulk-endpoint');
+    if (epBulk)   { epBulk.value   = ''; epBulk.dataset.userEdited   = '0'; }
+
+    const cont = document.querySelector('.peers-container');
+    peersLoading(true, getScopeId() ? 'Switching to node…' : 'Switching to local server…', 'Loading interfaces and peers for this scope.');
+    if (cont) {
+      cont.innerHTML = '';
+      renderPeers(cont, 2);
+    }
+
+    try {
+      await refreshInterfacesUI({ keepSelection: false, updateCreate: true, updateBulk: true });
+      await refreshPeers({ abortPrev: true, forceLoading: true });
+    } finally {
+      peersLoading(false);
+    }
+  });
+}
+  const createModal = $('#peer-modal');
+  $('#modal-close')?.addEventListener('click', () => closeModal(createModal));
+  $('#create-cancel')?.addEventListener('click', () => closeModal(createModal));
+  attachEndpoint(createModal);
+
+  editModal = $('#edit-peer-modal');
+  editForm  = $('#edit-peer-form');
+  if (editForm) {
+    $('#edit-close')?.addEventListener('click', () => closeModal(editModal));
+    $('#edit-cancel')?.addEventListener('click', () => closeModal(editModal));
+    editForm.onsubmit = subEdit;
+    attachEndpoint(editModal);
+
+    const editInternalToggle = document.getElementById('edit-include-internal-network');
+    if (editInternalToggle && editInternalToggle.dataset.wired !== '1') {
+      editInternalToggle.addEventListener('change', applyEditInternalNetworks);
+      editInternalToggle.dataset.wired = '1';
+    }
+  }
+
+  itsBulkModal(); 
+  let bulkBtn  = $('#bulk-btn');
+  const createBtn = $('#create-peer-btn');
+
+  if (!bulkBtn && createBtn) {
+    bulkBtn = document.createElement('button');
+    bulkBtn.id = 'bulk-btn';
+    bulkBtn.className = 'btn secondary';
+    bulkBtn.style.marginLeft = '6px';
+    bulkBtn.innerHTML = '<i class="fas fa-layer-group"></i> Bulk create';
+    createBtn.after(bulkBtn);
+  }
+
+  if (bulkForm) {
+    $('#bulk-close')?.addEventListener('click', () => closeModal(bulkModal));
+    $('#bulk-close-btn')?.addEventListener('click', () => closeModal(bulkModal));
+    bulkForm.onsubmit = submitBulk;
+    if (typeof attachEndpoint === 'function') attachEndpoint(bulkModal);
+  }
+
+  await refreshInterfacesUI({ keepSelection: true, updateCreate: true, updateBulk: true });
+  document.addEventListener('click', ifaceToggle);
+
+  if (typeof SELECTED_IFACE_ID === 'undefined' || SELECTED_IFACE_ID == null) {
+    if (IFACES.length) {
+      const saved = localStorage.getItem('selected_iface_id');
+      const defId = (saved && IFACES.some(i => String(i.id) === String(saved)))
+        ? saved
+        : IFACES[0].id;
+      setIfaceById?.(defId);
+    }
+  }
+
+  resolveBulkModal?.();
+
+  const openBulkFresh = async (e) => {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+
+    const openTicket = beginModalOpenRequest();
+
+    await refreshInterfacesUI({ keepSelection: true, updateCreate: false, updateBulk: true });
+
+    if (!modalOpenRequestIsCurrent(openTicket)) return;
+
+    resolveBulkModal?.();
+    if (typeof bulkOptions === 'function') bulkOptions();
+    if (typeof bulkAvailability === 'function') bulkAvailability();
+
+    if (!modalOpenRequestIsCurrent(openTicket)) return;
+    openModal(bulkModal);
+  };
+
+  if (bulkBtn) bulkBtn.onclick = openBulkFresh;
+
+  if (createBtn && createModal) {
+    createBtn.onclick = async (e) => {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
+
+      const openTicket = beginModalOpenRequest();
+
+      await refreshInterfacesUI({ keepSelection: true, updateCreate: true, updateBulk: false });
+
+      if (!modalOpenRequestIsCurrent(openTicket)) return;
+
+      const sel = $('#create-iface-id');
+      if (sel && SELECTED_IFACE_ID != null) sel.value = String(SELECTED_IFACE_ID);
+
+      const iface = findIfaceById?.(SELECTED_IFACE_ID);
+      if (iface && typeof refreshDefaultIface === 'function') {
+        refreshDefaultIface(iface);
+      }
+
+      if (!modalOpenRequestIsCurrent(openTicket)) return;
+      openModal(createModal);
+      wireContainedPickers();
+      window.createPeerModal?.();
+      attachEndpoint(createModal);
+    };
+  }
+
+
+  function closeIfaceCreateModal() {
+    const m = document.getElementById('iface-create-modal');
+    if (!m) return;
+    m.classList.remove('open');
+    m.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('modal-open');
+  }
+
+  function openIfaceCreateModal() {
+    const m = document.getElementById('iface-create-modal');
+    if (!m) return;
+
+    const usedNames = (window.IFACES || []).map(x => String(x.name || ''));
+    let nextIdx = 0;
+    while (usedNames.includes(`wg${nextIdx}`)) nextIdx++;
+
+    const ports = (window.IFACES || []).map(x => Number(x.listen_port || 0)).filter(Boolean);
+    let nextPort = ports.length ? Math.max(...ports) + 1 : 51820;
+    if (nextPort > 65535) nextPort = 51820;
+
+    const nameEl = document.getElementById('iface-new-name');
+    const portEl = document.getElementById('iface-new-port');
+    const addrEl = document.getElementById('iface-new-address');
+    const dnsEl  = document.getElementById('iface-new-dns');
+    const mtuEl  = document.getElementById('iface-new-mtu');
+
+    if (nameEl && !nameEl.value) nameEl.value = `wg${nextIdx}`;
+    if (portEl && !portEl.value) portEl.value = String(nextPort);
+    if (addrEl && !addrEl.value) addrEl.value = `10.${77 + Math.min(nextIdx, 100)}.0.1/24`;
+    if (dnsEl && !dnsEl.value) dnsEl.value = '1.1.1.1, 1.0.0.1';
+    if (mtuEl && !mtuEl.value) mtuEl.value = '';
+
+    m.classList.add('open');
+    m.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('modal-open');
+    setTimeout(() => nameEl?.focus?.({ preventScroll: true }), 0);
+  }
+
+async function submitIfaceCreate(e) {
+  e.preventDefault();
+  e.stopPropagation();
+
+  const form = e.currentTarget;
+
+  if (!form) {
+    toastSafe(
+      'Interface form could not be found',
+      'error'
+    );
+    return;
+  }
+
+  /*
+   * Prevent duplicate submits.
+   */
+  if (form.dataset.ifaceSubmitting === '1') {
+    return;
+  }
+
+  const scopeId = getScopeId();
+  const fd = new FormData(form);
+
+  const payload = {
+    name: String(
+      fd.get('name') || ''
+    ).trim(),
+
+    address: String(
+      fd.get('address') || ''
+    ).trim(),
+
+    listen_port: Number(
+      fd.get('listen_port') || 0
+    ),
+
+    dns: String(
+      fd.get('dns') || ''
+    ).trim(),
+
+    mtu: String(
+      fd.get('mtu') || ''
+    ).trim()
+      ? Number(fd.get('mtu'))
+      : null,
+
+    auto_up:
+      !!fd.get('auto_up'),
+
+    /*
+     * Honor the checkbox when present.
+     * Default to enabled when the form does not contain it.
+     */
+    auto_firewall:
+      form.querySelector(
+        '[name="auto_firewall"]'
+      )
+        ? !!fd.get('auto_firewall')
+        : true,
+  };
+
+  /*
+   * Basic validation.
+   */
+  if (
+    !payload.name ||
+    !payload.address ||
+    !payload.listen_port
+  ) {
+    toastSafe(
+      'Name, server address, and listen port are required',
+      'error'
+    );
+    return;
+  }
+
+  if (
+    !/^[A-Za-z0-9_.-]{1,32}$/.test(
+      payload.name
+    )
+  ) {
+    toastSafe(
+      'Interface name may contain only letters, numbers, underscore, dot, or dash.',
+      'error'
+    );
+    return;
+  }
+
+  if (
+    !Number.isInteger(
+      payload.listen_port
+    ) ||
+    payload.listen_port < 1 ||
+    payload.listen_port > 65535
+  ) {
+    toastSafe(
+      'Listen port must be between 1 and 65535.',
+      'error'
+    );
+    return;
+  }
+
+  if (
+    payload.mtu !== null &&
+    (
+      !Number.isInteger(payload.mtu) ||
+      payload.mtu < 576 ||
+      payload.mtu > 9000
+    )
+  ) {
+    toastSafe(
+      'MTU must be between 576 and 9000.',
+      'error'
+    );
+    return;
+  }
+
+  const url = scopeId
+    ? `/api/nodes/${encodeURIComponent(
+        String(scopeId)
+      )}/interfaces`
+    : '/api/interfaces';
+
+  /*
+   * Serialize once so the exact body can be inspected.
+   */
+  let requestBody;
+
+  try {
+    requestBody =
+      JSON.stringify(payload);
+  } catch (err) {
+    console.error(
+      'Could not serialize interface payload:',
+      err
+    );
+
+    toastSafe(
+      'Could not prepare interface request',
+      'error'
+    );
+    return;
+  }
+
+  console.debug(
+    'Creating WireGuard interface:',
+    {
+      scope:
+        scopeId || 'local',
+
+      url,
+      payload,
+      requestBody,
+    }
+  );
+
+  form.dataset.ifaceSubmitting = '1';
+
+  const submitButton =
+    form.querySelector(
+      'button[type="submit"]'
+    );
+
+  if (submitButton) {
+    submitButton.disabled = true;
+
+    submitButton.setAttribute(
+      'aria-busy',
+      'true'
+    );
+  }
+
+  const loader = toastSafe(
+    scopeId
+      ? 'Creating interface on node…'
+      : 'Creating local interface…',
+    'info',
+    true
+  );
+
+  /*
+   * Use XMLHttpRequest deliberately.
+   *
+   * This bypasses the global window.fetch wrappers
+   * from users.js and csrf.js.
+   */
+  function postJson(
+    targetUrl,
+    jsonBody
+  ) {
+    return new Promise(
+      (resolve, reject) => {
+        const xhr =
+          new XMLHttpRequest();
+
+        xhr.open(
+          'POST',
+          targetUrl,
+          true
+        );
+
+        xhr.withCredentials = true;
+        xhr.timeout = 30000;
+
+        xhr.setRequestHeader(
+          'Content-Type',
+          'application/json; charset=UTF-8'
+        );
+
+        xhr.setRequestHeader(
+          'Accept',
+          'application/json'
+        );
+
+        /*
+         * Include CSRF header when available.
+         */
+        try {
+          const csrfToken =
+            typeof getCookie === 'function'
+              ? getCookie(
+                  'csrf_token'
+                )
+              : '';
+
+          if (csrfToken) {
+            xhr.setRequestHeader(
+              'X-CSRFToken',
+              csrfToken
+            );
+          }
+        } catch (_) {}
+
+        xhr.onload = () => {
+          const text =
+            String(
+              xhr.responseText || ''
+            );
+
+          let result = {};
+
+          if (text) {
+            try {
+              result =
+                JSON.parse(text);
+            } catch (_) {
+              result = {
+                detail: text,
+              };
+            }
+          }
+
+          resolve({
+            ok:
+              xhr.status >= 200 &&
+              xhr.status < 300,
+
+            status:
+              xhr.status,
+
+            statusText:
+              xhr.statusText,
+
+            result,
+          });
+        };
+
+        xhr.onerror = () => {
+          reject(
+            new Error(
+              'Network error while creating interface'
+            )
+          );
+        };
+
+        xhr.ontimeout = () => {
+          reject(
+            new Error(
+              'Interface creation request timed out'
+            )
+          );
+        };
+
+        xhr.onabort = () => {
+          reject(
+            new Error(
+              'Interface creation request was aborted'
+            )
+          );
+        };
+
+        xhr.send(
+          jsonBody
+        );
+      }
+    );
+  }
+
+  try {
+    const response =
+      await postJson(
+        url,
+        requestBody
+      );
+
+    const j =
+      response.result || {};
+
+    if (!response.ok) {
+      console.error(
+        'Interface API rejected request:',
+        {
+          status:
+            response.status,
+
+          statusText:
+            response.statusText,
+
+          response:
+            j,
+
+          payload,
+
+          requestBody,
+
+          url,
+        }
+      );
+
+      const err =
+        new Error(
+          j.detail ||
+          j.message ||
+          j.error ||
+          `HTTP ${response.status}`
+        );
+
+      err.status =
+        response.status;
+
+      err.payload =
+        j;
+
+      throw err;
+    }
+
+    if (j.up_error) {
+      toastSafe(
+        `Interface created, but could not start: ${j.up_error}`,
+        'warn',
+        true
+      );
+    } else {
+      toastSafe(
+        'Interface created',
+        'success'
+      );
+    }
+
+    closeIfaceCreateModal();
+
+    /*
+     * Refresh the interface dropdown/state.
+     */
+    await refreshInterfacesUI({
+      keepSelection: false,
+      updateCreate: true,
+      updateBulk: true,
+    });
+
+    /*
+     * Handle both local and node response formats.
+     */
+    const createdName =
+      j.interface?.name ||
+      j.name ||
+      payload.name;
+
+    if (
+      createdName &&
+      Array.isArray(
+        window.IFACES
+      )
+    ) {
+      const created =
+        window.IFACES.find(
+          x =>
+            String(
+              x?.name || ''
+            ) ===
+            String(
+              createdName
+            )
+        );
+
+      if (
+        created &&
+        typeof setIfaceById ===
+          'function'
+      ) {
+        setIfaceById(
+          created.id,
+          {
+            fromUser: true,
+            force: true,
+          }
         );
       }
     }
 
-    const telegramHeader = r.headers.get("X-Backup-Telegram-Sent");
-    const telegramMessage = r.headers.get("X-Backup-Telegram-Message") || "";
-    const telegramSent = telegramHeader === "1";
-
-    if (useLoader && telegramEnabled) {
-      setRunStep("telegram", "done");
-    }
-
-    if (telegramEnabled && telegramHeader === "0") {
-      const uncertain = /timeout|timed out|read timed out|connection reset/i.test(telegramMessage);
-      if (uncertain) {
-        toast.warn("Backup saved. Telegram delivery could not be confirmed by the panel; check Telegram before retrying.");
-      } else {
-        toast.warn(`Auto backup saved, but Telegram reported an error${telegramMessage ? `: ${telegramMessage}` : "."}`);
-      }
-    } else if (telegramEnabled && telegramHeader === null) {
-      toast.info("Backup saved and Telegram delivery was requested. The server did not expose a delivery-status header.");
-    } else if (telegramEnabled && telegramSent) {
-      toast.success("Auto backup created and sent to the selected Telegram admin.");
-    } else {
-      toast.success("Auto backup created in instance/backups/.");
-    }
-
-    if (useLoader) {
-      setRunStep("refresh", "active");
-      updateRunLoader("Refreshing saved backups", "Loading the new backup into the inspection list.");
-    }
-
-    await loadAll();
-
-    if (useLoader) {
-      setRunStep("refresh", "done");
-    }
-    const details = $("#auto-files-details");
-    if (details) details.open = true;
-  }
-
-
-  async function confirmAction({
-    title = "Confirm action",
-    message = "",
-    confirmText = "Confirm",
-    danger = false,
-  } = {}) {
-    return new Promise((resolve) => {
-      const modal = $("#restore-confirm");
-      const body = $("#bk-modal-body");
-      const okBtn = $("#bk-modal-ok");
-      const titleEl = modal?.querySelector(".bk-modal-head strong");
-
-      if (!modal || !body || !okBtn) {
-        resolve(false);
-        return;
-      }
-
-      let finished = false;
-      const previousText = okBtn.textContent;
-      const previousClass = okBtn.className;
-      const previousTitle = titleEl?.textContent || "";
-
-      const cleanup = () => {
-        modal.removeEventListener("click", onModalClick);
-        okBtn.removeEventListener("click", onConfirm);
-        document.removeEventListener("keydown", onKeyDown);
-
-        okBtn.textContent = previousText;
-        okBtn.className = previousClass;
-
-        if (titleEl) {
-          titleEl.textContent = previousTitle;
-        }
-      };
-
-      const finish = (value) => {
-        if (finished) return;
-        finished = true;
-        modal.hidden = true;
-        cleanup();
-        resolve(value);
-      };
-
-      const onModalClick = (event) => {
-        if (event.target.closest('[data-close="1"]')) {
-          finish(false);
-        }
-      };
-
-      const onConfirm = (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        finish(true);
-      };
-
-      const onKeyDown = (event) => {
-        if (event.key === "Escape") {
-          finish(false);
-        }
-      };
-
-      if (titleEl) {
-        titleEl.textContent = title;
-      }
-
-      body.innerHTML = message;
-      okBtn.textContent = confirmText;
-      okBtn.className = danger
-        ? "bk-btn danger"
-        : "bk-btn primary";
-
-      modal.hidden = false;
-      modal.addEventListener("click", onModalClick);
-      okBtn.addEventListener("click", onConfirm);
-      document.addEventListener("keydown", onKeyDown);
-    });
-  }
-
-  async function confirmRestore(htmlMessage) {
-    return new Promise((resolve) => {
-      const modal = $("#restore-confirm");
-      const body = $("#bk-modal-body");
-      const okBtn = $("#bk-modal-ok");
-      if (!modal || !body || !okBtn) return resolve(false);
-      let done = false;
-      const close = (val) => {
-        if (done) return;
-        done = true;
-        modal.hidden = true;
-        cleanup();
-        resolve(val);
-      };
-      const onClick = (e) => { if (e.target.closest('[data-close="1"]')) close(false); };
-      const onKey = (e) => { if (e.key === "Escape") close(false); };
-      const onOk = () => close(true);
-      const cleanup = () => {
-        modal.removeEventListener("click", onClick);
-        okBtn.removeEventListener("click", onOk);
-        document.removeEventListener("keydown", onKey);
-      };
-      body.innerHTML = htmlMessage;
-      modal.hidden = false;
-      modal.addEventListener("click", onClick);
-      okBtn.addEventListener("click", onOk);
-      document.addEventListener("keydown", onKey);
-    });
-  }
-
-  function appendServerSettings(fd) {
-    const mode = currentServerMode();
-    fd.append("server_settings_mode", mode);
-    fd.append("restore_server_settings", mode === "saved" ? "1" : "0");
-    if (mode === "custom") {
-      const map = {
-        custom_port: "#custom-panel-port",
-        custom_bind: "#custom-panel-bind",
-        custom_domain: "#custom-panel-domain",
-        custom_scheme: "#custom-panel-scheme",
-        custom_http_port: "#custom-http-port",
-        custom_https_port: "#custom-https-port",
-        custom_wg_path: "#custom-wg-path",
-      };
-      Object.entries(map).forEach(([k, sel]) => fd.append(k, ($(sel)?.value || "").trim()));
-    }
-  }
-
-  function renderRestoreResult(j) {
-    if (!restoreResult) return;
-    const r = j.restored || {};
-    const warnings = j.warnings || [];
-    restoreResult.innerHTML = `
-      <div class="bk-result-card ${j.ok ? "ok" : "bad"}">
-        <strong>${safe(j.message || (j.ok ? "Restore completed." : "Restore failed."))}</strong>
-        <div class="bk-small bk-muted" style="margin-top:6px">
-          DB: ${r.db ? "yes" : "no"} · Settings: ${r.settings ? "yes" : "no"} · Local WG: ${r.wg ? "yes" : "no"} · Node WG: ${r.node_wg ? "yes" : "no"}
-        </div>
-        ${warnings.length ? `<div class="bk-small" style="margin-top:8px;color:#92400e">${warnings.map(safe).join("<br>")}</div>` : ""}
-      </div>`;
-  }
-
-  async function doRestoreFromBlob(blob, filename, kind = "auto") {
-    const fd = new FormData();
-    fd.append("file", blob, filename || "backup.zip");
-    fd.append("kind", kind);
-    fd.append("restore_wg", restoreWGBox?.checked ? "1" : "0");
-    appendServerSettings(fd);
-    const headers = csrfHeaders();
-    delete headers["Content-Type"];
-    const r = await fetch("/api/backup/restore", { method: "POST", headers, body: fd });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.ok) throw new Error(j.message || "Restore failed.");
-    renderRestoreResult(j);
-    return j;
-  }
-
-  async function restoreAutoBackup(filename) {
-    if (!filename) return;
-    const ok = await confirmRestore(`<div><strong>Restore auto backup?</strong></div><div class="bk-small bk-muted" style="margin-top:8px"><code>${safe(filename)}</code></div><div style="margin-top:10px">Server settings will use the mode selected in Restore options.</div>`);
-    if (!ok) return;
+    /*
+     * A peer refresh failure must not be reported
+     * as an interface creation failure.
+     */
     try {
-      const resp = await fetch(`/api/backups/file/${encodeURIComponent(filename)}`, {
-        headers: csrfHeaders(),
-        credentials: "same-origin",
-        cache: "no-store",
+      await refreshPeers?.({
+        abortPrev: true,
       });
-      if (!resp.ok) throw new Error("Could not download auto backup file from server.");
-      const blob = await resp.blob();
-      const j = await doRestoreFromBlob(blob, filename, "auto");
-      toast.success(j.message || "Restore completed.");
-      await loadAll();
-    } catch (e) {
-      console.error(e);
-      toast.error(e.message || "Restore failed.");
-    }
-  }
-
-  async function loadInstallCommand() {
-    if (cachedInstallCommand) return cachedInstallCommand;
-    const firstNodeId = Object.keys(lastInspect?.node_wg_nodes || {})[0] || "";
-    try {
-      const url = firstNodeId ? `/api/backup/node-agent/install-command?node_id=${encodeURIComponent(firstNodeId)}` : "/api/backup/node-agent/install-command";
-      const r = await fetch(url, { headers: csrfHeaders() });
-      const j = await r.json().catch(() => ({}));
-      cachedInstallCommand = [j.command, j.next_command ? `\n# Then open the node menu:\n${j.next_command}` : ""].filter(Boolean).join("\n");
-    } catch {}
-    if (!cachedInstallCommand) {
-      cachedInstallCommand = `sudo bash -c 'command -v curl >/dev/null 2>&1 || (apt-get update -y && apt-get install -y curl ca-certificates); bash -c "$(curl -fsSL https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main/agent/node.sh)"'\n\n# Then open the node menu:\nnode`;
-    }
-    return cachedInstallCommand;
-  }
-
-  btnFull?.addEventListener("click", () => downloadBackup("full", btnFull));
-  btnDb?.addEventListener("click", () => downloadBackup("db", btnDb));
-  btnSettings?.addEventListener("click", () => downloadBackup("settings", btnSettings));
-  btnSave?.addEventListener("click", async () => {
-    try {
-      setBusy(btnSave, true, "Saving");
-      await saveSchedule();
-    } catch (e) {
-      toast.error(e.message || "Could not save schedule.");
-    } finally {
-      setBusy(btnSave, false);
-    }
-  });
-
-  autoEnabled?.addEventListener("change", () => {
-    if (pillAuto) {
-      pillAuto.textContent = autoEnabled.checked ? "Unsaved: enabled" : "Unsaved: disabled";
-      pillAuto.className = "bk-pill warn";
-    }
-  });
-
-  autoTG?.addEventListener("change", () => {
-    updateTelegramTargetVisibility();
-
-    if (autoTelegramEnabled()) {
-      loadTelegramAdmins(
-        autoTelegramAdmin?.value ||
-        lastSchedule?.telegram_chat_id ||
-        ""
+    } catch (
+      refreshError
+    ) {
+      console.warn(
+        'Interface created, but peer refresh failed:',
+        refreshError
       );
     }
-  });
 
-  btnSaveRun?.addEventListener("click", async () => {
-    try {
-      setBusy(btnSaveRun, true, "Saving & running");
-      await saveAndRunSchedule();
-    } catch (e) {
-      toast.error(e.message || "Save & run failed.");
-    } finally {
-      hideRunLoader();
-      setBusy(btnSaveRun, false);
+  } catch (err) {
+    console.error(
+      'Interface creation failed:',
+      {
+        url,
+        payload,
+        requestBody,
+
+        status:
+          err?.status,
+
+        server:
+          err?.payload,
+
+        message:
+          err?.message,
+
+        error:
+          err,
+      }
+    );
+
+    const message =
+      err?.payload?.detail ||
+      err?.payload?.message ||
+      err?.payload?.error ||
+      err?.message ||
+      String(err);
+
+    toastSafe(
+      'Interface create failed: ' +
+      message,
+      'error',
+      true
+    );
+
+  } finally {
+    delete form.dataset
+      .ifaceSubmitting;
+
+    if (submitButton) {
+      submitButton.disabled =
+        false;
+
+      submitButton.removeAttribute(
+        'aria-busy'
+      );
     }
-  });
 
-  restoreTrigger?.addEventListener("click", () => restoreFile?.click());
-  restoreFile?.addEventListener("change", async () => {
-    const file = restoreFile.files && restoreFile.files[0];
-    if (!file) {
-      if (restoreName) restoreName.textContent = "No file chosen";
-      if (restoreHint) restoreHint.textContent = "Choose a ZIP to preview its contents before restore.";
-      lastInspect = null;
-      return;
-    }
-    if (restoreName) restoreName.textContent = file.name;
-    if (restoreHint) restoreHint.textContent = "Inspecting backup contents…";
-    await inspectSelectedBackup(file);
-    if (restoreHint) restoreHint.textContent = "Backup inspected. Review the summary, then restore.";
-  });
+    loader?.classList?.add?.(
+      'hide'
+    );
 
-  restoreBtn?.addEventListener("click", async () => {
-    const file = restoreFile?.files && restoreFile.files[0];
-    if (!file) return toast.error("Choose a backup .zip file first.");
-    const kind = $('input[name="restore-kind"]:checked')?.value || "auto";
-    const mode = currentServerMode();
-    const warning = mode === "saved"
-      ? "Saved server settings may change this panel’s port, bind address, domain and TLS. Use only for same-server restore."
-      : mode === "custom"
-        ? "Custom server settings will be written after restore. Check the port and domain before continuing."
-        : "Current server port/domain/TLS will be protected.";
-    const ok = await confirmRestore(`<div><strong>Confirm restore</strong></div><div style="margin-top:8px">${safe(warning)}</div><div class="bk-small bk-muted" style="margin-top:10px">Server settings: <strong>${safe(mode)}</strong> · Restore type: <strong>${safe(kind)}</strong> · WG configs: <strong>${restoreWGBox?.checked ? "yes" : "no"}</strong></div>`);
-    if (!ok) return;
-    setBusy(restoreBtn, true, "Restoring");
-    try {
-      const j = await doRestoreFromBlob(file, file.name, kind);
-      toast.success(j.message || "Restore completed.");
-      if (j.needs_restart) toast.info("Restart the panel service to apply restored data.");
-      await loadAll();
-    } catch (e) {
-      console.error(e);
-      toast.error(e.message || "Restore failed.");
-    } finally {
-      setBusy(restoreBtn, false);
-    }
-  });
-
-  nodeGuideToggle?.addEventListener("click", async () => {
-    const open = !nodeCommandBox?.classList.contains("open");
-    if (open) {
-      if (nodeInstallCommand) nodeInstallCommand.textContent = "Loading command…";
-      nodeCommandBox?.classList.add("open");
-      const cmd = await loadInstallCommand();
-      if (nodeInstallCommand) nodeInstallCommand.textContent = cmd;
-      nodeGuideToggle.innerHTML = '<i class="fas fa-terminal"></i> Hide install command';
-    } else {
-      nodeCommandBox?.classList.remove("open");
-      nodeGuideToggle.innerHTML = '<i class="fas fa-terminal"></i> Show install command';
-    }
-  });
-
-  $$("[data-auto-inspect-close='1']").forEach((button) => {
-    button.addEventListener("click", () => {
-      closeAutoInspectModal();
-    });
-  });
-
-  autoInspectDownload?.addEventListener("click", () => {
-    if (activeAutoInspectFilename) {
-      downloadAutoBackup(activeAutoInspectFilename);
-    }
-  });
-
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && autoInspectModal && !autoInspectModal.hidden) {
-      closeAutoInspectModal();
-    }
-  });
-
-  copyNodeCommand?.addEventListener("click", async () => {
-    const cmd = nodeInstallCommand?.textContent || await loadInstallCommand();
-    try {
-      await navigator.clipboard.writeText(cmd);
-      copyNodeCommand.classList.add("copy-ok");
-      toast.success("Node install command copied.");
-      setTimeout(() => copyNodeCommand.classList.remove("copy-ok"), 1200);
-    } catch {
-      toast.error("Could not copy command.");
-    }
-  });
-
-  updateServerModeUI();
-  loadAll();
-
-
-  function initBackupTabs(){
-    const tabs = Array.from(document.querySelectorAll('[data-bk-tab]'));
-    const panels = Array.from(document.querySelectorAll('[data-bk-panel]'));
-    if (!tabs.length || !panels.length) return;
-    function activate(name){
-      tabs.forEach(t => t.classList.toggle('active', t.dataset.bkTab === name));
-      panels.forEach(p => p.classList.toggle('active', p.dataset.bkPanel === name));
-      try { localStorage.setItem('wg_backup_tab', name); } catch(_) {}
-    }
-    tabs.forEach(t => t.addEventListener('click', () => activate(t.dataset.bkTab)));
-    let saved = 'backup';
-    try { saved = localStorage.getItem('wg_backup_tab') || 'backup'; } catch(_) {}
-    if (!tabs.some(t => t.dataset.bkTab === saved)) saved = 'backup';
-    activate(saved);
+    setTimeout(
+      () => {
+        try {
+          loader?.remove?.();
+        } catch (_) {}
+      },
+      400
+    );
   }
-  initBackupTabs();
+}
+
+
+const ifaceCreateBtn =
+  document.getElementById(
+    'create-iface-btn'
+  );
+
+const ifaceCreateModal =
+  document.getElementById(
+    'iface-create-modal'
+  );
+
+const ifaceCreateForm =
+  document.getElementById(
+    'iface-create-form'
+  );
+
+
+if (ifaceCreateBtn) {
+  ifaceCreateBtn.onclick =
+    openIfaceCreateModal;
+}
+
+
+/*
+ * Avoid installing this global handler twice.
+ */
+if (
+  !document.documentElement
+    .dataset.ifaceDeleteWired
+) {
+  document.addEventListener(
+    'click',
+    ifaceDelete
+  );
+
+  document.documentElement
+    .dataset.ifaceDeleteWired = '1';
+}
+
+
+/*
+ * Prevent duplicate submit listeners.
+ */
+if (
+  ifaceCreateForm &&
+  ifaceCreateForm.dataset
+    .ifaceCreateWired !== '1'
+) {
+  ifaceCreateForm.addEventListener(
+    'submit',
+    submitIfaceCreate
+  );
+
+  ifaceCreateForm.dataset
+    .ifaceCreateWired = '1';
+}
+
+
+const ifaceCreateClose =
+  document.getElementById(
+    'iface-create-close'
+  );
+
+if (
+  ifaceCreateClose &&
+  ifaceCreateClose.dataset
+    .ifaceCloseWired !== '1'
+) {
+  ifaceCreateClose.addEventListener(
+    'click',
+    closeIfaceCreateModal
+  );
+
+  ifaceCreateClose.dataset
+    .ifaceCloseWired = '1';
+}
+
+
+const ifaceCreateCancel =
+  document.getElementById(
+    'iface-create-cancel'
+  );
+
+if (
+  ifaceCreateCancel &&
+  ifaceCreateCancel.dataset
+    .ifaceCancelWired !== '1'
+) {
+  ifaceCreateCancel.addEventListener(
+    'click',
+    closeIfaceCreateModal
+  );
+
+  ifaceCreateCancel.dataset
+    .ifaceCancelWired = '1';
+}
+
+
+if (
+  ifaceCreateModal &&
+  ifaceCreateModal.dataset
+    .ifaceBackdropWired !== '1'
+) {
+  ifaceCreateModal.addEventListener(
+    'click',
+    (e) => {
+      if (
+        e.target.classList?.contains(
+          'modal-backdrop'
+        )
+      ) {
+        closeIfaceCreateModal();
+      }
+    }
+  );
+
+  ifaceCreateModal.dataset
+    .ifaceBackdropWired = '1';
+}
+
+
+loadFilters();
+loadPagination();
+buildFilters();
+
+
+const peersCont =
+  $('.peers-container');
+
+if (peersCont) {
+  /*
+   * Guard against duplicate listener wiring.
+   */
+  if (
+    peersCont.dataset
+      .peerActionClickWired !== '1'
+  ) {
+    peersCont.addEventListener(
+      'click',
+      clickList,
+      true
+    );
+
+    peersCont.dataset
+      .peerActionClickWired = '1';
+  }
+
+  attachOpen(
+    peersCont
+  );
+}
+
+
+refreshPeers();
+
+});
+
+
+})();
+
+(() => {
+  const routeList = value => String(value || '')
+    .split(',')
+    .map(v => v.trim())
+    .filter(Boolean);
+
+  const uniqueRoutes = value => [...new Set(routeList(value))];
+
+  function ipv4Network(cidr) {
+    const raw = String(cidr || '').trim();
+    const m = raw.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d|[12]\d|3[0-2])$/);
+    if (!m) return '';
+    const octets = m.slice(1, 5).map(Number);
+    if (octets.some(n => n < 0 || n > 255)) return '';
+    const prefix = Number(m[5]);
+    const value = (((octets[0] << 24) >>> 0) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>> 0;
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+    const net = (value & mask) >>> 0;
+    return `${(net >>> 24) & 255}.${(net >>> 16) & 255}.${(net >>> 8) & 255}.${net & 255}/${prefix}`;
+  }
+
+  function currentScopeNetworks() {
+    const out = [];
+    const add = value => {
+      const network = ipv4Network(value);
+      if (network && !out.includes(network)) out.push(network);
+    };
+
+    const rows = Array.isArray(window.IFACES) ? window.IFACES : [];
+    for (const iface of rows) {
+      const scoped = iface && iface.scope_networks;
+      if (Array.isArray(scoped)) scoped.forEach(add);
+      else if (scoped) String(scoped).split(',').forEach(add);
+      add(iface && (iface.address || iface.server_cidr || iface.interface_address || iface.cidr));
+    }
+    return out;
+  }
+
+  function setValueAndNotify(input, routes) {
+    input.value = [...new Set(routes)].join(', ');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  function apply(prefix, allowedInput) {
+    const toggle = document.getElementById(`${prefix}-include-internal-network`);
+    if (!toggle || !allowedInput) return;
+
+    const hidden = document.getElementById(`${prefix}-internal-network`);
+    let routes = uniqueRoutes(allowedInput.value);
+
+    if (prefix === 'peer' && routes.length === 0) {
+      routes = ['0.0.0.0/0', '::/0'];
+    }
+
+    const previousAdded = uniqueRoutes(allowedInput.dataset.autoInternalAdded || '');
+    const previousSet = new Set(previousAdded);
+
+    let next = routes.filter(route => !previousSet.has(route));
+    const detected = currentScopeNetworks();
+    if (hidden) hidden.value = detected.join(', ');
+
+    if (toggle.checked) {
+      const inserted = [];
+      for (const network of detected) {
+        if (!next.includes(network)) {
+          next.push(network);
+          inserted.push(network);
+        }
+      }
+      allowedInput.dataset.autoInternalAdded = inserted.join(', ');
+    } else {
+      allowedInput.dataset.autoInternalAdded = '';
+    }
+
+    setValueAndNotify(allowedInput, next);
+  }
+
+  function wire(prefix, selectors) {
+    const toggle = document.getElementById(`${prefix}-include-internal-network`);
+    const allowed = selectors.map(sel => document.querySelector(sel)).find(Boolean);
+    if (!toggle || !allowed || toggle.dataset.autoNetworkWired === '1') return;
+
+    toggle.dataset.autoNetworkWired = '1';
+    toggle.addEventListener('change', () => apply(prefix, allowed));
+
+    document.addEventListener('peer-interfaces-updated', () => {
+      if (toggle.checked) apply(prefix, allowed);
+    });
+  }
+
+  function run() {
+    wire('peer', ['#peer-allowed-ips', '#peer-modal [name="allowed_ips"]']);
+    wire('bulk', ['#bulk-allowed_ips', '#bulk-allowed-ips', '#bulk-modal [name="allowed_ips"]']);
+    wire('edit', ['#edit-allowed-ips', '#edit-peer-modal [name="allowed_ips"]']);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', run, { once: true });
+  } else {
+    run();
+  }
+
+  document.addEventListener('change', (event) => {
+    if (event.target?.matches?.('#peer-scope, #create-address-select, #bulk-iface')) {
+      setTimeout(updateEndpointInheritanceUI, 0);
+    }
+  });
+  document.addEventListener('peer-scope-ready', () => setTimeout(updateEndpointInheritanceUI, 0));
+})();
+
+
+/* Peer create state + endpoint help fix */
+(() => {
+  const modal = document.getElementById('peer-modal');
+  const form = document.getElementById('create-peer-form');
+  if (!modal || !form) return;
+
+  function resetCreatePeerState() {
+    form.reset();
+    form.dataset.nodeSubmitting = '0';
+    const allowed = document.getElementById('peer-allowed-ips');
+    if (allowed) {
+      allowed.value = '0.0.0.0/0, ::/0';
+      delete allowed.dataset.autoInternalNetworks;
+      allowed.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    const include = document.getElementById('peer-include-internal-network');
+    if (include) include.checked = false;
+    const hiddenNetworks = document.getElementById('peer-internal-network');
+    if (hiddenNetworks) hiddenNetworks.value = '';
+    const fixed = document.getElementById('peer-fixed-endpoint');
+    if (fixed) fixed.value = '';
+    const server = document.getElementById('peer-endpoint');
+    if (server) { server.value = ''; server.dataset.userEdited = '0'; }
+    const profile = document.getElementById('use-profile-toggle');
+    if (profile) profile.checked = false;
+    const info = document.getElementById('peer-wg-advanced');
+    if (info) info.classList.remove('is-open');
+    window.__profileSnapshot = null;
+    setTimeout(() => {
+      if (typeof window.updateEndpointInheritanceUI === 'function') window.updateEndpointInheritanceUI();
+    }, 0);
+  }
+
+  document.getElementById('create-peer-btn')?.addEventListener('click', resetCreatePeerState, true);
+  ['modal-close','create-cancel'].forEach(id => document.getElementById(id)?.addEventListener('click', resetCreatePeerState));
+  modal.querySelector('.modal-backdrop')?.addEventListener('click', resetCreatePeerState);
+
+  document.addEventListener('click', (event) => {
+    const trigger = event.target.closest('.endpoint-info-trigger');
+    if (!trigger) return;
+    const card = trigger.closest('.peerx-endpoint-info');
+    if (!card) return;
+    const open = !card.classList.contains('is-open');
+    card.classList.toggle('is-open', open);
+    trigger.setAttribute('aria-expanded', String(open));
+  });
+})();
+
+/* PEER_DROPDOWN_SUMMARY_POLISH_START */
+(() => {
+  'use strict';
+
+  let active = null;
+
+  const escapeHtml = (value) => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+
+  function closeActive({ focus = false } = {}) {
+    if (!active) return;
+    active.menu.classList.remove('open');
+    active.menu.hidden = true;
+    active.trigger.setAttribute('aria-expanded', 'false');
+    if (focus) active.trigger.focus();
+    active = null;
+  }
+
+  function enhance(select) {
+    if (!select || select.dataset.customIpReady === '1') return;
+    select.dataset.customIpReady = '1';
+
+    let shell = select.closest('.peer-ip-select-shell');
+    if (!shell) {
+      shell = document.createElement('span');
+      shell.className = 'peer-ip-select-shell';
+      select.parentNode.insertBefore(shell, select);
+      shell.appendChild(select);
+    }
+    shell.classList.add('peer-ip-custom-ready');
+
+    const trigger = document.createElement('button');
+    trigger.type = 'button';
+    trigger.className = 'peer-ip-combobox';
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-expanded', 'false');
+    trigger.innerHTML = `
+      <span class="peer-ip-combobox-icon"><i class="fas fa-network-wired" aria-hidden="true"></i></span>
+      <span class="peer-ip-combobox-copy"><strong>Choose an address</strong><small>Available on selected interface</small></span>
+      <span class="peer-ip-combobox-chevron"><i class="fas fa-chevron-down" aria-hidden="true"></i></span>`;
+    shell.insertBefore(trigger, select);
+
+    const menu = document.createElement('div');
+    menu.className = 'peer-ip-menu';
+    menu.hidden = true;
+    menu.innerHTML = `
+      <div class="peer-ip-menu-head">
+        <span><b>Available IP addresses</b><small>Choose a free address for this peer.</small></span>
+        <span class="peer-ip-menu-count">0</span>
+      </div>
+      <label class="peer-ip-menu-search-wrap">
+        <i class="fas fa-magnifying-glass" aria-hidden="true"></i>
+        <input class="peer-ip-menu-search" type="search" autocomplete="off" placeholder="Search addresses…" aria-label="Search available IP addresses">
+      </label>
+      <div class="peer-ip-menu-list" role="listbox"></div>`;
+    document.body.appendChild(menu);
+
+    const currentText = trigger.querySelector('strong');
+    const currentSub = trigger.querySelector('small');
+    const search = menu.querySelector('.peer-ip-menu-search');
+    const list = menu.querySelector('.peer-ip-menu-list');
+    const count = menu.querySelector('.peer-ip-menu-count');
+
+    function options() {
+      return Array.from(select.options).filter((option) => option.value);
+    }
+
+    function syncTrigger() {
+      const selected = select.options[select.selectedIndex];
+      currentText.textContent = selected?.textContent?.trim() || selected?.value || 'Choose an address';
+      currentSub.textContent = options().length
+        ? `${options().length} free address${options().length === 1 ? '' : 'es'}`
+        : 'No free addresses available';
+    }
+
+    function render(query = '') {
+      const term = String(query || '').trim().toLowerCase();
+      const all = options();
+      const filtered = all.filter((option) => {
+        const label = `${option.textContent || ''} ${option.value || ''}`.toLowerCase();
+        return !term || label.includes(term);
+      });
+      count.textContent = String(all.length);
+      if (!filtered.length) {
+        list.innerHTML = `<div class="peer-ip-menu-empty">${all.length ? 'No addresses match your search.' : 'No free addresses are currently available.'}</div>`;
+        return;
+      }
+      list.innerHTML = filtered.map((option) => {
+        const selected = option.value === select.value;
+        const value = escapeHtml(option.value);
+        const label = escapeHtml(option.textContent?.trim() || option.value);
+        return `<button type="button" class="peer-ip-option${selected ? ' selected' : ''}" data-value="${value}" role="option" aria-selected="${selected ? 'true' : 'false'}">
+          <span class="peer-ip-option-icon"><i class="fas fa-network-wired" aria-hidden="true"></i></span>
+          <span class="peer-ip-option-copy"><b>${label}</b><small>Free address</small></span>
+          <span class="peer-ip-option-check"><i class="fas fa-check" aria-hidden="true"></i></span>
+        </button>`;
+      }).join('');
+      list.querySelectorAll('.peer-ip-option').forEach((button) => {
+        button.addEventListener('click', () => {
+          select.value = button.dataset.value || '';
+          select.dispatchEvent(new Event('input', { bubbles: true }));
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+          syncTrigger();
+          closeActive({ focus: true });
+        });
+      });
+    }
+
+    function position() {
+      const rect = trigger.getBoundingClientRect();
+      const margin = 10;
+      const viewportWidth = document.documentElement.clientWidth;
+      const viewportHeight = document.documentElement.clientHeight;
+      const width = Math.min(Math.max(rect.width, 310), viewportWidth - margin * 2);
+      const left = Math.min(Math.max(margin, rect.left), viewportWidth - width - margin);
+      const estimatedHeight = Math.min(360, Math.max(190, 104 + options().length * 47));
+      const below = viewportHeight - rect.bottom - margin;
+      const above = rect.top - margin;
+      const placeAbove = below < Math.min(estimatedHeight, 270) && above > below;
+      menu.classList.toggle('is-above', placeAbove);
+      menu.style.width = `${width}px`;
+      menu.style.left = `${left}px`;
+      if (placeAbove) {
+        menu.style.top = 'auto';
+        menu.style.bottom = `${Math.max(margin, viewportHeight - rect.top + 8)}px`;
+      } else {
+        menu.style.bottom = 'auto';
+        menu.style.top = `${Math.min(viewportHeight - margin - 120, rect.bottom + 8)}px`;
+      }
+    }
+
+    function open() {
+      if (active && active.menu !== menu) closeActive();
+      render('');
+      search.value = '';
+      menu.hidden = false;
+      position();
+      requestAnimationFrame(() => menu.classList.add('open'));
+      trigger.setAttribute('aria-expanded', 'true');
+      active = { menu, trigger, select };
+      setTimeout(() => search.focus(), 30);
+    }
+
+    trigger.addEventListener('click', () => {
+      if (active?.menu === menu) closeActive({ focus: true });
+      else open();
+    });
+    trigger.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        open();
+      }
+    });
+    search.addEventListener('input', () => render(search.value));
+    menu.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeActive({ focus: true });
+        return;
+      }
+      const items = Array.from(list.querySelectorAll('.peer-ip-option'));
+      if (!items.length || !['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+      event.preventDefault();
+      const index = Math.max(-1, items.indexOf(document.activeElement));
+      const next = event.key === 'ArrowDown'
+        ? items[(index + 1) % items.length]
+        : items[(index <= 0 ? items.length : index) - 1];
+      next?.focus();
+    });
+
+    select.addEventListener('change', () => {
+      syncTrigger();
+      if (active?.menu === menu) render(search.value);
+    });
+    new MutationObserver(() => {
+      syncTrigger();
+      if (active?.menu === menu) {
+        render(search.value);
+        position();
+      }
+    }).observe(select, { childList: true, subtree: true, attributes: true });
+
+    syncTrigger();
+  }
+
+  function init() {
+    enhance(document.querySelector('#peer-modal #create-address-select'));
+  }
+
+  document.addEventListener('click', (event) => {
+    if (!active) return;
+    if (active.menu.contains(event.target) || active.trigger.contains(event.target)) return;
+    closeActive();
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && active) closeActive({ focus: true });
+  });
+  window.addEventListener('resize', () => closeActive());
+  window.addEventListener('scroll', () => closeActive(), true);
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+
+  const rootObserver = new MutationObserver(() => init());
+  rootObserver.observe(document.documentElement, { childList: true, subtree: true });
+})();
+/* PEER_DROPDOWN_SUMMARY_POLISH_END */
+/* Allowed IP chip editors for Create / Edit / Bulk */
+(() => {
+  'use strict';
+  const esc=s=>String(s??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+  const split=v=>String(v||'').split(',').map(x=>x.trim()).filter(Boolean);
+  const unique=a=>[...new Set(a.map(x=>String(x||'').trim()).filter(Boolean))];
+  function valid(v){v=String(v||'').trim();if(!v||!v.includes('/'))return false;const [h,p]=v.split('/'),n=Number(p);if(!Number.isInteger(n))return false;if(h.includes(':'))return n>=0&&n<=128;const q=h.split('.');return q.length===4&&q.every(x=>/^\d{1,3}$/.test(x)&&Number(x)<=255)&&n>=0&&n<=32}
+  function build(input,opt={}){
+    if(!input||input.dataset.routeEditorReady==='1')return;
+    input.dataset.routeEditorReady='1';input.classList.add('peer-route-source');
+    const host=document.createElement('div');host.className='peer-route-editor';host.innerHTML=`
+      <div class="peer-route-editor-head"><span><b>Allowed IPs</b><small>Each route is written to the client configuration.</small></span><button type="button" class="peer-route-default"><i class="fas fa-rotate-left"></i><span>Default</span></button></div>
+      <div class="peer-route-box"><div class="peer-route-chips" aria-live="polite"></div><div class="peer-route-add-row"><i class="fas fa-plus"></i><input type="text" class="peer-route-add-input" placeholder="Add route, e.g. 192.168.1.0/24" autocomplete="off" spellcheck="false"><button type="button" class="peer-route-add-btn">Add</button></div></div><div class="peer-route-error" role="alert" hidden></div>`;
+    input.insertAdjacentElement('afterend',host);
+    const chips=host.querySelector('.peer-route-chips'),addInput=host.querySelector('.peer-route-add-input'),err=host.querySelector('.peer-route-error');
+    const detected=()=>unique(split(opt.internalHidden?document.querySelector(opt.internalHidden)?.value:''));
+    const routes=()=>unique(split(input.value));
+    function render(){const d=new Set(detected()),r=routes();chips.innerHTML=r.length?r.map(x=>`<span class="peer-route-chip${d.has(x)?' detected':''}" data-route="${esc(x)}"><span>${esc(x)}</span>${d.has(x)?'<small>Private</small>':''}<button type="button" aria-label="Remove ${esc(x)}"><i class="fas fa-xmark"></i></button></span>`).join(''):'<span class="peer-route-empty">No routes added</span>';chips.querySelectorAll('[data-route] button').forEach(b=>b.onclick=()=>set(routes().filter(x=>x!==b.closest('[data-route]').dataset.route)))}
+    function set(a){input.value=unique(a).join(', ');render();input.dispatchEvent(new Event('input',{bubbles:true}))}
+    function add(){const r=addInput.value.trim();err.hidden=true;if(!valid(r)){err.textContent='Enter a valid IPv4 or IPv6 CIDR route.';err.hidden=false;addInput.focus();return}set([...routes(),r]);addInput.value='';addInput.focus()}
+    host.querySelector('.peer-route-add-btn').onclick=add;addInput.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();add()}};host.querySelector('.peer-route-default').onclick=()=>set(['0.0.0.0/0','::/0']);input.addEventListener('input',render);input.addEventListener('change',render);
+    if(opt.toggle){const t=document.querySelector(opt.toggle),label=t?.closest('label');if(label){label.classList.add('peer-route-private-toggle');host.querySelector('.peer-route-editor-head').appendChild(label)}t?.addEventListener('change',()=>setTimeout(render,0))}
+    render();
+  }
+  function init(){build(document.querySelector('#peer-allowed-ips'),{toggle:'#peer-include-internal-network',internalHidden:'#peer-internal-network'});build(document.querySelector('#bulk-allowed-ips'),{toggle:'#bulk-include-internal-network',internalHidden:'#bulk-internal-network'});build(document.querySelector('#edit-allowed-ips'),{toggle:'#edit-include-internal-network'})}
+  document.readyState==='loading'?document.addEventListener('DOMContentLoaded',init):init();
 })();
