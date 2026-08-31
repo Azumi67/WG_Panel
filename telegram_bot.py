@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time, threading
 from datetime import datetime, time as dtime, timezone
-import os, io, json, logging, math, re, asyncio
+import os, io, json, logging, math, re, asyncio, ipaddress
 from functools import wraps
 from pathlib import Path
 from urllib.parse import quote
@@ -43,6 +43,149 @@ except Exception:
     pass
 
 HERE = Path(__file__).parent.resolve()
+_TG_TIMEZONE_CACHE = {
+    "name": "",
+    "tz": None,
+    "expires": 0.0,
+}
+
+
+def _tg_system_timezone():
+    """
+    Resolve the current global panel timezone at call time.
+
+    """
+    try:
+        response = api.get(
+            f"{PANEL}/api/timezone",
+            timeout=8,
+        )
+        response.raise_for_status()
+
+        payload = response.json() or {}
+        timezone_name = str(
+            payload.get("timezone") or ""
+        ).strip()
+
+        if timezone_name:
+            return ZoneInfo(timezone_name)
+
+    except Exception:
+        pass
+
+    try:
+        return datetime.now().astimezone().tzinfo or timezone.utc
+    except Exception:
+        return timezone.utc
+
+def _tg_parse_datetime(value):
+    if value in (None, "", "—"):
+        return None
+
+    if isinstance(value, datetime):
+        parsed = value
+
+    elif isinstance(value, (int, float)):
+        try:
+            parsed = datetime.fromtimestamp(
+                float(value),
+                tz=timezone.utc,
+            )
+        except Exception:
+            return None
+
+    else:
+        raw = str(value).strip()
+
+        if not raw:
+            return None
+
+        try:
+            if re.fullmatch(r"\d+(?:\.\d+)?", raw):
+                parsed = datetime.fromtimestamp(
+                    float(raw),
+                    tz=timezone.utc,
+                )
+            else:
+                if raw.endswith("Z"):
+                    raw = raw[:-1] + "+00:00"
+
+                parsed = datetime.fromisoformat(raw)
+
+        except Exception:
+            return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return parsed
+
+
+def _tg_relative(seconds):
+    future = seconds < 0
+    seconds = abs(int(seconds))
+
+    if seconds < 10:
+        return "in a moment" if future else "just now"
+
+    units = (
+        (31536000, "year"),
+        (2592000, "month"),
+        (604800, "week"),
+        (86400, "day"),
+        (3600, "hour"),
+        (60, "minute"),
+        (1, "second"),
+    )
+
+    for unit_seconds, label in units:
+        if seconds >= unit_seconds:
+            count = max(1, seconds // unit_seconds)
+            text = f"{count} {label}{'s' if count != 1 else ''}"
+            return f"in {text}" if future else f"{text} ago"
+
+    return "just now"
+
+
+def tg_time(
+    value,
+    *,
+    relative=True,
+    seconds=False,
+    fallback="—",
+):
+    parsed = _tg_parse_datetime(value)
+
+    if parsed is None:
+        return fallback if value in (None, "", "—") else str(value)
+
+    tz = _tg_system_timezone()
+    local_dt = parsed.astimezone(tz)
+    now = datetime.now(timezone.utc).astimezone(tz)
+
+    fmt = (
+        "%d %b %Y · %H:%M:%S"
+        if seconds
+        else "%d %b %Y · %H:%M"
+    )
+
+    absolute = local_dt.strftime(fmt)
+
+    if not relative:
+        return absolute
+
+    return (
+        f"{absolute} "
+        f"({_tg_relative((now - local_dt).total_seconds())})"
+    )
+
+
+def tg_now():
+    return tg_time(
+        datetime.now(timezone.utc),
+        relative=False,
+        seconds=True,
+    )
 
 def _read_project_version() -> str:
     candidates = (HERE / "VERSION", HERE.parent / "VERSION")
@@ -58,7 +201,10 @@ def _read_project_version() -> str:
     return "0.0.0"
 
 PROJECT_VERSION = _read_project_version()
-BOT_VERSION = f"wg-bot-{PROJECT_VERSION}"
+BOT_VERSION = (
+    os.getenv("WG_BOT_VERSION")
+    or "wg-bot-1.1.0"
+).strip() or "wg-bot-1.1.0"
 INSTANCE_DIR = Path(os.getenv("PANEL_INSTANCE_PATH", HERE / "instance")).resolve()
 INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
 TELEGRAM_SETTINGS_FILE = INSTANCE_DIR / "telegram_settings.json"
@@ -417,8 +563,8 @@ def _peer_more_info(p: Dict[str, Any]) -> str:
         f"⌁ <b>Server endpoint</b>: {html(g('endpoint'))}",
         f"◎ <b>Fixed client</b>: {html(g('peer_endpoint'))}",
         f"◇ <b>Public key</b>: <code>{html(g('public_key'))}</code>",
-        f"◷ <b>Created</b>: {html(g('created_at'))} • <b>First used</b>: {html(g('first_used'))}",
-        f"◷ <b>Expires</b>: {html(g('expires_at'))} • <b>TTL</b>: {html(human_ttl(p.get('ttl_seconds')))}",
+        f"◷ <b>Created</b>: {html(tg_time(p.get('created_at')))} • <b>First used</b>: {html(tg_time(p.get('first_used') or p.get('first_used_at'), fallback='Not started'))}",
+        f"◷ <b>Expires</b>: {html(tg_time(p.get('expires_at'), fallback='No expiry'))} • <b>TTL</b>: {html(human_ttl(p.get('ttl_seconds')))}",
         f"◫ <b>Limit</b>: {html(str(p.get('data_limit_value') or p.get('data_limit') or 0))} {html(g('data_limit_unit','limit_unit'))} • <b>Unlimited</b>: { 'Yes' if p.get('unlimited') else 'No' }",
         f"↓ RX: {html(str(p.get('rx') or 0))} MiB • ↑ TX: {html(str(p.get('tx') or 0))} MiB",
         f"☎ <b>Phone</b>: {html(g('phone_number'))} • <b>Telegram</b>: {html(g('telegram_id'))}",
@@ -2773,7 +2919,15 @@ def _subscription_time(row: dict) -> str:
     if ttl is not None:
         return human_ttl(ttl)
     expires = row.get("expires_at")
-    return str(expires or "Not started")
+
+    if not expires:
+        return "Not started"
+
+    return tg_time(
+        expires,
+        relative=True,
+        fallback="Not started",
+    )
 
 
 def render_subscription(subscription_id: int):
@@ -2906,9 +3060,20 @@ def render_bot_settings():
         (
             "Security",
             (
-                ("login_success", "Successful admin login"),
-                ("login_fail", "Failed login / 2FA"),
-                ("suspicious_4xx", "Suspicious 4xx activity"),
+                ("login_success", "Successful login"),
+                ("login_fail", "Failed login"),
+                ("suspicious_4xx", "Suspicious HTTP activity"),
+                ("security_block", "Temporary block applied"),
+                ("security_release", "Manual security release"),
+                ("security_auto_release", "Automatic security release"),
+            ),
+        ),
+        (
+            "Traffic Control",
+            (
+                ("traffic_policy_change", "Policy configuration changed"),
+                ("traffic_apply_success", "Rules applied successfully"),
+                ("traffic_apply_failed", "Rule application failed"),
             ),
         ),
         (
@@ -2927,6 +3092,7 @@ def render_bot_settings():
         for _group, items in notification_groups
         for key, _label in items
     ]
+
     enabled_count = sum(
         1
         for key in all_keys
@@ -2951,6 +3117,7 @@ def render_bot_settings():
             f"Bot token     "
             f"{'Configured' if tg.get('has_token') else 'Missing'}"
         ),
+        f"✦ Bot version   <code>{html(BOT_VERSION)}</code>",
         f"◇ Rules         <code>{enabled_count}/{len(all_keys)}</code> enabled",
     ]
 
@@ -2959,12 +3126,17 @@ def render_bot_settings():
             "",
             f"<b>{html(group_name)}</b>",
         ])
+
         for key, label in items:
             lines.append(
                 f"{mark(key)} {html(label)}"
             )
 
     lines.extend([
+        "",
+        "<b>Traffic note</b>",
+        "◇ Traffic alerts describe policy/configuration and nftables apply results.",
+        "◇ Per-destination blocks are counters, not a real-time event stream.",
         "",
         "<b>Subscription portal</b>",
         f"◇ Layout       <code>{html(portal.get('layout') or 'aurora')}</code>",
@@ -2976,106 +3148,58 @@ def render_bot_settings():
 
     rows = [
         [
-            InlineKeyboardButton(
-                f"{mark('app_down')} Panel down",
-                callback_data="settings:notify:app_down",
-            ),
-            InlineKeyboardButton(
-                f"{mark('app_up')} Panel up",
-                callback_data="settings:notify:app_up",
-            ),
+            InlineKeyboardButton(f"{mark('app_down')} Panel down", callback_data="settings:notify:app_down"),
+            InlineKeyboardButton(f"{mark('app_up')} Panel up", callback_data="settings:notify:app_up"),
         ],
         [
-            InlineKeyboardButton(
-                f"{mark('node_down')} Node down",
-                callback_data="settings:notify:node_down",
-            ),
-            InlineKeyboardButton(
-                f"{mark('node_up')} Node up",
-                callback_data="settings:notify:node_up",
-            ),
+            InlineKeyboardButton(f"{mark('node_down')} Node down", callback_data="settings:notify:node_down"),
+            InlineKeyboardButton(f"{mark('node_up')} Node up", callback_data="settings:notify:node_up"),
         ],
         [
-            InlineKeyboardButton(
-                f"{mark('iface_down')} Interface down",
-                callback_data="settings:notify:iface_down",
-            ),
-            InlineKeyboardButton(
-                f"{mark('iface_up')} Interface up",
-                callback_data="settings:notify:iface_up",
-            ),
+            InlineKeyboardButton(f"{mark('iface_down')} Interface down", callback_data="settings:notify:iface_down"),
+            InlineKeyboardButton(f"{mark('iface_up')} Interface up", callback_data="settings:notify:iface_up"),
         ],
         [
-            InlineKeyboardButton(
-                f"{mark('peer_expired')} Peer expired",
-                callback_data="settings:notify:peer_expired",
-            ),
-            InlineKeyboardButton(
-                f"{mark('peer_limit')} Peer limit",
-                callback_data="settings:notify:peer_limit",
-            ),
+            InlineKeyboardButton(f"{mark('peer_expired')} Peer expired", callback_data="settings:notify:peer_expired"),
+            InlineKeyboardButton(f"{mark('peer_limit')} Peer limit", callback_data="settings:notify:peer_limit"),
         ],
         [
-            InlineKeyboardButton(
-                f"{mark('login_success')} Login success",
-                callback_data="settings:notify:login_success",
-            ),
-            InlineKeyboardButton(
-                f"{mark('login_fail')} Login rejected",
-                callback_data="settings:notify:login_fail",
-            ),
+            InlineKeyboardButton(f"{mark('login_success')} Login success", callback_data="settings:notify:login_success"),
+            InlineKeyboardButton(f"{mark('login_fail')} Login failed", callback_data="settings:notify:login_fail"),
         ],
         [
-            InlineKeyboardButton(
-                f"{mark('suspicious_4xx')} Suspicious 4xx",
-                callback_data="settings:notify:suspicious_4xx",
-            ),
+            InlineKeyboardButton(f"{mark('suspicious_4xx')} Suspicious HTTP", callback_data="settings:notify:suspicious_4xx"),
+            InlineKeyboardButton(f"{mark('security_block')} Security block", callback_data="settings:notify:security_block"),
         ],
         [
-            InlineKeyboardButton(
-                f"{mark('backup_success')} Backup success",
-                callback_data="settings:notify:backup_success",
-            ),
-            InlineKeyboardButton(
-                f"{mark('backup_failed')} Backup failed",
-                callback_data="settings:notify:backup_failed",
-            ),
+            InlineKeyboardButton(f"{mark('security_release')} Manual release", callback_data="settings:notify:security_release"),
+            InlineKeyboardButton(f"{mark('security_auto_release')} Auto release", callback_data="settings:notify:security_auto_release"),
         ],
         [
-            InlineKeyboardButton(
-                f"{mark('update_success')} Update success",
-                callback_data="settings:notify:update_success",
-            ),
-            InlineKeyboardButton(
-                f"{mark('update_failed')} Update failed",
-                callback_data="settings:notify:update_failed",
-            ),
+            InlineKeyboardButton(f"{mark('traffic_policy_change')} Traffic changed", callback_data="settings:notify:traffic_policy_change"),
+            InlineKeyboardButton(f"{mark('traffic_apply_success')} Traffic applied", callback_data="settings:notify:traffic_apply_success"),
         ],
         [
-            InlineKeyboardButton(
-                "◆ Critical only",
-                callback_data="settings:notify:preset:critical",
-            ),
-            InlineKeyboardButton(
-                "● Select all",
-                callback_data="settings:notify:preset:all",
-            ),
+            InlineKeyboardButton(f"{mark('traffic_apply_failed')} Traffic failed", callback_data="settings:notify:traffic_apply_failed"),
         ],
         [
-            InlineKeyboardButton(
-                "○ Clear all",
-                callback_data="settings:notify:preset:none",
-            ),
+            InlineKeyboardButton(f"{mark('backup_success')} Backup success", callback_data="settings:notify:backup_success"),
+            InlineKeyboardButton(f"{mark('backup_failed')} Backup failed", callback_data="settings:notify:backup_failed"),
         ],
         [
-            InlineKeyboardButton(
-                "↻ Refresh",
-                callback_data="home:settings",
-            ),
-            InlineKeyboardButton(
-                "← Dashboard",
-                callback_data="home:main",
-            ),
+            InlineKeyboardButton(f"{mark('update_success')} Update success", callback_data="settings:notify:update_success"),
+            InlineKeyboardButton(f"{mark('update_failed')} Update failed", callback_data="settings:notify:update_failed"),
+        ],
+        [
+            InlineKeyboardButton("◆ Critical only", callback_data="settings:notify:preset:critical"),
+            InlineKeyboardButton("● Select all", callback_data="settings:notify:preset:all"),
+        ],
+        [
+            InlineKeyboardButton("○ Clear all", callback_data="settings:notify:preset:none"),
+        ],
+        [
+            InlineKeyboardButton("↻ Refresh", callback_data="home:settings"),
+            InlineKeyboardButton("← Dashboard", callback_data="home:main"),
         ],
     ]
 
@@ -3158,12 +3282,724 @@ def render_update_center(*, fresh: bool = False):
     return "\n".join(lines), InlineKeyboardMarkup(rows)
 
 
+TG_SECURITY_STATE = "tg_security_control"
+TG_TRAFFIC_NEW_STATE = "tg_traffic_new"
+TG_TRAFFIC_TEST_STATE = "tg_traffic_test"
+TG_TRAFFIC_PAGE_STATE = "tg_traffic_page"
+
+
+def _ctl_error(data, fallback="Request failed") -> str:
+    if not isinstance(data, dict):
+        return str(data or fallback)
+    return str(
+        data.get("detail")
+        or data.get("message")
+        or data.get("error")
+        or fallback
+    )
+
+
+def security_control_data() -> dict:
+    return _api_data("GET", "/api/security/http-protection", timeout=15)
+
+
+def security_control_save(payload: dict) -> dict:
+    return _api_data("POST", "/api/security/http-protection", payload=payload, timeout=15)
+
+
+def security_unban(ip: str) -> dict:
+    return _api_data("POST", "/api/security/http-protection/unban", payload={"ip": ip}, timeout=15)
+
+
+def security_events(limit: int = 12) -> dict:
+    return _api_data("GET", f"/api/security/http-protection/events?limit={max(1,min(int(limit),50))}", timeout=15)
+
+
+def render_security_control():
+    data = security_control_data()
+    if data.get("ok") is False:
+        return (
+            "⊘ <b>Security control unavailable</b>\n\n"
+            f"<code>{html(_ctl_error(data))}</code>",
+            KB.back("home:main"),
+        )
+
+    settings = data.get("settings") or {}
+    blocks = data.get("active_blocks") or []
+    stats = data.get("stats_24h") or {}
+    deny = settings.get("deny_networks") or []
+    trusted = settings.get("trusted_networks") or []
+    firewall = data.get("firewall") or {}
+
+    enabled = bool(settings.get("enabled"))
+    mode = str(settings.get("response_mode") or "monitor").lower()
+    fw_text = "Ready" if firewall.get("usable") else "Application only"
+
+    lines = [
+        "◆ <b>Security</b>",
+        "<i>Panel HTTP/login protection</i>",
+        "",
+        f"{'●' if enabled else '○'} Protection   <b>{'Enabled' if enabled else 'Disabled'}</b>",
+        f"◇ Response     <code>{html(mode)}</code>",
+        f"⊘ Active blocks <code>{len(blocks)}</code>",
+        f"◆ Permanent deny <code>{len(deny)}</code>",
+        f"◇ Trusted       <code>{len(trusted)}</code>",
+        f"⌘ Firewall      <code>{html(fw_text)}</code>",
+        "",
+        "<b>Last 24 hours</b>",
+        f"◇ Requests      <code>{int(stats.get('requests') or stats.get('events') or 0)}</code>",
+        f"◆ Blocks        <code>{int(stats.get('blocks') or 0)}</code>",
+        f"◇ Releases      <code>{int(stats.get('releases') or 0)}</code>",
+    ]
+    if blocks:
+        lines += ["", "<b>Currently blocked</b>"]
+        for row in blocks[:5]:
+            ip = str(row.get("ip") or "—")
+            reason = str(row.get("reason") or row.get("category") or "Security threshold")
+            until = row.get("blocked_until")
+            lines.append(f"⊘ <code>{html(ip)}</code> · {html(reason[:70])}" + (f" · {html(tg_time(until, seconds=False))}" if until else ""))
+        if len(blocks) > 5:
+            lines.append(f"… and {len(blocks)-5} more")
+
+    rows = [
+        [
+            InlineKeyboardButton("○ Disable" if enabled else "● Enable", callback_data="security:toggle"),
+            InlineKeyboardButton("⊘ Block mode" if mode != "block" else "◇ Monitor mode", callback_data="security:mode"),
+        ],
+        [
+            InlineKeyboardButton("⊘ Active blocks", callback_data="security:blocks"),
+            InlineKeyboardButton("◆ Deny list", callback_data="security:deny"),
+        ],
+        [
+            InlineKeyboardButton("＋ Block IP / CIDR", callback_data="security:deny:add"),
+            InlineKeyboardButton("◷ Recent activity", callback_data="security:events"),
+        ],
+        [InlineKeyboardButton("↻ Refresh", callback_data="security:menu"), InlineKeyboardButton("← Dashboard", callback_data="home:main")],
+    ]
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+
+def render_security_blocks():
+    data = security_control_data()
+    blocks = data.get("active_blocks") or [] if isinstance(data, dict) else []
+    lines = ["⊘ <b>Active security blocks</b>", ""]
+    rows = []
+    if not blocks:
+        lines.append("No temporary blocks are active.")
+    for idx, row in enumerate(blocks[:30]):
+        ip = str(row.get("ip") or "")
+        reason = str(row.get("reason") or row.get("category") or "Security threshold")
+        lines.append(f"{idx+1}. <code>{html(ip)}</code> · {html(reason[:80])}")
+        if ip:
+            rows.append([InlineKeyboardButton(f"◇ Release {ip}", callback_data=f"security:unban:{idx}")])
+    rows.append([InlineKeyboardButton("← Security", callback_data="security:menu")])
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+
+def render_security_deny():
+    data = security_control_data()
+    settings = data.get("settings") or {} if isinstance(data, dict) else {}
+    deny = list(settings.get("deny_networks") or [])
+    lines = ["◆ <b>Permanent deny list</b>", "<i>These addresses are blocked by the panel security policy.</i>", ""]
+    rows = [[InlineKeyboardButton("＋ Add IP / CIDR", callback_data="security:deny:add")]]
+    if not deny:
+        lines.append("No permanent deny entries.")
+    for idx, value in enumerate(deny[:40]):
+        lines.append(f"{idx+1}. <code>{html(value)}</code>")
+        rows.append([InlineKeyboardButton(f"✕ Remove {value}", callback_data=f"security:deny:remove:{idx}")])
+    rows.append([InlineKeyboardButton("← Security", callback_data="security:menu")])
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+
+def render_security_events():
+    data = security_events(15)
+    rows_data = data.get("events") or [] if isinstance(data, dict) else []
+    lines = ["◷ <b>Recent security activity</b>", ""]
+    if not rows_data:
+        lines.append("No recent security events.")
+    for row in rows_data[:15]:
+        event = str(row.get("type") or row.get("action") or "event").replace("_", " ")
+        ip = str(row.get("ip") or "—")
+        reason = str(row.get("reason") or "")
+        ts = row.get("ts")
+        time_label = tg_time(ts, seconds=False) if ts else ""
+        lines.append(f"◇ <b>{html(event.title())}</b> · <code>{html(ip)}</code>" + (f"\n   {html(reason[:100])}" if reason else "") + (f"\n   ◷ {html(time_label)}" if time_label else ""))
+    return "\n".join(lines), InlineKeyboardMarkup([[InlineKeyboardButton("↻ Refresh", callback_data="security:events")], [InlineKeyboardButton("← Security", callback_data="security:menu")]])
+
+
+def traffic_control_data() -> dict:
+    return _api_data("GET", "/api/traffic-control", timeout=25)
+
+
+def traffic_control_save_config(policies: list, enabled: bool = True) -> dict:
+    return _api_data("POST", "/api/traffic-control", payload={"enabled": bool(enabled), "policies": policies}, timeout=25)
+
+
+def traffic_control_apply_now() -> dict:
+    return _api_data("POST", "/api/traffic-control/apply", payload={}, timeout=90)
+
+
+def _traffic_policy_index(data: dict, pid: str):
+    for idx, policy in enumerate(data.get("policies") or []):
+        if str((policy or {}).get("id") or "") == str(pid):
+            return idx, policy
+    return -1, None
+
+
+def _traffic_counter_for(data: dict, policy: dict) -> tuple[int, int]:
+    pid = str(policy.get("id") or "")
+    packets = 0
+    bytes_value = 0
+    if policy.get("location") == "node":
+        status = (data.get("nodes") or {}).get(str(policy.get("node_id") or ""), {}) or {}
+    else:
+        status = data.get("local") or {}
+    counters = status.get("counters") or {}
+    for key, row in counters.items():
+        if str(key).startswith(pid) or str(key) == pid:
+            packets += int((row or {}).get("packets") or 0)
+            bytes_value += int((row or {}).get("bytes") or 0)
+    return packets, bytes_value
+
+
+def render_traffic_control(page: int = 1):
+    data = traffic_control_data()
+    if data.get("ok") is False:
+        return (
+            "⊘ <b>Traffic Control unavailable</b>\n\n"
+            "<code>" + html(_ctl_error(data)) + "</code>",
+            KB.back("home:main"),
+        )
+
+    policies = list(data.get("policies") or [])
+    page_size = 6
+    pages = max(1, math.ceil(len(policies) / page_size))
+    try:
+        page = max(1, min(int(page or 1), pages))
+    except Exception:
+        page = 1
+    visible = policies[(page - 1) * page_size:page * page_size]
+    enabled_count = sum(1 for p in policies if p.get("enabled", True))
+    local_loaded = bool((data.get("local") or {}).get("loaded"))
+    nodes = data.get("nodes") or {}
+    node_loaded = sum(1 for st in nodes.values() if isinstance(st, dict) and st.get("loaded"))
+    total_packets = 0
+    total_bytes = 0
+    for p in policies:
+        packets, bytes_value = _traffic_counter_for(data, p)
+        total_packets += packets
+        total_bytes += bytes_value
+
+    lines = [
+        "⌘ <b>Traffic Control</b>",
+        "<i>WireGuard forwarding policy</i>",
+        "",
+        f"{'●' if data.get('enabled', True) else '○'} Engine       <b>{'Enabled' if data.get('enabled', True) else 'Disabled'}</b>",
+        f"◇ Policies     <code>{len(policies)}</code> · active <code>{enabled_count}</code>",
+        f"⊘ Blocked      <code>{total_packets}</code> packet{'' if total_packets == 1 else 's'} · <code>{html(_human_bytes(total_bytes))}</code>",
+        f"⌘ Local rules  <code>{'loaded' if local_loaded else 'not loaded'}</code>",
+        f"⌁ Nodes loaded <code>{node_loaded}/{len(nodes)}</code>",
+        "",
+        f"<b>Policies · page {page}/{pages}</b>",
+        "<i>Tap a policy to inspect or manage it.</i>",
+    ]
+    buttons=[]
+    if not visible:
+        lines += ["", "No Traffic Control policies yet."]
+    for p in visible:
+        pid=str(p.get("id") or "")
+        mark="●" if p.get("enabled", True) else "○"
+        location="Local" if p.get("location") == "local" else f"Node {p.get('node_id') or '—'}"
+        iface=str(p.get("interface") or "—")
+        scope="Peer" if p.get("source_mode") == "peer" else "Interface"
+        name=str(p.get("name") or "Policy").strip()
+        label=f"{mark} {name} · {location} · {iface} · {scope}"
+        if len(label) > 60:
+            label=label[:59] + "…"
+        buttons.append([InlineKeyboardButton(label, callback_data=f"traffic:open:{pid}")])
+    nav=[]
+    if page > 1: nav.append(InlineKeyboardButton("‹ Previous", callback_data=f"traffic:list:{page-1}"))
+    if page < pages: nav.append(InlineKeyboardButton("Next ›", callback_data=f"traffic:list:{page+1}"))
+    if nav: buttons.append(nav)
+    buttons += [
+        [InlineKeyboardButton("＋ New policy", callback_data="traffic:new"), InlineKeyboardButton("↻ Apply rules", callback_data="traffic:apply")],
+        [InlineKeyboardButton("↻ Refresh", callback_data=f"traffic:list:{page}"), InlineKeyboardButton("← Dashboard", callback_data="home:main")],
+    ]
+    return "\n".join(lines), InlineKeyboardMarkup(buttons)
+
+def render_traffic_policy(pid: str, return_page: int = 1):
+    data = traffic_control_data()
+    _, p = _traffic_policy_index(data, pid)
+    if not p:
+        return "⊘ Traffic policy was not found.", KB.back(f"traffic:list:{return_page}")
+    packets, bytes_value = _traffic_counter_for(data, p)
+    dest=[]
+    dest += [f"domain:{x}" for x in (p.get("domains") or [])]
+    dest += [f"ip:{x}" for x in (p.get("cidrs") or [])]
+    dest += [f"country:{x}" for x in (p.get("countries") or [])]
+    scope = "Entire interface" if p.get("source_mode") != "peer" else f"Peer {p.get('source_ip') or '—'}"
+    location = "Local" if p.get("location") == "local" else f"Node {p.get('node_id') or '—'}"
+    lines=[
+        f"{'●' if p.get('enabled',True) else '○'} <b>{html(p.get('name') or 'Traffic policy')}</b>",
+        "",
+        f"◇ Location   <code>{html(location)}</code>",
+        f"⌘ Interface  <code>{html(p.get('interface') or '—')}</code>",
+        f"◇ Scope      <code>{html(scope)}</code>",
+        f"⊘ Packets    <code>{packets}</code>",
+        f"▦ Data       <code>{html(_human_bytes(bytes_value))}</code>",
+        "",
+        "<b>Blocked destinations</b>",
+    ]
+    if dest:
+        lines += [f"• <code>{html(x)}</code>" for x in dest[:18]]
+        if len(dest)>18: lines.append(f"… and {len(dest)-18} more")
+    else:
+        lines.append("No destinations configured.")
+    kb=InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "○ Disable" if p.get("enabled", True) else "● Enable",
+                callback_data=f"traffic:toggle:{pid}",
+            ),
+            InlineKeyboardButton("✦ Edit", callback_data=f"traffic:edit:{pid}"),
+        ],
+        [
+            InlineKeyboardButton("✓ Check policy", callback_data=f"traffic:verify:{pid}"),
+            InlineKeyboardButton("⌕ Test destination", callback_data=f"traffic:test:{pid}"),
+        ],
+        [
+            InlineKeyboardButton("↻ Apply", callback_data="traffic:apply"),
+            InlineKeyboardButton("⌫ Delete", callback_data=f"traffic:delete:confirm:{pid}"),
+        ],
+        [InlineKeyboardButton("← Traffic Control", callback_data=f"traffic:list:{return_page}")],
+    ])
+    return "\n".join(lines), kb
+
+
+def _traffic_target_label(target: dict) -> str:
+    loc = "Local" if target.get("location") == "local" else str(target.get("node_name") or f"Node {target.get('node_id') or ''}")
+    return f"{loc} · {target.get('name') or 'interface'}"[:55]
+
+
+def _classify_traffic_destinations(text: str):
+    domains=[]; cidrs=[]; countries=[]
+    for raw in re.split(r"[\n,]+", str(text or "")):
+        value=raw.strip()
+        if not value: continue
+        low=value.lower()
+        if low.startswith(("country:", "geo:")):
+            cc=value.split(":",1)[1].strip().upper()
+            if not re.fullmatch(r"[A-Z]{2}",cc): raise ValueError(f"Invalid country code: {cc}")
+            if cc not in countries: countries.append(cc)
+            continue
+        if low.startswith(("domain:", "host:")):
+            value=value.split(":",1)[1].strip()
+            if value and value not in domains: domains.append(value)
+            continue
+        if low.startswith(("ip:", "cidr:")):
+            value=value.split(":",1)[1].strip()
+        candidate=value.strip("[]")
+        try:
+            if "/" in candidate:
+                norm=str(ipaddress.ip_network(candidate, strict=False))
+            else:
+                ip=ipaddress.ip_address(candidate); norm=str(ip)
+            if norm not in cidrs: cidrs.append(norm)
+            continue
+        except Exception:
+            pass
+        if value not in domains: domains.append(value)
+    if not (domains or cidrs or countries):
+        raise ValueError("Enter at least one domain, IP/CIDR, or country:XX value.")
+    return domains, cidrs, countries
+
+
+
+def _traffic_policy_copy(policy: dict) -> dict:
+    """Return a safe mutable copy of one Traffic Control policy."""
+    p = dict(policy or {})
+    for key in ("domains", "cidrs", "countries"):
+        p[key] = list(p.get(key) or [])
+    return p
+
+
+def _traffic_apply_policy_update(current: dict, policy: dict) -> tuple[dict, dict]:
+    """Replace one policy by id, save the complete config, then apply it."""
+    policy = _traffic_policy_copy(policy)
+    pid = str(policy.get("id") or "").strip()
+    policies = [_traffic_policy_copy(p) for p in (current.get("policies") or [])]
+    index, _old = _traffic_policy_index({"policies": policies}, pid)
+    if index < 0:
+        return {"ok": False, "error": "policy_not_found", "detail": "Traffic policy no longer exists."}, {}
+    policies[index] = policy
+    saved = traffic_control_save_config(policies, bool(current.get("enabled", True)))
+    if saved.get("ok") is False:
+        return saved, {}
+    applied = traffic_control_apply_now()
+    return saved, applied
+
+
+def render_traffic_edit_menu(pid: str, return_page: int = 1):
+    data = traffic_control_data()
+    _, p = _traffic_policy_index(data, pid)
+    if not p:
+        return "⊘ Traffic policy was not found.", KB.back(f"traffic:list:{return_page}")
+
+    target_count = (
+        len(p.get("domains") or [])
+        + len(p.get("cidrs") or [])
+        + len(p.get("countries") or [])
+    )
+    location = (
+        "Local"
+        if p.get("location") == "local"
+        else f"Node {p.get('node_id') or '—'}"
+    )
+    scope = (
+        "Entire interface"
+        if p.get("source_mode") != "peer"
+        else f"Peer {p.get('source_ip') or '—'}"
+    )
+
+    text = "\n".join([
+        f"✦ <b>Edit {html(p.get('name') or 'Traffic policy')}</b>",
+        "",
+        f"◇ Location      <code>{html(location)}</code>",
+        f"⌘ Interface     <code>{html(p.get('interface') or '—')}</code>",
+        f"◇ Scope         <code>{html(scope)}</code>",
+        f"⊘ Destinations  <code>{target_count}</code>",
+        "",
+        "Choose the part you want to change. Changes are saved and applied immediately.",
+    ])
+
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("◇ Name", callback_data=f"traffic:edit:name:{pid}"),
+            InlineKeyboardButton("⊘ Destinations", callback_data=f"traffic:edit:dest:{pid}"),
+        ],
+        [InlineKeyboardButton("⌘ Location / scope", callback_data=f"traffic:edit:scope:{pid}")],
+        [InlineKeyboardButton("← Policy", callback_data=f"traffic:open:{pid}")],
+    ])
+    return text, kb
+
+
+def _traffic_edit_save_scope(state: dict) -> tuple[str, dict, dict]:
+    """Save a scope/location change after target + optional peer selection."""
+    pid = str(state.get("policy_id") or "").strip()
+    current = traffic_control_data()
+    _, original = _traffic_policy_index(current, pid)
+    if not original:
+        return pid, {"ok": False, "error": "policy_not_found"}, {}
+
+    target = state.get("target") or {}
+    updated = _traffic_policy_copy(original)
+    updated["location"] = target.get("location") or ("node" if target.get("node_id") else "local")
+    updated["node_id"] = target.get("node_id")
+    updated["interface"] = target.get("name") or ""
+    updated["source_mode"] = state.get("source_mode") or "interface"
+    updated["source_ip"] = state.get("source_ip") or ""
+
+    saved, applied = _traffic_apply_policy_update(current, updated)
+    return pid, saved, applied
+
+
+async def _handle_security_callback(update, context, data: str):
+    q=update.callback_query
+    if data == "security:menu":
+        text,kb=await asyncio.to_thread(render_security_control); await edit_send(update,text,kb); return True
+    if data == "security:toggle":
+        cur=await asyncio.to_thread(security_control_data); settings=cur.get("settings") or {}
+        result=await asyncio.to_thread(security_control_save,{"enabled":not bool(settings.get("enabled"))})
+        if result.get("ok") is False:
+            await q.answer(_ctl_error(result),show_alert=True)
+            return True
+        text,kb=await asyncio.to_thread(render_security_control); await edit_send(update,text,kb); return True
+    if data == "security:mode":
+        cur=await asyncio.to_thread(security_control_data); settings=cur.get("settings") or {}; mode="monitor" if str(settings.get("response_mode"))=="block" else "block"
+        result=await asyncio.to_thread(security_control_save,{"response_mode":mode,"enabled":True})
+        if result.get("ok") is False:
+            await q.answer(_ctl_error(result),show_alert=True)
+            return True
+        text,kb=await asyncio.to_thread(render_security_control); await edit_send(update,text,kb); return True
+    if data == "security:blocks":
+        text,kb=await asyncio.to_thread(render_security_blocks); await edit_send(update,text,kb); return True
+    if data.startswith("security:unban:"):
+        idx=int(data.rsplit(":",1)[-1]); cur=await asyncio.to_thread(security_control_data); blocks=cur.get("active_blocks") or []
+        if idx<0 or idx>=len(blocks): await q.answer("Block no longer exists.",show_alert=True); return True
+        ip=str(blocks[idx].get("ip") or ""); result=await asyncio.to_thread(security_unban,ip)
+        if result.get("ok") is False: await q.answer(_ctl_error(result),show_alert=True)
+        text,kb=await asyncio.to_thread(render_security_blocks); await edit_send(update,text,kb); return True
+    if data == "security:deny":
+        text,kb=await asyncio.to_thread(render_security_deny); await edit_send(update,text,kb); return True
+    if data == "security:deny:add":
+        context.user_data[TG_SECURITY_STATE]={"stage":"deny_add"}
+        await edit_send(update,"◆ <b>Block IP / CIDR</b>\n\nSend an IP or network, for example:\n<code>203.0.113.15</code>\n<code>203.0.113.0/24</code>\n\nSend <code>-</code> to cancel.",KB.back("security:deny")); return True
+    if data.startswith("security:deny:remove:"):
+        idx=int(data.rsplit(":",1)[-1]); cur=await asyncio.to_thread(security_control_data); settings=cur.get("settings") or {}; deny=list(settings.get("deny_networks") or [])
+        if idx<0 or idx>=len(deny): await q.answer("Entry no longer exists.",show_alert=True); return True
+        removed=deny.pop(idx); result=await asyncio.to_thread(security_control_save,{"deny_networks":deny})
+        if result.get("ok") is False: await q.answer(_ctl_error(result),show_alert=True)
+        else: _log_admin_update(update,"security_deny_remove",f"network={removed}")
+        text,kb=await asyncio.to_thread(render_security_deny); await edit_send(update,text,kb); return True
+    if data == "security:events":
+        text,kb=await asyncio.to_thread(render_security_events); await edit_send(update,text,kb); return True
+    return False
+
+
+async def _handle_traffic_callback(update, context, data: str):
+    q=update.callback_query
+    if data == "traffic:menu" or data.startswith("traffic:list:"):
+        page=int(data.rsplit(":",1)[-1]) if data.startswith("traffic:list:") else 1
+        context.user_data[TG_TRAFFIC_PAGE_STATE] = page
+        text,kb=await asyncio.to_thread(render_traffic_control,page)
+        await edit_send(update,text,kb)
+        return True
+    try:
+        return_page=max(1,int(context.user_data.get(TG_TRAFFIC_PAGE_STATE) or 1))
+    except Exception:
+        return_page=1
+    if data.startswith("traffic:open:"):
+        pid=data.split(":",2)[-1]
+        text,kb=await asyncio.to_thread(render_traffic_policy,pid,return_page)
+        await edit_send(update,text,kb)
+        return True
+    if data == "traffic:apply":
+        await q.answer("Applying rules…")
+        result=await asyncio.to_thread(traffic_control_apply_now)
+        if result.get("ok") is False: await q.answer(_ctl_error(result),show_alert=True)
+        text,kb=await asyncio.to_thread(render_traffic_control,return_page); await edit_send(update,text,kb); return True
+    if data.startswith("traffic:toggle:"):
+        pid=data.split(":",2)[-1]; cur=await asyncio.to_thread(traffic_control_data); policies=list(cur.get("policies") or []); idx,p=_traffic_policy_index(cur,pid)
+        if not p: await q.answer("Policy not found.",show_alert=True); return True
+        policies[idx]={**p,"enabled":not bool(p.get("enabled",True))}
+        saved=await asyncio.to_thread(traffic_control_save_config,policies,bool(cur.get("enabled",True)))
+        if saved.get("ok") is False: await q.answer(_ctl_error(saved),show_alert=True); return True
+        applied=await asyncio.to_thread(traffic_control_apply_now)
+        if applied.get("ok") is False: await q.answer(_ctl_error(applied),show_alert=True)
+        text,kb=await asyncio.to_thread(render_traffic_policy,pid,return_page); await edit_send(update,text,kb); return True
+    if data.startswith("traffic:delete:confirm:"):
+        pid=data.split(":",3)[-1]
+        await edit_send(update,"⊘ <b>Delete this Traffic Control policy?</b>\n\nThe policy will be removed and live rules will be re-applied.",InlineKeyboardMarkup([[InlineKeyboardButton("⌫ Delete",callback_data=f"traffic:delete:run:{pid}")],[InlineKeyboardButton("← Cancel",callback_data=f"traffic:open:{pid}")]])); return True
+    if data.startswith("traffic:delete:run:"):
+        pid=data.split(":",3)[-1]; cur=await asyncio.to_thread(traffic_control_data); policies=[p for p in (cur.get("policies") or []) if str(p.get("id") or "")!=pid]
+        saved=await asyncio.to_thread(traffic_control_save_config,policies,bool(cur.get("enabled",True)))
+        if saved.get("ok") is False: await q.answer(_ctl_error(saved),show_alert=True); return True
+        applied=await asyncio.to_thread(traffic_control_apply_now)
+        if applied.get("ok") is False:
+            await edit_send(update,f"◆ <b>Policy deleted, but live rule apply failed.</b>\n\n<code>{html(_ctl_error(applied))}</code>",KB.back("traffic:list:1"))
+            return True
+        _log_admin_update(update,"traffic_policy_delete",f"policy_id={pid}")
+        text,kb=await asyncio.to_thread(render_traffic_control,1); await edit_send(update,text,kb); return True
+    if data.startswith("traffic:test:"):
+        pid=data.split(":",2)[-1]; context.user_data[TG_TRAFFIC_TEST_STATE]={"policy_id":pid,"return_page":return_page}
+        await edit_send(update,"⌕ <b>Test destination</b>\n\nSend a domain, URL, IPv4 or IPv6 address. The panel will compare it against the live nftables sets and scoped rules.\n\nSend <code>-</code> to cancel.",KB.back(f"traffic:open:{pid}")); return True
+
+    if data.startswith("traffic:verify:"):
+        pid = data.split(":", 2)[-1]
+        result = await asyncio.to_thread(
+            _api_data,
+            "POST",
+            "/api/traffic-control/test",
+            payload={"policy_id": pid},
+            timeout=35,
+        )
+        if result.get("ok") is False:
+            await edit_send(
+                update,
+                "⊘ <b>Policy check failed</b>\n\n"
+                f"<code>{html(_ctl_error(result))}</code>",
+                KB.back(f"traffic:open:{pid}"),
+            )
+            return True
+
+        checks = list(result.get("checks") or [])
+        counters = result.get("counters") or {}
+        icons = {"pass": "●", "fail": "⊘", "warn": "◆", "info": "◇"}
+        lines = [
+            "✓ <b>Live policy check</b>",
+            "",
+            f"Policy  <code>{html(result.get('policy_name') or pid)}</code>",
+        ]
+        for row in checks[:20]:
+            state = str(row.get("status") or "info").lower()
+            lines.append(
+                f"{icons.get(state, '◇')} <b>{html(row.get('label') or row.get('key') or 'Check')}</b>\n"
+                f"   {html(str(row.get('detail') or '')[:220])}"
+            )
+        lines += [
+            "",
+            f"⊘ Blocked packets  <code>{int(counters.get('packets') or 0)}</code>",
+            f"▦ Blocked data     <code>{html(_human_bytes(counters.get('bytes') or 0))}</code>",
+        ]
+        await edit_send(
+            update,
+            "\n".join(lines),
+            InlineKeyboardMarkup([
+                [InlineKeyboardButton("↻ Check again", callback_data=f"traffic:verify:{pid}")],
+                [InlineKeyboardButton("← Policy", callback_data=f"traffic:open:{pid}")],
+            ]),
+        )
+        return True
+
+    if data.startswith("traffic:edit:name:"):
+        pid = data.split(":", 3)[-1]
+        cur = await asyncio.to_thread(traffic_control_data)
+        _, policy = _traffic_policy_index(cur, pid)
+        if not policy:
+            await q.answer("Policy not found.", show_alert=True)
+            return True
+        context.user_data[TG_TRAFFIC_NEW_STATE] = {
+            "mode": "edit_name",
+            "policy_id": pid,
+            "return_page": return_page,
+            "stage": "edit_name",
+        }
+        await edit_send(
+            update,
+            f"◇ <b>Edit policy name</b>\n\nCurrent: <code>{html(policy.get('name') or 'Traffic policy')}</code>\n\nSend the new name.\nSend <code>-</code> to cancel.",
+            KB.back(f"traffic:edit:{pid}"),
+        )
+        return True
+
+    if data.startswith("traffic:edit:dest:"):
+        pid = data.split(":", 3)[-1]
+        cur = await asyncio.to_thread(traffic_control_data)
+        _, policy = _traffic_policy_index(cur, pid)
+        if not policy:
+            await q.answer("Policy not found.", show_alert=True)
+            return True
+        current_values = (
+            [str(x) for x in (policy.get("domains") or [])]
+            + [str(x) for x in (policy.get("cidrs") or [])]
+            + [f"country:{x}" for x in (policy.get("countries") or [])]
+        )
+        context.user_data[TG_TRAFFIC_NEW_STATE] = {
+            "mode": "edit_destinations",
+            "policy_id": pid,
+            "return_page": return_page,
+            "stage": "edit_destinations",
+        }
+        await edit_send(
+            update,
+            "⊘ <b>Edit blocked destinations</b>\n\n"
+            "Send the complete replacement list separated by commas or new lines.\n"
+            "The old list will be replaced, not appended.\n\n"
+            f"<b>Current</b>\n<code>{html(', '.join(current_values) or 'None')}</code>\n\n"
+            "Examples: <code>youtube.com, 1.1.1.1, country:IR</code>\n"
+            "Send <code>-</code> to cancel.",
+            KB.back(f"traffic:edit:{pid}"),
+        )
+        return True
+
+    if data.startswith("traffic:edit:scope:"):
+        pid = data.split(":", 3)[-1]
+        cur = await asyncio.to_thread(traffic_control_data)
+        _, policy = _traffic_policy_index(cur, pid)
+        targets = list(cur.get("targets") or [])
+        if not policy:
+            await q.answer("Policy not found.", show_alert=True)
+            return True
+        if not targets:
+            await q.answer("No WireGuard interfaces are available.", show_alert=True)
+            return True
+        context.user_data[TG_TRAFFIC_NEW_STATE] = {
+            "mode": "edit_scope",
+            "policy_id": pid,
+            "return_page": return_page,
+            "stage": "target",
+            "targets": targets,
+        }
+        rows = [
+            [InlineKeyboardButton(_traffic_target_label(t), callback_data=f"traffic:new:target:{idx}")]
+            for idx, t in enumerate(targets[:50])
+        ]
+        rows.append([InlineKeyboardButton("← Edit policy", callback_data=f"traffic:edit:{pid}")])
+        await edit_send(
+            update,
+            "⌘ <b>Edit location / scope</b>\n\nChoose the WireGuard interface for this policy:",
+            InlineKeyboardMarkup(rows),
+        )
+        return True
+
+    if data.startswith("traffic:edit:"):
+        pid = data.split(":", 2)[-1]
+        text_out, keyboard = await asyncio.to_thread(render_traffic_edit_menu, pid, return_page)
+        await edit_send(update, text_out, keyboard)
+        return True
+
+    if data == "traffic:new":
+        cur=await asyncio.to_thread(traffic_control_data); targets=list(cur.get("targets") or [])
+        if not targets: await q.answer("No WireGuard interfaces are available.",show_alert=True); return True
+        context.user_data[TG_TRAFFIC_NEW_STATE]={"stage":"target","targets":targets}
+        rows=[]
+        for idx,t in enumerate(targets[:50]): rows.append([InlineKeyboardButton(_traffic_target_label(t),callback_data=f"traffic:new:target:{idx}")])
+        rows.append([InlineKeyboardButton("← Traffic Control",callback_data="traffic:list:1")])
+        await edit_send(update,"＋ <b>New Traffic Control policy</b>\n\nChoose the WireGuard interface to protect:",InlineKeyboardMarkup(rows)); return True
+    if data.startswith("traffic:new:target:"):
+        idx=int(data.rsplit(":",1)[-1]); st=context.user_data.get(TG_TRAFFIC_NEW_STATE) or {}; targets=st.get("targets") or []
+        if idx<0 or idx>=len(targets): await q.answer("Target expired. Start again.",show_alert=True); return True
+        st["target"]=targets[idx]; st["stage"]="scope"; context.user_data[TG_TRAFFIC_NEW_STATE]=st
+        rows=[[InlineKeyboardButton("⌘ Entire interface",callback_data="traffic:new:scope:interface")]]
+        peers=targets[idx].get("peers") or []
+        if peers: rows.append([InlineKeyboardButton("◇ One peer",callback_data="traffic:new:scope:peer")])
+        rows.append([InlineKeyboardButton("← Cancel",callback_data="traffic:list:1")])
+        await edit_send(update,f"⌘ <b>{html(_traffic_target_label(targets[idx]))}</b>\n\nChoose the source scope:",InlineKeyboardMarkup(rows)); return True
+    if data == "traffic:new:scope:interface":
+        st=context.user_data.get(TG_TRAFFIC_NEW_STATE) or {}
+        st.update({"source_mode":"interface","source_ip":""})
+        if st.get("mode") == "edit_scope":
+            pid, saved, applied = await asyncio.to_thread(_traffic_edit_save_scope, st)
+            context.user_data.pop(TG_TRAFFIC_NEW_STATE, None)
+            if saved.get("ok") is False:
+                await edit_send(update, f"⊘ <b>Could not save policy scope.</b>\n\n<code>{html(_ctl_error(saved))}</code>", KB.back(f"traffic:edit:{pid}"))
+                return True
+            if applied.get("ok") is False:
+                await edit_send(update, f"◆ <b>Scope saved, but apply failed.</b>\n\n<code>{html(_ctl_error(applied))}</code>", KB.back(f"traffic:open:{pid}"))
+                return True
+            _log_admin_update(update, "traffic_policy_edit_scope", f"policy_id={pid}; scope=interface")
+            out,kb=await asyncio.to_thread(render_traffic_policy,pid,return_page)
+            await edit_send(update,"● <b>Policy scope updated and applied.</b>\n\n"+out,kb)
+            return True
+        st.update({"stage":"name"})
+        context.user_data[TG_TRAFFIC_NEW_STATE]=st
+        await edit_send(update,"◇ <b>Policy name</b>\n\nSend a short name, for example <code>Block social media</code>.\nSend <code>-</code> to cancel.",KB.back("traffic:list:1")); return True
+    if data == "traffic:new:scope:peer":
+        st=context.user_data.get(TG_TRAFFIC_NEW_STATE) or {}; target=st.get("target") or {}; peers=target.get("peers") or []
+        rows=[]
+        for idx,p in enumerate(peers[:60]): rows.append([InlineKeyboardButton(f"◇ {str(p.get('name') or 'Peer')[:35]} · {str(p.get('address') or '')[:20]}",callback_data=f"traffic:new:peer:{idx}")])
+        rows.append([InlineKeyboardButton("← Cancel",callback_data="traffic:list:1")])
+        await edit_send(update,"◇ <b>Select peer</b>\n\nTraffic from only this peer will be filtered.",InlineKeyboardMarkup(rows)); return True
+    if data.startswith("traffic:new:peer:"):
+        idx=int(data.rsplit(":",1)[-1]); st=context.user_data.get(TG_TRAFFIC_NEW_STATE) or {}; peers=(st.get("target") or {}).get("peers") or []
+        if idx<0 or idx>=len(peers): await q.answer("Peer expired. Start again.",show_alert=True); return True
+        peer=peers[idx]
+        st.update({"source_mode":"peer","source_ip":str(peer.get("address") or "")})
+        if st.get("mode") == "edit_scope":
+            pid, saved, applied = await asyncio.to_thread(_traffic_edit_save_scope, st)
+            context.user_data.pop(TG_TRAFFIC_NEW_STATE, None)
+            if saved.get("ok") is False:
+                await edit_send(update, f"⊘ <b>Could not save policy scope.</b>\n\n<code>{html(_ctl_error(saved))}</code>", KB.back(f"traffic:edit:{pid}"))
+                return True
+            if applied.get("ok") is False:
+                await edit_send(update, f"◆ <b>Scope saved, but apply failed.</b>\n\n<code>{html(_ctl_error(applied))}</code>", KB.back(f"traffic:open:{pid}"))
+                return True
+            _log_admin_update(update, "traffic_policy_edit_scope", f"policy_id={pid}; scope=peer; source_ip={st.get('source_ip')}")
+            out,kb=await asyncio.to_thread(render_traffic_policy,pid,return_page)
+            await edit_send(update,"● <b>Policy scope updated and applied.</b>\n\n"+out,kb)
+            return True
+        st.update({"stage":"name"})
+        context.user_data[TG_TRAFFIC_NEW_STATE]=st
+        await edit_send(update,"◇ <b>Policy name</b>\n\nSend a short name.\nSend <code>-</code> to cancel.",KB.back("traffic:list:1")); return True
+    return False
+
+
 class KB:
     @staticmethod
     def home():
         return InlineKeyboardMarkup([
             [InlineKeyboardButton("◇ Peers", callback_data="peers:menu"), InlineKeyboardButton("⌘ Subscriptions", callback_data="client:list:1")],
             [InlineKeyboardButton("✦ Profiles", callback_data="profiles:menu"), InlineKeyboardButton("▣ Backups", callback_data="backup:menu")],
+            [InlineKeyboardButton("⌘ Traffic Control", callback_data="traffic:menu"), InlineKeyboardButton("◆ Security", callback_data="security:menu")],
             [InlineKeyboardButton("↥ Update center", callback_data="home:system"), InlineKeyboardButton("⚙ Settings", callback_data="home:settings")],
             [InlineKeyboardButton("♙ Administrators", callback_data="home:admins"), InlineKeyboardButton("↻ Refresh", callback_data="home:refresh")],
         ])
@@ -3284,11 +4120,7 @@ async def _send_zipfile(
         f"◇ Size      <code>{html(_human_bytes(len(content)))}</code>",
         (
             "◇ Created   <code>"
-            + html(
-                datetime.now(timezone.utc).strftime(
-                    "%Y-%m-%d %H:%M:%S UTC"
-                )
-            )
+            + html(tg_now())
             + "</code>"
         ),
         "",
@@ -3413,47 +4245,21 @@ def _last_backup() -> int | None:
     return None
 
 def _fmt_backup_datetime(value, *, fallback="—") -> str:
-
-    if value in (None, "", "—"):
-        return fallback
-
-    try:
-        if isinstance(value, (int, float)):
-            dt = datetime.fromtimestamp(
-                float(value),
-                tz=timezone.utc,
-            )
-        else:
-            raw = str(value).strip()
-
-            # Unix timestamp supplied as a string
-            if re.fullmatch(r"\d+(?:\.\d+)?", raw):
-                dt = datetime.fromtimestamp(
-                    float(raw),
-                    tz=timezone.utc,
-                )
-            else:
-                dt = datetime.fromisoformat(
-                    raw.replace("Z", "+00:00")
-                )
-
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-
-                dt = dt.astimezone(timezone.utc)
-
-        if dt.second:
-            return dt.strftime("%d %b %Y · %H:%M:%S UTC")
-
-        return dt.strftime("%d %b %Y · %H:%M UTC")
-
-    except Exception:
-        return str(value)
+    return tg_time(
+        value,
+        relative=True,
+        fallback=fallback,
+    )
     
 def _fmt_when(ts: int | None) -> str:
     if not ts:
         return "Never"
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(ts)))
+
+    return tg_time(
+        ts,
+        relative=True,
+        fallback="Never",
+    )
 
 
 def _backup_filename(kind: str, when_ts: int | None = None) -> str:
@@ -3558,6 +4364,66 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await admin_azumi.handle_callback(globals(), update, context):
         return
 
+    if data.startswith("security:"):
+        try:
+            if await _handle_security_callback(update, context, data):
+                return
+        except Exception as exc:
+            logging.getLogger(__name__).exception(
+                "Security Telegram callback failed: %s",
+                data,
+            )
+            try:
+                await q.answer(
+                    "Security action failed.",
+                    show_alert=True,
+                )
+            except Exception:
+                pass
+            try:
+                await edit_send(
+                    update,
+                    (
+                        "⊘ <b>Security action failed</b>\n\n"
+                        f"<code>{html(str(exc))}</code>\n\n"
+                        "The action was not completed."
+                    ),
+                    KB.back("security:menu"),
+                )
+            except Exception:
+                pass
+            return
+
+    if data.startswith("traffic:"):
+        try:
+            if await _handle_traffic_callback(update, context, data):
+                return
+        except Exception as exc:
+            logging.getLogger(__name__).exception(
+                "Traffic Control Telegram callback failed: %s",
+                data,
+            )
+            try:
+                await q.answer(
+                    "Traffic Control action failed.",
+                    show_alert=True,
+                )
+            except Exception:
+                pass
+            try:
+                await edit_send(
+                    update,
+                    (
+                        "⊘ <b>Traffic Control action failed</b>\n\n"
+                        f"<code>{html(str(exc))}</code>\n\n"
+                        "The action was not completed."
+                    ),
+                    KB.back("traffic:list:1"),
+                )
+            except Exception:
+                pass
+            return
+
     if data.startswith("subs:list:"):
         try:
             page = int(data.rsplit(":", 1)[-1])
@@ -3628,12 +4494,16 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "app_down", "app_up", "node_down", "node_up",
             "iface_down", "iface_up", "peer_expired", "peer_limit",
             "login_success", "login_fail", "suspicious_4xx",
+            "security_block", "security_release", "security_auto_release",
+            "traffic_policy_change", "traffic_apply_success",
+            "traffic_apply_failed",
             "backup_success", "backup_failed",
             "update_success", "update_failed",
         }
         critical_keys = {
             "app_down", "node_down", "iface_down",
-            "login_fail", "suspicious_4xx",
+            "login_fail", "security_block",
+            "traffic_apply_failed",
             "backup_failed", "update_failed",
         }
 
@@ -3673,6 +4543,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "app_down", "app_up", "node_down", "node_up",
             "iface_down", "iface_up", "peer_expired", "peer_limit",
             "login_success", "login_fail", "suspicious_4xx",
+            "security_block", "security_release", "security_auto_release",
+            "traffic_policy_change", "traffic_apply_success",
+            "traffic_apply_failed",
             "backup_success", "backup_failed",
             "update_success", "update_failed",
         }
@@ -4898,12 +5771,35 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if data == "backup:schedule":
         s = _backup_schedule()
-        enabled = bool(s.get("enabled"))
-        freq = str(s.get("freq") or "daily")
-        run_time = str(s.get("time") or "03:00")
-        timezone_name = str(s.get("timezone") or "UTC")
-        next_run = _fmt_backup_datetime(s.get("next_run"))
-        keep = int(s.get("keep") or 7)
+
+        enabled = bool(
+            s.get("enabled")
+        )
+
+        freq = str(
+            s.get("freq")
+            or "daily"
+        )
+
+        run_time = str(
+           s.get("time")
+           or "03:00"
+        )
+
+        timezone_name = str(
+            s.get("timezone")
+            or "UTC"
+        ).strip() or "UTC"
+
+        next_run = tg_time(
+            s.get("next_run"),
+            relative=True,
+        )
+
+        keep = int(
+            s.get("keep")
+            or 7
+        )
 
         msg = "\n".join([
             "◷ <b>Automatic backup</b>",
@@ -4915,7 +5811,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"{'Enabled' if enabled else 'Disabled'}"
             ),
             f"◇ Frequency    <code>{html(freq)}</code>",
-            f"◇ Time         <code>{html(run_time)} {html(timezone_name)}</code>",
+            f"◇ Run at       <code>{html(run_time)}</code>",
+            f"◇ Timezone     <code>{html(timezone_name)}</code>",
             f"◇ Retention    <code>{keep}</code> archive(s)",
             f"◇ Next run     <code>{html(next_run)}</code>",
             "",
@@ -4929,10 +5826,18 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Telegram delivery"
             ),
             "",
-            "⌁ <i>Automatic backups are stored by the panel scheduler.</i>",
+            (
+                "⌁ <i>Schedule and displayed timestamps use the "
+                "global panel timezone. Internal timestamps remain UTC.</i>"
+            ),
         ])
 
-        await edit_send(update, msg, kb_backup_schedule(s))
+        await edit_send(
+            update,
+            msg,
+            kb_backup_schedule(s),
+        )
+
         return
 
     if data == "backup:schedule:toggle":
@@ -5125,23 +6030,23 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 prefs = {"include_wg": True, "send_to_telegram": False}
 
             wg = "1" if prefs.get("include_wg") else "0"
-            tg = "1" if prefs.get("send_to_telegram") else "0"
 
-            if tg == "1":
-                _get(f"{PANEL}/api/backup/full?wg={wg}&tg=1", session="api")
-                await edit_send(
-                    update,
-                    "↗ <b>Full backup initiated</b>\n"
-                    "The panel is sending the backup to Telegram admins (based on Preferences).",
-                    KB.back("backup:menu"),
-                )
-                _log_admin("backup_full", f"file=sent_via_panel wg={int(wg=='1')} tg=1")
-            else:
-                r = _get(f"{PANEL}/api/backup/full?wg={wg}&tg=0", session="api")
-                content = _safe_zip(r, "Full backup")
-                await _send_zipfile(update, content, _backup_filename("full"), kind="full")
-                fname = _headers_filename(r)
-                _log_admin("backup_full", f"file={fname} size={len(content)}B wg={int(wg=='1')} tg=0")
+            r = _get(
+                f"{PANEL}/api/backup/full?wg={wg}&tg=0",
+                session="api",
+            )
+            content = _safe_zip(r, "Full backup")
+            fname = _headers_filename(r) or _backup_filename("full")
+            await _send_zipfile(
+                update,
+                content,
+                fname,
+                kind="full",
+            )
+            _log_admin(
+                "backup_full",
+                f"file={fname} size={len(content)}B wg={int(wg=='1')} tg=0",
+            )
 
         except Exception as e:
             await edit_send(update, f"⊘ Full backup failed: <code>{html(str(e))}</code>", KB.back("backup:menu"))
@@ -6025,6 +6930,182 @@ async def wizard_bulk_node(update: Update):
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
 
+
+    # Security control text input
+    sec_state = context.user_data.get(TG_SECURITY_STATE)
+    if sec_state:
+        if text == "-":
+            context.user_data.pop(TG_SECURITY_STATE, None)
+            out, kb = await asyncio.to_thread(render_security_deny)
+            await edit_send(update, out, kb)
+            return
+        if sec_state.get("stage") == "deny_add":
+            value = text.strip()
+            try:
+                if "/" not in value:
+                    ip = ipaddress.ip_address(value)
+                    value = f"{ip}/{32 if ip.version == 4 else 128}"
+                else:
+                    value = str(ipaddress.ip_network(value, strict=False))
+            except Exception:
+                await send_text(update, "⊘ Invalid IP/CIDR. Example: <code>203.0.113.15</code> or <code>203.0.113.0/24</code>", KB.back("security:deny"))
+                return
+            cur = await asyncio.to_thread(security_control_data)
+            settings = cur.get("settings") or {}
+            deny = list(settings.get("deny_networks") or [])
+            if value not in deny:
+                deny.append(value)
+            result = await asyncio.to_thread(security_control_save, {"deny_networks": deny})
+            if result.get("ok") is False:
+                await send_text(update, f"⊘ Could not block address: <code>{html(_ctl_error(result))}</code>", KB.back("security:deny"))
+                return
+            context.user_data.pop(TG_SECURITY_STATE, None)
+            _log_admin_update(update, "security_deny_add", f"network={value}")
+            out, kb = await asyncio.to_thread(render_security_deny)
+            await edit_send(update, "● <b>Permanent block added.</b>\n\n" + out, kb)
+            return
+
+    test_state = context.user_data.get(TG_TRAFFIC_TEST_STATE)
+    if test_state:
+        pid = str(test_state.get("policy_id") or "")
+        if text == "-":
+            context.user_data.pop(TG_TRAFFIC_TEST_STATE, None)
+            out, kb = await asyncio.to_thread(render_traffic_policy, pid)
+            await edit_send(update, out, kb)
+            return
+        result = await asyncio.to_thread(_api_data, "POST", "/api/traffic-control/test-destination", payload={"policy_id": pid, "target": text.strip()}, timeout=30)
+        context.user_data.pop(TG_TRAFFIC_TEST_STATE, None)
+        if result.get("ok") is False:
+            await send_text(update, f"⊘ <b>Destination test failed</b>\n\n<code>{html(_ctl_error(result))}</code>", KB.back(f"traffic:open:{pid}"))
+            return
+        verdict = str(result.get("verdict") or "unknown")
+        verdict_label = {"blocked":"⊘ Blocked","partial":"◆ Partially blocked","not_blocked":"● Allowed","not_applicable":"○ Not applicable"}.get(verdict, f"◇ {verdict}")
+        resolved = result.get("resolved") or []
+        lines=["⌕ <b>Traffic destination test</b>","",f"Result   <b>{html(verdict_label)}</b>",f"Target   <code>{html(result.get('target') or text)}</code>",f"Scope    <code>{html(result.get('scope') or '—')}</code>"]
+        if resolved: lines.append(f"Resolved <code>{html(', '.join(str(x) for x in resolved[:8]))}</code>")
+        lines += ["", "<i>This predicts behavior from the live kernel rules; it does not generate traffic as the peer.</i>"]
+        await send_text(update,"\n".join(lines),KB.back(f"traffic:open:{pid}"))
+        return
+
+    tr_state = context.user_data.get(TG_TRAFFIC_NEW_STATE)
+    if tr_state:
+        pid_for_edit = str(tr_state.get("policy_id") or "")
+        try:
+            return_page = max(1, int(tr_state.get("return_page") or 1))
+        except Exception:
+            return_page = 1
+        if text == "-":
+            context.user_data.pop(TG_TRAFFIC_NEW_STATE, None)
+            if pid_for_edit:
+                out, kb = await asyncio.to_thread(render_traffic_edit_menu, pid_for_edit, return_page)
+            else:
+                out, kb = await asyncio.to_thread(render_traffic_control, 1)
+            await edit_send(update, out, kb)
+            return
+
+        stage = tr_state.get("stage")
+
+        if stage == "edit_name":
+            current = await asyncio.to_thread(traffic_control_data)
+            _, original = _traffic_policy_index(current, pid_for_edit)
+            if not original:
+                context.user_data.pop(TG_TRAFFIC_NEW_STATE, None)
+                await send_text(update, "⊘ Traffic policy no longer exists.", KB.back("traffic:list:1"))
+                return
+            new_name = text.strip()[:80]
+            if not new_name:
+                await send_text(update, "⊘ Policy name cannot be empty.", KB.back(f"traffic:edit:{pid_for_edit}"))
+                return
+            updated = _traffic_policy_copy(original)
+            updated["name"] = new_name
+            saved, applied = await asyncio.to_thread(_traffic_apply_policy_update, current, updated)
+            if saved.get("ok") is False:
+                await send_text(update, f"⊘ <b>Policy save failed</b>\n<code>{html(_ctl_error(saved))}</code>", KB.back(f"traffic:edit:{pid_for_edit}"))
+                return
+            context.user_data.pop(TG_TRAFFIC_NEW_STATE, None)
+            if applied.get("ok") is False:
+                await send_text(update, f"◆ <b>Name saved, but apply failed.</b>\n<code>{html(_ctl_error(applied))}</code>", KB.back(f"traffic:open:{pid_for_edit}"))
+                return
+            _log_admin_update(update, "traffic_policy_edit_name", f"policy_id={pid_for_edit}; name={new_name}")
+            out,kb=await asyncio.to_thread(render_traffic_policy,pid_for_edit,return_page)
+            await edit_send(update,"● <b>Policy name updated and applied.</b>\n\n"+out,kb)
+            return
+
+        if stage == "edit_destinations":
+            try:
+                domains, cidrs, countries = _classify_traffic_destinations(text)
+            except Exception as exc:
+                await send_text(update, f"⊘ {html(str(exc))}", KB.back(f"traffic:edit:{pid_for_edit}"))
+                return
+            current = await asyncio.to_thread(traffic_control_data)
+            _, original = _traffic_policy_index(current, pid_for_edit)
+            if not original:
+                context.user_data.pop(TG_TRAFFIC_NEW_STATE, None)
+                await send_text(update, "⊘ Traffic policy no longer exists.", KB.back("traffic:list:1"))
+                return
+            updated = _traffic_policy_copy(original)
+            updated["domains"] = domains
+            updated["cidrs"] = cidrs
+            updated["countries"] = countries
+            saved, applied = await asyncio.to_thread(_traffic_apply_policy_update, current, updated)
+            if saved.get("ok") is False:
+                await send_text(update, f"⊘ <b>Policy save failed</b>\n<code>{html(_ctl_error(saved))}</code>", KB.back(f"traffic:edit:{pid_for_edit}"))
+                return
+            context.user_data.pop(TG_TRAFFIC_NEW_STATE, None)
+            if applied.get("ok") is False:
+                await send_text(update, f"◆ <b>Destinations saved, but apply failed.</b>\n<code>{html(_ctl_error(applied))}</code>", KB.back(f"traffic:open:{pid_for_edit}"))
+                return
+            _log_admin_update(update, "traffic_policy_edit_destinations", f"policy_id={pid_for_edit}; domains={len(domains)}; cidrs={len(cidrs)}; countries={len(countries)}")
+            out,kb=await asyncio.to_thread(render_traffic_policy,pid_for_edit,return_page)
+            await edit_send(update,"● <b>Blocked destinations updated and applied.</b>\n\n"+out,kb)
+            return
+        if stage == "name":
+            tr_state["name"] = text.strip()[:80] or "Traffic policy"
+            tr_state["stage"] = "destinations"
+            context.user_data[TG_TRAFFIC_NEW_STATE] = tr_state
+            await send_text(update,
+                "⊘ <b>What should this policy block?</b>\n\nSend one or more entries separated by commas or new lines.\n\n"
+                "Examples:\n<code>youtube.com</code>\n<code>1.1.1.1</code>\n<code>10.10.0.0/16</code>\n<code>country:IR</code>\n\n"
+                "You can mix them:\n<code>youtube.com, country:IR, 203.0.113.0/24</code>\n\nSend <code>-</code> to cancel.",
+                KB.back("traffic:list:1"))
+            return
+        if stage == "destinations":
+            try:
+                domains, cidrs, countries = _classify_traffic_destinations(text)
+            except Exception as exc:
+                await send_text(update, f"⊘ {html(str(exc))}", KB.back("traffic:list:1"))
+                return
+            target = tr_state.get("target") or {}
+            policy = {
+                "id": f"tg_{int(time.time()):x}_{os.urandom(3).hex()}",
+                "name": tr_state.get("name") or "Traffic policy",
+                "enabled": True,
+                "location": target.get("location") or ("node" if target.get("node_id") else "local"),
+                "node_id": target.get("node_id"),
+                "interface": target.get("name") or "",
+                "source_mode": tr_state.get("source_mode") or "interface",
+                "source_ip": tr_state.get("source_ip") or "",
+                "domains": domains,
+                "cidrs": cidrs,
+                "countries": countries,
+            }
+            cur = await asyncio.to_thread(traffic_control_data)
+            policies = list(cur.get("policies") or [])
+            policies.append(policy)
+            saved = await asyncio.to_thread(traffic_control_save_config, policies, bool(cur.get("enabled", True)))
+            if saved.get("ok") is False:
+                await send_text(update, f"⊘ <b>Policy save failed</b>\n<code>{html(_ctl_error(saved))}</code>", KB.back("traffic:list:1"))
+                return
+            applied = await asyncio.to_thread(traffic_control_apply_now)
+            context.user_data.pop(TG_TRAFFIC_NEW_STATE, None)
+            if applied.get("ok") is False:
+                await send_text(update, f"◆ <b>Policy saved, but apply failed.</b>\n<code>{html(_ctl_error(applied))}</code>", KB.back("traffic:list:1"))
+                return
+            _log_admin_update(update, "traffic_policy_create", f"policy_id={policy['id']}; name={policy['name']}")
+            out, kb = await asyncio.to_thread(render_traffic_policy, policy["id"])
+            await edit_send(update, "● <b>Policy created and applied.</b>\n\n" + out, kb)
+            return
+
     if await admin_azumi.handle_text(globals(), update, context):
         return
 
@@ -6344,11 +7425,7 @@ async def _panel_watchdog(
     last_error = ""
 
     def utc_now_text() -> str:
-        return datetime.now(
-            timezone.utc
-        ).strftime(
-            "%Y-%m-%d %H:%M:%S UTC"
-        )
+        return tg_now()
 
     def duration_text(
         seconds: float,
@@ -7138,6 +8215,19 @@ async def cmd_admin_panel(
         ]),
     )
 
+
+@admin_only
+async def cmd_security(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text, kb = await asyncio.to_thread(render_security_control)
+    await send_text(update, text, kb=kb)
+
+
+@admin_only
+async def cmd_traffic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text, kb = await asyncio.to_thread(render_traffic_control, 1)
+    await send_text(update, text, kb=kb)
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -7260,6 +8350,26 @@ def main():
                 "update",
             ],
             cmd_updates,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            [
+                "security",
+                "protect",
+            ],
+            cmd_security,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            [
+                "traffic",
+                "traffic_control",
+            ],
+            cmd_traffic,
         )
     )
 
