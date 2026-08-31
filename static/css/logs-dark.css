@@ -407,3 +407,7 @@ html[data-theme="dark"] #pane-view select:-webkit-autofill {
   -webkit-box-shadow: 0 0 0 1000px #09151c inset !important;
   -webkit-text-fill-color: #e4ebef !important;
 }
+
+html[data-theme="dark"] .log-time-sub{color:#7f919c!important}
+html[data-theme="dark"] .log-msg__main{color:#e7edf2!important}
+html[data-theme="dark"] .log-msg__sub{color:#8fa1ac!important}
