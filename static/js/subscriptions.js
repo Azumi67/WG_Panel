@@ -262,6 +262,7 @@ const ttlText = sec => {
 let MODE='new', SCOPE='all', STATUS_SCOPE='all', SEARCH='', NEW_ITEMS=[], CURRENT_ITEMS=[], SUBS=[], EDIT_ID=null, SUB_SETTINGS=null;
 let SUB_STUDIO_TARGET_ID=null, SUB_STUDIO_TARGET_NAME='', SUB_STUDIO_HAS_OVERRIDE=false;
 let SUBS_LIVE_TIMER=null, SUBS_LOADING=false, SUBS_LAST_JSON='';
+let SUBX_MOBILE_MANAGE_ID = null;
 let CURRENT_SELECTED = new Set();
 let OPEN_SUBSCRIPTION_LOGS_SID = null;
 const SUBS_REFRESH_MS = 8000;
@@ -315,14 +316,28 @@ function closeDetails(){
 }
 
 function openSettings(){
-  $('#sub-settings-modal').classList.add('open');
-  $('#sub-settings-modal').setAttribute('aria-hidden','false');
+  const modal = $('#sub-settings-modal');
+  if (!modal) return;
+
+  if (window.matchMedia('(max-width: 820px)').matches && modal.parentElement !== document.body) {
+    document.body.appendChild(modal);
+  }
+
+  document.body.classList.remove('mobile-nav-open');
+  document.body.classList.add('mobile-sub-studio-open');
+  document.getElementById('mobile-nav-toggle')?.setAttribute('aria-expanded','false');
+
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden','false');
   subxUpdateModalBodyState();
 }
 
 function closeSettings(){
-  $('#sub-settings-modal').classList.remove('open');
-  $('#sub-settings-modal').setAttribute('aria-hidden','true');
+  const modal = $('#sub-settings-modal');
+  if (!modal) return;
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden','true');
+  document.body.classList.remove('mobile-sub-studio-open');
   subxUpdateModalBodyState();
 }
 
@@ -2049,6 +2064,16 @@ $('#label-edit-modal')?.addEventListener('click', e=>{ if(e.target.dataset.close
 $('#label-edit-input')?.addEventListener('keydown', e=>{ if(e.key === 'Enter'){ e.preventDefault(); saveLabelEditor(); } if(e.key === 'Escape'){ closeLabelEditor(); } });
 
 document.addEventListener('click', async e=>{
+  const mobileManage=e.target.closest('[data-sub-mobile-manage]'); if(mobileManage){
+    const row=mobileManage.closest('.subx-row');
+    const id=String(mobileManage.dataset.subMobileManage || row?.dataset.sub || '');
+    const open=!row?.classList.contains('subx-mobile-actions-open');
+    SUBX_MOBILE_MANAGE_ID = open ? id : null;
+    document.querySelectorAll('.subx-row.subx-mobile-actions-open').forEach(x=>{ if(x!==row){ x.classList.remove('subx-mobile-actions-open'); x.querySelector('[data-sub-mobile-manage]')?.setAttribute('aria-expanded','false'); }});
+    row?.classList.toggle('subx-mobile-actions-open',open);
+    mobileManage.setAttribute('aria-expanded',open?'true':'false');
+    return;
+  }
   const copy=e.target.closest('[data-copy]'); if(copy){ const ok = await copyText(copy.dataset.copy); ok ? toastOk('Copied.') : toastBad('Copy failed. Open HTTPS or copy manually.'); return; }
   const more=e.target.closest('[data-more]'); if(more){ const s=SUBS.find(x=>String(x.id)===String(more.dataset.more)); if(s) renderDetails(s); return; }
   const subLogs=e.target.closest('[data-subscription-logs]'); if(subLogs){ const s=SUBS.find(x=>String(x.id)===String(subLogs.dataset.subscriptionLogs)); if(s) await openSubscriptionLogs(s); return; }
@@ -2436,7 +2461,8 @@ function subxActionButtons(s){
   if(isBlocked){toggleButton = `<button class="subx-icon-btn subscription-power state-blocked" title="Blocked — enable and reset data and timer" aria-label="Blocked subscription. Enable and reset" data-sub-enable="${s.id}"><i class="fas fa-power-off"></i></button>`;}
   else if(isDisabled){toggleButton = `<button class="subx-icon-btn subscription-power state-disabled" title="Disabled — enable and reset data and timer" aria-label="Disabled subscription. Enable and reset" data-sub-enable="${s.id}"><i class="fas fa-power-off"></i></button>`;}
   else{toggleButton = `<button class="subx-icon-btn subscription-power state-ready" title="Ready — disable subscription and stop all configs" aria-label="Ready subscription. Disable" data-sub-disable="${s.id}"><i class="fas fa-power-off"></i></button>`;}
-  return `<div class="subx-actions subx-actions-icons" aria-label="Subscription actions">
+  const mobileOpen = String(SUBX_MOBILE_MANAGE_ID ?? '') === String(s.id);
+  return `<button class="subx-mobile-manage-btn" type="button" data-sub-mobile-manage="${s.id}" aria-expanded="${mobileOpen ? 'true' : 'false'}"><span><i class="fas fa-sliders"></i><b>Manage client</b></span><i class="fas fa-chevron-down"></i></button><div class="subx-actions subx-actions-icons" aria-label="Subscription actions">
     <div class="subx-tool-row" aria-label="Subscription tools">
       <button class="subx-tool-btn subx-logs-box-btn" type="button" title="Open subscription activity history" data-subscription-logs="${s.id}"><i class="fas fa-clock-rotate-left"></i><span>Logs</span></button>
       <button class="subx-tool-btn subx-theme-box-btn" type="button" title="Open Theme Studio for this client's public portal" data-template="${s.id}"><span class="subx-theme-pulse"><i class="fas fa-wand-magic-sparkles"></i></span><span>Theme</span></button>
@@ -2486,7 +2512,8 @@ function rowHtml(s){
     scope === 'local' ? 'Local only' :
     'No location yet';
 
-  return `<article class="subx-row subx-row-line state-${state.cls}" data-sub="${s.id}">
+  const mobileActionsOpen = String(SUBX_MOBILE_MANAGE_ID ?? '') === String(s.id);
+  return `<article class="subx-row subx-row-line state-${state.cls}${mobileActionsOpen ? ' subx-mobile-actions-open' : ''}" data-sub="${s.id}">
     <div class="subx-line-id">
       <div class="subx-name"><i class="fas fa-user-shield"></i><span>${esc(s.name)}</span></div>
       <div class="subx-note">${esc(note)}</div>
@@ -2612,6 +2639,9 @@ async function loadSubs(opts={}){
     const next = j.subscriptions || [];
     const nextJson = JSON.stringify(next);
     SUBS = next;
+    if(SUBX_MOBILE_MANAGE_ID != null && !SUBS.some(x => String(x.id) === String(SUBX_MOBILE_MANAGE_ID))){
+      SUBX_MOBILE_MANAGE_ID = null;
+    }
 
     if(opts.force || nextJson !== SUBS_LAST_JSON){
       renderSubscriptions();
