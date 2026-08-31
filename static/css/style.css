@@ -5403,3 +5403,56 @@ button.secondary {
         right: 0;
     }
 }
+
+.brand-badge img,
+.brand-badge svg{
+    display:block;
+    width:72px;
+    height:72px;
+    max-width:72px;
+    max-height:72px;
+    object-fit:contain;
+}
+
+.auth-badge img{
+    display:block;
+    max-width:64px;
+    max-height:64px;
+    object-fit:contain;
+}
+
+.sidebar.sb2 .wg-logo-img,
+.wg-mobile-brand img{
+    object-fit:contain!important;
+}
+
+.sidebar.sb2:hover{
+    width:var(--sb2-w)!important;
+}
+
+.sidebar.sb2:hover~.main{
+    margin-left:calc(var(--sb2-w) + var(--sb2-gap))!important;
+}
+
+.sidebar.sb2.is-collapsed:hover{
+    width:var(--sb2-w-collapsed)!important;
+}
+
+.sidebar.sb2.is-collapsed:hover~.main{
+    margin-left:calc(var(--sb2-w-collapsed) + var(--sb2-gap))!important;
+}
+
+@media (max-width:760px){
+    .sidebar.sb2:hover,
+    .sidebar.sb2.is-collapsed:hover{
+        width:min(84vw,286px)!important;
+    }
+
+    .main,
+    .sidebar.sb2:hover~.main,
+    .sidebar.sb2.is-collapsed:hover~.main{
+        margin-left:0!important;
+        width:100%!important;
+        max-width:100%!important;
+    }
+}
