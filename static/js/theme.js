@@ -119,8 +119,6 @@
   }
 
   function onSystemThemeChange() {
-    // Important: system changes only alter the effective theme while the
-    // persisted selection remains exactly "auto".
     if (currentMode() === 'auto') {
       apply('auto', { persist: false, announce: true });
     }
