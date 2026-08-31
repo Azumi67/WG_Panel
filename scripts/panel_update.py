@@ -267,6 +267,333 @@ def validate(root: Path, scope: str):
         raise RuntimeError("No expected Python entrypoint found after update.")
     run([str(py), "-m", "py_compile", *existing], timeout=90)
 
+def _optional_nftables(log=None):
+
+    import os
+    import shutil
+    import subprocess
+
+    def emit(message):
+        if callable(log):
+            try:
+                log(message)
+            except Exception:
+                pass
+
+    nft = shutil.which("nft")
+
+    if nft:
+        version = ""
+
+        try:
+            version_result = subprocess.run(
+                [nft, "--version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+
+            version = (
+                version_result.stdout
+                or ""
+            ).strip()
+
+        except Exception:
+            pass
+
+        try:
+            usable_result = subprocess.run(
+                [
+                    nft,
+                    "list",
+                    "ruleset",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+
+            if usable_result.returncode == 0:
+                return {
+                    "ok": True,
+                    "installed": True,
+                    "usable": True,
+                    "changed": False,
+                    "status": "already_present",
+                    "version": version,
+                }
+
+            return {
+                "ok": False,
+                "installed": True,
+                "usable": False,
+                "changed": False,
+                "status": "installed_not_usable",
+                "version": version,
+                "detail": (
+                    usable_result.stderr
+                    or ""
+                )[-1000:],
+            }
+
+        except subprocess.TimeoutExpired:
+            return {
+                "ok": False,
+                "installed": True,
+                "usable": False,
+                "changed": False,
+                "status": "check_timeout",
+                "version": version,
+            }
+
+        except Exception as exc:
+            return {
+                "ok": False,
+                "installed": True,
+                "usable": False,
+                "changed": False,
+                "status": "check_failed",
+                "version": version,
+                "detail": str(exc),
+            }
+
+    apt_get = shutil.which("apt-get")
+
+    if not apt_get:
+        emit(
+            "nftables is missing and apt-get is not available; "
+            "continuing without Traffic Control enforcement."
+        )
+
+        return {
+            "ok": False,
+            "installed": False,
+            "usable": False,
+            "changed": False,
+            "status": "unsupported_package_manager",
+        }
+
+    env = os.environ.copy()
+    env["DEBIAN_FRONTEND"] = "noninteractive"
+    env["APT_LISTCHANGES_FRONTEND"] = "none"
+
+    common_options = [
+        "-o",
+        "Dpkg::Use-Pty=0",
+        "-o",
+        "DPkg::Lock::Timeout=30",
+    ]
+
+    try:
+        emit(
+            "nftables is missing; refreshing package metadata…"
+        )
+
+        update_result = subprocess.run(
+            [
+                apt_get,
+                "update",
+                "-o",
+                "Dpkg::Use-Pty=0",
+                "-o",
+                "DPkg::Lock::Timeout=30",
+                "-o",
+                "Acquire::Retries=2",
+                "-o",
+                "Acquire::http::Timeout=20",
+                "-o",
+                "Acquire::https::Timeout=20",
+            ],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+
+        if update_result.returncode != 0:
+            emit(
+                "Could not refresh package metadata for nftables; "
+                "the update will continue."
+            )
+
+            return {
+                "ok": False,
+                "installed": False,
+                "usable": False,
+                "changed": False,
+                "status": "apt_update_failed",
+                "detail": (
+                    update_result.stdout
+                    or ""
+                )[-2000:],
+            }
+
+        emit(
+            "Installing optional nftables dependency…"
+        )
+
+        install_result = subprocess.run(
+            [
+                apt_get,
+                "install",
+                "-y",
+                "--no-install-recommends",
+                *common_options,
+                "nftables",
+            ],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+
+        if install_result.returncode != 0:
+            emit(
+                "nftables installation failed; "
+                "the update will continue."
+            )
+
+            return {
+                "ok": False,
+                "installed": False,
+                "usable": False,
+                "changed": False,
+                "status": "install_failed",
+                "detail": (
+                    install_result.stdout
+                    or ""
+                )[-2000:],
+            }
+
+    except subprocess.TimeoutExpired:
+        emit(
+            "nftables installation timed out; "
+            "the update will continue."
+        )
+
+        return {
+            "ok": False,
+            "installed": False,
+            "usable": False,
+            "changed": False,
+            "status": "timeout",
+        }
+
+    except Exception as exc:
+        emit(
+            "nftables installation could not be completed; "
+            "the update will continue."
+        )
+
+        return {
+            "ok": False,
+            "installed": False,
+            "usable": False,
+            "changed": False,
+            "status": "error",
+            "detail": str(exc),
+        }
+
+    nft = shutil.which("nft")
+
+    if not nft:
+        return {
+            "ok": False,
+            "installed": False,
+            "usable": False,
+            "changed": False,
+            "status": "binary_missing_after_install",
+        }
+
+    version = ""
+
+    try:
+        version_result = subprocess.run(
+            [
+                nft,
+                "--version",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+
+        version = (
+            version_result.stdout
+            or ""
+        ).strip()
+
+    except Exception:
+        pass
+
+    try:
+        usable_result = subprocess.run(
+            [
+                nft,
+                "list",
+                "ruleset",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+
+        if usable_result.returncode == 0:
+            return {
+                "ok": True,
+                "installed": True,
+                "usable": True,
+                "changed": True,
+                "status": "installed",
+                "version": version,
+            }
+
+        return {
+            "ok": False,
+            "installed": True,
+            "usable": False,
+            "changed": True,
+            "status": "installed_not_usable",
+            "version": version,
+            "detail": (
+                usable_result.stderr
+                or ""
+            )[-1000:],
+        }
+
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "installed": True,
+            "usable": False,
+            "changed": True,
+            "status": "check_timeout",
+            "version": version,
+        }
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "installed": True,
+            "usable": False,
+            "changed": True,
+            "status": "check_failed",
+            "version": version,
+            "detail": str(exc),
+        }
+    
 def install_requirements(root: Path, scope: str):
     pip = root / "venv/bin/pip"
     if scope == "node" and (root / "agent/venv/bin/pip").exists():
@@ -475,49 +802,164 @@ def schedule_service_restart(
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", required=True)
-    ap.add_argument("--repo", required=True)
-    ap.add_argument("--service", default="auto")
-    ap.add_argument("--status", required=True)
-    ap.add_argument("--scope", choices=["panel","node"], required=True)
-    ap.add_argument("--target", default="latest")
+
+    ap.add_argument(
+        "--root",
+        required=True,
+    )
+
+    ap.add_argument(
+        "--repo",
+        required=True,
+    )
+
+    ap.add_argument(
+        "--service",
+        default="auto",
+    )
+
+    ap.add_argument(
+        "--status",
+        required=True,
+    )
+
+    ap.add_argument(
+        "--scope",
+        choices=[
+            "panel",
+            "node",
+        ],
+        required=True,
+    )
+
+    ap.add_argument(
+        "--target",
+        default="latest",
+    )
+
     args = ap.parse_args()
 
-    root = Path(args.root).resolve()
-    service = str(args.service or "auto").strip()
+    root = Path(
+        args.root
+    ).resolve()
 
-    if service.lower() in {"", "auto", "detect"}:
-        service = detect_service(root, args.scope)
+    service = str(
+        args.service
+        or "auto"
+    ).strip()
 
-    status = Status(Path(args.status).resolve())
+    if service.lower() in {
+        "",
+        "auto",
+        "detect",
+    }:
+        service = detect_service(
+            root,
+            args.scope,
+        )
+
+    status = Status(
+        Path(
+            args.status
+        ).resolve()
+    )
+
     status.set(
-        log=f"Detected systemd service: {service}",
+        log=(
+            f"Detected systemd service: "
+            f"{service}"
+        ),
         service=service,
     )
-    stamp = dt.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    backup = root / "instance/update_backups" / f"{args.scope}_{stamp}.tar.gz"
-    lock = root / "instance/update.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
+
+    stamp = (
+        dt.datetime.utcnow()
+        .strftime(
+            "%Y%m%d_%H%M%S"
+        )
+    )
+
+    backup = (
+        root
+        / "instance"
+        / "update_backups"
+        / f"{args.scope}_{stamp}.tar.gz"
+    )
+
+    lock = (
+        root
+        / "instance"
+        / "update.lock"
+    )
+
+    lock.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     fd = None
+
     try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        os.write(fd, str(os.getpid()).encode())
-        os.close(fd); fd = None
 
-        status.set(status="running", stage="backup", percent=8,
-                   message="Creating rollback backup…")
-        backup_code(root, backup)
-        status.set(percent=18, backup=str(backup), log=f"Backup created: {backup}")
+        fd = os.open(
+            lock,
+            os.O_CREAT
+            | os.O_EXCL
+            | os.O_WRONLY,
+            0o600,
+        )
 
-        with tempfile.TemporaryDirectory(prefix="wg-panel-update-") as tmp:
+        os.write(
+            fd,
+            str(
+                os.getpid()
+            ).encode(),
+        )
+
+        os.close(fd)
+        fd = None
+
+        status.set(
+            status="running",
+            stage="backup",
+            percent=8,
+            message=(
+                "Creating rollback backup…"
+            ),
+        )
+
+        backup_code(
+            root,
+            backup,
+        )
+
+        status.set(
+            percent=18,
+            backup=str(
+                backup
+            ),
+            log=(
+                f"Backup created: {backup}"
+            ),
+        )
+
+        with tempfile.TemporaryDirectory(
+            prefix="wg-panel-update-"
+        ) as tmp:
+
             tmp = Path(tmp)
-            archive = tmp / "source.tar.gz"
+
+            archive = (
+                tmp
+                / "source.tar.gz"
+            )
 
             status.set(
                 stage="download",
                 percent=27,
-                message="Downloading the main branch…",
+                message=(
+                    "Downloading the main branch…"
+                ),
             )
 
             source_metadata = download_repo(
@@ -526,20 +968,27 @@ def main():
                 archive,
             )
 
-            source_metadata["repo"] = args.repo
+            source_metadata[
+                "repo"
+            ] = args.repo
 
             status.set(
                 percent=38,
                 target="main",
                 source="main",
-                revision=source_metadata.get(
-                    "revision"
+                revision=(
+                    source_metadata.get(
+                        "revision"
+                    )
                 ),
-                revision_short=source_metadata.get(
-                    "revision_short"
+                revision_short=(
+                    source_metadata.get(
+                        "revision_short"
+                    )
                 ),
                 log=(
-                    "Repository main branch downloaded: "
+                    "Repository main branch "
+                    "downloaded: "
                     + str(
                         source_metadata.get(
                             "revision_short"
@@ -552,53 +1001,195 @@ def main():
             status.set(
                 stage="extract",
                 percent=45,
-                message="Preparing repository files…",
+                message=(
+                    "Preparing repository files…"
+                ),
             )
-            with tarfile.open(archive, "r:gz") as tar:
-                tar.extractall(tmp / "source")
-            roots = [p for p in (tmp / "source").iterdir() if p.is_dir()]
+
+            with tarfile.open(
+                archive,
+                "r:gz",
+            ) as tar:
+                tar.extractall(
+                    tmp / "source"
+                )
+
+            roots = [
+                p
+                for p
+                in (
+                    tmp
+                    / "source"
+                ).iterdir()
+                if p.is_dir()
+            ]
+
             if len(roots) != 1:
-                raise RuntimeError("Downloaded release layout is invalid.")
+                raise RuntimeError(
+                    "Downloaded release layout "
+                    "is invalid."
+                )
+
             source = roots[0]
 
-            status.set(stage="install", percent=58, message="Installing updated code…")
-            copy_tree(source, root)
-            status.set(percent=70, log="Code files replaced; persistent data preserved.")
+            status.set(
+                stage="install",
+                percent=58,
+                message=(
+                    "Installing updated code…"
+                ),
+            )
 
-            status.set(stage="dependencies", percent=76, message="Checking dependencies…")
-            install_requirements(root, args.scope)
+            copy_tree(
+                source,
+                root,
+            )
 
-            status.set(stage="validate", percent=87, message="Validating updated Python…")
-            validate(root, args.scope)
+            status.set(
+                percent=70,
+                log=(
+                    "Code files replaced; "
+                    "persistent data preserved."
+                ),
+            )
+
+            status.set(
+                stage="dependencies",
+                percent=76,
+                message=(
+                    "Checking system dependencies…"
+                ),
+            )
+
+            nftables_result = (
+                _optional_nftables(
+                    log=lambda message: (
+                        status.set(
+                            log=message,
+                        )
+                    )
+                )
+            )
+
+            nftables_status = str(
+                nftables_result.get(
+                    "status"
+                )
+                or "unknown"
+            )
+
+            if (
+                nftables_status
+                == "already_present"
+            ):
+                status.set(
+                    percent=78,
+                    log=(
+                        "nftables is already "
+                        "installed and ready."
+                    ),
+                    nftables=(
+                        nftables_result
+                    ),
+                )
+
+            elif nftables_result.get(
+                "ok"
+            ):
+                status.set(
+                    percent=78,
+                    log=(
+                        "nftables was installed "
+                        "and is ready."
+                    ),
+                    nftables=(
+                        nftables_result
+                    ),
+                )
+
+            else:
+                status.set(
+                    percent=78,
+                    log=(
+                        "Warning: nftables is "
+                        "unavailable. The update "
+                        "will continue; Traffic "
+                        "Control may not be "
+                        "available on this server."
+                    ),
+                    nftables=(
+                        nftables_result
+                    ),
+                )
+
+            status.set(
+                percent=80,
+                message=(
+                    "Installing Python "
+                    "dependencies…"
+                ),
+            )
+
+            install_requirements(
+                root,
+                args.scope,
+            )
+
+            status.set(
+                stage="validate",
+                percent=87,
+                message=(
+                    "Validating updated Python…"
+                ),
+            )
+
+            validate(
+                root,
+                args.scope,
+            )
+
             status.set(
                 percent=93,
-                log="Validation completed.",
+                log=(
+                    "Validation completed."
+                ),
             )
 
         status.set(
             status="restarting",
             stage="restart",
             percent=97,
-            message=f"Restarting {service}…",
+            message=(
+                f"Restarting {service}…"
+            ),
         )
 
-        restart_info = schedule_service_restart(
-            service,
-            scope=args.scope,
+        restart_info = (
+            schedule_service_restart(
+                service,
+                scope=args.scope,
+            )
         )
 
         status.set(
-            restart_launcher=restart_info.get(
-                "launcher"
+            restart_launcher=(
+                restart_info.get(
+                    "launcher"
+                )
             ),
-            restart_unit=restart_info.get(
-                "unit"
+            restart_unit=(
+                restart_info.get(
+                    "unit"
+                )
             ),
-            restart_pid=restart_info.get(
-                "pid"
+            restart_pid=(
+                restart_info.get(
+                    "pid"
+                )
             ),
             log=(
-                "Detached service restart scheduled for "
+                "Detached service restart "
+                "scheduled for "
                 f"{service}."
             ),
         )
@@ -613,24 +1204,47 @@ def main():
             status="completed",
             stage="completed",
             percent=100,
-            message="Update installed successfully. Service restart was scheduled.",
+            message=(
+                "Update installed successfully. "
+                "Service restart was scheduled."
+            ),
             completed_at=utc(),
-            restart_launcher=restart_info.get("launcher"),
-            restart_unit=restart_info.get("unit"),
-            restart_pid=restart_info.get("pid"),
+            restart_launcher=(
+                restart_info.get(
+                    "launcher"
+                )
+            ),
+            restart_unit=(
+                restart_info.get(
+                    "unit"
+                )
+            ),
+            restart_pid=(
+                restart_info.get(
+                    "pid"
+                )
+            ),
             log=(
-                f"Updated revision {source_metadata.get('revision_short') or 'unknown'} installed; "
-                f"detached restart scheduled for {service}."
+                "Updated revision "
+                f"{source_metadata.get('revision_short') or 'unknown'} "
+                "installed; detached restart "
+                f"scheduled for {service}."
             ),
         )
 
     except Exception as exc:
+
         status.set(
             status="running",
             stage="rollback",
             percent=94,
-            message="Update failed; restoring previous code…",
-            log=str(exc),
+            message=(
+                "Update failed; restoring "
+                "previous code…"
+            ),
+            log=str(
+                exc
+            ),
         )
 
         try:
@@ -647,66 +1261,111 @@ def main():
                 except Exception:
                     pass
 
-                restart_info = schedule_service_restart(
-                    service,
-                    scope=args.scope,
+                restart_info = (
+                    schedule_service_restart(
+                        service,
+                        scope=args.scope,
+                    )
                 )
 
                 status.set(
-                    status="rollback_completed",
-                    stage="rollback_completed",
+                    status=(
+                        "rollback_completed"
+                    ),
+                    stage=(
+                        "rollback_completed"
+                    ),
                     percent=100,
                     message=(
-                        "Update was not installed. Previous code was restored and restart was scheduled."
+                        "Update was not installed. "
+                        "Previous code was restored "
+                        "and restart was scheduled."
                     ),
-                    failure_detail=str(exc),
-                    restart_launcher=restart_info.get(
-                        "launcher"
+                    failure_detail=str(
+                        exc
                     ),
-                    restart_unit=restart_info.get(
-                        "unit"
+                    restart_launcher=(
+                        restart_info.get(
+                            "launcher"
+                        )
                     ),
-                    restart_pid=restart_info.get(
-                        "pid"
+                    restart_unit=(
+                        restart_info.get(
+                            "unit"
+                        )
+                    ),
+                    restart_pid=(
+                        restart_info.get(
+                            "pid"
+                        )
                     ),
                     completed_at=utc(),
                     log=(
-                        "Rollback files restored; detached "
-                        f"restart scheduled for {service}."
+                        "Rollback files restored; "
+                        "detached restart scheduled "
+                        f"for {service}."
                     ),
                 )
 
             else:
                 status.set(
-                    status="rollback_failed",
-                    stage="rollback_failed",
+                    status=(
+                        "rollback_failed"
+                    ),
+                    stage=(
+                        "rollback_failed"
+                    ),
                     percent=100,
                     message=(
-                        "Update failed and no rollback "
-                        "backup was available."
+                        "Update failed and no "
+                        "rollback backup was "
+                        "available."
                     ),
-                    failure_detail=str(exc),
+                    failure_detail=str(
+                        exc
+                    ),
                     completed_at=utc(),
                 )
 
         except Exception as rollback_exc:
             status.set(
-                status="rollback_failed",
-                stage="rollback_failed",
+                status=(
+                    "rollback_failed"
+                ),
+                stage=(
+                    "rollback_failed"
+                ),
                 percent=100,
                 message=(
-                    "Update failed and rollback could not "
-                    "be completed."
+                    "Update failed and rollback "
+                    "could not be completed."
                 ),
-                failure_detail=str(exc),
+                failure_detail=str(
+                    exc
+                ),
                 rollback_detail=str(
                     rollback_exc
                 ),
                 completed_at=utc(),
             )
+
     finally:
-        try: lock.unlink(missing_ok=True)
-        except Exception: pass
+
+        if fd is not None:
+            try:
+                os.close(
+                    fd
+                )
+            except Exception:
+                pass
+
+        try:
+            lock.unlink(
+                missing_ok=True,
+            )
+        except Exception:
+            pass
+
 
 if __name__ == "__main__":
     main()
