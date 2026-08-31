@@ -7,129 +7,364 @@
 {% set module_radius = ps.get('module_radius') or {} %}
 {% set module_heading = ps.get('module_heading') or {} %}
 {% set module_mobile_position = ps.get('module_mobile_position') or {} %}
-<!doctype html>
-<html lang="en"
-  data-preview="{{ 'true' if preview_mode|default(false) else 'false' }}"
-  data-theme="{{ ps.get('theme_default','dark') if preview_mode|default(false) else 'dark' }}"
-  data-layout="{{ sub_layout|default('ps5') }}"
-  data-hero-style="{{ ps.get('hero_style','banner') }}"
-  data-background="{{ sub_background|default('orbits') }}"
-  data-stat-style="{{ sub_display_mode|default('hybrid') }}"
-  data-motion="{{ sub_animation|default('cinematic') }}"
-  data-accent="{{ ps.get('accent','mint') }}"
-  data-surface="{{ ps.get('surface','glass') }}"
-  data-radius="{{ ps.get('radius','rounded') }}"
-  data-density="{{ ps.get('density','comfortable') }}"
-  data-config-style="{{ ps.get('config_style','cards') }}"
-  data-config-columns="{{ ps.get('config_columns','auto') }}"
-  data-support-style="{{ ps.get('support_style','buttons') }}"
-  data-button-style="{{ ps.get('button_style','solid') }}"
-  data-font-scale="{{ ps.get('font_scale','standard') }}"
-  data-default-theme="{{ ps.get('theme_default','auto') }}"
-  data-show-quick="{{ 'true' if ps.get('show_quick_stats',True) else 'false' }}"
-  data-show-install="{{ 'true' if ps.get('show_install',True) else 'false' }}"
-  data-show-support="{{ 'true' if ps.get('show_support',True) else 'false' }}"
-  data-show-live="{{ 'true' if ps.get('show_live_badge',True) else 'false' }}"
-  data-page-width="{{ ps.get('page_width','wide') }}"
-  data-section-order="{{ ps.get('section_order','usage_first') }}"
-  data-module-1="{{ (ps.get('module_order') or ['configs','usage','install','support'])[0] }}"
-  data-module-2="{{ (ps.get('module_order') or ['configs','usage','install','support'])[1] }}"
-  data-module-3="{{ (ps.get('module_order') or ['configs','usage','install','support'])[2] }}"
-  data-module-4="{{ (ps.get('module_order') or ['configs','usage','install','support'])[3] }}"
-  data-module-configs-enabled="{{ 'true' if module_enabled.get('configs',True) else 'false' }}"
-  data-module-usage-enabled="{{ 'true' if module_enabled.get('usage',True) else 'false' }}"
-  data-module-install-enabled="{{ 'true' if module_enabled.get('install',True) else 'false' }}"
-  data-module-support-enabled="{{ 'true' if module_enabled.get('support',True) else 'false' }}"
-  data-module-configs-size="{{ module_sizes.get('configs','auto') }}"
-  data-module-usage-size="{{ module_sizes.get('usage','auto') }}"
-  data-module-install-size="{{ module_sizes.get('install','auto') }}"
-  data-module-support-size="{{ module_sizes.get('support','auto') }}"
-  data-module-configs-mobile="{{ module_mobile.get('configs','auto') }}"
-  data-module-usage-mobile="{{ module_mobile.get('usage','auto') }}"
-  data-module-install-mobile="{{ module_mobile.get('install','auto') }}"
-  data-module-support-mobile="{{ module_mobile.get('support','auto') }}"
-  data-module-configs-surface="{{ module_surface.get('configs','auto') }}"
-  data-module-usage-surface="{{ module_surface.get('usage','auto') }}"
-  data-module-install-surface="{{ module_surface.get('install','auto') }}"
-  data-module-support-surface="{{ module_surface.get('support','auto') }}"
-  data-module-configs-spacing="{{ module_spacing.get('configs','auto') }}"
-  data-module-usage-spacing="{{ module_spacing.get('usage','auto') }}"
-  data-module-install-spacing="{{ module_spacing.get('install','auto') }}"
-  data-module-support-spacing="{{ module_spacing.get('support','auto') }}"
-  data-module-configs-radius="{{ module_radius.get('configs','auto') }}"
-  data-module-usage-radius="{{ module_radius.get('usage','auto') }}"
-  data-module-install-radius="{{ module_radius.get('install','auto') }}"
-  data-module-support-radius="{{ module_radius.get('support','auto') }}"
-  data-module-configs-heading="{{ module_heading.get('configs','auto') }}"
-  data-module-usage-heading="{{ module_heading.get('usage','auto') }}"
-  data-module-install-heading="{{ module_heading.get('install','auto') }}"
-  data-module-support-heading="{{ module_heading.get('support','auto') }}"
-  data-module-configs-mobile-position="{{ module_mobile_position.get('configs','auto') }}"
-  data-module-usage-mobile-position="{{ module_mobile_position.get('usage','auto') }}"
-  data-module-install-mobile-position="{{ module_mobile_position.get('install','auto') }}"
-  data-module-support-mobile-position="{{ module_mobile_position.get('support','auto') }}"
-  data-notice-tone="{{ ps.get('notice_tone','info') }}"
-  data-notice-style="{{ ps.get('notice_style','banner') }}"
-  data-notice-position="{{ ps.get('notice_position','after_summary') }}"
-  data-module-gap="{{ ps.get('module_gap','standard') }}"
-  data-shadow="{{ ps.get('shadow','deep') }}"
-  data-stat-size="{{ ps.get('stat_size','standard') }}"
-  data-title-align="{{ ps.get('title_align','left') }}"
-  data-logo-size="{{ ps.get('logo_size','medium') }}"
-  data-show-percentage="{{ 'true' if ps.get('show_percentage',True) else 'false' }}"
-  data-show-used-detail="{{ 'true' if ps.get('show_used_detail',True) else 'false' }}"
-  data-show-status="{{ 'true' if ps.get('show_status_badge',True) else 'false' }}"
-  data-show-country="{{ 'true' if ps.get('show_location_country',True) else 'false' }}"
-  data-show-download="{{ 'true' if ps.get('show_download_action',True) else 'false' }}"
-  data-show-copy="{{ 'true' if ps.get('show_copy_action',True) else 'false' }}"
-  data-show-theme-action="{{ 'true' if ps.get('show_theme_action',True) else 'false' }}"
-  data-show-descriptions="{{ 'true' if ps.get('show_section_descriptions',True) else 'false' }}"
-  data-entrance="{{ ps.get('entrance_animation','stagger') }}"
-  data-hover="{{ ps.get('hover_animation','lift') }}"
-  data-toast-style="{{ ps.get('toast_style','pill') }}"
-  data-toast-position="{{ ps.get('toast_position','bottom_center') }}"
-  data-toast-motion="{{ ps.get('toast_motion','slide') }}"
-  data-toast-duration="{{ ps.get('toast_duration',2200) }}"
-  data-motion-intensity="{{ ps.get('motion_intensity',150) }}">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta id="browser-theme-color" name="theme-color" content="#07111f">
-  <title>{{ portal_title or sub.name }} — WireGuard</title>
-  <script>
-  (()=>{const root=document.documentElement;const configured=root.dataset.defaultTheme||'auto';const preview=root.dataset.preview==='true';let theme;if(preview){theme=configured==='light'?'light':configured==='dark'?'dark':(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark');}else{try{const saved=localStorage.getItem('sub-theme');theme=saved==='light'||saved==='dark'?saved:(configured==='light'||configured==='dark'?configured:(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'));}catch(_){theme=configured==='light'?'light':'dark';}}root.dataset.theme=theme;root.style.colorScheme=theme;const meta=document.getElementById('browser-theme-color');if(meta)meta.content=theme==='light'?'#eef5fb':'#07111f';})();
-  </script>
-  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}">
-  <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Regular.woff2') }}" as="font" type="font/woff2" crossorigin>
-  <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-SemiBold.woff2') }}" as="font" type="font/woff2" crossorigin>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/subscription_public.css') }}?v=20260820-studio-v16">
-  <style>:root{--custom-accent:{{ ps.get('primary_color', ps.get('custom_primary','#3addaa')) }};--custom-accent2:{{ ps.get('secondary_color', ps.get('custom_secondary','#63a5ff')) }};--background-intensity:{{ (ps.get('background_intensity',86)|int) / 100 }};--card-opacity:{{ (ps.get('card_opacity',82)|int) / 100 }};--motion-speed:{{ 100 / (ps.get('motion_speed',125)|int if (ps.get('motion_speed',125)|int) else 100) }};--motion-power:{{ (ps.get('motion_intensity',150)|int) / 100 }};--particle-density:{{ (ps.get('particle_density',90)|int) / 100 }};--engine-speed:{{ (ps.get('motion_speed',125)|int) / 100 }};--engine-density:{{ (ps.get('particle_density',90)|int) / 100 }};--status-online:{{ ps.get('online_color','#22c55e') }};--status-offline:{{ ps.get('offline_color','#94a3b8') }};--status-warning:{{ ps.get('warning_color','#f59e0b') }};--status-danger:{{ ps.get('danger_color','#ef4444') }};--pill-color:{{ ps.get('pill_color','#64748b') }};--action-color:{{ ps.get('action_color', ps.get('primary_color','#3addaa')) }};}</style>
-</head>
-<body>
-  <div class="live-bg" aria-hidden="true"><span class="bg-orb one"></span><span class="bg-orb two"></span><span class="bg-orb three"></span><span class="bg-wave one"></span><span class="bg-wave two"></span><span class="bg-grid"></span><span class="bg-orbits"></span><span class="bg-lines"></span></div>
-  <canvas id="particles" aria-hidden="true"></canvas>
-  <div class="page"><main class="portal-shell">
-    <div class="layout-chrome" aria-hidden="true"><span class="chrome-dot one"></span><span class="chrome-dot two"></span><span class="chrome-dot three"></span><span class="chrome-brand"><i class="fas fa-shield-halved"></i></span><span class="chrome-rail"><i></i><i></i><i></i><i></i></span></div>
-    <section class="portal-hero surface">
-      <div class="portal-id"><div class="portal-icon"><i class="{{ portal_icon|default('fas fa-bolt') }}"></i></div><div class="portal-copy"><div class="portal-meta"><span class="portal-label">{{ portal_label|default('Secure WireGuard portal') }}</span><span class="hero-live"><i class="fas fa-circle"></i> Live</span></div><h1 id="sub-name">{{ portal_title or sub.name }}</h1><p>{{ portal_subtitle|default('Your account is ready. Install WireGuard, then scan QR or import a config.') }}</p></div></div>
-      <div class="portal-actions" aria-label="Public subscription actions"><a class="icon-action primary" id="download-all" href="{{ url_for('subscription_public_config', token=sub.token) }}" download title="Download all configs"><i class="fas fa-download"></i></a><button class="icon-action copy-action" id="copy-sub" title="Copy subscription config link"><i class="fas fa-link"></i></button><button class="icon-action theme-action" id="theme-toggle" title="Light / dark mode"><i class="fas fa-moon"></i></button><span class="auto-chip" id="live-dot"><i class="fas fa-circle"></i><b>Auto</b></span></div>
-    </section>
-    <div class="access-banner" id="access-banner" role="status" hidden></div>
-    <section class="quick-stats surface" aria-label="Client summary"><article><span>Status</span><b id="hero-state">—</b><small id="hero-configs">—</small></article><article><span>Data</span><b id="hero-data">—</b><small id="data-pct-label">—</small></article><article><span>Time</span><b id="hero-time">—</b><small id="timer-mode">—</small></article></section>
-    <section class="portal-announcement surface" id="portal-announcement" data-tone="{{ ps.get('notice_tone','info') }}" data-style="{{ ps.get('notice_style','banner') }}" {% if not ps.get('show_admin_notice',False) or not ps.get('notice_text','') %}hidden{% endif %}>
-      <span class="announcement-icon"><i class="fas fa-bullhorn"></i></span>
-      <div class="announcement-copy"><b>{{ ps.get('notice_title','Service notice') }}</b><p>{{ ps.get('notice_text','') }}</p></div>
-    </section>
-    <div class="portal-content">
-      <section class="usage-section" data-module-key="usage"><div class="section-head simple"><div><h2><i class="fas fa-chart-pie"></i> {{ ps.get('usage_title','Usage overview') }}</h2><p>Live data and time remaining.</p></div></div><div class="stats-grid"><article class="stat-card surface data-stat"><div class="stat-head"><span><i class="fas fa-database"></i> Data remaining</span></div><div class="stat-body"><div class="ring" id="data-ring"><span id="data-ring-label">—</span></div><div class="stat-copy"><div class="big" id="data-human">—</div><div class="subline" id="data-sub">—</div><div class="meter" id="data-meter-wrap"><span id="data-meter" style="width:0%"></span></div><div class="segments" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div></div></div></article><article class="stat-card surface time-stat"><div class="stat-head"><span><i class="fas fa-clock"></i> Time remaining</span></div><div class="stat-body"><div class="ring" id="time-ring"><span id="time-ring-label">—</span></div><div class="stat-copy"><div class="big" id="time-human">—</div><div class="subline" id="time-sub">—</div><div class="meter"><span id="time-meter" style="width:100%"></span></div><div class="segments" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div></div></div></article></div></section>
-      <section class="install-card surface" data-module-key="install"><div><h2><i class="fas fa-mobile-screen-button"></i> {{ ps.get('install_title','Install WireGuard') }}</h2><p>Open the official app, then scan QR or import a config.</p></div><div class="client-links"><a href="https://www.wireguard.com/install/" target="_blank" rel="noopener" title="Desktop"><i class="fas fa-desktop"></i></a><a href="https://apps.apple.com/app/wireguard/id1441195209" target="_blank" rel="noopener" title="iPhone / iPad"><i class="fab fa-apple"></i></a><a href="https://play.google.com/store/apps/details?id=com.wireguard.android" target="_blank" rel="noopener" title="Android"><i class="fab fa-android"></i></a><a href="https://www.wireguard.com/install/" target="_blank" rel="noopener" title="All platforms"><i class="fas fa-arrow-up-right-from-square"></i></a></div></section>
-      <section class="configs surface" id="configs-section" data-module-key="configs"><div class="section-head"><div><h2><i class="fas fa-location-dot"></i> {{ ps.get('configs_title','Configs') }}</h2><p>Choose a location, download the config, or scan its QR code.</p></div><span id="cfg-count">—</span></div><div id="loc-grid" class="loc-grid"></div></section>
-      <section class="support surface" id="support-box" data-module-key="support"><div class="section-head simple"><div><h2><i class="fas fa-headset"></i> {{ ps.get('support_title','Support') }}</h2><p>Contact the service team.</p></div></div><div class="support-links">{% if support_telegram %}<a href="{{ support_telegram if support_telegram.startswith('http') else 'https://t.me/' + support_telegram.lstrip('@') }}" target="_blank" rel="noopener"><i class="fab fa-telegram"></i><span>Telegram</span></a>{% endif %}{% if support_whatsapp %}<a href="{{ support_whatsapp if support_whatsapp.startswith('http') else 'https://wa.me/' + support_whatsapp|replace('+','')|replace(' ','') }}" target="_blank" rel="noopener"><i class="fab fa-whatsapp"></i><span>WhatsApp</span></a>{% endif %}{% if support_phone %}<a href="tel:{{ support_phone }}"><i class="fas fa-phone"></i><span>Phone</span></a>{% endif %}{% if support_email %}<a href="mailto:{{ support_email }}"><i class="fas fa-envelope"></i><span>Email</span></a>{% endif %}{% if support_website %}<a href="{{ support_website }}" target="_blank" rel="noopener"><i class="fas fa-globe"></i><span>Website</span></a>{% endif %}{% if support_instagram %}<a href="{{ support_instagram if support_instagram.startswith('http') else 'https://instagram.com/' + support_instagram.lstrip('@') }}" target="_blank" rel="noopener"><i class="fab fa-instagram"></i><span>Instagram</span></a>{% endif %}{% if not support_telegram and not support_whatsapp and not support_phone and not support_email and not support_website and not support_instagram %}<span class="support-empty">No support channels configured.</span>{% endif %}</div></section>
-    </div>
-  </main></div>
+{% set module_order = ps.get('module_order') or ['configs','usage','install','support'] %}
+{% if module_order|length < 4 %} {% set module_order=['configs','usage','install','support'] %} {% endif %} <!doctype
+  html>
+  <html lang="en" data-preview="{{ 'true' if preview_mode|default(false) else 'false' }}"
+    data-theme="{{ 'dark' if ps.get('theme_default','auto') == 'auto' else ps.get('theme_default','dark') }}"
+    data-layout="{{ sub_layout|default('ps5') }}" data-hero-style="{{ ps.get('hero_style','banner') }}"
+    data-background="{{ sub_background|default('orbits') }}" data-stat-style="{{ sub_display_mode|default('hybrid') }}"
+    data-motion="{{ sub_animation|default('cinematic') }}" data-accent="{{ ps.get('accent','mint') }}"
+    data-surface="{{ ps.get('surface','glass') }}" data-radius="{{ ps.get('radius','rounded') }}"
+    data-density="{{ ps.get('density','comfortable') }}" data-config-style="{{ ps.get('config_style','cards') }}"
+    data-config-columns="{{ ps.get('config_columns','auto') }}"
+    data-support-style="{{ ps.get('support_style','buttons') }}"
+    data-button-style="{{ ps.get('button_style','solid') }}" data-font-scale="{{ ps.get('font_scale','standard') }}"
+    data-default-theme="{{ ps.get('theme_default','auto') }}"
+    data-show-quick="{{ 'true' if ps.get('show_quick_stats',True) else 'false' }}"
+    data-show-install="{{ 'true' if ps.get('show_install',True) else 'false' }}"
+    data-show-support="{{ 'true' if ps.get('show_support',True) else 'false' }}"
+    data-show-live="{{ 'true' if ps.get('show_live_badge',True) else 'false' }}"
+    data-page-width="{{ ps.get('page_width','wide') }}" data-section-order="{{ ps.get('section_order','usage_first') }}"
+    data-module-1="{{ module_order[0] }}" data-module-2="{{ module_order[1] }}" data-module-3="{{ module_order[2] }}"
+    data-module-4="{{ module_order[3] }}"
+    data-module-configs-enabled="{{ 'true' if module_enabled.get('configs',True) else 'false' }}"
+    data-module-usage-enabled="{{ 'true' if module_enabled.get('usage',True) else 'false' }}"
+    data-module-install-enabled="{{ 'true' if module_enabled.get('install',True) else 'false' }}"
+    data-module-support-enabled="{{ 'true' if module_enabled.get('support',True) else 'false' }}"
+    data-module-configs-size="{{ module_sizes.get('configs','auto') }}"
+    data-module-usage-size="{{ module_sizes.get('usage','auto') }}"
+    data-module-install-size="{{ module_sizes.get('install','auto') }}"
+    data-module-support-size="{{ module_sizes.get('support','auto') }}"
+    data-module-configs-mobile="{{ module_mobile.get('configs','auto') }}"
+    data-module-usage-mobile="{{ module_mobile.get('usage','auto') }}"
+    data-module-install-mobile="{{ module_mobile.get('install','auto') }}"
+    data-module-support-mobile="{{ module_mobile.get('support','auto') }}"
+    data-module-configs-surface="{{ module_surface.get('configs','auto') }}"
+    data-module-usage-surface="{{ module_surface.get('usage','auto') }}"
+    data-module-install-surface="{{ module_surface.get('install','auto') }}"
+    data-module-support-surface="{{ module_surface.get('support','auto') }}"
+    data-module-configs-spacing="{{ module_spacing.get('configs','auto') }}"
+    data-module-usage-spacing="{{ module_spacing.get('usage','auto') }}"
+    data-module-install-spacing="{{ module_spacing.get('install','auto') }}"
+    data-module-support-spacing="{{ module_spacing.get('support','auto') }}"
+    data-module-configs-radius="{{ module_radius.get('configs','auto') }}"
+    data-module-usage-radius="{{ module_radius.get('usage','auto') }}"
+    data-module-install-radius="{{ module_radius.get('install','auto') }}"
+    data-module-support-radius="{{ module_radius.get('support','auto') }}"
+    data-module-configs-heading="{{ module_heading.get('configs','auto') }}"
+    data-module-usage-heading="{{ module_heading.get('usage','auto') }}"
+    data-module-install-heading="{{ module_heading.get('install','auto') }}"
+    data-module-support-heading="{{ module_heading.get('support','auto') }}"
+    data-module-configs-mobile-position="{{ module_mobile_position.get('configs','auto') }}"
+    data-module-usage-mobile-position="{{ module_mobile_position.get('usage','auto') }}"
+    data-module-install-mobile-position="{{ module_mobile_position.get('install','auto') }}"
+    data-module-support-mobile-position="{{ module_mobile_position.get('support','auto') }}"
+    data-notice-tone="{{ ps.get('notice_tone','info') }}" data-notice-style="{{ ps.get('notice_style','banner') }}"
+    data-notice-position="{{ ps.get('notice_position','after_summary') }}"
+    data-module-gap="{{ ps.get('module_gap','standard') }}" data-shadow="{{ ps.get('shadow','deep') }}"
+    data-stat-size="{{ ps.get('stat_size','standard') }}" data-title-align="{{ ps.get('title_align','left') }}"
+    data-logo-size="{{ ps.get('logo_size','medium') }}"
+    data-show-percentage="{{ 'true' if ps.get('show_percentage',True) else 'false' }}"
+    data-show-used-detail="{{ 'true' if ps.get('show_used_detail',True) else 'false' }}"
+    data-show-status="{{ 'true' if ps.get('show_status_badge',True) else 'false' }}"
+    data-show-country="{{ 'true' if ps.get('show_location_country',True) else 'false' }}"
+    data-show-download="{{ 'true' if ps.get('show_download_action',True) else 'false' }}"
+    data-show-copy="{{ 'true' if ps.get('show_copy_action',True) else 'false' }}"
+    data-show-theme-action="{{ 'true' if ps.get('show_theme_action',True) else 'false' }}"
+    data-show-descriptions="{{ 'true' if ps.get('show_section_descriptions',True) else 'false' }}"
+    data-entrance="{{ ps.get('entrance_animation','stagger') }}" data-hover="{{ ps.get('hover_animation','lift') }}"
+    data-toast-style="{{ ps.get('toast_style','pill') }}"
+    data-toast-position="{{ ps.get('toast_position','bottom_center') }}"
+    data-toast-motion="{{ ps.get('toast_motion','slide') }}" data-toast-duration="{{ ps.get('toast_duration',2200) }}"
+    data-motion-intensity="{{ ps.get('motion_intensity',150) }}">
 
-  <div class="qr-dialog" id="qr-dialog" hidden><button class="qr-backdrop" data-close-qr aria-label="Close QR"></button><section class="qr-sheet" role="dialog" aria-modal="true" aria-labelledby="qr-title"><header><div><span class="qr-icon"><i class="fas fa-qrcode"></i></span><span><b id="qr-title">WireGuard QR</b><small id="qr-location">Scan with the WireGuard app</small></span></div><button data-close-qr aria-label="Close"><i class="fas fa-times"></i></button></header><div class="qr-code-wrap"><img id="qr-image" alt="WireGuard QR code"></div><footer><a class="qr-download" id="qr-download" href="#"><i class="fas fa-download"></i> Download config</a><button data-close-qr>Done</button></footer></section></div>
-  <div class="toast" id="toast">Copied</div>
-  <script>let DATA={{ data|tojson }};const PREVIEW_MODE={{ 'true' if preview_mode|default(false) else 'false' }};const TOKEN={{ sub.token|tojson }};const CONFIG_URL={{ url_for('subscription_public_config', token=sub.token, _external=True)|tojson }};const API_URL={{ url_for('subscription_public_api', token=sub.token, _external=True)|tojson }};const PUBLIC_SETTINGS={{ ps|tojson }};</script>
-  <script defer src="{{ url_for('static', filename='js/subscription_public.js') }}?v=20260820-studio-v16"></script>
-</body></html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+    <meta id="browser-theme-color" name="theme-color" content="#07111f">
+    <title>{{ portal_title or sub.name }} — WireGuard</title>
+    <script>
+      (() => { const root = document.documentElement; const configured = root.dataset.defaultTheme || 'auto'; const preview = root.dataset.preview === 'true'; let theme; if (preview) { theme = configured === 'light' ? 'light' : configured === 'dark' ? 'dark' : (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'); } else { try { const saved = localStorage.getItem('sub-theme'); theme = saved === 'light' || saved === 'dark' ? saved : (configured === 'light' || configured === 'dark' ? configured : (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')); } catch (_) { theme = configured === 'light' ? 'light' : 'dark'; } } root.dataset.theme = theme; root.style.colorScheme = theme; const meta = document.getElementById('browser-theme-color'); if (meta) meta.content = theme === 'light' ? '#eef5fb' : '#07111f'; })();
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}">
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-Regular.woff2') }}" as="font"
+      type="font/woff2" crossorigin>
+    <link rel="preload" href="{{ url_for('static', filename='fonts/Poppins-SemiBold.woff2') }}" as="font"
+      type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/subscription_public.css') }}">
+    <style>
+      :root {
+        --custom-accent: {
+            {
+            ps.get('primary_color', ps.get('custom_primary', '#3addaa'))
+          }
+        }
+
+        ;
+
+        --custom-accent2: {
+            {
+            ps.get('secondary_color', ps.get('custom_secondary', '#63a5ff'))
+          }
+        }
+
+        ;
+
+        --background-intensity: {
+            {
+            (ps.get('background_intensity', 86)|int) / 100
+          }
+        }
+
+        ;
+
+        --card-opacity: {
+            {
+            (ps.get('card_opacity', 82)|int) / 100
+          }
+        }
+
+        ;
+
+        --motion-speed: {
+            {
+            100 / (ps.get('motion_speed', 125)|int if (ps.get('motion_speed', 125)|int) else 100)
+          }
+        }
+
+        ;
+
+        --motion-power: {
+            {
+            (ps.get('motion_intensity', 150)|int) / 100
+          }
+        }
+
+        ;
+
+        --particle-density: {
+            {
+            (ps.get('particle_density', 90)|int) / 100
+          }
+        }
+
+        ;
+
+        --engine-speed: {
+            {
+            (ps.get('motion_speed', 125)|int) / 100
+          }
+        }
+
+        ;
+
+        --engine-density: {
+            {
+            (ps.get('particle_density', 90)|int) / 100
+          }
+        }
+
+        ;
+
+        --status-online: {
+            {
+            ps.get('online_color', '#22c55e')
+          }
+        }
+
+        ;
+
+        --status-offline: {
+            {
+            ps.get('offline_color', '#94a3b8')
+          }
+        }
+
+        ;
+
+        --status-warning: {
+            {
+            ps.get('warning_color', '#f59e0b')
+          }
+        }
+
+        ;
+
+        --status-danger: {
+            {
+            ps.get('danger_color', '#ef4444')
+          }
+        }
+
+        ;
+
+        --pill-color: {
+            {
+            ps.get('pill_color', '#64748b')
+          }
+        }
+
+        ;
+
+        --action-color: {
+            {
+            ps.get('action_color', ps.get('primary_color', '#3addaa'))
+          }
+        }
+
+        ;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="live-bg" aria-hidden="true"><span class="bg-orb one"></span><span class="bg-orb two"></span><span
+        class="bg-orb three"></span><span class="bg-wave one"></span><span class="bg-wave two"></span><span
+        class="bg-grid"></span><span class="bg-orbits"></span><span class="bg-lines"></span></div>
+    <canvas id="particles" aria-hidden="true"></canvas>
+    <div class="page">
+      <main class="portal-shell">
+        <div class="layout-chrome" aria-hidden="true"><span class="chrome-dot one"></span><span
+            class="chrome-dot two"></span><span class="chrome-dot three"></span><span class="chrome-brand"><i
+              class="fas fa-shield-halved"></i></span><span class="chrome-rail"><i></i><i></i><i></i><i></i></span>
+        </div>
+        <section class="portal-hero surface">
+          <div class="portal-id">
+            <div class="portal-icon"><i class="{{ portal_icon|default('fas fa-bolt') }}"></i></div>
+            <div class="portal-copy">
+              <div class="portal-meta"><span class="portal-label">{{ portal_label|default('Secure WireGuard portal')
+                  }}</span><span class="hero-live"><i class="fas fa-circle"></i> Live</span></div>
+              <h1 id="sub-name">{{ portal_title or sub.name }}</h1>
+              <p>{{ portal_subtitle|default('Your account is ready. Install WireGuard, then scan QR or import a
+                config.') }}</p>
+            </div>
+          </div>
+          <div class="portal-actions" aria-label="Public subscription actions"><a class="icon-action primary"
+              id="download-all" href="{{ url_for('subscription_public_config', token=sub.token) }}" download
+              title="Download all configs"><i class="fas fa-download"></i></a><button class="icon-action copy-action"
+              id="copy-sub" title="Copy subscription config link"><i class="fas fa-link"></i></button><button
+              class="icon-action theme-action" id="theme-toggle" title="Light / dark mode"><i
+                class="fas fa-moon"></i></button><span class="auto-chip" id="live-dot"><i
+                class="fas fa-circle"></i><b>Auto</b></span></div>
+        </section>
+        <div class="access-banner" id="access-banner" role="status" hidden></div>
+        <section class="quick-stats surface" aria-label="Client summary">
+          <article><span>Status</span><b id="hero-state">—</b><small id="hero-configs">—</small></article>
+          <article><span>Data</span><b id="hero-data">—</b><small id="data-pct-label">—</small></article>
+          <article><span>Time</span><b id="hero-time">—</b><small id="timer-mode">—</small></article>
+        </section>
+        <section class="portal-announcement surface" id="portal-announcement"
+          data-tone="{{ ps.get('notice_tone','info') }}" data-style="{{ ps.get('notice_style','banner') }}" {% if not
+          ps.get('show_admin_notice',False) or not ps.get('notice_text','') %}hidden{% endif %}>
+          <span class="announcement-icon"><i class="fas fa-bullhorn"></i></span>
+          <div class="announcement-copy"><b>{{ ps.get('notice_title','Service notice') }}</b>
+            <p>{{ ps.get('notice_text','') }}</p>
+          </div>
+        </section>
+        <div class="portal-content">
+          <section class="usage-section" data-module-key="usage">
+            <div class="section-head simple">
+              <div>
+                <h2><i class="fas fa-chart-pie"></i> {{ ps.get('usage_title','Usage overview') }}</h2>
+                <p>Live data and time remaining.</p>
+              </div>
+            </div>
+            <div class="stats-grid">
+              <article class="stat-card surface data-stat">
+                <div class="stat-head"><span><i class="fas fa-database"></i> Data remaining</span></div>
+                <div class="stat-body">
+                  <div class="ring" id="data-ring"><span id="data-ring-label">—</span></div>
+                  <div class="stat-copy">
+                    <div class="big" id="data-human">—</div>
+                    <div class="subline" id="data-sub">—</div>
+                    <div class="meter" id="data-meter-wrap"><span id="data-meter" style="width:0%"></span></div>
+                    <div class="segments" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                  </div>
+                </div>
+              </article>
+              <article class="stat-card surface time-stat">
+                <div class="stat-head"><span><i class="fas fa-clock"></i> Time remaining</span></div>
+                <div class="stat-body">
+                  <div class="ring" id="time-ring"><span id="time-ring-label">—</span></div>
+                  <div class="stat-copy">
+                    <div class="big" id="time-human">—</div>
+                    <div class="subline" id="time-sub">—</div>
+                    <div class="meter"><span id="time-meter" style="width:100%"></span></div>
+                    <div class="segments" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </section>
+          <section class="install-card surface" data-module-key="install">
+            <div>
+              <h2><i class="fas fa-mobile-screen-button"></i> {{ ps.get('install_title','Install WireGuard') }}</h2>
+              <p>Open the official app, then scan QR or import a config.</p>
+            </div>
+            <div class="client-links"><a href="https://www.wireguard.com/install/" target="_blank" rel="noopener"
+                title="Desktop"><i class="fas fa-desktop"></i></a><a
+                href="https://apps.apple.com/app/wireguard/id1441195209" target="_blank" rel="noopener"
+                title="iPhone / iPad"><i class="fab fa-apple"></i></a><a
+                href="https://play.google.com/store/apps/details?id=com.wireguard.android" target="_blank"
+                rel="noopener" title="Android"><i class="fab fa-android"></i></a><a
+                href="https://www.wireguard.com/install/" target="_blank" rel="noopener" title="All platforms"><i
+                  class="fas fa-arrow-up-right-from-square"></i></a></div>
+          </section>
+          <section class="configs surface" id="configs-section" data-module-key="configs">
+            <div class="section-head">
+              <div>
+                <h2><i class="fas fa-location-dot"></i> {{ ps.get('configs_title','Configs') }}</h2>
+                <p>Choose a location, download the config, or scan its QR code.</p>
+              </div><span id="cfg-count">—</span>
+            </div>
+            <div id="loc-grid" class="loc-grid"></div>
+          </section>
+          <section class="support surface" id="support-box" data-module-key="support">
+            <div class="section-head simple">
+              <div>
+                <h2><i class="fas fa-headset"></i> {{ ps.get('support_title','Support') }}</h2>
+                <p>Contact the service team.</p>
+              </div>
+            </div>
+            <div class="support-links">{% if support_telegram %}<a
+                href="{{ support_telegram if support_telegram.startswith('http') else 'https://t.me/' + support_telegram.lstrip('@') }}"
+                target="_blank" rel="noopener"><i class="fab fa-telegram"></i><span>Telegram</span></a>{% endif %}{% if
+              support_whatsapp %}<a
+                href="{{ support_whatsapp if support_whatsapp.startswith('http') else 'https://wa.me/' + support_whatsapp|replace('+','')|replace(' ','') }}"
+                target="_blank" rel="noopener"><i class="fab fa-whatsapp"></i><span>WhatsApp</span></a>{% endif %}{% if
+              support_phone %}<a href="tel:{{ support_phone }}"><i class="fas fa-phone"></i><span>Phone</span></a>{%
+              endif %}{% if support_email %}<a href="mailto:{{ support_email }}"><i
+                  class="fas fa-envelope"></i><span>Email</span></a>{% endif %}{% if support_website and
+              support_website.startswith(('http://','https://')) %}<a href="{{ support_website }}" target="_blank"
+                rel="noopener"><i class="fas fa-globe"></i><span>Website</span></a>{% endif %}{% if support_instagram
+              %}<a
+                href="{{ support_instagram if support_instagram.startswith('http') else 'https://instagram.com/' + support_instagram.lstrip('@') }}"
+                target="_blank" rel="noopener"><i class="fab fa-instagram"></i><span>Instagram</span></a>{% endif %}{%
+              if not support_telegram and not support_whatsapp and not support_phone and not support_email and not
+              support_website and not support_instagram %}<span class="support-empty">No support channels
+                configured.</span>{% endif %}</div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <div class="qr-dialog" id="qr-dialog" hidden><button class="qr-backdrop" data-close-qr
+        aria-label="Close QR"></button>
+      <section class="qr-sheet" role="dialog" aria-modal="true" aria-labelledby="qr-title">
+        <header>
+          <div><span class="qr-icon"><i class="fas fa-qrcode"></i></span><span><b id="qr-title">WireGuard QR</b><small
+                id="qr-location">Scan with the WireGuard app</small></span></div><button data-close-qr
+            aria-label="Close"><i class="fas fa-times"></i></button>
+        </header>
+        <div class="qr-code-wrap"><img id="qr-image" alt="WireGuard QR code"></div>
+        <footer><a class="qr-download" id="qr-download" href="#"><i class="fas fa-download"></i> Download
+            config</a><button data-close-qr>Done</button></footer>
+      </section>
+    </div>
+    <div class="toast" id="toast">Copied</div>
+    <script>let DATA = {{ data| tojson }}; const PREVIEW_MODE = {{ 'true' if preview_mode|default (false) else 'false' }}; const TOKEN = {{ sub.token| tojson }}; const CONFIG_URL = {{ url_for('subscription_public_config', token = sub.token, _external = True) | tojson }}; const API_URL = {{ url_for('subscription_public_api', token = sub.token, _external = True) | tojson }}; const PUBLIC_SETTINGS = {{ ps| tojson }};</script>
+    <script defer src="{{ url_for('static', filename='js/subscription_public.js') }}"></script>
+  </body>
+
+  </html>
