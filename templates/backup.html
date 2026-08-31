@@ -7,9 +7,12 @@
 {% endblock %}
 
 {% block head_extras %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/backup.css') }}?v=20260729-3">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/backup-dark.css') }}?v=20260729-3">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/backup.css') }}?v=20260830-light-mobile-v3">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/backup-dark.css') }}?v=20260830-light-mobile-v3">
 {% endblock %}
+{% block responsive_extras %}
+{% endblock %}
+
 
 {% block content %}
 <div class="backup-shell">
@@ -177,8 +180,19 @@
           <label class="bk-switch"><input id="schedule-enabled" type="checkbox"><span class="track"></span><span>Enable schedule</span></label>
           <div class="bk-form-grid">
             <div class="bk-field"><label>Frequency</label><select id="freq"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></div>
-            <div class="bk-field"><label>Time</label><input id="time" type="time" value="03:00"></div>
-            <div class="bk-field"><label>Timezone</label><select id="tz"><option value="UTC">UTC</option></select></div>
+            <div class="bk-field"><label>Run time <span class="bk-field-note">panel local time</span></label><input id="time" type="time" value="03:00"></div>
+            <div class="bk-field bk-timezone-field">
+              <label>Timezone</label>
+              <input id="tz" type="hidden" value="UTC">
+              <div class="bk-inherited-zone" aria-live="polite">
+                <span class="bk-inherited-zone__icon"><i class="fas fa-globe"></i></span>
+                <span class="bk-inherited-zone__copy">
+                  <strong id="tz-display">Loading…</strong>
+                  <small>Inherited from Settings → Panel → Regional</small>
+                </span>
+                <span class="bk-inherited-zone__state"><i class="fas fa-link"></i> Global</span>
+              </div>
+            </div>
             <div class="bk-field"><label>Keep last</label><input id="keep" type="number" min="1" value="7"></div>
           </div>
           <div class="bk-switch-row">
@@ -279,5 +293,5 @@
 {% endblock %}
 
 {% block body_extras %}
-<script defer src="{{ url_for('static', filename='js/backup.js') }}?v=20260729-dark-v32"></script>
+<script defer src="{{ url_for('static', filename='js/backup.js') }}?v=20260830-backup-v3"></script>
 {% endblock %}
