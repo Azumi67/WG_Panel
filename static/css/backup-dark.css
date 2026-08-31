@@ -438,3 +438,4 @@ html[data-theme="dark"] .bk-run-step.done {
     grid-template-columns:1fr;
   }
 }
+\n\n/* Global panel timezone dark */\nhtml[data-theme="dark"] .backup-shell .bk-inherited-zone{background:#0d1b22!important;border-color:#2c4b49!important;color:#e5efeb!important}\nhtml[data-theme="dark"] .backup-shell .bk-inherited-zone__icon{background:#153b32!important;color:#8fe3c8!important}\nhtml[data-theme="dark"] .backup-shell .bk-inherited-zone__copy strong{color:#e5f3ed!important}\nhtml[data-theme="dark"] .backup-shell .bk-inherited-zone__copy small{color:#8ca199!important}\nhtml[data-theme="dark"] .backup-shell .bk-inherited-zone__state{background:#123229!important;border-color:#2e6554!important;color:#91ddc3!important}\nhtml[data-theme="dark"] .backup-shell .bk-field-note{color:#8197a3!important}\n
