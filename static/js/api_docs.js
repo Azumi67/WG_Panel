@@ -190,13 +190,28 @@ document.addEventListener('alpine:init', () => {
             if (active) {
               const rail = link.closest('.api-side-links');
               if (rail) {
-                const linkTop = link.offsetTop;
-                const linkBottom = linkTop + link.offsetHeight;
-                const visibleTop = rail.scrollTop;
-                const visibleBottom = visibleTop + rail.clientHeight;
+                const railRect = rail.getBoundingClientRect();
+                const linkRect = link.getBoundingClientRect();
+                const horizontal = rail.scrollWidth > rail.clientWidth + 2;
 
-                if (linkTop < visibleTop + 8 || linkBottom > visibleBottom - 8) {
-                  link.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+                if (horizontal) {
+                  const leftLimit = railRect.left + 8;
+                  const rightLimit = railRect.right - 8;
+
+                  if (linkRect.left < leftLimit) {
+                    rail.scrollLeft -= leftLimit - linkRect.left;
+                  } else if (linkRect.right > rightLimit) {
+                    rail.scrollLeft += linkRect.right - rightLimit;
+                  }
+                } else {
+                  const topLimit = railRect.top + 8;
+                  const bottomLimit = railRect.bottom - 8;
+
+                  if (linkRect.top < topLimit) {
+                    rail.scrollTop -= topLimit - linkRect.top;
+                  } else if (linkRect.bottom > bottomLimit) {
+                    rail.scrollTop += linkRect.bottom - bottomLimit;
+                  }
                 }
               }
             }
