@@ -1,0 +1,246 @@
+.wg-mobile-topbar,
+.wg-mobile-menu-backdrop{
+  display:none!important;
+}
+
+@media (min-width:761px){
+  .sidebar.sb2{
+    transform:none!important;
+    top:0!important;
+    height:100vh!important;
+  }
+  .sidebar.sb2:not(.is-collapsed){
+    width:var(--sb2-w)!important;
+  }
+  .sidebar.sb2.is-collapsed{
+    width:var(--sb2-w-collapsed)!important;
+  }
+  .sidebar.sb2~.main{
+    margin-left:calc(var(--sb2-w) + var(--sb2-gap))!important;
+    width:auto!important;
+  }
+  .sidebar.sb2.is-collapsed~.main{
+    margin-left:calc(var(--sb2-w-collapsed) + var(--sb2-gap))!important;
+    width:auto!important;
+  }
+  .main::before{
+    display:block!important;
+    left:calc(var(--sb2-w) + var(--sb2-gap))!important;
+  }
+  .sidebar.sb2.is-collapsed~.main::before{
+    left:calc(var(--sb2-w-collapsed) + var(--sb2-gap))!important;
+  }
+}
+
+@media (max-width:760px){
+  :root{
+    --wg-mobile-topbar-h:56px;
+  }
+
+  html,
+  body{
+    width:100%;
+    max-width:100%;
+    overflow-x:hidden;
+  }
+
+  .wg-mobile-topbar{
+    position:sticky!important;
+    top:0!important;
+    z-index:1300!important;
+    display:flex!important;
+    align-items:center!important;
+    gap:12px!important;
+    width:100%!important;
+    height:var(--wg-mobile-topbar-h)!important;
+    min-height:var(--wg-mobile-topbar-h)!important;
+    padding:0 14px!important;
+    box-sizing:border-box!important;
+    background:linear-gradient(180deg,#0e1923,#0a131c)!important;
+    border-bottom:1px solid rgba(148,163,184,.18)!important;
+    box-shadow:0 8px 26px rgba(2,6,23,.16)!important;
+  }
+
+  .wg-mobile-menu-btn{
+    width:42px!important;
+    height:42px!important;
+    min-width:42px!important;
+    padding:0!important;
+    display:grid!important;
+    place-items:center!important;
+    border:1px solid rgba(148,163,184,.25)!important;
+    border-radius:13px!important;
+    background:#162231!important;
+    cursor:pointer!important;
+  }
+
+  .wg-mobile-menu-lines{
+    position:relative!important;
+    display:block!important;
+    width:22px!important;
+    height:14px!important;
+  }
+
+  .wg-mobile-menu-lines i{
+    position:absolute!important;
+    left:0!important;
+    width:22px!important;
+    height:2px!important;
+    border-radius:999px!important;
+    background:#edf5f7!important;
+    transition:transform .18s ease,top .18s ease,opacity .18s ease!important;
+  }
+
+  .wg-mobile-menu-lines i:nth-child(1){top:0!important;}
+  .wg-mobile-menu-lines i:nth-child(2){top:6px!important;}
+  .wg-mobile-menu-lines i:nth-child(3){top:12px!important;}
+
+  body.wg-mobile-menu-open .wg-mobile-menu-lines i:nth-child(1){top:6px!important;transform:rotate(45deg)!important;}
+  body.wg-mobile-menu-open .wg-mobile-menu-lines i:nth-child(2){opacity:0!important;}
+  body.wg-mobile-menu-open .wg-mobile-menu-lines i:nth-child(3){top:6px!important;transform:rotate(-45deg)!important;}
+
+  .wg-mobile-brand{
+    display:flex!important;
+    align-items:center!important;
+    gap:9px!important;
+    min-width:0!important;
+    color:#f8fafc!important;
+  }
+
+  .wg-mobile-brand img{
+    display:block!important;
+    width:28px!important;
+    height:28px!important;
+    max-width:28px!important;
+    max-height:28px!important;
+    flex:0 0 28px!important;
+    object-fit:contain!important;
+  }
+
+  .wg-mobile-brand strong{
+    min-width:0!important;
+    font-size:17px!important;
+    line-height:1!important;
+    white-space:nowrap!important;
+    overflow:hidden!important;
+    text-overflow:ellipsis!important;
+  }
+
+  .wg-mobile-menu-backdrop{
+    position:fixed!important;
+    left:0!important;
+    right:0!important;
+    top:var(--wg-mobile-topbar-h)!important;
+    bottom:0!important;
+    z-index:1200!important;
+    display:block!important;
+    border:0!important;
+    background:rgba(2,6,23,.56)!important;
+    backdrop-filter:blur(3px)!important;
+    -webkit-backdrop-filter:blur(3px)!important;
+    opacity:0!important;
+    visibility:hidden!important;
+    pointer-events:none!important;
+    transition:opacity .18s ease,visibility .18s ease!important;
+  }
+
+  body.wg-mobile-menu-open .wg-mobile-menu-backdrop{
+    opacity:1!important;
+    visibility:visible!important;
+    pointer-events:auto!important;
+  }
+
+  .main{
+    width:100%!important;
+    max-width:100%!important;
+    min-width:0!important;
+    margin-left:0!important;
+  }
+
+  .main::before{
+    display:none!important;
+  }
+
+  .sidebar.sb2,
+  .sidebar.sb2.is-collapsed{
+    position:fixed!important;
+    left:0!important;
+    right:auto!important;
+    top:var(--wg-mobile-topbar-h)!important;
+    bottom:0!important;
+    z-index:1250!important;
+    width:min(84vw,286px)!important;
+    max-width:286px!important;
+    height:calc(100dvh - var(--wg-mobile-topbar-h))!important;
+    overflow:hidden!important;
+    transform:translate3d(calc(-100% - 18px),0,0)!important;
+    transition:transform .2s ease!important;
+  }
+
+  body.wg-mobile-menu-open .sidebar.sb2,
+  body.wg-mobile-menu-open .sidebar.sb2.is-collapsed{
+    transform:translate3d(0,0,0)!important;
+  }
+
+  .sidebar.sb2 .logo{
+    display:none!important;
+  }
+
+  .sidebar.sb2.is-collapsed .sb2-text,
+  .sidebar.sb2.is-collapsed .sb2-section,
+  .sidebar.sb2.is-collapsed .user-text,
+  .sidebar.sb2.is-collapsed .sb2-update-copy,
+  .sidebar.sb2.is-collapsed .sb2-account-copy,
+  .sidebar.sb2.is-collapsed .sb2-footer-actions span{
+    display:initial!important;
+  }
+
+  .sidebar.sb2 nav,
+  .sidebar.sb2.is-collapsed nav{
+    padding:10px!important;
+  }
+
+  .sidebar.sb2 .sb2-link,
+  .sidebar.sb2.is-collapsed .sb2-link{
+    width:auto!important;
+    max-width:none!important;
+    min-width:0!important;
+    height:40px!important;
+    margin:3px 4px!important;
+    padding:0 11px!important;
+    justify-content:flex-start!important;
+    gap:.82rem!important;
+    border-radius:13px!important;
+  }
+
+  .sidebar.sb2.is-collapsed .sb2-link i{
+    width:25px!important;
+    height:25px!important;
+    min-width:25px!important;
+  }
+
+  .sidebar.sb2 .sb2-bottom,
+  .sidebar.sb2.is-collapsed .sb2-bottom{
+    align-items:stretch!important;
+    padding:9px 10px 11px!important;
+  }
+
+  body.wg-mobile-menu-open{
+    overflow:hidden!important;
+  }
+
+  body.modal-open .wg-mobile-topbar,
+  body.subx-modal-open .wg-mobile-topbar,
+  body.mobile-panel-update-open .wg-mobile-topbar,
+  body.mobile-sub-studio-open .wg-mobile-topbar{
+    display:none!important;
+  }
+}
+
+@media (prefers-reduced-motion:reduce){
+  .sidebar.sb2,
+  .wg-mobile-menu-backdrop,
+  .wg-mobile-menu-lines i{
+    transition:none!important;
+  }
+}
