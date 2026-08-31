@@ -78,24 +78,37 @@
 
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/panel-version.css') }}?v=20260730-sidebar-two-row" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}?v=20260810-v23" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/sidebar-compact.css') }}?v=20260730-v50" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/panel-update.css') }}?v=20260730-v50" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/panel-version.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/sidebar-compact.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/panel-update.css') }}" />
 
     {% block head_extras %}{% endblock %}
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/dark-dashboard-peers.css') }}?v=20260810-v23" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/dark-dashboard-peers.css') }}" />
+    {% block responsive_extras %}{% endblock %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile-native.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/base-responsive.css') }}" />
 
     {% if request.endpoint == 'index' %}
     <script defer src="{{ url_for('static', filename='vendor/chartjs/chart.umd.min.js', v='4.4.4') }}"></script>
     {% endif %}
     <script defer src="{{ url_for('static', filename='js/toast.js') }}"></script>
     <script defer src="{{ url_for('static', filename='js/csrf.js') }}"></script>
-    <script defer src="{{ url_for('static', filename='js/base.js') }}?v=20260810-v23"></script>
+    <script defer src="{{ url_for('static', filename='js/base.js') }}"></script>
 </head>
 
 <body data-preview="{{ '1' if preview|default(false) else '0' }}">
-    <aside class="sidebar sb2" aria-label="Sidebar">
+    <header class="wg-mobile-topbar" id="wg-mobile-topbar" aria-label="Mobile navigation">
+        <button type="button" class="wg-mobile-menu-btn" id="wg-mobile-menu-btn" aria-controls="panel-sidebar" aria-expanded="false" aria-label="Open menu">
+            <span class="wg-mobile-menu-lines" aria-hidden="true"><i></i><i></i><i></i></span>
+        </button>
+        <div class="wg-mobile-brand" aria-hidden="true">
+            <img src="{{ url_for('static', filename='img/wireguard-badge.svg') }}" alt="">
+            <strong>WG Panel</strong>
+        </div>
+    </header>
+    <button type="button" class="wg-mobile-menu-backdrop" id="wg-mobile-menu-backdrop" tabindex="-1" aria-hidden="true"></button>
+    <aside class="sidebar sb2" id="panel-sidebar" aria-label="Sidebar">
         <div class="logo" data-tip="WG Panel">
             <img src="{{ url_for('static', filename='img/wireguard-badge.svg') }}" alt="WireGuard badge" class="wg-logo-img">
             <span class="brand-title">WG Panel</span>
@@ -236,9 +249,9 @@
         {% block content %}{% endblock %}
     </main>
 
-    <script defer src="{{ url_for('static', filename='js/panel-version.js') }}?v=20260730-dashboard-version-chip"></script>
-    <script defer src="{{ url_for('static', filename='js/panel-update.js') }}?v=20260730-v50"></script>
-    <script defer src="{{ url_for('static', filename='js/theme.js') }}?v=20260730-v50"></script>
+    <script defer src="{{ url_for('static', filename='js/panel-version.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/panel-update.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/theme.js') }}"></script>
 
 
     <div class="pu-modal" id="panel-update-modal" hidden aria-hidden="true" role="dialog"
@@ -331,6 +344,8 @@
 
 
     {% block body_extras %}{% endblock %}
+
+    
 </body>
 
 </html>
