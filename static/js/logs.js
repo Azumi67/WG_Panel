@@ -476,38 +476,101 @@ function buildURL() {
     : url;
 }
 
+function relativeTime(ts){
+  if (!ts) return '';
+  let d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '';
+  const diff = Date.now() - d.getTime();
+  const future = diff < 0;
+  const sec = Math.abs(Math.floor(diff / 1000));
+  const fmt = (n, unit) => future ? `in ${n} ${unit}${n === 1 ? '' : 's'}` : `${n} ${unit}${n === 1 ? '' : 's'} ago`;
+  if (sec < 10) return 'just now';
+  if (sec < 60) return fmt(sec, 'second');
+  const min = Math.floor(sec / 60);
+  if (min < 60) return fmt(min, 'minute');
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return fmt(hr, 'hour');
+  const day = Math.floor(hr / 24);
+  if (day < 7) return fmt(day, 'day');
+  return fmt(Math.floor(day / 7), 'week');
+}
+
+function humanSummary(x, src, rawMsg){
+  const raw = stripLevels(redactSecrets(rawMsg)).replace(/\s+/g,' ').trim();
+  const lower = raw.toLowerCase();
+
+  if (src === 'tg_app') {
+    if (x.heartbeat || x.kind === 'heartbeat' || /heartbeat/.test(lower)) return {main:'Bot heartbeat', sub:'Telegram bot is alive'};
+    if (/service=wg-panel-telegram/.test(lower) && !raw.replace(/service=wg-panel-telegram/ig,'').trim()) return {main:'Telegram bot service started', sub:'Service metadata'};
+    if (/service=wg-panel-telegram/.test(lower)) {
+      const cleaned = raw.replace(/\b(pid|v|service)=[^\s]+/g,'').replace(/\s+/g,' ').trim();
+      if (!cleaned) return {main:'Telegram bot heartbeat', sub:'Service is running'};
+    }
+  }
+
+  if (src === 'tg_admin') {
+    const action = String(x.action || x.event || x.kind || '').trim();
+    const details = String(x.details || x.msg || x.message || '').trim();
+    const actor = String(x.admin_username || x.admin || x.user || x.by || '').replace(/^@/,'').trim();
+    if (action.toLowerCase() === 'log') {
+      const clean = stripLevels(details || raw);
+      if (/watchdog health check recovered/i.test(clean)) return {main:'Panel watchdog recovered', sub: actor ? `Admin bot · @${actor}` : 'Admin bot'};
+      if (/background task .* exited unexpectedly/i.test(clean)) {
+        const m = clean.match(/background task\s+([^\s]+)\s+exited unexpectedly/i);
+        return {main:'Background task stopped unexpectedly', sub:m?.[1] ? `Task: ${m[1]}` : 'Admin bot'};
+      }
+      if (/watchdog stopped/i.test(clean)) return {main:'Panel watchdog stopped', sub:'Admin bot'};
+      if (/Unhandled bot error/i.test(clean)) return {main:'Telegram bot error', sub:clean.replace(/^.*Unhandled bot error:\s*/i,'').slice(0,140)};
+      return {main: clean || 'Admin log event', sub: actor ? `Admin bot · @${actor}` : 'Admin bot'};
+    }
+  }
+
+  if (src === 'app') {
+    const h = humanApp(x);
+    return {main:h || raw || 'Application event', sub:''};
+  }
+
+  if (src === 'iface') {
+    const h = humanIface(x);
+    return {main:h || raw || 'Interface event', sub:''};
+  }
+
+  return {main: humanRow(x, src) || raw || 'Event', sub:''};
+}
+
 function renderizeRows(rows){
   const body = $('#logs-body'); if (!body) return;
   const arr = Array.isArray(rows) ? rows : [];
   const srcCfg = SOURCES[state.source] || SOURCES.app;
 
   const html = arr.map(x => {
-  const tsRaw  = x.ts || x.time || x.timestamp || x.when || '';
-  const tsShow = fmtTsDisplay(tsRaw, state.localTime);
+    const tsRaw  = x.ts || x.time || x.timestamp || x.when || '';
+    const tsShow = fmtTsDisplay(tsRaw, state.localTime);
+    const tsHuman = state.friendly ? relativeTime(tsRaw) : '';
 
-  const rawMsg = String(
-    x.msg || x.message || x.text ||
-    (x.action ? (x.details ? `${x.action} • ${x.details}` : x.action) : '') ||
-    x.details || x.raw || ''
-  ).trim();
+    const rawMsg = String(
+      x.msg || x.message || x.text ||
+      (x.action ? (x.details ? `${x.action} • ${x.details}` : x.action) : '') ||
+      x.details || x.raw || ''
+    ).trim();
 
-  const lvl = x.kind || x.level || parseLevel(rawMsg) || (x.action ? 'action' : 'info');
+    const lvl = x.kind || x.level || parseLevel(rawMsg) || (x.action ? 'action' : 'info');
+    const summary = state.friendly ? humanSummary(x, state.source, rawMsg) : {main: rawMsg || '—', sub:''};
+    const main = summary.main || '—';
+    const sub = summary.sub || '';
+    const rawTitle = escapeHtml(redactSecrets(rawMsg).replace(/\s+/g,' ').trim());
 
-  const nice = state.friendly ? humanRow(x, state.source) : rawMsg;
-  const msgShow = String(nice || rawMsg);
-
-  return `<tr>
-    <td class="mono">${escapeHtml(tsShow)}</td>
-    <td>${levelBadge(lvl)}</td>
-    <td>${escapeHtml(srcCfg.label)}</td>
-    <td>${formatMessage(x, state.source, rawMsg, msgShow)}</td>
-  </tr>`;
-}).join('');
-
+    return `<tr>
+      <td class="mono"><div class="log-time-main">${escapeHtml(tsShow)}</div>${tsHuman ? `<div class="log-time-sub">${escapeHtml(tsHuman)}</div>` : ''}</td>
+      <td>${levelBadge(lvl)}</td>
+      <td>${escapeHtml(srcCfg.label)}</td>
+      <td><div class="log-msg" title="${rawTitle}"><div class="log-msg__main">${escapeHtml(main)}</div>${sub ? `<div class="log-msg__sub">${escapeHtml(sub)}</div>` : ''}</div></td>
+    </tr>`;
+  }).join('');
 
   body.innerHTML = html || `<tr><td colspan="4" class="muted">No entries</td></tr>`;
   const badge = $('#count-badge'); if (badge) badge.textContent = String(arr.length || 0);
-  }
+}
 
   async function getLogs(){
     const url = buildURL(); if (!url) return;
@@ -926,7 +989,6 @@ function stopAuto(){
 
 
   window.addEventListener('logs:applied',   () => pageToast('Filters applied',   'success'));
-  window.addEventListener('logs:refreshed', () => { if (!state.auto) pageToast('Entries refreshed', 'success'); });
   window.addEventListener('logs:cleared',   () => pageToast('Logs cleared', 'success'));
   window.addEventListener('logs:exported',  (e) => pageToast(`Exported ${e.detail?.fmt || ''}`, 'success'));
 
