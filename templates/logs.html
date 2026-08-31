@@ -1,8 +1,11 @@
 {% extends "base.html" %}
 {% block head_extras %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/logs.css') }}?v=20260729-v29">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/logs-dark.css') }}?v=20260729-v29">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/logs.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/logs-dark.css') }}">
 {% endblock %}
+{% block responsive_extras %}
+{% endblock %}
+
 {% block content %}
 
 
