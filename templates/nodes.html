@@ -1,8 +1,11 @@
 {% extends 'base.html' %}
 {% block head_extras %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/nodes.css') }}?v=20260729-v27">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/nodes-dark.css') }}?v=20260729-v27">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/nodes.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/nodes-dark.css') }}">
 {% endblock %}
+{% block responsive_extras %}
+{% endblock %}
+
 {% block content %}
 
 <div class="nodes-page np-pro">
@@ -224,7 +227,7 @@
   })();
 </script>
 
-<script defer src="{{ url_for('static', filename='js/nodes.js') }}?v=20260729-v27"></script>
+<script defer src="{{ url_for('static', filename='js/nodes.js') }}"></script>
 
 
 {% endblock %}
