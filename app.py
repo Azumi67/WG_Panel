@@ -2633,6 +2633,12 @@ def _load_tg_settings():
         'login_success': True,
         'login_fail': True,
         'suspicious_4xx': True,
+        'security_block': True,
+        'security_release': True,
+        'security_auto_release': False,
+        'traffic_policy_change': False,
+        'traffic_apply_success': False,
+        'traffic_apply_failed': True,
         'backup_success': False,
         'backup_failed': True,
         'update_success': True,
@@ -2769,85 +2775,144 @@ def _tg_human_duration(value) -> str:
     )
 
 
-def _tg_human_datetime(value) -> str:
- 
-    if value in (
-        None,
-        '',
-    ):
-        return ''
+def _tg_system_timezone():
+    """
+    Telegram timestamps use the global panel timezone.
 
-    parsed = None
+    All stored timestamps remain UTC.
+    """
+    try:
+        return _panel_timezone()
+    except Exception:
+        return timezone.utc
 
-    if isinstance(
-        value,
-        datetime,
-    ):
+
+def _tg_parse_datetime(value):
+    if value in (None, "", "—"):
+        return None
+
+    if isinstance(value, datetime):
         parsed = value
 
-    elif isinstance(
-        value,
-        (int, float),
-    ):
+    elif isinstance(value, (int, float)):
         try:
             parsed = datetime.fromtimestamp(
                 float(value),
                 tz=timezone.utc,
             )
         except Exception:
-            return str(value)
+            return None
 
     else:
-        raw = str(
-            value
-        ).strip()
+        raw = str(value).strip()
 
         if not raw:
-            return ''
+            return None
 
         try:
-            if re.fullmatch(
-                r'\d+(?:\.\d+)?',
-                raw,
-            ):
+            if re.fullmatch(r"\d+(?:\.\d+)?", raw):
                 parsed = datetime.fromtimestamp(
                     float(raw),
                     tz=timezone.utc,
                 )
-
             else:
                 normalized = raw
 
-                if normalized.endswith(
-                    'Z'
-                ):
-                    normalized = (
-                        normalized[:-1]
-                        + '+00:00'
-                    )
+                if normalized.endswith("Z"):
+                    normalized = normalized[:-1] + "+00:00"
 
-                parsed = datetime.fromisoformat(
-                    normalized
-                )
+                parsed = datetime.fromisoformat(normalized)
 
         except Exception:
-            return raw
+            return None
 
-    if parsed is None:
-        return str(value)
-
+    # Database/API datetimes without an offset are treated as UTC.
     if parsed.tzinfo is None:
-        parsed = parsed.replace(
-            tzinfo=timezone.utc
-        )
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return parsed
+
+
+def _tg_human_delta(seconds: float) -> str:
+    future = seconds < 0
+    seconds = abs(int(seconds))
+
+    if seconds < 10:
+        return "in a moment" if future else "just now"
+
+    if seconds < 60:
+        value = seconds
+        text = f"{value} second{'s' if value != 1 else ''}"
+
+    elif seconds < 3600:
+        value = max(1, seconds // 60)
+        text = f"{value} minute{'s' if value != 1 else ''}"
+
+    elif seconds < 86400:
+        value = max(1, seconds // 3600)
+        text = f"{value} hour{'s' if value != 1 else ''}"
+
+    elif seconds < 604800:
+        value = max(1, seconds // 86400)
+        text = f"{value} day{'s' if value != 1 else ''}"
+
+    elif seconds < 2592000:
+        value = max(1, seconds // 604800)
+        text = f"{value} week{'s' if value != 1 else ''}"
+
+    elif seconds < 31536000:
+        value = max(1, seconds // 2592000)
+        text = f"{value} month{'s' if value != 1 else ''}"
 
     else:
-        parsed = parsed.astimezone(
-            timezone.utc
-        )
+        value = max(1, seconds // 31536000)
+        text = f"{value} year{'s' if value != 1 else ''}"
 
-    return parsed.strftime(
-        '%d %b %Y, %H:%M UTC'
+    return f"in {text}" if future else f"{text} ago"
+
+
+def _tg_human_datetime(
+    value,
+    *,
+    relative: bool = True,
+    seconds: bool = False,
+    fallback: str = "—",
+) -> str:
+    """
+    Human-friendly Telegram datetime in the server/system timezone.
+
+    Example:
+        23 Aug 2026 · 22:31 (5 minutes ago)
+        24 Aug 2026 · 03:00 (in 4 hours)
+    """
+    parsed = _tg_parse_datetime(value)
+
+    if parsed is None:
+        return fallback if value in (None, "", "—") else str(value)
+
+    local_tz = _tg_system_timezone()
+    local_dt = parsed.astimezone(local_tz)
+    now = datetime.now(timezone.utc).astimezone(local_tz)
+
+    if seconds:
+        absolute = local_dt.strftime("%d %b %Y · %H:%M:%S")
+    else:
+        absolute = local_dt.strftime("%d %b %Y · %H:%M")
+
+    if not relative:
+        return absolute
+
+    delta = (now - local_dt).total_seconds()
+    human = _tg_human_delta(delta)
+
+    return f"{absolute} ({human})"
+
+
+def _tg_now_text() -> str:
+    return _tg_human_datetime(
+        datetime.now(timezone.utc),
+        relative=False,
+        seconds=True,
     )
 
 def _tg_event_escape(value) -> str:
@@ -2902,7 +2967,7 @@ def _send_telegram_event(
         or {}
     )
 
-    bot_token = (
+    bot_token = str(
         settings.get('bot_token')
         or ''
     ).strip()
@@ -2928,6 +2993,10 @@ def _send_telegram_event(
     if not bot_token or not recipients:
         return
 
+    # -----------------
+    # Deduplication
+    # -----------------
+
     event_identity = (
         event_key,
         str(
@@ -2942,6 +3011,7 @@ def _send_telegram_event(
     )
 
     with _TG_EVENT_LOCK:
+
         previous_time = float(
             _TG_EVENT_LAST.get(
                 event_identity
@@ -2964,7 +3034,10 @@ def _send_telegram_event(
             event_identity
         ] = monotonic_now
 
+        # Prevent the dedupe dictionary
+        # from growing forever.
         if len(_TG_EVENT_LAST) > 1000:
+
             expiry_time = (
                 monotonic_now
                 - 86400
@@ -2973,6 +3046,7 @@ def _send_telegram_event(
             for old_key, old_time in list(
                 _TG_EVENT_LAST.items()
             ):
+
                 if (
                     float(
                         old_time
@@ -2980,6 +3054,7 @@ def _send_telegram_event(
                     )
                     < expiry_time
                 ):
+
                     _TG_EVENT_LAST.pop(
                         old_key,
                         None,
@@ -3004,7 +3079,15 @@ def _send_telegram_event(
 
         'login_success': '●',
         'login_fail': '⊘',
+
         'suspicious_4xx': '◆',
+        'security_block': '⊘',
+        'security_release': '◇',
+        'security_auto_release': '◇',
+
+        'traffic_policy_change': '◇',
+        'traffic_apply_success': '●',
+        'traffic_apply_failed': '⊘',
 
         'backup_success': '●',
         'backup_failed': '⊘',
@@ -3030,24 +3113,71 @@ def _send_telegram_event(
         status or ''
     ).strip()
 
-    timestamp = (
-        _tg_human_datetime(
-            datetime.now(
-                timezone.utc
-            )
-        )
-    )
+    # Footer timestamp uses the
+    # global panel timezone.
+    timestamp = _tg_now_text()
 
     hostname = str(
         socket.gethostname()
         or 'panel'
     ).strip()
 
+    # -----------------
+    # Datetime labels
+    # -----------------
+
+    time_labels = {
+        'time',
+        'timestamp',
+
+        'created',
+        'created at',
+
+        'updated',
+        'updated at',
+
+        'started',
+        'started at',
+
+        'completed',
+        'completed at',
+
+        'failed at',
+
+        'blocked at',
+        'blocked until',
+
+        'released at',
+
+        'expires',
+        'expires at',
+
+        'last seen',
+        'last run',
+
+        'next run',
+        'next check',
+
+        'recovered at',
+
+        'schedule time',
+        'scheduled for',
+    }
+
+    # These are fixed schedule timestamps.
+    # Relative text such as "(just now)"
+    # is not useful for them.
+    absolute_only_time_labels = {
+        'schedule time',
+        'scheduled for',
+    }
+
     rows = []
 
     for label, value in (
         details or []
     ):
+
         if value in (
             None,
             '',
@@ -3058,11 +3188,41 @@ def _send_telegram_event(
             label or ''
         ).strip()
 
-        clean_value = str(
-            value
-        ).strip()
+        if not clean_label:
+            continue
 
-        if not clean_label or not clean_value:
+        label_key = (
+            clean_label.lower()
+        )
+
+        # --------------------------
+        # Human-readable timestamps
+        # --------------------------
+
+        if label_key in time_labels:
+
+            clean_value = (
+                _tg_human_datetime(
+                    value,
+                    relative=(
+                        label_key
+                        not in
+                        absolute_only_time_labels
+                    ),
+                    seconds=False,
+                    fallback='—',
+                )
+            )
+
+        else:
+
+            clean_value = str(
+                value
+                if value is not None
+                else ''
+            ).strip()
+
+        if not clean_value:
             continue
 
         rows.append(
@@ -3073,13 +3233,15 @@ def _send_telegram_event(
         )
 
     # -------------------------
-    # mobile-friendly layout
+    # Mobile-friendly layout
     # -------------------------
 
     message_lines = [
         (
             f'{icon} '
-            f'<b>{_tg_event_escape(clean_title)}</b>'
+            f'<b>'
+            f'{_tg_event_escape(clean_title)}'
+            f'</b>'
         )
     ]
 
@@ -3087,7 +3249,9 @@ def _send_telegram_event(
         clean_status
         or rows
     ):
-        message_lines.append('')
+        message_lines.append(
+            ''
+        )
 
     if clean_status:
         message_lines.append(
@@ -3098,12 +3262,19 @@ def _send_telegram_event(
         )
 
     for label, value in rows:
+
         message_lines.append(
             (
-                f'<b>{_tg_event_escape(label)}</b> · '
+                f'<b>'
+                f'{_tg_event_escape(label)}'
+                f'</b> · '
                 f'{_tg_event_escape(value)}'
             )
         )
+
+    # -----------------
+    # Message footer
+    # -----------------
 
     message_lines.extend([
         '',
@@ -3119,15 +3290,25 @@ def _send_telegram_event(
         message_lines
     )
 
+    # Keep a real Flask app reference
+    # because sending happens in a thread.
     flask_app = (
         current_app
         ._get_current_object()
     )
 
+    # -----------------
+    # Background sender
+    # -----------------
+
     def worker():
+
         with flask_app.app_context():
+
             for chat_id in recipients:
+
                 try:
+
                     response = requests.post(
                         (
                             'https://api.telegram.org/'
@@ -3143,6 +3324,7 @@ def _send_telegram_event(
                     )
 
                     if not response.ok:
+
                         flask_app.logger.warning(
                             'Telegram event failed: '
                             'event=%s '
@@ -3156,6 +3338,7 @@ def _send_telegram_event(
                         )
 
                 except Exception:
+
                     flask_app.logger.debug(
                         'Telegram event failed: '
                         'event=%s '
@@ -3175,448 +3358,1477 @@ def _send_telegram_event(
     ).start()
 
 # ========================
-# HTTP 4xx burst monitor
+# HTTP security center
 # ========================
 
-_HTTP_4XX_STATE_FILE = os.path.join(
-    app.instance_path,
-    "suspicious_4xx_state.json",
-)
+_HTTP_4XX_STATE_FILE = os.path.join(app.instance_path, "suspicious_4xx_state.json")
+_HTTP_4XX_LOCK_FILE = os.path.join(app.instance_path, "suspicious_4xx_state.lock")
+_HTTP_SECURITY_SETTINGS_FILE = os.path.join(app.instance_path, "http_security_settings.json")
+_HTTP_4XX_STATUSES = {401, 403, 404, 405, 429}
 
-_HTTP_4XX_LOCK_FILE = os.path.join(
-    app.instance_path,
-    "suspicious_4xx_state.lock",
-)
-
-_HTTP_4XX_STATUSES = {
-    401,
-    403,
-    404,
-    405,
-    429,
+_HTTP_SECURITY_DEFAULTS = {
+    "enabled": True,
+    "response_mode": "monitor",       # monitor | block
+    "ip_source": "direct",            # direct | effective
+    "block_scope": "all",             # all | auth_admin
+    "threshold": 20,
+    "window_seconds": 60,
+    "sensitive_threshold": 3,
+    "rate_limit_threshold": 10,
+    "login_threshold": 5,
+    "login_window_seconds": 600,
+    "cooldown_seconds": 600,
+    "block_seconds": 900,
+    "max_block_seconds": 86400,
+    "escalate": True,
+    "enrich_ip": False,
+    "firewall_enabled": False,
+    "firewall_after_offenses": 3,
+    "trusted_networks": ["127.0.0.1/32", "::1/128"],
+    "deny_networks": [],
 }
 
-_HTTP_4XX_WINDOW_SEC = 60
-_HTTP_4XX_THRESHOLD = 20
-_HTTP_4XX_COOLDOWN_SEC = 600
+_HTTP_SECURITY_OFFENSE_RESET_SEC = 7 * 24 * 60 * 60
+_HTTP_SECURITY_HISTORY_LIMIT = 500
+_HTTP_SECURITY_TEMP_ALLOW_MAX_SEC = 7 * 24 * 60 * 60
+_HTTP_SECURITY_NFT_TABLE = "wgpanel_security"
+_HTTP_SECURITY_NFT_V4_SET = "blocked_v4"
+_HTTP_SECURITY_NFT_V6_SET = "blocked_v6"
+_HTTP_SECURITY_CLEANUP_STARTED = False
+_HTTP_SECURITY_GEO_CACHE = {}
+_HTTP_SECURITY_GEO_CACHE_LOCK = threading.Lock()
+
+_HTTP_SECURITY_SENSITIVE_RE = re.compile(
+    r"(?:^|/)\.env(?:[./~_-]|$)|"
+    r"(?:^|/)\.(?:git|svn|hg|aws|ssh)(?:/|$)|"
+    r"(?:^|/)(?:wp-admin|wp-login\.php|phpmyadmin)(?:/|$)|"
+    r"(?:^|/)(?:credentials?|secrets?|config|settings?)(?:\.(?:json|ya?ml|ini|conf|php|py|js|bak|old|orig|save|zip|tar|gz)|/|$)|"
+    r"(?:^|/)(?:docker-?compose|compose)(?:\.[^/]+)?$|"
+    r"\.(?:bak|old|orig|save|swp|sql|sqlite|db)(?:$|[?#])",
+    re.IGNORECASE,
+)
 
 
-def _suspicious_4xx_client_ip() -> str:
-    """
-    Return the effective request IP.
+def _http_security_int(value, default, minimum, maximum):
+    try:
+        return max(minimum, min(maximum, int(value)))
+    except Exception:
+        return default
 
-    """
+
+def _http_security_normalize_networks(value):
+    if isinstance(value, str):
+        value = re.split(r"[\r\n,]+", value)
+    if not isinstance(value, list):
+        value = []
+
+    cleaned = []
+    for item in value:
+        raw = str(item or "").strip()
+        if not raw:
+            continue
+        try:
+            if "/" not in raw:
+                ip = ipaddress.ip_address(raw)
+                raw = f"{ip}/{32 if ip.version == 4 else 128}"
+            else:
+                raw = str(ipaddress.ip_network(raw, strict=False))
+        except ValueError:
+            continue
+        if raw not in cleaned:
+            cleaned.append(raw)
+    return cleaned
+
+
+def _load_http_security_settings():
+    raw = _json_load(_HTTP_SECURITY_SETTINGS_FILE, {})
+    if not isinstance(raw, dict):
+        raw = {}
+
+    settings = dict(_HTTP_SECURITY_DEFAULTS)
+    settings.update(raw)
+
+    settings["enabled"] = bool(settings.get("enabled", True))
+    settings["response_mode"] = (
+        "block" if str(settings.get("response_mode") or "").lower() == "block" else "monitor"
+    )
+    settings["ip_source"] = (
+        "effective" if str(settings.get("ip_source") or "").lower() == "effective" else "direct"
+    )
+    settings["block_scope"] = (
+        "auth_admin" if str(settings.get("block_scope") or "").lower() == "auth_admin" else "all"
+    )
+    settings["threshold"] = _http_security_int(settings.get("threshold"), 20, 3, 500)
+    settings["window_seconds"] = _http_security_int(settings.get("window_seconds"), 60, 10, 3600)
+    settings["sensitive_threshold"] = _http_security_int(settings.get("sensitive_threshold"), 3, 1, 50)
+    settings["rate_limit_threshold"] = _http_security_int(settings.get("rate_limit_threshold"), 10, 1, 200)
+    settings["login_threshold"] = _http_security_int(settings.get("login_threshold"), 5, 2, 100)
+    settings["login_window_seconds"] = _http_security_int(settings.get("login_window_seconds"), 600, 60, 86400)
+    settings["cooldown_seconds"] = _http_security_int(settings.get("cooldown_seconds"), 600, 30, 86400)
+    settings["block_seconds"] = _http_security_int(settings.get("block_seconds"), 900, 60, 604800)
+    settings["max_block_seconds"] = _http_security_int(settings.get("max_block_seconds"), 86400, 60, 2592000)
+    settings["max_block_seconds"] = max(settings["block_seconds"], settings["max_block_seconds"])
+    settings["escalate"] = bool(settings.get("escalate", True))
+    settings["enrich_ip"] = bool(settings.get("enrich_ip", False))
+    settings["firewall_enabled"] = bool(settings.get("firewall_enabled", False))
+    settings["firewall_after_offenses"] = _http_security_int(
+        settings.get("firewall_after_offenses"), 3, 1, 20
+    )
+    settings["trusted_networks"] = _http_security_normalize_networks(settings.get("trusted_networks"))
+    settings["deny_networks"] = _http_security_normalize_networks(settings.get("deny_networks"))
+    return settings
+
+
+def _save_http_security_settings(settings):
+    normalized = _load_http_security_settings()
+    normalized.update(settings or {})
+    _json_save(_HTTP_SECURITY_SETTINGS_FILE, normalized)
+    return _load_http_security_settings()
+
+
+def _http_security_normalize_ip(value):
+    value = str(value or "").strip()
+    if not value:
+        return "unknown"
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return "unknown"
+
+
+def _http_security_direct_ip():
+    original = request.environ.get("werkzeug.proxy_fix.orig") or {}
+    if isinstance(original, dict):
+        value = _http_security_normalize_ip(original.get("REMOTE_ADDR"))
+        if value != "unknown":
+            return value
+    return _http_security_normalize_ip(request.remote_addr)
+
+
+def _http_security_effective_ip():
     candidates = [
-        request.headers.get(
-            "CF-Connecting-IP"
-        ),
-        request.headers.get(
-            "True-Client-IP"
-        ),
-        request.headers.get(
-            "X-Real-IP"
-        ),
+        request.headers.get("CF-Connecting-IP"),
+        request.headers.get("True-Client-IP"),
+        request.headers.get("X-Real-IP"),
+        (request.headers.get("X-Forwarded-For") or "").split(",", 1)[0].strip(),
         request.remote_addr,
     ]
-
     for candidate in candidates:
-        value = str(
-            candidate or ""
-        ).strip()
-
-        if value:
-            return value[:128]
-
+        value = _http_security_normalize_ip(candidate)
+        if value != "unknown":
+            return value
     return "unknown"
 
 
-def _suspicious_4xx_ignored_path(
-    path: str,
-) -> bool:
-    """
-    Ignore routine asset and monitor paths.
+def _http_security_client_ip(settings=None):
+    settings = settings or _load_http_security_settings()
+    return (
+        _http_security_effective_ip()
+        if settings.get("ip_source") == "effective"
+        else _http_security_direct_ip()
+    )
 
-    Failed requests to application/API routes will be counted..
-    """
-    normalized = str(
-        path or ""
-    ).strip().lower()
 
-    if normalized.startswith(
-        "/static/"
-    ):
-        return True
-
-    if normalized in {
-        "/favicon.ico",
-        "/robots.txt",
-        "/api/healthz",
-        "/api/telegram/heartbeat",
-    }:
-        return True
-
+def _http_security_network_contains(client_ip, networks):
+    try:
+        address = ipaddress.ip_address(str(client_ip).strip())
+    except ValueError:
+        return False
+    for value in networks or []:
+        try:
+            if address in ipaddress.ip_network(value, strict=False):
+                return True
+        except ValueError:
+            continue
     return False
 
 
-def _record_suspicious_4xx(
-    response,
-) -> None:
-    status_code = int(
-        getattr(
-            response,
-            "status_code",
-            0,
+def _http_security_is_trusted(client_ip, settings=None):
+    settings = settings or _load_http_security_settings()
+    return _http_security_network_contains(client_ip, settings.get("trusted_networks"))
+
+
+def _http_security_is_denied(client_ip, settings=None):
+    settings = settings or _load_http_security_settings()
+    return _http_security_network_contains(client_ip, settings.get("deny_networks"))
+
+
+def _http_security_temp_allows_locked(state, now=None):
+    now = int(now or time.time())
+    rows = state.get("temporary_allow") if isinstance(state, dict) else []
+    if not isinstance(rows, list):
+        rows = []
+    active = []
+    changed = False
+    for row in rows:
+        if not isinstance(row, dict):
+            changed = True
+            continue
+        network = str(row.get("network") or "").strip()
+        expires_at = int(row.get("expires_at") or 0)
+        if not network or expires_at <= now:
+            changed = True
+            continue
+        active.append({"network": network, "expires_at": expires_at})
+    if changed:
+        state["temporary_allow"] = active
+    return active
+
+
+def _http_security_is_temporarily_allowed(client_ip, state=None, now=None):
+    now = int(now or time.time())
+    if state is None:
+        state = _json_load(_HTTP_4XX_STATE_FILE, {})
+    rows = _http_security_temp_allows_locked(state if isinstance(state, dict) else {}, now)
+    return _http_security_network_contains(client_ip, [row.get("network") for row in rows])
+
+
+def _suspicious_4xx_ignored_path(path):
+    normalized = str(path or "").strip().lower()
+    if normalized.startswith("/static/"):
+        return True
+    return normalized in {
+        "/favicon.ico", "/robots.txt", "/api/healthz", "/api/telegram/heartbeat"
+    }
+
+
+def _http_security_sensitive_path(path):
+    return bool(_HTTP_SECURITY_SENSITIVE_RE.search(str(path or "")))
+
+
+def _http_security_classify(path, status_code=None):
+    p = str(path or "").lower()
+    if int(status_code or 0) == 429:
+        return "rate_limit"
+    if re.search(r"(?:^|/)\.env(?:[./~_-]|$)", p):
+        return "environment_scan"
+    if re.search(r"(?:^|/)\.(?:git|svn|hg)(?:/|$)", p):
+        return "repository_scan"
+    if re.search(r"(?:wp-admin|wp-login\.php|phpmyadmin)", p):
+        return "admin_scanner"
+    if re.search(r"(?:credentials?|secrets?|config|settings?)", p):
+        return "credential_config_scan"
+    if re.search(r"\.(?:bak|old|orig|save|swp|sql|sqlite|db)(?:$|[?#])", p):
+        return "backup_database_scan"
+    return "generic_4xx"
+
+
+def _http_security_scope_applies(path, scope):
+    if scope != "auth_admin":
+        return True
+    p = str(path or "").lower()
+    prefixes = (
+        "/login", "/logout", "/register", "/settings", "/users", "/nodes",
+        "/logs", "/backup", "/api/", "/admin",
+    )
+    return p.startswith(prefixes)
+
+
+def _http_security_add_history_locked(state, *, event_type, ip="", category="", action="", reason="", path="", status=0, details=None, now=None):
+    now = int(now or time.time())
+    history = state.get("history")
+    if not isinstance(history, list):
+        history = []
+    row = {
+        "ts": now,
+        "type": str(event_type or "event")[:48],
+        "ip": _http_security_normalize_ip(ip) if ip else "",
+        "category": str(category or "")[:64],
+        "action": str(action or "")[:64],
+        "reason": str(reason or "")[:320],
+        "path": str(path or "")[:300],
+        "status": int(status or 0),
+        "details": details if isinstance(details, dict) else {},
+    }
+    history.append(row)
+    state["history"] = history[-_HTTP_SECURITY_HISTORY_LIMIT:]
+    return row
+
+
+def _http_security_stat_add_locked(state, now, ip, **counts):
+    buckets = state.get("stats_hours")
+    if not isinstance(buckets, dict):
+        buckets = {}
+    hour = str((int(now) // 3600) * 3600)
+    bucket = buckets.get(hour)
+    if not isinstance(bucket, dict):
+        bucket = {"ips": []}
+    for key, value in counts.items():
+        bucket[key] = int(bucket.get(key) or 0) + int(value or 0)
+    normalized_ip = _http_security_normalize_ip(ip)
+    ips = bucket.get("ips")
+    if not isinstance(ips, list):
+        ips = []
+    if normalized_ip != "unknown" and normalized_ip not in ips and len(ips) < 1000:
+        ips.append(normalized_ip)
+    bucket["ips"] = ips
+    buckets[hour] = bucket
+    cutoff = int(now) - (72 * 3600)
+    for key in list(buckets.keys()):
+        try:
+            if int(key) < cutoff:
+                buckets.pop(key, None)
+        except Exception:
+            buckets.pop(key, None)
+    state["stats_hours"] = buckets
+
+
+def _http_security_stats_24h(state=None, now=None):
+    now = int(now or time.time())
+    if state is None:
+        state = _json_load(_HTTP_4XX_STATE_FILE, {})
+    buckets = state.get("stats_hours") if isinstance(state, dict) else {}
+    if not isinstance(buckets, dict):
+        buckets = {}
+    totals = {
+        "rejected": 0,
+        "sensitive": 0,
+        "blocks": 0,
+        "monitor_triggers": 0,
+        "releases": 0,
+        "login_failures": 0,
+        "rate_limited": 0,
+        "unique_ips": 0,
+    }
+    ips = set()
+    cutoff = now - 86400
+    for key, bucket in buckets.items():
+        try:
+            if int(key) < cutoff or not isinstance(bucket, dict):
+                continue
+        except Exception:
+            continue
+        for name in ("rejected", "sensitive", "blocks", "monitor_triggers", "releases", "login_failures", "rate_limited"):
+            totals[name] += int(bucket.get(name) or 0)
+        for value in bucket.get("ips") or []:
+            if _http_security_normalize_ip(value) != "unknown":
+                ips.add(str(value))
+    totals["unique_ips"] = len(ips)
+    return totals
+
+
+def _http_security_geo(ip, settings=None):
+    settings = settings or _load_http_security_settings()
+    if not settings.get("enrich_ip"):
+        return {}
+    ip = _http_security_normalize_ip(ip)
+    if ip == "unknown":
+        return {}
+    try:
+        address = ipaddress.ip_address(ip)
+        if not address.is_global:
+            return {}
+    except Exception:
+        return {}
+
+    now = time.time()
+    with _HTTP_SECURITY_GEO_CACHE_LOCK:
+        cached = _HTTP_SECURITY_GEO_CACHE.get(ip)
+        if isinstance(cached, dict) and now - float(cached.get("_ts") or 0) < 86400:
+            return {k: v for k, v in cached.items() if k != "_ts"}
+
+    result = {}
+    try:
+        response = requests.get(f"https://ipwho.is/{ip}", timeout=3)
+        if response.ok:
+            payload = response.json() or {}
+            if payload.get("success", True):
+                connection = payload.get("connection") or {}
+                result = {
+                    "country": str(payload.get("country") or "")[:80],
+                    "country_code": str(payload.get("country_code") or "")[:8],
+                    "asn": str(connection.get("asn") or "")[:40],
+                    "provider": str(connection.get("isp") or connection.get("org") or "")[:120],
+                }
+    except Exception:
+        result = {}
+
+    with _HTTP_SECURITY_GEO_CACHE_LOCK:
+        _HTTP_SECURITY_GEO_CACHE[ip] = {"_ts": now, **result}
+        if len(_HTTP_SECURITY_GEO_CACHE) > 500:
+            oldest = sorted(_HTTP_SECURITY_GEO_CACHE.items(), key=lambda item: float((item[1] or {}).get("_ts") or 0))[:100]
+            for key, _ in oldest:
+                _HTTP_SECURITY_GEO_CACHE.pop(key, None)
+    return result
+
+
+def _http_security_nft_install_command():
+    if shutil.which("apt-get"):
+        return "sudo apt-get update && sudo apt-get install -y nftables"
+    if shutil.which("dnf"):
+        return "sudo dnf install -y nftables"
+    if shutil.which("yum"):
+        return "sudo yum install -y nftables"
+    if shutil.which("pacman"):
+        return "sudo pacman -S --needed nftables"
+    return "Install the nftables package with your operating system package manager."
+
+
+def _http_security_nft_status(settings=None):
+    nft = shutil.which("nft")
+    configured = bool((settings or {}).get("firewall_enabled")) if isinstance(settings, dict) else None
+
+    base = {
+        "backend": "nftables",
+        "available": bool(nft),
+        "usable": False,
+        "privileged": False,
+        "configured": configured,
+        "effective": False,
+        "table": _HTTP_SECURITY_NFT_TABLE,
+        "reason": "not_installed" if not nft else "checking",
+        "detail": "",
+        "install_command": _http_security_nft_install_command(),
+        "check_command": "sudo nft list ruleset",
+        "automatic_install": False,
+    }
+
+    if not nft:
+        base["detail"] = (
+            "The nft executable was not found. "
+            "Application-level blocking is still active."
         )
-        or 0
-    )
-
-    if status_code not in _HTTP_4XX_STATUSES:
-        return
-
-    request_path = str(
-        request.path or ""
-    )
-
-    if _suspicious_4xx_ignored_path(
-        request_path
-    ):
-        return
-
-    if not _tg_event_enabled(
-        "suspicious_4xx"
-    ):
-        return
-
-    client_ip = (
-        _suspicious_4xx_client_ip()
-    )
-
-    current_epoch = int(
-        time.time()
-    )
-
-    lock_handle = None
-    should_notify = False
-    request_count = 0
-    status_counts = {}
-    recent_paths = []
+        return base
 
     try:
-        lock_handle = open(
-            _HTTP_4XX_LOCK_FILE,
-            "a+",
+        proc = subprocess.run(
+            [nft, "list", "ruleset"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=3,
+            check=False,
         )
+    except Exception as exc:
+        base["reason"] = "check_failed"
+        base["detail"] = str(exc)[:300]
+        return base
 
-        fcntl.flock(
-            lock_handle.fileno(),
-            fcntl.LOCK_EX,
+    if proc.returncode == 0:
+        base["usable"] = True
+        base["privileged"] = True
+        base["reason"] = "ready"
+        base["detail"] = (
+            "WG Panel can read/manage nftables through "
+            "the current service permissions."
         )
-
-        state = _json_load(
-            _HTTP_4XX_STATE_FILE,
-            {},
+        base["effective"] = (
+            bool(configured)
+            if configured is not None
+            else False
         )
+        return base
 
-        if not isinstance(
-            state,
-            dict,
-        ):
+    detail = (
+        proc.stderr
+        or "nft list ruleset failed"
+    ).strip()[:300]
+
+    low = detail.lower()
+
+    base["reason"] = (
+        "permission_denied"
+        if (
+            "operation not permitted" in low
+            or "permission denied" in low
+            or "must be root" in low
+        )
+        else "unusable"
+    )
+    base["detail"] = detail
+
+    return base
+
+
+
+def _http_security_nft_run_script(script):
+    status = _http_security_nft_status()
+    nft = shutil.which("nft")
+    if not status.get("usable") or not nft:
+        return False, "nftables is unavailable or the panel process lacks root/CAP_NET_ADMIN"
+    try:
+        proc = subprocess.run(
+            [nft, "-f", "-"],
+            input=str(script),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=4,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return False, (proc.stderr or proc.stdout or "nft failed").strip()[:300]
+        return True, ""
+    except Exception as exc:
+        return False, str(exc)[:300]
+
+
+def _http_security_nft_ensure():
+    status = _http_security_nft_status()
+    nft = shutil.which("nft")
+    if not status.get("usable") or not nft:
+        return False, "nftables is unavailable or the panel process lacks root/CAP_NET_ADMIN"
+    check = subprocess.run(
+        [nft, "list", "table", "inet", _HTTP_SECURITY_NFT_TABLE],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=3,
+        check=False,
+    )
+    if check.returncode == 0:
+        return True, ""
+    script = f"""
+table inet {_HTTP_SECURITY_NFT_TABLE} {{
+    set {_HTTP_SECURITY_NFT_V4_SET} {{ type ipv4_addr; flags timeout; }}
+    set {_HTTP_SECURITY_NFT_V6_SET} {{ type ipv6_addr; flags timeout; }}
+    chain input {{
+        type filter hook input priority -10; policy accept;
+        ip saddr @{_HTTP_SECURITY_NFT_V4_SET} drop
+        ip6 saddr @{_HTTP_SECURITY_NFT_V6_SET} drop
+    }}
+}}
+"""
+    return _http_security_nft_run_script(script)
+
+
+def _http_security_firewall_add(ip, seconds):
+    ip = _http_security_normalize_ip(ip)
+    if ip == "unknown":
+        return False, "invalid IP"
+    ok, detail = _http_security_nft_ensure()
+    if not ok:
+        return False, detail
+    version = ipaddress.ip_address(ip).version
+    set_name = _HTTP_SECURITY_NFT_V4_SET if version == 4 else _HTTP_SECURITY_NFT_V6_SET
+    seconds = _http_security_int(seconds, 900, 60, 2592000)
+    _http_security_nft_run_script(
+        f"delete element inet {_HTTP_SECURITY_NFT_TABLE} {set_name} {{ {ip} }}\n"
+    )
+    return _http_security_nft_run_script(
+        f"add element inet {_HTTP_SECURITY_NFT_TABLE} {set_name} {{ {ip} timeout {seconds}s }}\n"
+    )
+
+
+def _http_security_firewall_remove(ip):
+    ip = _http_security_normalize_ip(ip)
+    if ip == "unknown":
+        return False, "invalid IP"
+    status = _http_security_nft_status()
+    if not status.get("usable"):
+        return False, "nftables unavailable"
+    version = ipaddress.ip_address(ip).version
+    set_name = _HTTP_SECURITY_NFT_V4_SET if version == 4 else _HTTP_SECURITY_NFT_V6_SET
+    return _http_security_nft_run_script(
+        f"delete element inet {_HTTP_SECURITY_NFT_TABLE} {set_name} {{ {ip} }}\n"
+    )
+
+
+def _http_security_apply_block_locked(record, settings, now, reason):
+    current_block = int(record.get("blocked_until") or 0)
+    if current_block > now:
+        return False, 0, int(record.get("offenses") or 1)
+
+    last_offense = int(record.get("last_offense") or 0)
+    if last_offense and now - last_offense >= _HTTP_SECURITY_OFFENSE_RESET_SEC:
+        record["offenses"] = 0
+
+    offenses = max(0, int(record.get("offenses") or 0)) + 1
+    record["offenses"] = offenses
+    record["last_offense"] = now
+    multiplier = (2 ** max(0, offenses - 1)) if settings.get("escalate") else 1
+    block_seconds = min(settings["max_block_seconds"], settings["block_seconds"] * multiplier)
+    record["blocked_until"] = now + block_seconds
+    record["block_started_at"] = now
+    record["block_reason"] = reason
+    record["block_active"] = True
+    return True, block_seconds, offenses
+
+
+def _http_security_active_blocks(state=None, current_epoch=None, settings=None):
+    current_epoch = int(current_epoch or time.time())
+    settings = settings or _load_http_security_settings()
+    if state is None:
+        state = _json_load(_HTTP_4XX_STATE_FILE, {})
+    clients = state.get("clients") if isinstance(state, dict) else {}
+    if not isinstance(clients, dict):
+        clients = {}
+
+    rows = []
+    for ip, record in clients.items():
+        if not isinstance(record, dict):
+            continue
+        blocked_until = int(record.get("blocked_until") or 0)
+        if blocked_until <= current_epoch:
+            continue
+        rows.append({
+            "ip": ip,
+            "reason": str(record.get("block_reason") or "Threshold reached"),
+            "category": str(record.get("block_category") or ""),
+            "offenses": int(record.get("offenses") or 1),
+            "blocked_until": blocked_until,
+            "remaining_seconds": max(0, blocked_until - current_epoch),
+            "last_seen": int(record.get("last_seen") or 0),
+            "firewall": bool(record.get("firewall_active")),
+            "geo": _http_security_geo(ip, settings),
+        })
+    return sorted(rows, key=lambda row: row["blocked_until"], reverse=True)
+
+
+def _http_security_cleanup_expired(send_notifications=True):
+    now = int(time.time())
+    released = []
+    lock_handle = None
+    try:
+        lock_handle = open(_HTTP_4XX_LOCK_FILE, "a+")
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        state = _json_load(_HTTP_4XX_STATE_FILE, {})
+        if not isinstance(state, dict):
             state = {}
-
-        clients = state.get(
-            "clients"
-        )
-
-        if not isinstance(
-            clients,
-            dict,
-        ):
+        _http_security_temp_allows_locked(state, now)
+        clients = state.get("clients")
+        if not isinstance(clients, dict):
             clients = {}
 
-        window_start = (
-            current_epoch
-            - _HTTP_4XX_WINDOW_SEC
-        )
-
-        # Remove stale IP records.
-        for old_ip, old_record in list(
-            clients.items()
-        ):
-            if not isinstance(
-                old_record,
-                dict,
-            ):
-                clients.pop(
-                    old_ip,
-                    None,
-                )
+        for ip, record in clients.items():
+            if not isinstance(record, dict):
                 continue
-
-            last_seen = int(
-                old_record.get(
-                    "last_seen"
+            blocked_until = int(record.get("blocked_until") or 0)
+            if blocked_until and blocked_until <= now and bool(record.get("block_active")):
+                reason = str(record.get("block_reason") or "Temporary block expired")
+                offenses = int(record.get("offenses") or 1)
+                record["block_active"] = False
+                record["blocked_until"] = 0
+                record["block_reason"] = ""
+                record["firewall_active"] = False
+                _http_security_stat_add_locked(state, now, ip, releases=1)
+                _http_security_add_history_locked(
+                    state,
+                    event_type="auto_release",
+                    ip=ip,
+                    category="release",
+                    action="auto_release",
+                    reason=reason,
+                    details={"offenses": offenses},
+                    now=now,
                 )
-                or 0
-            )
-
-            if (
-                current_epoch - last_seen
-                > max(
-                    _HTTP_4XX_COOLDOWN_SEC * 2,
-                    3600,
-                )
-            ):
-                clients.pop(
-                    old_ip,
-                    None,
-                )
-
-        record = clients.get(
-            client_ip
-        )
-
-        if not isinstance(
-            record,
-            dict,
-        ):
-            record = {
-                "events": [],
-                "last_alert": 0,
-                "last_seen": 0,
-            }
-
-        events = record.get(
-            "events"
-        )
-
-        if not isinstance(
-            events,
-            list,
-        ):
-            events = []
-
-        cleaned_events = []
-
-        for event_record in events:
-            if not isinstance(
-                event_record,
-                dict,
-            ):
-                continue
-
-            event_time = int(
-                event_record.get(
-                    "ts"
-                )
-                or 0
-            )
-
-            if event_time >= window_start:
-                cleaned_events.append(
-                    event_record
-                )
-
-        cleaned_events.append({
-            "ts": current_epoch,
-            "status": status_code,
-            "path": request_path[:240],
-            "method": str(
-                request.method or ""
-            )[:16],
-        })
-
-        cleaned_events = (
-            cleaned_events[-200:]
-        )
-
-        record["events"] = (
-            cleaned_events
-        )
-        record["last_seen"] = (
-            current_epoch
-        )
-
-        request_count = len(
-            cleaned_events
-        )
-
-        for event_record in cleaned_events:
-            status_text = str(
-                event_record.get(
-                    "status"
-                )
-                or "unknown"
-            )
-
-            status_counts[
-                status_text
-            ] = (
-                status_counts.get(
-                    status_text,
-                    0,
-                )
-                + 1
-            )
-
-        recent_paths = []
-
-        for event_record in reversed(
-            cleaned_events
-        ):
-            path_value = str(
-                event_record.get(
-                    "path"
-                )
-                or ""
-            ).strip()
-
-            if (
-                path_value
-                and path_value
-                not in recent_paths
-            ):
-                recent_paths.append(
-                    path_value
-                )
-
-            if len(recent_paths) >= 5:
-                break
-
-        last_alert = int(
-            record.get(
-                "last_alert"
-            )
-            or 0
-        )
-
-        if (
-            request_count
-            >= _HTTP_4XX_THRESHOLD
-            and (
-                current_epoch - last_alert
-                >= _HTTP_4XX_COOLDOWN_SEC
-            )
-        ):
-            should_notify = True
-            record["last_alert"] = (
-                current_epoch
-            )
-
-        clients[client_ip] = record
-
+                released.append((ip, reason, offenses))
         state["clients"] = clients
-        state["updated_at"] = (
-            current_epoch
-        )
-
-        _json_save(
-            _HTTP_4XX_STATE_FILE,
-            state,
-        )
-
+        state["updated_at"] = now
+        _json_save(_HTTP_4XX_STATE_FILE, state)
     except Exception:
-        app.logger.debug(
-            "Suspicious 4xx tracker failed",
-            exc_info=True,
-        )
-
+        app.logger.debug("HTTP security expiry cleanup failed", exc_info=True)
     finally:
         if lock_handle:
             try:
-                fcntl.flock(
-                    lock_handle.fileno(),
-                    fcntl.LOCK_UN,
-                )
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
             except Exception:
                 pass
-
             try:
                 lock_handle.close()
             except Exception:
                 pass
 
-    if not should_notify:
+    if send_notifications:
+        for ip, reason, offenses in released:
+            _send_telegram_event(
+                "security_auto_release",
+                "◇ HTTP security block expired",
+                status="Automatically released",
+                details=[
+                    ("Client IP", ip),
+                    ("Previous reason", reason),
+                    ("Offense level", offenses),
+                ],
+                dedupe_key=f"security-auto-release:{ip}:{now}",
+                dedupe_seconds=0,
+            )
+    return released
+
+
+def _http_security_cleanup_loop():
+    while True:
+        try:
+            with app.app_context():
+                _http_security_cleanup_expired(send_notifications=True)
+        except Exception:
+            pass
+        time.sleep(30)
+
+
+def _start_http_security_cleanup():
+    global _HTTP_SECURITY_CLEANUP_STARTED
+    if _HTTP_SECURITY_CLEANUP_STARTED:
+        return
+    _HTTP_SECURITY_CLEANUP_STARTED = True
+    threading.Thread(
+        target=_http_security_cleanup_loop,
+        name="http-security-cleanup",
+        daemon=True,
+    ).start()
+
+
+@app.before_request
+def _http_security_enforce_temporary_block():
+    settings = _load_http_security_settings()
+    if not settings.get("enabled"):
+        return None
+
+    client_ip = _http_security_client_ip(settings)
+    if client_ip == "unknown":
+        return None
+
+    # A permanent deny is deliberately stronger than all allow/temporary rules.
+    if _http_security_is_denied(client_ip, settings):
+        g.http_security_blocked = True
+        return make_response(jsonify(
+            ok=False,
+            error="permanently_blocked",
+            message="This client is denied by the panel security policy.",
+        ), 403)
+
+    state = _json_load(_HTTP_4XX_STATE_FILE, {})
+    if _http_security_is_trusted(client_ip, settings):
+        return None
+    if _http_security_is_temporarily_allowed(client_ip, state=state):
+        return None
+    if settings.get("response_mode") != "block":
+        return None
+    if not _http_security_scope_applies(request.path, settings.get("block_scope")):
+        return None
+
+    clients = state.get("clients") if isinstance(state, dict) else {}
+    record = clients.get(client_ip) if isinstance(clients, dict) else None
+    blocked_until = int((record or {}).get("blocked_until") or 0)
+    now = int(time.time())
+
+    if blocked_until <= now:
+        return None
+
+    g.http_security_blocked = True
+    retry_after = max(1, blocked_until - now)
+    response = make_response(jsonify(
+        ok=False,
+        error="temporarily_blocked",
+        message="This client is temporarily blocked by panel HTTP security.",
+        retry_after=retry_after,
+    ), 403)
+    response.headers["Retry-After"] = str(retry_after)
+    return response
+
+
+def _record_suspicious_4xx(response):
+    if getattr(g, "http_security_blocked", False):
         return
 
-    status_summary = ", ".join(
-        f"{key}×{value}"
-        for key, value in sorted(
-            status_counts.items()
-        )
-    )
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    if status_code not in _HTTP_4XX_STATUSES:
+        return
 
-    path_summary = " | ".join(
-        recent_paths
-    )
+    request_path = str(request.path or "")
+    if _suspicious_4xx_ignored_path(request_path):
+        return
 
-    _send_telegram_event(
-        "suspicious_4xx",
-        "● Suspicious HTTP activity detected",
-        status="Threshold reached",
-        details=[
-            (
-                "Client IP",
-                client_ip,
-            ),
-            (
-                "Requests",
-                request_count,
-            ),
-            (
-            "Window",
-            _tg_human_duration(
-            _HTTP_4XX_WINDOW_SEC
-            ),
-            ),
-            (
-                "Statuses",
-                status_summary,
-            ),
-            (
-                "Recent paths",
-                path_summary[:700],
-            ),
-            (
-                "Last method",
-                request.method,
-            ),
-            (
-                "User agent",
-                str(
-                    request.headers.get(
-                        "User-Agent"
-                    )
-                    or ""
-                )[:300],
-            ),
-        ],
-        dedupe_key=(
-            f"suspicious-4xx:{client_ip}"
-        ),
-        dedupe_seconds=(
-            _HTTP_4XX_COOLDOWN_SEC
-        ),
-    )
+    settings = _load_http_security_settings()
+    if not settings.get("enabled"):
+        return
 
-@app.after_request
-def _suspicious_4xx_after_request(
-    response,
-):
-    """
-    Record relevant 4xx responses
-    """
+    client_ip = _http_security_client_ip(settings)
+    if client_ip == "unknown":
+        return
+    if _http_security_is_denied(client_ip, settings):
+        return
+    state_snapshot = _json_load(_HTTP_4XX_STATE_FILE, {})
+    if _http_security_is_trusted(client_ip, settings) or _http_security_is_temporarily_allowed(client_ip, state_snapshot):
+        return
+
+    now = int(time.time())
+    window_start = now - settings["window_seconds"]
+    sensitive_now = _http_security_sensitive_path(request_path)
+    category_now = _http_security_classify(request_path, status_code)
+    lock_handle = None
+    should_alert = False
+    did_block = False
+    block_seconds = 0
+    offenses = 0
+    reason = ""
+    trigger_category = category_now
+    request_count = 0
+    sensitive_count = 0
+    rate_limit_count = 0
+    status_counts = {}
+    recent_paths = []
+    firewall_should_apply = False
+
     try:
-        _record_suspicious_4xx(
-            response
+        lock_handle = open(_HTTP_4XX_LOCK_FILE, "a+")
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        state = _json_load(_HTTP_4XX_STATE_FILE, {})
+        if not isinstance(state, dict):
+            state = {}
+        clients = state.get("clients")
+        if not isinstance(clients, dict):
+            clients = {}
+
+        _http_security_temp_allows_locked(state, now)
+        _http_security_stat_add_locked(
+            state, now, client_ip,
+            rejected=1,
+            sensitive=(1 if sensitive_now else 0),
+            rate_limited=(1 if status_code == 429 else 0),
         )
+
+        stale_after = max(settings["cooldown_seconds"] * 4, settings["max_block_seconds"] * 2, 86400)
+        for old_ip, old_record in list(clients.items()):
+            if not isinstance(old_record, dict):
+                clients.pop(old_ip, None)
+                continue
+            last_seen = int(old_record.get("last_seen") or 0)
+            blocked_until = int(old_record.get("blocked_until") or 0)
+            offenses_old = int(old_record.get("offenses") or 0)
+            if blocked_until <= now and offenses_old <= 0 and now - last_seen > stale_after:
+                clients.pop(old_ip, None)
+
+        record = clients.get(client_ip)
+        if not isinstance(record, dict):
+            record = {"events": [], "login_events": [], "last_alert": 0, "last_seen": 0, "offenses": 0}
+
+        events = record.get("events")
+        if not isinstance(events, list):
+            events = []
+        events = [event for event in events if isinstance(event, dict) and int(event.get("ts") or 0) >= window_start]
+        events.append({
+            "ts": now,
+            "status": status_code,
+            "path": request_path[:240],
+            "method": str(request.method or "")[:16],
+            "sensitive": bool(sensitive_now),
+            "category": category_now,
+        })
+        events = events[-300:]
+        record["events"] = events
+        record["last_seen"] = now
+
+        request_count = len(events)
+        sensitive_count = sum(1 for event in events if bool(event.get("sensitive")))
+        rate_limit_count = sum(1 for event in events if int(event.get("status") or 0) == 429)
+        for event in events:
+            key = str(event.get("status") or "unknown")
+            status_counts[key] = status_counts.get(key, 0) + 1
+        for event in reversed(events):
+            value = str(event.get("path") or "").strip()
+            if value and value not in recent_paths:
+                recent_paths.append(value)
+            if len(recent_paths) >= 5:
+                break
+
+        triggered_sensitive = sensitive_count >= settings["sensitive_threshold"]
+        triggered_rate = rate_limit_count >= settings["rate_limit_threshold"]
+        triggered_generic = request_count >= settings["threshold"]
+        triggered = triggered_sensitive or triggered_rate or triggered_generic
+        if triggered:
+            if triggered_sensitive:
+                trigger_category = category_now if sensitive_now else "sensitive_scan"
+                reason = f"Sensitive-path threshold reached ({sensitive_count}/{settings['sensitive_threshold']})"
+            elif triggered_rate:
+                trigger_category = "rate_limit"
+                reason = f"429 threshold reached ({rate_limit_count}/{settings['rate_limit_threshold']})"
+            else:
+                trigger_category = "generic_4xx"
+                reason = f"4xx threshold reached ({request_count}/{settings['threshold']})"
+
+            last_alert = int(record.get("last_alert") or 0)
+            if now - last_alert >= settings["cooldown_seconds"]:
+                should_alert = True
+                record["last_alert"] = now
+
+            if settings.get("response_mode") == "block":
+                did_block, block_seconds, offenses = _http_security_apply_block_locked(record, settings, now, reason)
+                if did_block:
+                    record["block_category"] = trigger_category
+                    should_alert = True
+                    record["last_alert"] = now
+                    _http_security_stat_add_locked(state, now, client_ip, blocks=1)
+                    _http_security_add_history_locked(
+                        state,
+                        event_type="block",
+                        ip=client_ip,
+                        category=trigger_category,
+                        action="temporary_block",
+                        reason=reason,
+                        path=request_path,
+                        status=status_code,
+                        details={"duration_seconds": block_seconds, "offenses": offenses},
+                        now=now,
+                    )
+                    firewall_should_apply = bool(
+                        settings.get("firewall_enabled")
+                        and offenses >= settings.get("firewall_after_offenses", 3)
+                    )
+            elif should_alert:
+                _http_security_stat_add_locked(state, now, client_ip, monitor_triggers=1)
+                _http_security_add_history_locked(
+                    state,
+                    event_type="monitor_trigger",
+                    ip=client_ip,
+                    category=trigger_category,
+                    action="monitor",
+                    reason=reason,
+                    path=request_path,
+                    status=status_code,
+                    details={"requests": request_count, "sensitive": sensitive_count, "rate_limited": rate_limit_count},
+                    now=now,
+                )
+
+        clients[client_ip] = record
+        state["clients"] = clients
+        state["updated_at"] = now
+        _json_save(_HTTP_4XX_STATE_FILE, state)
 
     except Exception:
-        app.logger.debug(
-            "Could not inspect 4xx response",
-            exc_info=True,
+        app.logger.debug("HTTP security tracker failed", exc_info=True)
+    finally:
+        if lock_handle:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            try:
+                lock_handle.close()
+            except Exception:
+                pass
+
+    firewall_detail = ""
+    if did_block and firewall_should_apply:
+        fw_ok, firewall_detail = _http_security_firewall_add(client_ip, block_seconds)
+        if fw_ok:
+            lock_handle = None
+            try:
+                lock_handle = open(_HTTP_4XX_LOCK_FILE, "a+")
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                state = _json_load(_HTTP_4XX_STATE_FILE, {})
+                clients = state.get("clients") if isinstance(state, dict) else {}
+                if isinstance(clients, dict) and isinstance(clients.get(client_ip), dict):
+                    clients[client_ip]["firewall_active"] = True
+                    state["clients"] = clients
+                    _json_save(_HTTP_4XX_STATE_FILE, state)
+            finally:
+                if lock_handle:
+                    try:
+                        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                    except Exception:
+                        pass
+                    lock_handle.close()
+        else:
+            app.logger.warning("HTTP security nftables escalation failed for %s: %s", client_ip, firewall_detail)
+
+    if not should_alert:
+        return
+
+    event_key = "security_block" if did_block else "suspicious_4xx"
+    details = [
+        ("Client IP", client_ip),
+        ("Category", trigger_category.replace("_", " ").title()),
+        ("Requests", request_count),
+        ("Sensitive requests", sensitive_count),
+        ("429 responses", rate_limit_count),
+        ("Window", _tg_human_duration(settings["window_seconds"])),
+        ("Statuses", ", ".join(f"{k}×{v}" for k, v in sorted(status_counts.items()))),
+        ("Reason", reason or "Threshold reached"),
+        ("Action", (f"Blocked for {_tg_human_duration(block_seconds)}" if did_block else "Monitor only")),
+        ("Recent paths", " | ".join(recent_paths)[:700]),
+        ("Last method", request.method),
+        ("User agent", str(request.headers.get("User-Agent") or "")[:300]),
+    ]
+    if did_block and settings.get("firewall_enabled"):
+        details.append(("Host firewall", "Applied" if not firewall_detail else f"Not applied · {firewall_detail}"))
+    geo = _http_security_geo(client_ip, settings)
+    if geo:
+        details.append(("Network", " · ".join(filter(None, [geo.get("country_code"), geo.get("asn"), geo.get("provider")]))))
+
+    _send_telegram_event(
+        event_key,
+        "◆ Suspicious HTTP activity detected",
+        status=("Temporarily blocked" if did_block else "Threshold reached"),
+        details=details,
+        dedupe_key=f"http-security:{event_key}:{client_ip}",
+        dedupe_seconds=(0 if did_block else settings["cooldown_seconds"]),
+    )
+
+
+def _http_security_record_login_failure(username="", failure_type="credentials"):
+    settings = _load_http_security_settings()
+    if not settings.get("enabled"):
+        return
+    client_ip = _http_security_client_ip(settings)
+    if client_ip == "unknown" or _http_security_is_denied(client_ip, settings):
+        return
+    state_snapshot = _json_load(_HTTP_4XX_STATE_FILE, {})
+    if _http_security_is_trusted(client_ip, settings) or _http_security_is_temporarily_allowed(client_ip, state_snapshot):
+        return
+
+    now = int(time.time())
+    window_start = now - settings["login_window_seconds"]
+    lock_handle = None
+    should_alert = False
+    did_block = False
+    block_seconds = 0
+    offenses = 0
+    count = 0
+    reason = ""
+    firewall_should_apply = False
+
+    try:
+        lock_handle = open(_HTTP_4XX_LOCK_FILE, "a+")
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        state = _json_load(_HTTP_4XX_STATE_FILE, {})
+        if not isinstance(state, dict):
+            state = {}
+        clients = state.get("clients")
+        if not isinstance(clients, dict):
+            clients = {}
+        record = clients.get(client_ip)
+        if not isinstance(record, dict):
+            record = {"events": [], "login_events": [], "last_alert": 0, "last_seen": 0, "offenses": 0}
+
+        login_events = record.get("login_events")
+        if not isinstance(login_events, list):
+            login_events = []
+        login_events = [event for event in login_events if isinstance(event, dict) and int(event.get("ts") or 0) >= window_start]
+        login_events.append({
+            "ts": now,
+            "type": str(failure_type or "credentials")[:32],
+            "username": str(username or "")[:120],
+        })
+        login_events = login_events[-200:]
+        record["login_events"] = login_events
+        record["last_seen"] = now
+        count = len(login_events)
+        _http_security_stat_add_locked(state, now, client_ip, login_failures=1)
+
+        if count >= settings["login_threshold"]:
+            reason = f"Login-failure threshold reached ({count}/{settings['login_threshold']})"
+            last_alert = int(record.get("last_login_alert") or 0)
+            if now - last_alert >= settings["cooldown_seconds"]:
+                should_alert = True
+                record["last_login_alert"] = now
+
+            if settings.get("response_mode") == "block":
+                did_block, block_seconds, offenses = _http_security_apply_block_locked(record, settings, now, reason)
+                if did_block:
+                    record["block_category"] = "auth_bruteforce"
+                    should_alert = True
+                    record["last_login_alert"] = now
+                    _http_security_stat_add_locked(state, now, client_ip, blocks=1)
+                    _http_security_add_history_locked(
+                        state,
+                        event_type="block",
+                        ip=client_ip,
+                        category="auth_bruteforce",
+                        action="temporary_block",
+                        reason=reason,
+                        details={"duration_seconds": block_seconds, "offenses": offenses, "username": str(username or "")[:120]},
+                        now=now,
+                    )
+                    firewall_should_apply = bool(
+                        settings.get("firewall_enabled")
+                        and offenses >= settings.get("firewall_after_offenses", 3)
+                    )
+            elif should_alert:
+                _http_security_stat_add_locked(state, now, client_ip, monitor_triggers=1)
+                _http_security_add_history_locked(
+                    state,
+                    event_type="login_trigger",
+                    ip=client_ip,
+                    category="auth_bruteforce",
+                    action="monitor",
+                    reason=reason,
+                    details={"username": str(username or "")[:120], "count": count},
+                    now=now,
+                )
+
+        clients[client_ip] = record
+        state["clients"] = clients
+        state["updated_at"] = now
+        _json_save(_HTTP_4XX_STATE_FILE, state)
+    except Exception:
+        app.logger.debug("HTTP security login tracker failed", exc_info=True)
+    finally:
+        if lock_handle:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_handle.close()
+
+    firewall_detail = ""
+    if did_block and firewall_should_apply:
+        fw_ok, firewall_detail = _http_security_firewall_add(client_ip, block_seconds)
+        if not fw_ok:
+            app.logger.warning("HTTP security nftables escalation failed for login offender %s: %s", client_ip, firewall_detail)
+
+    if should_alert:
+        _send_telegram_event(
+            "security_block" if did_block else "suspicious_4xx",
+            "◆ Repeated authentication failures",
+            status=("Temporarily blocked" if did_block else "Threshold reached"),
+            details=[
+                ("Client IP", client_ip),
+                ("Account", username or "unknown"),
+                ("Failures", count),
+                ("Window", _tg_human_duration(settings["login_window_seconds"])),
+                ("Reason", reason),
+                ("Action", f"Blocked for {_tg_human_duration(block_seconds)}" if did_block else "Monitor only"),
+                ("Host firewall", "Requested" if did_block and firewall_should_apply else "Application only"),
+            ],
+            dedupe_key=f"security-login-threshold:{client_ip}",
+            dedupe_seconds=(0 if did_block else settings["cooldown_seconds"]),
         )
 
+
+@app.after_request
+def _suspicious_4xx_after_request(response):
+    try:
+        _record_suspicious_4xx(response)
+    except Exception:
+        app.logger.debug("Could not inspect 4xx response", exc_info=True)
     return response
+
+@app.get('/api/security/http-protection/capabilities')
+@login_required
+def http_security_capabilities_get():
+    settings = _load_http_security_settings()
+
+    return jsonify(
+        ok=True,
+        firewall=_http_security_nft_status(settings),
+        geo={
+            "enabled": bool(settings.get("enrich_ip")),
+            "provider": "ipwho.is",
+            "external_lookup": True,
+            "display_only": True,
+            "cache_seconds": 86400,
+        },
+    )
+
+
+
+@app.get('/api/security/http-protection')
+@require_api_key_or_login
+def http_security_settings_get():
+    _http_security_cleanup_expired(send_notifications=True)
+    settings = _load_http_security_settings()
+    state = _json_load(_HTTP_4XX_STATE_FILE, {})
+    temporary_allow = _http_security_temp_allows_locked(state if isinstance(state, dict) else {})
+    return jsonify(
+        ok=True,
+        settings=settings,
+        active_blocks=_http_security_active_blocks(state, settings=settings),
+        temporary_allow=temporary_allow,
+        stats_24h=_http_security_stats_24h(state),
+        firewall=_http_security_nft_status(settings),
+    )
+
+
+@app.post('/api/security/http-protection')
+@require_api_key_or_login
+def http_security_settings_post():
+    payload = request.get_json(silent=True) or {}
+    allowed = {
+        "enabled", "response_mode", "ip_source", "block_scope", "threshold", "window_seconds",
+        "sensitive_threshold", "rate_limit_threshold", "login_threshold", "login_window_seconds",
+        "cooldown_seconds", "block_seconds", "max_block_seconds", "escalate", "enrich_ip",
+        "firewall_enabled", "firewall_after_offenses", "trusted_networks", "deny_networks",
+    }
+    partial = {key: payload[key] for key in allowed if key in payload}
+
+    if "response_mode" in partial and str(partial["response_mode"]).lower() not in {"monitor", "block"}:
+        return jsonify(ok=False, error="invalid_response_mode"), 400
+    if "ip_source" in partial and str(partial["ip_source"]).lower() not in {"direct", "effective"}:
+        return jsonify(ok=False, error="invalid_ip_source"), 400
+    if "block_scope" in partial and str(partial["block_scope"]).lower() not in {"all", "auth_admin"}:
+        return jsonify(ok=False, error="invalid_block_scope"), 400
+
+    for key in ("trusted_networks", "deny_networks"):
+        if key not in partial:
+            continue
+        raw_values = partial[key]
+        if isinstance(raw_values, str):
+            raw_values = re.split(r"[\r\n,]+", raw_values)
+        if not isinstance(raw_values, list):
+            return jsonify(ok=False, error=f"invalid_{key}"), 400
+        checked = []
+        for item in raw_values:
+            value = str(item or "").strip()
+            if not value:
+                continue
+            try:
+                if "/" not in value:
+                    ip = ipaddress.ip_address(value)
+                    value = f"{ip}/{32 if ip.version == 4 else 128}"
+                else:
+                    value = str(ipaddress.ip_network(value, strict=False))
+            except ValueError:
+                return jsonify(ok=False, error="invalid_network", field=key, value=value), 400
+            if value not in checked:
+                checked.append(value)
+        partial[key] = checked
+
+    proposed = _load_http_security_settings()
+    proposed.update(partial)
+    proposed["trusted_networks"] = _http_security_normalize_networks(proposed.get("trusted_networks"))
+    proposed["deny_networks"] = _http_security_normalize_networks(proposed.get("deny_networks"))
+
+    current_ip = _http_security_client_ip(proposed)
+    if current_ip != "unknown" and _http_security_network_contains(current_ip, proposed.get("deny_networks")):
+        return jsonify(
+            ok=False,
+            error="would_block_current_admin",
+            message="The permanent deny list contains your current client IP. Remove it before saving.",
+            ip=current_ip,
+        ), 409
+
+    # Host-firewall escalation is optional. Never persist it as enabled when
+    # this process cannot actually use nftables. The Flask application-level
+    # blocker remains fully functional either way.
+    if bool(proposed.get("firewall_enabled")):
+        firewall_status = _http_security_nft_status(proposed)
+
+        if not firewall_status.get("usable"):
+            return jsonify(
+                ok=False,
+                error="nftables_unavailable",
+                message=(
+                    "Host-firewall escalation cannot be enabled because nftables "
+                    "is unavailable to the WG Panel service. Application-level "
+                    "blocking is still active."
+                ),
+                firewall=firewall_status,
+            ), 409
+
+    _json_save(_HTTP_SECURITY_SETTINGS_FILE, proposed)
+    settings = _load_http_security_settings()
+
+    state = _json_load(_HTTP_4XX_STATE_FILE, {})
+    return jsonify(
+        ok=True,
+        settings=settings,
+        active_blocks=_http_security_active_blocks(state, settings=settings),
+        temporary_allow=_http_security_temp_allows_locked(state if isinstance(state, dict) else {}),
+        stats_24h=_http_security_stats_24h(state),
+        firewall=_http_security_nft_status(settings),
+    )
+
+
+@app.post('/api/security/http-protection/unban')
+@require_api_key_or_login
+def http_security_unban():
+    payload = request.get_json(silent=True) or {}
+    client_ip = _http_security_normalize_ip(payload.get("ip"))
+    if client_ip == "unknown":
+        return jsonify(ok=False, error="invalid_ip"), 400
+
+    now = int(time.time())
+    released = False
+    reason = ""
+    offenses = 0
+    lock_handle = None
+    try:
+        lock_handle = open(_HTTP_4XX_LOCK_FILE, "a+")
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        state = _json_load(_HTTP_4XX_STATE_FILE, {})
+        if not isinstance(state, dict):
+            state = {}
+        clients = state.get("clients")
+        if not isinstance(clients, dict):
+            clients = {}
+        record = clients.get(client_ip)
+        if isinstance(record, dict):
+            released = int(record.get("blocked_until") or 0) > now
+            reason = str(record.get("block_reason") or "")
+            offenses = int(record.get("offenses") or 0)
+            record["blocked_until"] = 0
+            record["block_active"] = False
+            record["block_reason"] = ""
+            record["firewall_active"] = False
+            record["events"] = []
+            clients[client_ip] = record
+        if released:
+            _http_security_stat_add_locked(state, now, client_ip, releases=1)
+            _http_security_add_history_locked(
+                state,
+                event_type="manual_release",
+                ip=client_ip,
+                category="release",
+                action="manual_release",
+                reason=reason or "Released by administrator",
+                details={"offenses": offenses},
+                now=now,
+            )
+        state["clients"] = clients
+        state["updated_at"] = now
+        _json_save(_HTTP_4XX_STATE_FILE, state)
+    finally:
+        if lock_handle:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_handle.close()
+
+    _http_security_firewall_remove(client_ip)
+    if released:
+        _send_telegram_event(
+            "security_release",
+            "◇ HTTP security block released",
+            status="Manually released",
+            details=[("Client IP", client_ip), ("Previous reason", reason or "Temporary block"), ("Offense level", offenses)],
+            dedupe_key=f"security-manual-release:{client_ip}:{now}",
+            dedupe_seconds=0,
+        )
+
+    return jsonify(ok=True, ip=client_ip, active_blocks=_http_security_active_blocks())
+
+
+@app.get('/api/security/http-protection/events')
+@require_api_key_or_login
+def http_security_events_get():
+    settings = _load_http_security_settings()
+    state = _json_load(_HTTP_4XX_STATE_FILE, {})
+    history = state.get("history") if isinstance(state, dict) else []
+    if not isinstance(history, list):
+        history = []
+
+    event_type = str(request.args.get("type") or "").strip().lower()
+    category = str(request.args.get("category") or "").strip().lower()
+    ip_filter = str(request.args.get("ip") or "").strip()
+    limit = _http_security_int(request.args.get("limit"), 150, 1, 500)
+
+    rows = []
+    for row in reversed(history):
+        if not isinstance(row, dict):
+            continue
+        if event_type and str(row.get("type") or "").lower() != event_type:
+            continue
+        if category and str(row.get("category") or "").lower() != category:
+            continue
+        if ip_filter and ip_filter not in str(row.get("ip") or ""):
+            continue
+        item = dict(row)
+        if settings.get("enrich_ip") and item.get("ip"):
+            item["geo"] = _http_security_geo(item.get("ip"), settings)
+        rows.append(item)
+        if len(rows) >= limit:
+            break
+
+    return jsonify(ok=True, events=rows, stats_24h=_http_security_stats_24h(state))
+
+
+@app.delete('/api/security/http-protection/events')
+@login_required
+def http_security_events_clear():
+    lock_handle = None
+    try:
+        lock_handle = open(_HTTP_4XX_LOCK_FILE, "a+")
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        state = _json_load(_HTTP_4XX_STATE_FILE, {})
+        if not isinstance(state, dict):
+            state = {}
+        state["history"] = []
+        state["updated_at"] = int(time.time())
+        _json_save(_HTTP_4XX_STATE_FILE, state)
+    finally:
+        if lock_handle:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_handle.close()
+    return jsonify(ok=True)
+
+
+@app.post('/api/security/http-protection/temporary-allow')
+@login_required
+def http_security_temporary_allow_add():
+    payload = request.get_json(silent=True) or {}
+    raw = str(payload.get("network") or "").strip()
+    duration = _http_security_int(payload.get("duration_seconds"), 3600, 60, _HTTP_SECURITY_TEMP_ALLOW_MAX_SEC)
+    normalized = _http_security_normalize_networks([raw])
+    if not normalized:
+        return jsonify(ok=False, error="invalid_network"), 400
+    network = normalized[0]
+    now = int(time.time())
+    expires_at = now + duration
+
+    lock_handle = None
+    try:
+        lock_handle = open(_HTTP_4XX_LOCK_FILE, "a+")
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        state = _json_load(_HTTP_4XX_STATE_FILE, {})
+        if not isinstance(state, dict):
+            state = {}
+        rows = _http_security_temp_allows_locked(state, now)
+        rows = [row for row in rows if str(row.get("network")) != network]
+        rows.append({"network": network, "expires_at": expires_at})
+        state["temporary_allow"] = rows
+        _http_security_add_history_locked(
+            state,
+            event_type="temporary_allow",
+            category="access_list",
+            action="allow",
+            reason=f"Temporary allow added for {_tg_human_duration(duration)}",
+            details={"network": network, "expires_at": expires_at},
+            now=now,
+        )
+        _json_save(_HTTP_4XX_STATE_FILE, state)
+    finally:
+        if lock_handle:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_handle.close()
+    return jsonify(ok=True, network=network, expires_at=expires_at, temporary_allow=_http_security_temp_allows_locked(_json_load(_HTTP_4XX_STATE_FILE, {})))
+
+
+@app.post('/api/security/http-protection/temporary-allow/remove')
+@login_required
+def http_security_temporary_allow_remove():
+    payload = request.get_json(silent=True) or {}
+    normalized = _http_security_normalize_networks([payload.get("network")])
+    if not normalized:
+        return jsonify(ok=False, error="invalid_network"), 400
+    network = normalized[0]
+    now = int(time.time())
+    lock_handle = None
+    try:
+        lock_handle = open(_HTTP_4XX_LOCK_FILE, "a+")
+        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        state = _json_load(_HTTP_4XX_STATE_FILE, {})
+        if not isinstance(state, dict):
+            state = {}
+        rows = _http_security_temp_allows_locked(state, now)
+        state["temporary_allow"] = [row for row in rows if str(row.get("network")) != network]
+        _http_security_add_history_locked(
+            state,
+            event_type="temporary_allow_removed",
+            category="access_list",
+            action="remove_allow",
+            reason="Temporary allow removed",
+            details={"network": network},
+            now=now,
+        )
+        _json_save(_HTTP_4XX_STATE_FILE, state)
+    finally:
+        if lock_handle:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_handle.close()
+    return jsonify(ok=True, network=network, temporary_allow=_http_security_temp_allows_locked(_json_load(_HTTP_4XX_STATE_FILE, {})))
+
+
+_start_http_security_cleanup()
 
 # ==================================================
 # Node and WG interface notification monitor
@@ -7219,254 +8431,152 @@ def _send_zip_telegram(
     data_bytes: bytes,
     filename: str,
     chat_id: str | None = None,
+    caption: str | None = None,
 ) -> tuple[bool, str]:
     settings = _load_tg_settings()
 
-    if not settings.get('enabled'):
-        return False, 'Telegram disabled.'
+    if not settings.get("enabled"):
+        return False, "Telegram disabled."
 
     token = (
-        settings.get('bot_token')
-        or ''
+        settings.get("bot_token")
+        or ""
     ).strip()
 
     if not token:
-        return False, 'Telegram token missing.'
+        return False, "Telegram token missing."
 
     selected_chat_id = str(
         chat_id
         or _tg_chatid()
-        or ''
+        or ""
     ).strip()
 
     if not selected_chat_id:
         return False, (
-            'No active Telegram administrator selected.'
+            "No active Telegram administrator selected."
         )
 
     active_admin_ids = {
         str(
-            admin.get('id')
-            or ''
+            admin.get("id")
+            or ""
         ).strip()
         for admin in (
             _load_tg_admins()
             or []
         )
         if (
-            not admin.get('muted')
+            not admin.get("muted")
             and str(
-                admin.get('id')
-                or ''
+                admin.get("id")
+                or ""
             ).strip()
         )
     }
 
     if selected_chat_id not in active_admin_ids:
         return False, (
-            'Selected Telegram recipient is not an '
-            'active panel administrator.'
+            "Selected Telegram recipient is not an "
+            "active panel administrator."
         )
-
 
     size_bytes = len(
         data_bytes
-        or b''
+        or b""
     )
 
-    size_value = float(
-        size_bytes
-    )
+    if not caption:
+        try:
+            size_text = _tg_human_bytes(
+                size_bytes
+            )
+        except Exception:
+            size_text = (
+                f"{size_bytes} bytes"
+            )
 
-    size_unit = 'B'
+        created_at = _tg_now_text()
 
-    for unit in (
-        'B',
-        'KiB',
-        'MiB',
-        'GiB',
-        'TiB',
-    ):
-        size_unit = unit
+        caption = "\n".join([
+            "<b>WG Panel backup</b>",
+            "",
+            "<b>Status</b> · Completed",
+            (
+                "<b>File</b> · "
+                f"<code>{_tg_event_escape(filename)}</code>"
+            ),
+            (
+                "<b>Size</b> · "
+                f"{_tg_event_escape(size_text)}"
+            ),
+            (
+                "<b>Created</b> · "
+                f"{_tg_event_escape(created_at)}"
+            ),
+        ])
 
-        if (
-            size_value < 1024
-            or unit == 'TiB'
-        ):
-            break
-
-        size_value /= 1024.0
-
-    if size_unit == 'B':
-        size_text = (
-            f'{int(size_value)} B'
-        )
-    else:
-        size_text = (
-            f'{size_value:.1f} '
-            f'{size_unit}'
-        )
-
-
-    created_at = datetime.now(
-        timezone.utc
-    ).strftime(
-        '%Y-%m-%d %H:%M:%S UTC'
-    )
-
-    safe_filename = (
-        _tg_event_escape(
-            filename
-        )
-    )
-
-    safe_size = (
-        _tg_event_escape(
-            size_text
-        )
-    )
-
-    safe_created_at = (
-        _tg_event_escape(
-            created_at
-        )
-    )
-
-    safe_panel_host = (
-        _tg_event_escape(
-            socket.gethostname()
-        )
-    )
-
-    caption = '\n'.join([
-        '▣ <b>WG Panel automatic backup</b>',
-        '<i>Scheduled protected archive</i>',
-        '',
-        '● <b>Status</b>  Completed',
-        (
-            '◇ <b>File</b>  '
-            f'<code>{safe_filename}</code>'
-        ),
-        (
-            '◇ <b>Size</b>  '
-            f'<code>{safe_size}</code>'
-        ),
-        (
-            '◇ <b>Created</b>  '
-            f'<code>{safe_created_at}</code>'
-        ),
-        (
-            '◇ <b>Stored locally</b>  '
-            'Yes'
-        ),
-        (
-            '⌂ <b>Panel host</b>  '
-            f'<code>{safe_panel_host}</code>'
-        ),
-        '',
-        (
-            '⌁ <i>Keep this archive private. '
-            'It may contain WireGuard keys, '
-            'Telegram credentials, panel settings, '
-            'and node configuration.</i>'
-        ),
-    ])
+    if len(caption) > 1000:
+        caption = caption[:997] + "..."
 
     try:
         response = requests.post(
             (
-                'https://api.telegram.org/'
-                f'bot{token}/sendDocument'
+                "https://api.telegram.org/bot"
+                f"{token}/sendDocument"
             ),
             data={
-                'chat_id': (
-                    selected_chat_id
-                ),
-                'disable_notification': (
-                    True
-                ),
-                'parse_mode': 'HTML',
-                'caption': caption,
+                "chat_id": selected_chat_id,
+                "disable_notification": "true",
+                "caption": caption,
+                "parse_mode": "HTML",
             },
             files={
-                'document': (
+                "document": (
                     filename,
                     data_bytes,
-                    'application/zip',
+                    "application/zip",
                 )
             },
-            timeout=(
-                10,
-                120,
-            ),
+            timeout=60,
         )
 
         try:
-            result = response.json()
+            payload = (
+                response.json()
+                or {}
+            )
         except Exception:
-            result = {}
+            payload = {}
 
         if (
             response.ok
-            and isinstance(
-                result,
-                dict,
-            )
-            and result.get('ok')
+            and payload.get("ok")
         ):
-            return True, (
-                'Backup sent to Telegram '
-                f'administrator {selected_chat_id}.'
+            return (
+                True,
+                "Backup document sent to Telegram.",
             )
 
-        description = (
-            result.get('description')
-            if isinstance(
-                result,
-                dict,
-            )
-            else ''
-        )
+        description = str(
+            payload.get("description")
+            or response.text
+            or ""
+        )[:300]
 
-        detail = (
-            description
-            or str(result)[:300]
-            or response.text[:300]
-        )
-
-        return False, (
-            'Telegram error: '
-            f'{response.status_code} '
-            f'{detail}'
-        )
-
-    except requests.exceptions.ReadTimeout:
-        return False, (
-            'Telegram response timed out after upload. '
-            'The backup may still have been delivered.'
-        )
-
-    except requests.exceptions.ConnectTimeout:
-        return False, (
-            'Could not connect to Telegram '
-            'within the timeout.'
-        )
-
-    except requests.exceptions.RequestException as exc:
-        return False, (
-            'Telegram request error: '
-            f'{exc}'
+        return (
+            False,
+            (
+                "Telegram error "
+                f"{response.status_code}: "
+                f"{description}"
+            ),
         )
 
     except Exception as exc:
-        current_app.logger.exception(
-            'Unexpected Telegram backup error: %s',
-            exc,
-        )
-
-        return False, (
-            'Telegram exception: '
-            f'{exc}'
+        return (
+            False,
+            f"Telegram exception: {exc}",
         )
 
 @app.get('/api/backup/db')
@@ -8192,36 +9302,141 @@ def backup_full():
     return resp
 
 def _load_backup_schedule():
-    d = _json_load(BACKUP_SCHEDULE_FILE, {})
+    d = _json_load(
+        BACKUP_SCHEDULE_FILE,
+        {},
+    )
+
     return {
-        "enabled": bool(d.get("enabled", False)),
-        "freq": d.get("freq", "daily"),
-        "time": d.get("time", "03:00"),
-        "timezone": (d.get("timezone") or "UTC"),
-        "dow":  list(map(str, d.get("dow", []))),
-        "dom":  int(d.get("dom", 1)),
-        "cron": d.get("cron", ""),
-        "keep": int(d.get("keep", 7)),
-        "include_wg": bool(d.get("include_wg", True)),
-        "send_to_telegram": bool(d.get("send_to_telegram", False)),
+        "enabled": bool(
+            d.get("enabled", False)
+        ),
+        "freq": d.get(
+            "freq",
+            "daily",
+        ),
+        "time": d.get(
+            "time",
+            "03:00",
+        ),
+
+        "timezone": _panel_timezone_name(),
+
+        "dow": list(
+            map(
+                str,
+                d.get("dow", []),
+            )
+        ),
+        "dom": int(
+            d.get("dom", 1)
+        ),
+        "cron": d.get(
+            "cron",
+            "",
+        ),
+        "keep": int(
+            d.get("keep", 7)
+        ),
+        "include_wg": bool(
+            d.get("include_wg", True)
+        ),
+        "send_to_telegram": bool(
+            d.get(
+                "send_to_telegram",
+                False,
+            )
+        ),
+
+        "telegram_chat_id": str(
+            d.get(
+                "telegram_chat_id",
+                "",
+            )
+            or ""
+        ).strip(),
     }
 
 
 def _save_backup_schedule(partial: dict):
     cur = _load_backup_schedule()
+
     cur.update({
-        "enabled": bool(partial.get("enabled", cur["enabled"])),
-        "freq": (partial.get("freq") or cur["freq"]).lower(),
-        "time": partial.get("time") or cur["time"],
-        "timezone": (partial.get("timezone") or cur.get("timezone") or "UTC"),
-        "dow":  [str(x) for x in (partial.get("dow") or cur["dow"] or [])],
-        "dom":  int(partial.get("dom") or cur["dom"] or 1),
-        "cron": (partial.get("cron") or cur["cron"]).strip(),
-        "keep": max(1, int(partial.get("keep") or cur["keep"] or 7)),
-        "include_wg": bool(partial.get("include_wg", cur["include_wg"])),
-        "send_to_telegram": bool(partial.get("send_to_telegram", cur["send_to_telegram"])),
+        "enabled": bool(
+            partial.get(
+                "enabled",
+                cur["enabled"],
+            )
+        ),
+        "freq": (
+            partial.get("freq")
+            or cur["freq"]
+        ).lower(),
+        "time": (
+            partial.get("time")
+            or cur["time"]
+        ),
+
+        "timezone": _panel_timezone_name(),
+
+        "dow": [
+            str(x)
+            for x in (
+                partial.get("dow")
+                or cur["dow"]
+                or []
+            )
+        ],
+        "dom": int(
+            partial.get("dom")
+            or cur["dom"]
+            or 1
+        ),
+        "cron": (
+            partial.get("cron")
+            or cur["cron"]
+        ).strip(),
+        "keep": max(
+            1,
+            int(
+                partial.get("keep")
+                or cur["keep"]
+                or 7
+            ),
+        ),
+        "include_wg": bool(
+            partial.get(
+                "include_wg",
+                cur["include_wg"],
+            )
+        ),
+        "send_to_telegram": bool(
+            partial.get(
+                "send_to_telegram",
+                cur["send_to_telegram"],
+            )
+        ),
+
+        "telegram_chat_id": str(
+            partial.get(
+                "telegram_chat_id",
+                cur.get(
+                    "telegram_chat_id",
+                    "",
+                ),
+            )
+            or ""
+        ).strip(),
     })
-    _json_save(BACKUP_SCHEDULE_FILE, cur)
+
+    if not cur["send_to_telegram"]:
+        cur["telegram_chat_id"] = ""
+
+    _json_save(
+        BACKUP_SCHEDULE_FILE,
+        cur,
+    )
+
     return cur
 
 def _load_backup_last():
@@ -8587,10 +9802,23 @@ def _run_scheduled_backup(
     sched: dict,
     slot: str,
 ) -> dict:
-    """
-    Create the same complete ZIP used by Run once.
-    """
+
     from urllib.parse import urlencode
+
+    send_to_telegram = bool(
+        sched.get(
+            "send_to_telegram",
+            False,
+        )
+    )
+
+    telegram_chat_id = str(
+        sched.get(
+            "telegram_chat_id",
+            "",
+        )
+        or ""
+    ).strip()
 
     query = {
         "auto": "1",
@@ -8602,22 +9830,13 @@ def _run_scheduled_backup(
             )
             else "0"
         ),
-        "tg": (
-            "1"
-            if sched.get(
-                "send_to_telegram",
-                False,
-            )
-            else "0"
-        ),
+        "tg": "0",
     }
 
     request_path = (
         "/api/backup/full?"
         + urlencode(query)
     )
-
-    backup_metadata = {}
 
     with app.test_request_context(
         request_path
@@ -8634,10 +9853,7 @@ def _run_scheduled_backup(
 
         response = backup_function()
 
-        if isinstance(
-            response,
-            tuple,
-        ):
+        if isinstance(response, tuple):
             flask_response = response[0]
             tuple_status = (
                 response[1]
@@ -8697,19 +9913,154 @@ def _run_scheduled_backup(
         except Exception:
             saved_timestamp = 0
 
-        if not saved_name:
+    if not saved_name:
+        raise RuntimeError(
+            "The backup response did not confirm "
+            "a locally saved automatic archive."
+        )
+
+    backup_root = Path(
+        BACKUP_AUTO_DIR
+    ).resolve()
+
+    backup_path = (
+        backup_root
+        / os.path.basename(saved_name)
+    ).resolve()
+
+    try:
+        backup_path.relative_to(
+            backup_root
+        )
+    except ValueError:
+        raise RuntimeError(
+            "Automatic backup path validation failed."
+        )
+
+    if not backup_path.is_file():
+        raise RuntimeError(
+            "Automatic backup was created but the stored "
+            f"ZIP could not be found: {saved_name}"
+        )
+
+    try:
+        data_bytes = backup_path.read_bytes()
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not read the stored automatic backup: "
+            f"{exc}"
+        ) from exc
+
+    if not data_bytes:
+        raise RuntimeError(
+            "The stored automatic backup is empty."
+        )
+
+    if not data_bytes.startswith(b"PK"):
+        raise RuntimeError(
+            "The stored automatic backup is not a valid ZIP."
+        )
+
+    saved_size = len(data_bytes)
+
+    completed_at = (
+        datetime.utcnow()
+        .isoformat(
+            timespec="seconds"
+        )
+        + "Z"
+    )
+
+    telegram_sent = False
+    telegram_message = ""
+
+    if send_to_telegram:
+        if not telegram_chat_id:
             raise RuntimeError(
-                "The backup response did not confirm "
-                "a locally saved automatic archive."
+                "Telegram delivery is enabled, but no "
+                "Telegram administrator is selected."
             )
 
-        backup_metadata = {
-            "filename": saved_name,
-            "name": saved_name,
-            "size": saved_size,
-            "size_bytes": saved_size,
-            "timestamp": saved_timestamp,
-        }
+        scheduled_dt = _backup_slot_datetime(
+            slot,
+            sched,
+        )
+
+        schedule_text = _tg_human_datetime(
+            scheduled_dt,
+            seconds=False,
+        )
+
+        completed_text = _tg_human_datetime(
+            completed_at,
+            seconds=False,
+        )
+
+        try:
+            size_text = _tg_human_bytes(
+                saved_size
+            )
+        except Exception:
+            size_text = (
+                f"{saved_size} bytes"
+            )
+
+        caption = "\n".join([
+            "<b>Automatic backup completed</b>",
+            "",
+            "<b>Status</b> · Completed",
+            (
+                "<b>Schedule time</b> · "
+                f"{_tg_event_escape(schedule_text)}"
+            ),
+            (
+                "<b>Completed at</b> · "
+                f"{_tg_event_escape(completed_text)}"
+            ),
+            (
+                "<b>File</b> · "
+                f"<code>{_tg_event_escape(saved_name)}</code>"
+            ),
+            (
+                "<b>Size</b> · "
+                f"{_tg_event_escape(size_text)}"
+            ),
+        ])
+
+        telegram_sent, telegram_message = (
+            _send_zip_telegram(
+                data_bytes,
+                saved_name,
+                chat_id=telegram_chat_id,
+                caption=caption,
+            )
+        )
+
+        if not telegram_sent:
+            raise RuntimeError(
+                "Backup was stored locally, but Telegram "
+                "document delivery failed: "
+                f"{telegram_message}"
+            )
+
+        app.logger.info(
+            "Automatic backup delivered to Telegram: "
+            "file=%s chat_id=%s size=%s",
+            saved_name,
+            telegram_chat_id,
+            saved_size,
+        )
+
+    backup_metadata = {
+        "filename": saved_name,
+        "name": saved_name,
+        "size": saved_size,
+        "size_bytes": saved_size,
+        "timestamp": saved_timestamp,
+        "telegram_requested": send_to_telegram,
+        "telegram_sent": telegram_sent,
+        "telegram_message": telegram_message,
+    }
 
     state = _json_load(
         _BACKUP_SCHEDULER_STATE_FILE,
@@ -8722,32 +10073,24 @@ def _run_scheduled_backup(
     ):
         state = {}
 
-    completed_at = (
-        datetime.utcnow()
-        .isoformat(
-            timespec="seconds"
-        )
-        + "Z"
-    )
-
     state.update({
         "last_slot": slot,
         "last_success": completed_at,
         "last_success_at": completed_at,
-        "last_file": (
-            backup_metadata.get(
-                "filename"
-            )
-            or ""
-        ),
-        "last_size": int(
-            backup_metadata.get(
-                "size"
-            )
-            or 0
-        ),
+        "last_file": saved_name,
+        "last_size": saved_size,
         "last_error": "",
         "last_error_at": "",
+        "last_telegram_sent": (
+            telegram_sent
+            if send_to_telegram
+            else None
+        ),
+        "last_telegram_message": (
+            telegram_message
+            if send_to_telegram
+            else ""
+        ),
     })
 
     _json_save(
@@ -8757,17 +10100,55 @@ def _run_scheduled_backup(
 
     return backup_metadata
 
-def _backup_scheduler_loop():
+def _backup_slot_datetime(
+    slot: str,
+    schedule: dict,
+):
     """
-    Run the automatic backup scheduler in only one Gunicorn worker.
+    Convert a scheduler slot such as:
 
+        daily:2026-08-25T06:30
+
+    into a timezone-aware datetime.
+
+    Scheduler slot clock values are in panel timezone.
     """
+    raw = str(
+        slot or ""
+    ).strip()
+
+    if ":" not in raw:
+        return None
+
+    _frequency, timestamp_text = (
+        raw.split(
+            ":",
+            1,
+        )
+    )
+
+    try:
+        parsed = datetime.fromisoformat(
+            timestamp_text
+        )
+    except Exception:
+        return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(
+            tzinfo=_panel_timezone()
+        )
+
+    return parsed
+
+def _backup_scheduler_loop():
+
     lock_handle = None
 
     try:
         lock_handle = open(
             _BACKUP_SCHEDULER_LOCK_FILE,
-            'a+',
+            "a+",
         )
 
         fcntl.flock(
@@ -8788,9 +10169,7 @@ def _backup_scheduler_loop():
     while True:
         try:
             with app.app_context():
-                schedule = (
-                    _load_backup_schedule()
-                )
+                schedule = _load_backup_schedule()
 
                 slot = _backup_due_slot(
                     schedule
@@ -8809,11 +10188,11 @@ def _backup_scheduler_loop():
 
                 if (
                     slot
-                    and state.get(
-                        'last_slot'
-                    ) != slot
+                    and state.get("last_slot")
+                    != slot
                 ):
                     try:
+
                         backup_result = (
                             _run_scheduled_backup(
                                 schedule,
@@ -8824,38 +10203,28 @@ def _backup_scheduler_loop():
                         completed_at = (
                             datetime.utcnow()
                             .isoformat(
-                                timespec='seconds'
+                                timespec="seconds"
                             )
-                            + 'Z'
-                        )
-
-                        state.update({
-                            'last_slot': slot,
-                            'last_success_at': (
-                                completed_at
-                            ),
-                            'last_error': '',
-                            'last_error_at': '',
-                        })
-
-                        _json_save(
-                            _BACKUP_SCHEDULER_STATE_FILE,
-                            state,
+                            + "Z"
                         )
 
                         app.logger.info(
-                            'Automatic backup completed: '
-                            'slot=%s',
+                            "Automatic backup completed: "
+                            "slot=%s",
                             slot,
                         )
 
                         notification_details = [
                             (
-                                'Schedule slot',
-                                slot,
+                                "Schedule time",
+                                _backup_slot_datetime(
+                                    slot,
+                                    schedule,
+                                )
+                                or slot,
                             ),
                             (
-                                'Completed at',
+                                "Completed at",
                                 completed_at,
                             ),
                         ]
@@ -8864,118 +10233,153 @@ def _backup_scheduler_loop():
                             backup_result,
                             dict,
                         ):
-                            backup_filename = (
+                            backup_filename = str(
                                 backup_result.get(
-                                    'filename'
+                                    "filename"
                                 )
                                 or backup_result.get(
-                                    'file'
+                                    "file"
                                 )
                                 or backup_result.get(
-                                    'name'
+                                    "name"
                                 )
-                                or ''
-                            )
+                                or ""
+                            ).strip()
 
                             backup_size = (
                                 backup_result.get(
-                                    'size'
+                                    "size"
                                 )
                                 or backup_result.get(
-                                    'size_bytes'
+                                    "size_bytes"
                                 )
-                                or ''
                             )
 
                             if backup_filename:
                                 notification_details.append(
                                     (
-                                        'File',
+                                        "File",
                                         backup_filename,
                                     )
                                 )
 
                             if backup_size not in (
                                 None,
-                                '',
+                                "",
                             ):
                                 notification_details.append(
                                     (
-                                        'Size bytes',
+                                        "Size bytes",
                                         backup_size,
                                     )
                                 )
 
-                        _send_telegram_event(
-                            'backup_success',
-                            (
-                                '● Automatic backup '
-                                'completed'
-                            ),
-                            status='Completed',
-                            details=notification_details,
-                            dedupe_key=(
-                                f'backup-success:{slot}'
-                            ),
-                            dedupe_seconds=0,
-                        )
+                        if not schedule.get(
+                            "send_to_telegram",
+                            False,
+                        ):
+                            _send_telegram_event(
+                                "backup_success",
+                                (
+                                    "● Automatic backup "
+                                    "completed"
+                                ),
+                                status="Completed",
+                                details=(
+                                    notification_details
+                                ),
+                                dedupe_key=(
+                                    f"backup-success:{slot}"
+                                ),
+                                dedupe_seconds=0,
+                            )
+
+                        # _run_scheduled_backup() 
+                        #
+                        # - last_slot
+                        # - last_success
+                        # - last_success_at
+                        # - last_file
+                        # - last_size
+                        # - last_error
+                        # - last_error_at
+                        # - last_telegram_sent
+                        # - last_telegram_message
 
                     except Exception as exc:
                         failed_at = (
                             datetime.utcnow()
                             .isoformat(
-                                timespec='seconds'
+                                timespec="seconds"
                             )
-                            + 'Z'
+                            + "Z"
                         )
 
-                        state.update({
-                            'last_slot': slot,
-                            'last_error': str(
+                        failure_state = _json_load(
+                            _BACKUP_SCHEDULER_STATE_FILE,
+                            {},
+                        )
+
+                        if not isinstance(
+                            failure_state,
+                            dict,
+                        ):
+                            failure_state = {}
+
+                        failure_state.update({
+
+                            "last_slot": slot,
+
+                            "last_error": str(
                                 exc
                             ),
-                            'last_error_at': (
+
+                            "last_error_at": (
                                 failed_at
                             ),
                         })
 
                         _json_save(
                             _BACKUP_SCHEDULER_STATE_FILE,
-                            state,
+                            failure_state,
                         )
 
                         app.logger.exception(
-                            'Automatic backup failed: '
-                            'slot=%s error=%s',
+                            "Automatic backup failed: "
+                            "slot=%s error=%s",
                             slot,
                             exc,
                         )
 
                         _send_telegram_event(
-                            'backup_failed',
+                            "backup_failed",
                             (
-                                '● Automatic backup '
-                                'failed'
+                                "● Automatic backup "
+                                "failed"
                             ),
-                            status='Failed',
+                            status="Failed",
                             details=[
                                 (
-                                    'Schedule slot',
-                                    slot,
+                                    "Schedule time",
+                                    _backup_slot_datetime(
+                                        slot,
+                                        schedule,
+                                    )
+                                    or slot,
                                 ),
                                 (
-                                    'Failed at',
+                                    "Failed at",
                                     failed_at,
                                 ),
                                 (
-                                    'Error',
+                                    "Error",
                                     str(
                                         exc
                                     )[:300],
                                 ),
                             ],
                             dedupe_key=(
-                                f'backup-failed:{slot}'
+                                f"backup-failed:{slot}"
                             ),
                             dedupe_seconds=300,
                         )
@@ -8983,7 +10387,7 @@ def _backup_scheduler_loop():
         except Exception as exc:
             try:
                 app.logger.exception(
-                    'Backup scheduler sweep failed: %s',
+                    "Backup scheduler sweep failed: %s",
                     exc,
                 )
             except Exception:
@@ -10394,6 +11798,26 @@ def api_settings():
 
     force_https = bool(data.get("force_https_redirect", False))
     hsts        = bool(data.get("hsts", False))
+    requested_timezone = (
+        data.get("timezone")
+        if "timezone" in data
+        else cur.get("timezone")
+        )
+
+    panel_timezone = _valid_timezone_name(
+        requested_timezone
+    )
+
+    if not panel_timezone:
+        return jsonify(
+            ok=False,
+            error="invalid_timezone",
+            message=(
+            "Timezone must be a valid "
+            "IANA timezone such as "
+            "Asia/Tehran or Europe/Amsterdam."
+            ),
+        ), 400
 
     if not tls_enabled:
         force_https = False
@@ -10420,6 +11844,7 @@ def api_settings():
         "https_port": https_port,
         "tls_cert_path": tls_cert_path,
         "tls_key_path": tls_key_path,
+        "timezone": panel_timezone,
     }
 
     _save_panel_settings(payload)
@@ -10443,6 +11868,36 @@ def api_settings():
 
     return jsonify(ok=True, settings=payload, next_url=next_url, requires_restart=True)
 
+@app.get("/api/timezone")
+@require_api_key_or_login
+def api_timezone():
+    tz_name = _panel_timezone_name()
+    tz = _panel_timezone()
+
+    now_utc = datetime.now(
+        timezone.utc
+    )
+
+    now_local = now_utc.astimezone(
+        tz
+    )
+
+    return jsonify(
+        ok=True,
+        timezone=tz_name,
+        utc_now=now_utc.isoformat(
+            timespec="seconds"
+        ).replace(
+            "+00:00",
+            "Z",
+        ),
+        local_now=now_local.isoformat(
+            timespec="seconds"
+        ),
+        utc_offset=now_local.strftime(
+            "%z"
+        ),
+    )
 
 @app.get('/api/template_settings')
 @login_required
@@ -11966,6 +13421,133 @@ def _panel_base() -> str:
 
 PANEL_SETTINGS_FILE = os.path.join(app.instance_path, "panel_settings.json")
 
+def _valid_timezone_name(value: str) -> str | None:
+    value = str(value or "").strip()
+    if not value:
+        return None
+
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(value)
+        return value
+    except Exception:
+        return None
+
+
+def _detect_system_timezone_name() -> str:
+
+    try:
+        backup_file = globals().get("BACKUP_SCHEDULE_FILE")
+        if backup_file and os.path.isfile(backup_file):
+            data = _json_load(backup_file, {})
+            candidate = _valid_timezone_name(
+                data.get("timezone")
+            )
+            if candidate:
+                return candidate
+    except Exception:
+        pass
+
+    try:
+        with open(
+            "/etc/timezone",
+            "r",
+            encoding="utf-8",
+        ) as timezone_file:
+            candidate = _valid_timezone_name(
+                timezone_file.read().strip()
+            )
+            if candidate:
+                return candidate
+    except Exception:
+        pass
+
+    try:
+        target = os.path.realpath(
+            "/etc/localtime"
+        )
+
+        marker = "/zoneinfo/"
+
+        if marker in target:
+            candidate = _valid_timezone_name(
+                target.split(
+                    marker,
+                    1,
+                )[1]
+            )
+
+            if candidate:
+                return candidate
+    except Exception:
+        pass
+
+    try:
+        tzinfo = (
+            datetime.now()
+            .astimezone()
+            .tzinfo
+        )
+
+        candidate = _valid_timezone_name(
+            getattr(
+                tzinfo,
+                "key",
+                "",
+            )
+        )
+
+        if candidate:
+            return candidate
+    except Exception:
+        pass
+
+    return "UTC"
+
+
+def _panel_timezone_name() -> str:
+    """
+    Single timezone source for the whole panel.
+    """
+    try:
+        settings = _load_panel_settings() or {}
+
+        candidate = _valid_timezone_name(
+            settings.get("timezone")
+        )
+
+        if candidate:
+            return candidate
+    except Exception:
+        pass
+
+    return _detect_system_timezone_name()
+
+
+def _panel_timezone():
+    from zoneinfo import ZoneInfo
+
+    try:
+        return ZoneInfo(
+            _panel_timezone_name()
+        )
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+def _panel_local_datetime(value):
+
+    parsed = _tg_parse_datetime(
+        value
+    )
+
+    if parsed is None:
+        return None
+
+    return parsed.astimezone(
+        _panel_timezone()
+    )
+
 def _load_panel_settings():
     os.makedirs(app.instance_path, exist_ok=True)
     try:
@@ -11983,16 +13565,31 @@ def _load_panel_settings():
         except Exception:
             return default
 
-    return {
-        "tls_enabled": bool(j.get("tls_enabled", False)),
-        "domain": (j.get("domain") or "").strip(),
-        "force_https_redirect": bool(j.get("force_https_redirect", False)),
-        "hsts": bool(j.get("hsts", False)),
-        "http_port": _port(j.get("http_port"), None),
-        "https_port": _port(j.get("https_port"), 443),
-        "tls_cert_path": (j.get("tls_cert_path") or "").strip(),
-        "tls_key_path": (j.get("tls_key_path") or "").strip(),
-    }
+    timezone_name = _valid_timezone_name(
+    j.get("timezone")
+)
+
+    if not timezone_name:
+        timezone_name = (_detect_system_timezone_name())
+
+    return {"tls_enabled": bool(j.get("tls_enabled",False,)),
+
+        "domain": (j.get("domain")or "").strip(),
+
+        "force_https_redirect": bool(j.get("force_https_redirect",False,)),
+
+        "hsts": bool(j.get("hsts",False,)),
+
+        "http_port": _port(j.get("http_port"),None,),
+
+        "https_port": _port(j.get("https_port"),443,),
+
+        "tls_cert_path": (j.get("tls_cert_path")or "").strip(),
+
+        "tls_key_path": (j.get("tls_key_path")or "").strip(),
+
+        "timezone": timezone_name,
+        }
 
 def _is_https(req=None) -> bool:
     """
@@ -16492,6 +18089,10 @@ def login():
                     'Invalid username or password'
                 ),
             )
+            _http_security_record_login_failure(
+                username=(username or 'unknown'),
+                failure_type='credentials',
+            )
 
             try:
                 client_ip, _ = (
@@ -16575,6 +18176,10 @@ def login():
                     reason=(
                         'Invalid TOTP or recovery code'
                     ),
+                )
+                _http_security_record_login_failure(
+                    username=account.username,
+                    failure_type='twofa',
                 )
 
                 try:
@@ -21381,7 +22986,8 @@ def api_edit_node_peer(nid, pub):
     return api_edit(p.id)
 
 @app.route('/api/peer/<int:pid>', methods=['DELETE'])
-@require_api_key
+@csrf.exempt
+@require_api_key_or_login
 def api_delete(pid):
     p = db.session.get(Peer, pid) or abort(404)
 
@@ -21389,13 +22995,25 @@ def api_delete(pid):
         remove_peer_everywhere(p)
     except PeerRemovalError as e:
         current_app.logger.error(
-            "peer delete failed at %s stage for pid=%s: %s", e.phase, pid, e
+            "peer delete failed at %s stage for pid=%s: %s",
+            e.phase,
+            pid,
+            e,
         )
-        return peer_removal_response(e, peer_id=pid)
+        return peer_removal_response(
+            e,
+            peer_id=pid,
+        )
 
-    logpanel_action("peer_delete", f"pid={pid}")
-    return jsonify(success=True, ok=True)
+    logpanel_action(
+        "peer_delete",
+        f"pid={pid}",
+    )
 
+    return jsonify(
+        success=True,
+        ok=True,
+    )
 
 @app.route('/api/peer/<int:pid>/logs')
 @login_required
@@ -21641,7 +23259,6 @@ SUBSCRIPTION_PORTAL_OVERRIDES_FILE = os.path.join(
 )
 
 
-# Subscription Studio backend contract: v16
 SUBSCRIPTION_LAYOUTS = {
     'ps5',
     'mac',
@@ -27768,6 +29385,1755 @@ _start_retention()
 _start_expiry_enforcer()
 _start_backup_scheduler()
 _node_notify_monitor()
+# ========================================
+# Traffic Control / WG forwarding policy
+# ========================================
+TRAFFIC_POLICY_FILE = os.path.join(INSTANCE_DIR, "traffic_policies.json")
+TRAFFIC_GEO_DIR = os.path.join(INSTANCE_DIR, "traffic_geo")
+TRAFFIC_NFT_TABLE = "wgpanel_traffic"
+TRAFFIC_GEO_MAX_AGE = 86400
+
+
+def _traffic_default_config():
+    return {
+        "enabled": True,
+        "policies": [],
+    }
+
+
+def _traffic_load_config():
+    data = _json_load(TRAFFIC_POLICY_FILE, _traffic_default_config())
+    if not isinstance(data, dict):
+        data = _traffic_default_config()
+    policies = data.get("policies")
+    if not isinstance(policies, list):
+        policies = []
+    return {
+        "enabled": bool(data.get("enabled", True)),
+        "policies": policies,
+    }
+
+
+def _traffic_save_config(data):
+    payload = {
+        "enabled": bool((data or {}).get("enabled", True)),
+        "policies": list((data or {}).get("policies") or []),
+    }
+    _json_save(TRAFFIC_POLICY_FILE, payload)
+    return payload
+
+
+def _traffic_nft_capability():
+    nft = shutil.which("nft")
+    if not nft:
+        return {
+            "available": False,
+            "usable": False,
+            "reason": "not_installed",
+            "detail": "The nft command was not found.",
+        }
+    try:
+        result = subprocess.run(
+            [nft, "list", "ruleset"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+        if result.returncode == 0:
+            return {
+                "available": True,
+                "usable": True,
+                "reason": "ready",
+                "detail": "nftables is available and the panel can read the ruleset.",
+            }
+        return {
+            "available": True,
+            "usable": False,
+            "reason": "permission_denied",
+            "detail": (result.stderr or result.stdout or "nft list ruleset failed").strip()[:500],
+        }
+    except Exception as exc:
+        return {
+            "available": True,
+            "usable": False,
+            "reason": "nft_error",
+            "detail": str(exc),
+        }
+
+
+def _traffic_clean_iface(value):
+    value = str(value or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,32}", value):
+        raise ValueError("Invalid WireGuard interface name.")
+    return value
+
+
+def _traffic_host_addresses(value):
+    out = []
+    for raw in re.split(r"[\s,]+", str(value or "").strip()):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = ipaddress.ip_interface(raw) if "/" in raw else ipaddress.ip_address(raw)
+            ip_obj = obj.ip if hasattr(obj, "ip") else obj
+            text = str(ip_obj)
+            if text not in out:
+                out.append(text)
+        except Exception:
+            continue
+    return out
+
+
+def _traffic_normalize_destination(raw):
+    raw = str(raw or "").strip()
+    if not raw:
+        return None
+    try:
+        if "://" in raw:
+            host = urlparse(raw).hostname or ""
+        else:
+            host = raw.split("/", 1)[0]
+            if host.count(":") == 1 and host.rsplit(":", 1)[1].isdigit():
+                host = host.rsplit(":", 1)[0]
+        host = host.strip().strip(".").lower()
+        if host.startswith("*."):
+            host = host[2:]
+        if not host or len(host) > 253:
+            return None
+        if not re.fullmatch(r"[a-z0-9._-]+", host):
+            return None
+        return host
+    except Exception:
+        return None
+
+
+def _traffic_resolve_domains(domains):
+    v4, v6, warnings = set(), set(), []
+    resolved = {}
+    for raw in list(domains or []):
+        host = _traffic_normalize_destination(raw)
+        if not host:
+            warnings.append(f"Invalid domain: {raw}")
+            continue
+        found = []
+        try:
+            for family, _socktype, _proto, _canon, sockaddr in socket.getaddrinfo(host, None):
+                candidate = sockaddr[0]
+                try:
+                    ip_obj = ipaddress.ip_address(candidate)
+                except Exception:
+                    continue
+                if ip_obj.version == 4:
+                    v4.add(str(ip_obj))
+                else:
+                    v6.add(str(ip_obj))
+                if str(ip_obj) not in found:
+                    found.append(str(ip_obj))
+        except Exception as exc:
+            warnings.append(f"Could not resolve {host}: {exc}")
+        resolved[host] = found
+    return v4, v6, resolved, warnings
+
+
+def _traffic_parse_cidrs(values):
+    v4, v6, warnings = set(), set(), []
+    for raw in list(values or []):
+        raw = str(raw or "").strip()
+        if not raw:
+            continue
+        try:
+            if "/" in raw:
+                net = ipaddress.ip_network(raw, strict=False)
+            else:
+                ip_obj = ipaddress.ip_address(raw)
+                net = ipaddress.ip_network(f"{ip_obj}/{32 if ip_obj.version == 4 else 128}", strict=False)
+            (v4 if net.version == 4 else v6).add(str(net))
+        except Exception:
+            warnings.append(f"Invalid IP/CIDR: {raw}")
+    return v4, v6, warnings
+
+
+def _traffic_geo_cache_path(country, version):
+    os.makedirs(TRAFFIC_GEO_DIR, exist_ok=True)
+    return os.path.join(TRAFFIC_GEO_DIR, f"{country.lower()}-v{version}.zone")
+
+
+def _traffic_geo_url(country, version):
+    cc = country.lower()
+    if version == 4:
+        return f"https://www.ipdeny.com/ipblocks/data/countries/{cc}.zone"
+    return f"https://www.ipdeny.com/ipv6/ipaddresses/blocks/{cc}.zone"
+
+
+def _traffic_geo_networks(country, version, *, force=False):
+    cc = str(country or "").strip().lower()
+    if not re.fullmatch(r"[a-z]{2}", cc):
+        raise ValueError(f"Invalid country code: {country}")
+    path = _traffic_geo_cache_path(cc, version)
+    fresh = False
+    try:
+        fresh = os.path.isfile(path) and (time.time() - os.path.getmtime(path) < TRAFFIC_GEO_MAX_AGE)
+    except Exception:
+        fresh = False
+    if force or not fresh:
+        try:
+            response = requests.get(_traffic_geo_url(cc, version), timeout=12)
+            response.raise_for_status()
+            text_body = response.text
+            valid = []
+            for line in text_body.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                try:
+                    net = ipaddress.ip_network(line, strict=False)
+                    if net.version == version:
+                        valid.append(str(net))
+                except Exception:
+                    continue
+            if not valid:
+                raise ValueError("Downloaded country list was empty or invalid.")
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                handle.write("\n".join(valid) + "\n")
+            os.replace(tmp, path)
+        except Exception:
+            if not os.path.isfile(path):
+                raise
+    networks = []
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                net = ipaddress.ip_network(line, strict=False)
+                if net.version == version:
+                    networks.append(str(net))
+            except Exception:
+                continue
+    return networks
+
+
+def _traffic_set_elements(values):
+    return ", ".join(sorted(set(values)))
+
+
+def _traffic_apply_local(policies):
+    capability = _traffic_nft_capability()
+    if not capability.get("usable"):
+        raise RuntimeError(
+            capability.get("detail")
+            or "nftables is unavailable"
+        )
+
+    nft = shutil.which("nft")
+    if not nft:
+        raise RuntimeError("The nft command was not found.")
+
+    active = [
+        p for p in list(policies or [])
+        if isinstance(p, dict)
+        and p.get("enabled", True)
+    ]
+
+    warnings = []
+    domain_map = {}
+    country_sets = {}
+    policy_data = []
+
+    for p in active:
+        pid = str(
+            p.get("id")
+            or secrets.token_hex(6)
+        )[:32]
+
+        iface = _traffic_clean_iface(
+            p.get("interface")
+        )
+
+        source_mode = str(
+            p.get("source_mode")
+            or "interface"
+        )
+
+        source_ips = (
+            _traffic_host_addresses(
+                p.get("source_ip")
+            )
+            if source_mode == "peer"
+            else []
+        )
+
+        cidr4, cidr6, cidr_warn = (
+            _traffic_parse_cidrs(
+                p.get("cidrs") or []
+            )
+        )
+
+        dom4, dom6, resolved, dom_warn = (
+            _traffic_resolve_domains(
+                p.get("domains") or []
+            )
+        )
+
+        warnings.extend([
+            f"{p.get('name') or pid}: {warning}"
+            for warning in (
+                cidr_warn + dom_warn
+            )
+        ])
+
+        domain_map[pid] = resolved
+
+        direct4 = set(cidr4) | set(dom4)
+        direct6 = set(cidr6) | set(dom6)
+
+        countries = []
+
+        for raw_cc in list(
+            p.get("countries") or []
+        ):
+            cc = str(
+                raw_cc or ""
+            ).strip().lower()
+
+            if not re.fullmatch(
+                r"[a-z]{2}",
+                cc,
+            ):
+                warnings.append(
+                    f"{p.get('name') or pid}: "
+                    f"invalid country code {raw_cc}"
+                )
+                continue
+
+            countries.append(cc)
+
+            if cc not in country_sets:
+                try:
+                    country_sets[cc] = {
+                        4: _traffic_geo_networks(
+                            cc,
+                            4,
+                        ),
+                        6: _traffic_geo_networks(
+                            cc,
+                            6,
+                        ),
+                    }
+
+                except Exception as exc:
+                    warnings.append(
+                        f"Country {cc.upper()}: {exc}"
+                    )
+                    country_sets[cc] = {
+                        4: [],
+                        6: [],
+                    }
+
+        policy_data.append({
+            "id": pid,
+            "name": str(
+                p.get("name")
+                or "Traffic policy"
+            ),
+            "interface": iface,
+            "source_mode": source_mode,
+            "source_ips": source_ips,
+            "direct4": sorted(direct4),
+            "direct6": sorted(direct6),
+            "countries": countries,
+        })
+
+    set_lines = []
+    rule_lines = []
+
+    for cc, versions in sorted(
+        country_sets.items()
+    ):
+        for version, values in (
+            (4, versions.get(4) or []),
+            (6, versions.get(6) or []),
+        ):
+            if not values:
+                continue
+
+            nft_type = (
+                "ipv4_addr"
+                if version == 4
+                else "ipv6_addr"
+            )
+
+            set_name = (
+                f"geo_{cc}_v{version}"
+            )
+
+            set_lines.append(
+                f"  set {set_name} {{ "
+                f"type {nft_type}; "
+                "flags interval; auto-merge; "
+                "elements = { "
+                f"{_traffic_set_elements(values)}"
+                " } }"
+            )
+
+    for row in policy_data:
+        safe_id = (
+            re.sub(
+                r"[^A-Za-z0-9_]",
+                "",
+                row["id"],
+            )[:18]
+            or secrets.token_hex(4)
+        )
+
+        for version, values in (
+            (4, row["direct4"]),
+            (6, row["direct6"]),
+        ):
+            if not values:
+                continue
+
+            nft_type = (
+                "ipv4_addr"
+                if version == 4
+                else "ipv6_addr"
+            )
+
+            set_name = (
+                f"p_{safe_id}_v{version}"
+            )
+
+            set_lines.append(
+                f"  set {set_name} {{ "
+                f"type {nft_type}; "
+                "flags interval; auto-merge; "
+                "elements = { "
+                f"{_traffic_set_elements(values)}"
+                " } }"
+            )
+
+        source_by_version = {
+            4: [],
+            6: [],
+        }
+
+        for src in row["source_ips"]:
+            try:
+                version = (
+                    ipaddress.ip_address(src)
+                    .version
+                )
+                source_by_version[
+                    version
+                ].append(src)
+            except Exception:
+                pass
+
+        for version in (4, 6):
+            family = (
+                "ip"
+                if version == 4
+                else "ip6"
+            )
+
+            source_clause = ""
+
+            if row["source_mode"] == "peer":
+                sources = (
+                    source_by_version[
+                        version
+                    ]
+                )
+
+                if not sources:
+                    warnings.append(
+                        f"{row['name']}: no IPv{version} "
+                        "peer address, so IPv"
+                        f"{version} peer-scoped blocking "
+                        "was skipped"
+                    )
+                    continue
+
+                if len(sources) == 1:
+                    source_clause = (
+                        f" {family} saddr "
+                        f"{sources[0]}"
+                    )
+                else:
+                    source_clause = (
+                        f" {family} saddr {{ "
+                        f"{', '.join(sources)} }}"
+                    )
+
+            base = (
+                f'    iifname "{row["interface"]}"'
+                f"{source_clause}"
+            )
+
+            direct = row[
+                f"direct{version}"
+            ]
+
+            if direct:
+                set_name = (
+                    f"p_{safe_id}_v{version}"
+                )
+
+                rule_lines.append(
+                    f"{base} {family} daddr "
+                    f"@{set_name} counter drop "
+                    f'comment "wgpanel:{row["id"]}:'
+                    f'direct:v{version}"'
+                )
+
+            for cc in row["countries"]:
+                if not (
+                    country_sets
+                    .get(cc, {})
+                    .get(version)
+                ):
+                    continue
+
+                rule_lines.append(
+                    f"{base} {family} daddr "
+                    f"@geo_{cc}_v{version} "
+                    "counter drop "
+                    f'comment "wgpanel:{row["id"]}:'
+                    f'geo:{cc}:v{version}"'
+                )
+
+    table_exists = (
+        subprocess.run(
+            [
+                nft,
+                "list",
+                "table",
+                "inet",
+                TRAFFIC_NFT_TABLE,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=8,
+            check=False,
+        ).returncode
+        == 0
+    )
+
+    lines = []
+
+    if table_exists:
+        lines.append(
+            f"delete table inet "
+            f"{TRAFFIC_NFT_TABLE}"
+        )
+
+    lines.append(
+        f"table inet {TRAFFIC_NFT_TABLE} {{"
+    )
+
+    lines.extend(set_lines)
+
+    lines.extend([
+        "  chain forward {",
+        (
+            "    type filter hook forward "
+            "priority -10; policy accept;"
+        ),
+    ])
+
+    lines.extend(rule_lines)
+
+    lines.extend([
+        "  }",
+        "}",
+    ])
+
+    script = "\n".join(lines) + "\n"
+
+    result = subprocess.run(
+        [nft, "-f", "-"],
+        input=script,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        detail = (
+            result.stderr
+            or result.stdout
+            or "nftables apply failed"
+        ).strip()
+
+        raise RuntimeError(detail)
+
+    return {
+        "ok": True,
+        "policies": len(policy_data),
+        "rules": len(rule_lines),
+        "warnings": warnings,
+        "resolved_domains": domain_map,
+    }
+
+
+def _traffic_local_status():
+    capability = _traffic_nft_capability()
+    result = {
+        "capability": capability,
+        "loaded": False,
+        "counters": {},
+    }
+    if not capability.get("usable"):
+        return result
+    nft = shutil.which("nft")
+    proc = subprocess.run(
+        [nft, "list", "table", "inet", TRAFFIC_NFT_TABLE],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=8,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return result
+    result["loaded"] = True
+    text_body = proc.stdout or ""
+    for line in text_body.splitlines():
+        m_comment = re.search(r'comment\s+"wgpanel:([^\"]+)"', line)
+        m_counter = re.search(r'counter packets\s+(\d+)\s+bytes\s+(\d+)', line)
+        if m_comment and m_counter:
+            key = m_comment.group(1)
+            result["counters"][key] = {
+                "packets": int(m_counter.group(1)),
+                "bytes": int(m_counter.group(2)),
+            }
+    return result
+
+
+def _traffic_targets_payload():
+    interfaces = []
+    for iface in InterfaceConfig.query.order_by(InterfaceConfig.node_id.asc().nullsfirst(), InterfaceConfig.name.asc()).all():
+        peers = []
+        for peer in Peer.query.filter(Peer.iface_id == iface.id).order_by(Peer.name.asc()).all():
+            peers.append({
+                "id": peer.id,
+                "name": peer.name,
+                "address": peer.address,
+                "public_key": peer.public_key,
+            })
+        interfaces.append({
+            "id": iface.id,
+            "name": iface.name,
+            "address": iface.address,
+            "node_id": iface.node_id,
+            "node_name": iface.node.name if iface.node else "Local panel",
+            "location": "node" if iface.node_id else "local",
+            "peers": peers,
+        })
+    return interfaces
+
+
+def _traffic_normalize_policy(data):
+    data = data or {}
+    policy_id = str(data.get("id") or secrets.token_hex(8)).strip()[:32]
+    name = str(data.get("name") or "Traffic policy").strip()[:80]
+    location = str(data.get("location") or "local").strip().lower()
+    if location not in {"local", "node"}:
+        raise ValueError("location must be local or node")
+    node_id = int(data.get("node_id") or 0) or None
+    iface = _traffic_clean_iface(data.get("interface"))
+    source_mode = str(data.get("source_mode") or "interface").strip().lower()
+    if source_mode not in {"interface", "peer"}:
+        raise ValueError("source_mode must be interface or peer")
+    source_ip = str(data.get("source_ip") or "").strip()
+    if source_mode == "peer" and not _traffic_host_addresses(source_ip):
+        raise ValueError("A peer/source address is required for peer scope.")
+
+    def clean_list(key, max_items=100):
+        raw = data.get(key) or []
+        if isinstance(raw, str):
+            raw = re.split(r"[\n,]+", raw)
+        return [str(x).strip() for x in list(raw) if str(x).strip()][:max_items]
+
+    return {
+        "id": policy_id,
+        "name": name,
+        "enabled": bool(data.get("enabled", True)),
+        "location": location,
+        "node_id": node_id if location == "node" else None,
+        "interface": iface,
+        "source_mode": source_mode,
+        "source_ip": source_ip if source_mode == "peer" else "",
+        "domains": clean_list("domains", 100),
+        "cidrs": clean_list("cidrs", 200),
+        "countries": [x.upper() for x in clean_list("countries", 50)],
+    }
+
+
+@app.get("/api/traffic-control")
+@require_api_key_or_login
+def traffic_control_get():
+    cfg = _traffic_load_config()
+    node_status = {}
+    for node in Node.query.filter(Node.enabled.is_(True)).order_by(Node.id.asc()).all():
+        try:
+            node_status[str(node.id)] = node_get(node, "/api/traffic-control/status", timeout=8) or {}
+        except Exception as exc:
+            node_status[str(node.id)] = {"ok": False, "error": str(exc)}
+    return jsonify(
+        ok=True,
+        enabled=cfg["enabled"],
+        policies=cfg["policies"],
+        targets=_traffic_targets_payload(),
+        local=_traffic_local_status(),
+        nodes=node_status,
+        geo_provider="IPdeny",
+        domain_mode="resolved_ip",
+    )
+
+@app.post("/api/traffic-control")
+@require_api_key_or_login
+def traffic_control_save():
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    try:
+        previous = _traffic_load_config()
+
+        raw_policies = (
+            data.get("policies")
+            or []
+        )
+
+        if not isinstance(
+            raw_policies,
+            list,
+        ):
+            raise ValueError(
+                "policies must be a list"
+            )
+
+        policies = [
+            _traffic_normalize_policy(
+                item
+            )
+            for item in raw_policies
+        ]
+
+        seen = set()
+
+        for policy in policies:
+            if policy["id"] in seen:
+                raise ValueError(
+                    "Duplicate policy id: "
+                    f"{policy['id']}"
+                )
+
+            seen.add(
+                policy["id"]
+            )
+
+        enabled = bool(
+            data.get(
+                "enabled",
+                True,
+            )
+        )
+
+        cfg = _traffic_save_config({
+            "enabled": enabled,
+            "policies": policies,
+        })
+
+        previous_enabled = bool(
+            previous.get(
+                "enabled",
+                True,
+            )
+        )
+
+        previous_policies = (
+            previous.get("policies")
+            if isinstance(
+                previous,
+                dict,
+            )
+            else []
+        ) or []
+
+        changed = bool(
+            previous_enabled != enabled
+            or previous_policies != policies
+        )
+
+        if changed:
+            local_count = sum(
+                1
+                for policy in policies
+                if policy.get(
+                    "location"
+                ) == "local"
+            )
+
+            node_count = sum(
+                1
+                for policy in policies
+                if policy.get(
+                    "location"
+                ) == "node"
+            )
+
+            active_count = sum(
+                1
+                for policy in policies
+                if policy.get(
+                    "enabled",
+                    True,
+                )
+            )
+
+            _send_telegram_event(
+                "traffic_policy_change",
+                (
+                    "Traffic Control "
+                    "policy changed"
+                ),
+                status=(
+                    "Enabled"
+                    if enabled
+                    else "Disabled"
+                ),
+                details=[
+                    (
+                        "Policies",
+                        len(policies),
+                    ),
+                    (
+                        "Active policies",
+                        active_count,
+                    ),
+                    (
+                        "Local policies",
+                        local_count,
+                    ),
+                    (
+                        "Node policies",
+                        node_count,
+                    ),
+                ],
+                dedupe_key=(
+                    "traffic-policy:"
+                    f"{int(enabled)}:"
+                    f"{len(policies)}:"
+                    f"{active_count}"
+                ),
+                dedupe_seconds=2,
+            )
+
+        return jsonify(
+            ok=True,
+            **cfg,
+        )
+
+    except ValueError as exc:
+        return jsonify(
+            ok=False,
+            error="invalid_policy",
+            detail=str(exc),
+        ), 400
+
+
+@app.post("/api/traffic-control/apply")
+@require_api_key_or_login
+def traffic_control_apply():
+    cfg = _traffic_load_config()
+
+    policies = (
+        cfg["policies"]
+        if cfg.get("enabled", True)
+        else []
+    )
+
+    local_policies = [
+        p for p in policies
+        if p.get("location") == "local"
+    ]
+
+    node_groups = {}
+
+    for p in policies:
+        if p.get("location") != "node":
+            continue
+
+        nid = int(
+            p.get("node_id") or 0
+        )
+
+        if nid:
+            node_groups.setdefault(
+                nid,
+                [],
+            ).append(p)
+
+    result = {
+        "local": None,
+        "nodes": {},
+        "warnings": [],
+    }
+
+    errors = []
+
+    try:
+        result["local"] = (
+            _traffic_apply_local(
+                local_policies
+            )
+        )
+
+        result["warnings"].extend(
+            (result["local"] or {})
+            .get("warnings")
+            or []
+        )
+
+    except Exception as exc:
+        detail = str(exc).strip()
+
+        result["local"] = {
+            "ok": False,
+            "error": detail,
+        }
+
+        errors.append(
+            f"Local panel: {detail}"
+        )
+
+        current_app.logger.exception(
+            "Local Traffic Control apply failed"
+        )
+
+    for nid, rows in node_groups.items():
+        node = db.session.get(
+            Node,
+            nid,
+        )
+
+        if not node or not node.enabled:
+            detail = (
+                "node_not_found_or_disabled"
+            )
+
+            result["nodes"][str(nid)] = {
+                "ok": False,
+                "error": detail,
+            }
+
+            errors.append(
+                f"Node {nid}: {detail}"
+            )
+            continue
+
+        try:
+            remote = (
+                node_post(
+                    node,
+                    "/api/traffic-control/apply",
+                    {"policies": rows},
+                    timeout=45,
+                )
+                or {}
+            )
+
+            result["nodes"][
+                str(nid)
+            ] = remote
+
+            result["warnings"].extend(
+                remote.get("warnings")
+                or []
+            )
+
+            if not remote.get("ok"):
+                detail = str(
+                    remote.get("detail")
+                    or remote.get("error")
+                    or "remote apply failed"
+                ).strip()
+
+                errors.append(
+                    f"{node.name or ('Node ' + str(nid))}: "
+                    f"{detail}"
+                )
+
+        except Exception as exc:
+            detail = str(exc).strip()
+
+            result["nodes"][
+                str(nid)
+            ] = {
+                "ok": False,
+                "error": detail,
+            }
+
+            errors.append(
+                f"{node.name or ('Node ' + str(nid))}: "
+                f"{detail}"
+            )
+
+            current_app.logger.exception(
+                "Node Traffic Control apply failed: node=%s",
+                nid,
+            )
+
+    local_ok = bool(
+        (result.get("local") or {})
+        .get("ok")
+    )
+
+    nodes_ok = (
+        all(
+            bool(value.get("ok"))
+            for value in result[
+                "nodes"
+            ].values()
+        )
+        if result["nodes"]
+        else True
+    )
+
+    ok = bool(
+        local_ok
+        and nodes_ok
+    )
+
+    response = {
+        "ok": ok,
+        **result,
+    }
+
+    if errors:
+        response["detail"] = (
+        " | ".join(
+            errors
+        )[:1800]
+    )
+
+    active_policy_count = len(
+        policies
+    )
+
+    local_policy_count = len(
+        local_policies
+    )
+
+    node_policy_count = sum(
+        len(rows)
+        for rows in (
+            node_groups.values()
+        )
+    )
+
+    if ok:
+        _send_telegram_event(
+            "traffic_apply_success",
+            (
+                "Traffic Control "
+                "rules applied"
+            ),
+            status="Active",
+            details=[
+                (
+                    "Policies",
+                    active_policy_count,
+                ),
+                (
+                    "Local policies",
+                    local_policy_count,
+                ),
+                (
+                    "Node policies",
+                    node_policy_count,
+                ),
+                (
+                    "Nodes",
+                    len(node_groups),
+                ),
+                (
+                    "Warnings",
+                    len(
+                        result.get(
+                            "warnings"
+                        )
+                        or []
+                    ),
+                ),
+            ],
+            dedupe_key=(
+                "traffic-apply-success:"
+                f"{active_policy_count}:"
+                f"{len(node_groups)}"
+            ),
+            dedupe_seconds=5,
+        )  
+
+    else:
+        _send_telegram_event(
+            "traffic_apply_failed",
+            (
+                "Traffic Control "
+                "apply failed"
+            ),
+            status="Failed",
+            details=[
+                (
+                    "Policies",
+                    active_policy_count,
+                ),
+                (
+                    "Local policies",
+                    local_policy_count,
+                ),
+                (
+                    "Node policies",
+                    node_policy_count,
+                ),
+                (
+                    "Nodes",
+                    len(node_groups),
+                ),
+                (
+                    "Error",
+                    response.get(
+                        "detail"
+                    )
+                    or (
+                        "Traffic Control "
+                        "could not be applied."
+                    ),
+                ),
+            ],
+            dedupe_key=(
+                "traffic-apply-failed:"
+                + str(
+                    response.get(
+                        "detail"
+                    )
+                    or "unknown"
+                )[:180]
+            ),
+            dedupe_seconds=60,
+        )
+
+    return jsonify(
+        **response
+    ), (
+        200
+        if ok
+        else 502
+    )
+
+@app.get("/api/traffic-control/status")
+@login_required
+def traffic_control_status():
+    return jsonify(ok=True, **_traffic_local_status())
+
+def _traffic_nft_set_text(set_name):
+    nft = shutil.which("nft")
+    if not nft:
+        return ""
+    proc = subprocess.run(
+        [nft, "list", "set", "inet", TRAFFIC_NFT_TABLE, str(set_name)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=8,
+        check=False,
+    )
+    return proc.stdout if proc.returncode == 0 else ""
+
+
+def _traffic_test_policy_local(policy):
+    policy = dict(policy or {})
+    pid = str(policy.get("id") or "").strip()
+    name = str(policy.get("name") or "Traffic policy").strip()
+    iface = _traffic_clean_iface(policy.get("interface"))
+    source_mode = str(policy.get("source_mode") or "interface").strip().lower()
+    source_ips = _traffic_host_addresses(policy.get("source_ip")) if source_mode == "peer" else []
+    checks = []
+
+    def add(key, label, status, detail):
+        checks.append({
+            "key": key,
+            "label": label,
+            "status": status,
+            "detail": str(detail or ""),
+        })
+
+    capability = _traffic_nft_capability()
+    if not capability.get("usable"):
+        add("nftables", "nftables engine", "fail", capability.get("detail") or "nftables is unavailable.")
+        return {
+            "ok": False,
+            "policy_id": pid,
+            "policy_name": name,
+            "checks": checks,
+            "counters": {"packets": 0, "bytes": 0},
+        }
+
+    nft = shutil.which("nft")
+    table_proc = subprocess.run(
+        [nft, "list", "table", "inet", TRAFFIC_NFT_TABLE],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=8,
+        check=False,
+    )
+    table_text = table_proc.stdout or ""
+    if table_proc.returncode != 0:
+        add("table", "Live policy table", "fail", "inet wgpanel_traffic is not loaded. Re-apply the policy rules.")
+        return {
+            "ok": False,
+            "policy_id": pid,
+            "policy_name": name,
+            "checks": checks,
+            "counters": {"packets": 0, "bytes": 0},
+        }
+    add("table", "Live policy table", "pass", "inet wgpanel_traffic is loaded in the kernel.")
+
+    iface_proc = subprocess.run(
+        ["wg", "show", iface],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=5,
+        check=False,
+    )
+    add(
+        "interface",
+        "WireGuard interface",
+        "pass" if iface_proc.returncode == 0 else "fail",
+        f"{iface} is active." if iface_proc.returncode == 0 else f"{iface} is not active in the WireGuard runtime.",
+    )
+
+    versions = {4, 6}
+    if source_mode == "peer":
+        versions = set()
+        for src in source_ips:
+            try:
+                versions.add(ipaddress.ip_address(src).version)
+            except Exception:
+                pass
+        if source_ips:
+            add("scope", "Peer source scope", "pass", f"Live policy is expected to match only {', '.join(source_ips)} on {iface}.")
+        else:
+            add("scope", "Peer source scope", "fail", "The policy has no usable peer/source address.")
+
+    safe_id = re.sub(r"[^A-Za-z0-9_]", "", pid)[:18]
+    configured_domains = list(policy.get("domains") or [])
+    configured_cidrs = list(policy.get("cidrs") or [])
+    configured_countries = [str(x or "").strip().lower() for x in list(policy.get("countries") or []) if str(x or "").strip()]
+
+    def rule_line(comment):
+        marker = f'comment "{comment}"'
+        for line in table_text.splitlines():
+            if marker in line:
+                return line.strip()
+        return ""
+
+    def scope_matches(line, version):
+        if not line or f'iifname "{iface}"' not in line:
+            return False
+        if source_mode != "peer":
+            return True
+        family = "ip" if version == 4 else "ip6"
+        candidates = [s for s in source_ips if ipaddress.ip_address(s).version == version]
+        return bool(candidates) and all((f"{family} saddr {s}" in line) or (s in line and f"{family} saddr" in line) for s in candidates)
+
+    direct_needed = bool(configured_domains or configured_cidrs)
+    for version in (4, 6):
+        if version not in versions:
+            if direct_needed:
+                add(f"direct_v{version}", f"IPv{version} direct rule", "info", f"Skipped because this peer has no IPv{version} WireGuard source address.")
+            continue
+        if not direct_needed:
+            continue
+        comment = f"wgpanel:{pid}:direct:v{version}"
+        line = rule_line(comment)
+        set_name = f"p_{safe_id}_v{version}"
+        set_text = _traffic_nft_set_text(set_name)
+        if line and scope_matches(line, version) and set_text:
+            add(f"direct_v{version}", f"IPv{version} domain/IP rule", "pass", f"DROP rule and @{set_name} are loaded with the expected {iface} scope.")
+        else:
+            add(f"direct_v{version}", f"IPv{version} domain/IP rule", "fail", "The expected live DROP rule or destination set is missing. Save & apply again.")
+
+    if configured_domains:
+        dom4, dom6, resolved, warnings = _traffic_resolve_domains(configured_domains)
+        for warning in warnings:
+            add("domain_dns", "Domain resolution", "warn", warning)
+        for version, values in ((4, sorted(dom4)), (6, sorted(dom6))):
+            if version not in versions:
+                continue
+            if not values:
+                continue
+            set_name = f"p_{safe_id}_v{version}"
+            set_text = _traffic_nft_set_text(set_name)
+            present = [ip for ip in values if ip in set_text]
+            missing = [ip for ip in values if ip not in set_text]
+            if present and not missing:
+                add(f"domain_v{version}", f"IPv{version} domain addresses", "pass", f"Current DNS addresses are present in the live set: {', '.join(present[:4])}{'…' if len(present) > 4 else ''}")
+            elif present:
+                add(f"domain_v{version}", f"IPv{version} domain addresses", "warn", f"DNS changed partially. {len(present)} current address(es) are loaded and {len(missing)} are not. Re-apply the policy.")
+            else:
+                add(f"domain_v{version}", f"IPv{version} domain addresses", "fail", "Current DNS addresses are not in the live set. The domain changed since the last apply; refresh the live policy rules.")
+
+    for cc in configured_countries:
+        if not re.fullmatch(r"[a-z]{2}", cc):
+            add(f"geo_{cc}", "Geo country", "fail", f"Invalid country code: {cc}")
+            continue
+        for version in (4, 6):
+            if version not in versions:
+                continue
+            set_name = f"geo_{cc}_v{version}"
+            set_text = _traffic_nft_set_text(set_name)
+            comment = f"wgpanel:{pid}:geo:{cc}:v{version}"
+            line = rule_line(comment)
+            if set_text and line and scope_matches(line, version):
+                add(f"geo_{cc}_v{version}", f"{cc.upper()} Geo IPv{version}", "pass", f"@{set_name} and its scoped DROP rule are loaded.")
+            else:
+                add(f"geo_{cc}_v{version}", f"{cc.upper()} Geo IPv{version}", "fail", "The country set or its scoped DROP rule is missing.")
+
+    status = _traffic_local_status()
+    packets = 0
+    byte_count = 0
+    for key, counter in (status.get("counters") or {}).items():
+        if str(key).startswith(pid + ":"):
+            packets += int((counter or {}).get("packets") or 0)
+            byte_count += int((counter or {}).get("bytes") or 0)
+    add(
+        "counters",
+        "Live hit counters",
+        "pass" if packets > 0 else "info",
+        f"This policy has blocked {packets} packet(s) / {byte_count} byte(s)." if packets > 0 else "Rules are loaded but no real forwarded packet has matched them yet.",
+    )
+
+    if not (configured_domains or configured_cidrs or configured_countries):
+        add("destinations", "Policy destinations", "fail", "The policy has no domains, IP/CIDR entries, or countries to block.")
+
+    overall = not any(row.get("status") == "fail" for row in checks)
+    return {
+        "ok": overall,
+        "policy_id": pid,
+        "policy_name": name,
+        "checks": checks,
+        "counters": {"packets": packets, "bytes": byte_count},
+    }
+
+
+@app.post("/api/traffic-control/test")
+@login_required
+def traffic_control_test():
+    data = request.get_json(silent=True) or {}
+    policy_id = str(data.get("policy_id") or "").strip()
+    if not policy_id:
+        return jsonify(ok=False, error="policy_id_required", detail="policy_id is required."), 400
+
+    cfg = _traffic_load_config()
+    policy = next((p for p in cfg.get("policies", []) if str((p or {}).get("id") or "") == policy_id), None)
+    if not policy:
+        return jsonify(ok=False, error="policy_not_found", detail="The saved traffic policy was not found."), 404
+    if policy.get("enabled", True) is False:
+        return jsonify(ok=False, error="policy_disabled", detail="The policy is disabled and is intentionally not loaded."), 409
+
+    if policy.get("location") == "node":
+        node_id = int(policy.get("node_id") or 0)
+        node = db.session.get(Node, node_id)
+        if not node or not node.enabled:
+            return jsonify(ok=False, error="node_not_found_or_disabled", detail="The policy node is missing or disabled."), 404
+        try:
+            result = node_post(node, "/api/traffic-control/test", {"policy": policy}, timeout=20) or {}
+            return jsonify(result), 200
+        except Exception as exc:
+            return jsonify(ok=False, error="node_test_failed", detail=str(exc)), 502
+
+    try:
+        result = _traffic_test_policy_local(policy)
+        return jsonify(result), 200
+    except Exception as exc:
+        current_app.logger.exception("Traffic policy test failed")
+        return jsonify(ok=False, error="traffic_test_failed", detail=str(exc)), 500
+
+def _traffic_live_set_contains(set_name, address):
+    """
+    Return True when *address* is covered by a live nftables set.
+
+    Exact addresses are checked directly through nftables first.
+    The fallback parser handles CIDRs / interval Geo sets and works
+    with both one-line and multiline `nft list set` output.
+    """
+    try:
+        wanted = ipaddress.ip_address(
+            str(address or '').strip()
+        )
+    except Exception:
+        return False
+
+    clean_set_name = str(
+        set_name or ''
+    ).strip()
+
+    if not re.fullmatch(
+        r'[A-Za-z0-9_.:-]{1,128}',
+        clean_set_name,
+    ):
+        return False
+
+    nft = shutil.which("nft")
+
+    if nft:
+        try:
+            script = (
+                f"get element inet "
+                f"{TRAFFIC_NFT_TABLE} "
+                f"{clean_set_name} "
+                f"{{ {wanted} }}\n"
+            )
+
+            result = subprocess.run(
+                [nft, "-f", "-"],
+                input=script,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=8,
+                check=False,
+            )
+
+            if result.returncode == 0:
+                return True
+
+        except Exception:
+            pass
+
+    text_body = _traffic_nft_set_text(
+        clean_set_name
+    )
+
+    if not text_body:
+        return False
+
+    match = re.search(
+        r'elements\s*=\s*\{(.*?)\}',
+        text_body,
+        re.S,
+    )
+
+    if not match:
+        return False
+
+    for raw_token in match.group(1).split(','):
+        token = ' '.join(
+            raw_token.strip().split()
+        )
+
+        if not token:
+            continue
+
+        try:
+            if (
+                '-' in token
+                and '/' not in token
+            ):
+                first, last = [
+                    part.strip()
+                    for part in token.split(
+                        '-',
+                        1,
+                    )
+                ]
+
+                start_ip = ipaddress.ip_address(
+                    first
+                )
+                end_ip = ipaddress.ip_address(
+                    last
+                )
+
+                if (
+                    start_ip.version
+                    == wanted.version
+                    and int(start_ip)
+                    <= int(wanted)
+                    <= int(end_ip)
+                ):
+                    return True
+
+                continue
+
+            if '/' in token:
+                network = ipaddress.ip_network(
+                    token,
+                    strict=False,
+                )
+
+                if (
+                    network.version
+                    == wanted.version
+                    and wanted in network
+                ):
+                    return True
+
+                continue
+
+            if (
+                ipaddress.ip_address(token)
+                == wanted
+            ):
+                return True
+
+        except Exception:
+            continue
+
+    return False
+
+
+def _traffic_manual_target_addresses(target):
+    raw = str(target or '').strip()
+    if not raw:
+        raise ValueError('Enter a domain, URL, IPv4 or IPv6 address.')
+
+    candidate = raw.strip('[]')
+    try:
+        return raw, '', [str(ipaddress.ip_address(candidate))]
+    except Exception:
+        pass
+
+    host = _traffic_normalize_destination(raw)
+    if not host:
+        raise ValueError('The destination is not a valid domain, URL, IPv4 or IPv6 address.')
+
+    found = []
+    try:
+        for _family, _socktype, _proto, _canon, sockaddr in socket.getaddrinfo(host, None):
+            if not sockaddr:
+                continue
+            try:
+                value = str(ipaddress.ip_address(sockaddr[0]))
+            except Exception:
+                continue
+            if value not in found:
+                found.append(value)
+    except Exception as exc:
+        raise ValueError(f'Could not resolve {host}: {exc}') from exc
+
+    if not found:
+        raise ValueError(f'{host} did not resolve to a usable IP address.')
+
+    return raw, host, found
+
+
+def _traffic_manual_test_local(policy, target):
+    policy = dict(policy or {})
+    pid = str(policy.get('id') or '').strip()
+    iface = _traffic_clean_iface(policy.get('interface'))
+    source_mode = str(policy.get('source_mode') or 'interface').strip().lower()
+    source_ips = _traffic_host_addresses(policy.get('source_ip')) if source_mode == 'peer' else []
+
+    capability = _traffic_nft_capability()
+    if not capability.get('usable'):
+        raise RuntimeError(capability.get('detail') or 'nftables is unavailable.')
+
+    nft = shutil.which('nft')
+    table_proc = subprocess.run(
+        [nft, 'list', 'table', 'inet', TRAFFIC_NFT_TABLE],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=8,
+        check=False,
+    )
+    if table_proc.returncode != 0:
+        raise RuntimeError('inet wgpanel_traffic is not loaded. Re-apply the policy rules.')
+    table_text = table_proc.stdout or ''
+
+    original_target, hostname, addresses = _traffic_manual_target_addresses(target)
+    safe_id = re.sub(r'[^A-Za-z0-9_]', '', pid)[:18]
+    countries = [
+        str(value or '').strip().lower()
+        for value in list(policy.get('countries') or [])
+        if re.fullmatch(r'[A-Za-z]{2}', str(value or '').strip())
+    ]
+
+    source_versions = {4, 6}
+    if source_mode == 'peer':
+        source_versions = set()
+        for source in source_ips:
+            try:
+                source_versions.add(ipaddress.ip_address(source).version)
+            except Exception:
+                pass
+
+    def rule_line(comment):
+        marker = f'comment "{comment}"'
+        for line in table_text.splitlines():
+            if marker in line:
+                return line.strip()
+        return ''
+
+    def scoped_rule_exists(comment, version):
+        line = rule_line(comment)
+        if not line or f'iifname "{iface}"' not in line:
+            return False
+        if source_mode != 'peer':
+            return True
+        family = 'ip' if version == 4 else 'ip6'
+        candidates = []
+        for source in source_ips:
+            try:
+                if ipaddress.ip_address(source).version == version:
+                    candidates.append(source)
+            except Exception:
+                pass
+        return bool(candidates) and all(source in line and f'{family} saddr' in line for source in candidates)
+
+    results = []
+    for address in addresses:
+        ip_obj = ipaddress.ip_address(address)
+        version = ip_obj.version
+        applicable = version in source_versions
+        matches = []
+
+        if applicable:
+            direct_set = f'p_{safe_id}_v{version}'
+            direct_comment = f'wgpanel:{pid}:direct:v{version}'
+            if (
+                _traffic_live_set_contains(direct_set, address)
+                and scoped_rule_exists(direct_comment, version)
+            ):
+                matches.append({
+                    'kind': 'direct',
+                    'label': 'Domain/IP set',
+                    'set': direct_set,
+                    'comment': direct_comment,
+                })
+
+            for cc in countries:
+                geo_set = f'geo_{cc}_v{version}'
+                geo_comment = f'wgpanel:{pid}:geo:{cc}:v{version}'
+                if (
+                    _traffic_live_set_contains(geo_set, address)
+                    and scoped_rule_exists(geo_comment, version)
+                ):
+                    matches.append({
+                        'kind': 'geo',
+                        'label': f'Geo {cc.upper()}',
+                        'set': geo_set,
+                        'comment': geo_comment,
+                    })
+
+        results.append({
+            'ip': address,
+            'version': version,
+            'applicable': applicable,
+            'blocked': bool(applicable and matches),
+            'matches': matches,
+            'note': (
+                '' if applicable
+                else f'This peer has no IPv{version} WireGuard source address.'
+            ),
+        })
+
+    applicable_rows = [row for row in results if row.get('applicable')]
+    blocked_rows = [row for row in applicable_rows if row.get('blocked')]
+
+    if not applicable_rows:
+        verdict = 'not_applicable'
+    elif len(blocked_rows) == len(applicable_rows):
+        verdict = 'blocked'
+    elif blocked_rows:
+        verdict = 'partial'
+    else:
+        verdict = 'not_blocked'
+
+    scope = (
+        f'{iface} · peer source {", ".join(source_ips)}'
+        if source_mode == 'peer'
+        else f'{iface} · entire interface'
+    )
+
+    return {
+        'ok': True,
+        'policy_id': pid,
+        'policy_name': str(policy.get('name') or 'Traffic policy'),
+        'target': original_target,
+        'hostname': hostname,
+        'resolved': addresses,
+        'verdict': verdict,
+        'scope': scope,
+        'results': results,
+        'note': (
+            'This evaluates the live nftables sets and exact scoped DROP rules. '
+            'It does not generate traffic as the WireGuard peer.'
+        ),
+    }
+
+
+@app.post('/api/traffic-control/test-destination')
+@require_api_key_or_login
+def traffic_control_test_destination():
+    data = request.get_json(silent=True) or {}
+    policy_id = str(data.get('policy_id') or '').strip()
+    target = str(data.get('target') or '').strip()
+
+    if not policy_id:
+        return jsonify(ok=False, error='policy_id_required', detail='policy_id is required.'), 400
+    if not target:
+        return jsonify(ok=False, error='target_required', detail='Enter a domain, URL, IPv4 or IPv6 address.'), 400
+
+    cfg = _traffic_load_config()
+    policy = next(
+        (
+            row for row in cfg.get('policies', [])
+            if str((row or {}).get('id') or '') == policy_id
+        ),
+        None,
+    )
+    if not policy:
+        return jsonify(ok=False, error='policy_not_found', detail='The saved traffic policy was not found.'), 404
+    if policy.get('enabled', True) is False:
+        return jsonify(ok=False, error='policy_disabled', detail='The policy is disabled and is not loaded into nftables.'), 409
+
+    if policy.get('location') == 'node':
+        node_id = int(policy.get('node_id') or 0)
+        node = db.session.get(Node, node_id)
+        if not node or not node.enabled:
+            return jsonify(ok=False, error='node_not_found_or_disabled', detail='The policy node is missing or disabled.'), 404
+        try:
+            result = node_post(
+                node,
+                '/api/traffic-control/test-destination',
+                {'policy': policy, 'target': target},
+                timeout=20,
+            ) or {}
+            return jsonify(result), 200
+        except Exception as exc:
+            return jsonify(ok=False, error='node_destination_test_failed', detail=str(exc)), 502
+
+    try:
+        return jsonify(_traffic_manual_test_local(policy, target))
+    except ValueError as exc:
+        return jsonify(ok=False, error='invalid_target', detail=str(exc)), 400
+    except Exception as exc:
+        current_app.logger.exception('Traffic destination test failed')
+        return jsonify(ok=False, error='traffic_destination_test_failed', detail=str(exc)), 500
+
 
 if __name__ == "__main__":
 
