@@ -6,6 +6,7 @@
     <title>WG Panel — Register</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="preload" href="{{ url_for('static', filename='img/wireguard-badge.svg') }}" as="image">
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}">
 
@@ -303,18 +304,6 @@ input {
     color: var(--text);
     outline: none
 }
-
-input[type="password"]::-ms-reveal,
-input[type="password"]::-ms-clear{
-  display: none;
-}
-
-input[type="password"]::-webkit-credentials-auto-fill-button{
-  visibility: hidden;
-  pointer-events: none;
-  position: absolute;
-}
-*, *::before, *::after { box-sizing: border-box; }
 .actions {
     margin-top: 16px;
     display: flex;
@@ -443,6 +432,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button{
     }
 }
 </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/auth-native.css') }}">
 </head>
 
 <body class="bg-glow">
@@ -688,7 +678,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button{
 
             let inFlight = false;
 
-            function setUI(on) {
+            function setEnabledUI(on) {
                 pill.classList.toggle('pill--on', on);
                 pill.classList.toggle('pill--off', !on);
                 pill.innerHTML = `<span class="dot"></span> ${on ? 'Enabled' : 'Disabled'}`;
@@ -697,10 +687,10 @@ input[type="password"]::-webkit-credentials-auto-fill-button{
 
             function openModal() {
                 qrBox.innerHTML = `
-                <button type="button" class="btn" id="twofa-generate">Generate</button>
-                `;
+    <button type="button" class="btn" id="twofa-generate">Generate</button>
+  `;
                 const regenBtn = document.getElementById('twofa-generate');
-                regenBtn?.addEventListener('click', onGen);
+                regenBtn?.addEventListener('click', onGenerate);
 
                 secretEl.textContent = '—';
                 codeEl.value = '';
@@ -710,17 +700,17 @@ input[type="password"]::-webkit-credentials-auto-fill-button{
                 modal.classList.add('open');
                 modal.setAttribute('aria-hidden', 'false');
             }
-            async function onGen() {
+            async function onGenerate() {
                 if (inFlight) return;
                 inFlight = true;
                 const genBtn = document.getElementById('twofa-generate');
                 if (genBtn) { genBtn.disabled = true; genBtn.textContent = 'Generating…'; }
 
                 qrBox.innerHTML = `
-                <div class="qr-skel">
-                <div class="skel-inner">Preparing secret…</div>
-                </div>
-                `;
+    <div class="qr-skel">
+      <div class="skel-inner">Preparing secret…</div>
+    </div>
+  `;
 
                 const userInp = document.querySelector('#username');
                 const username = (userInp?.value || 'admin').trim();
@@ -746,12 +736,12 @@ input[type="password"]::-webkit-credentials-auto-fill-button{
                     const hasQR = Boolean(j.qr_svg || j.qr_png || uri);
                     if (!hasQR) {
                         qrBox.innerHTML = `
-                    <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
-                    <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
-                    <div class="muted" style="margin-bottom:10px">Server didn’t return a QR or TOTP URI. Please try again.</div>
-                    <button type="button" class="btn" id="qr-retry">Try again</button>
-                    </div>`;
-                        document.getElementById('qr-retry')?.addEventListener('click', onGen);
+        <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
+          <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
+          <div class="muted" style="margin-bottom:10px">Server didn’t return a QR or TOTP URI. Please try again.</div>
+          <button type="button" class="btn" id="qr-retry">Try again</button>
+        </div>`;
+                        document.getElementById('qr-retry')?.addEventListener('click', onGenerate);
                         toastPanel('Could not generate TOTP key', 'bad');
                         return;
                     }
@@ -769,18 +759,19 @@ input[type="password"]::-webkit-credentials-auto-fill-button{
                     toastPanel('TOTP secret generated', 'ok');
                 } catch (err) {
                     qrBox.innerHTML = `
-                   <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
-                   <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
-                   <div class="muted" style="margin-bottom:10px">Server didn’t return a TOTP secret. Please try again.</div>
-                   <button type="button" class="btn" id="qr-retry">Try again</button>
-                   </div>`;
-                    document.getElementById('qr-retry')?.addEventListener('click', onGen);
+      <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
+        <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
+        <div class="muted" style="margin-bottom:10px">Server didn’t return a TOTP secret. Please try again.</div>
+        <button type="button" class="btn" id="qr-retry">Try again</button>
+      </div>`;
+                    document.getElementById('qr-retry')?.addEventListener('click', onGenerate);
                     toastPanel('Could not generate TOTP key', 'bad');
                 } finally {
                     if (genBtn) { genBtn.disabled = false; genBtn.textContent = 'Generate'; }
                     inFlight = false;
                 }
             }
+
 
             function closeModal() {
                 modal.classList.remove('open');
@@ -803,10 +794,10 @@ input[type="password"]::-webkit-credentials-auto-fill-button{
                 genBtn.disabled = true; genBtn.textContent = 'Generating…';
 
                 qrBox.innerHTML = `
-                <div class="qr-skel">
-                <div class="skel-inner">Preparing secret…</div>
-                </div>
-                `;
+          <div class="qr-skel">
+            <div class="skel-inner">Preparing secret…</div>
+          </div>
+        `;
 
                 const userInp = document.querySelector('#username');
                 const username = (userInp?.value || 'admin').trim();
@@ -831,11 +822,11 @@ input[type="password"]::-webkit-credentials-auto-fill-button{
                     const hasQR = Boolean(j.qr_svg || j.qr_png || uri);
                     if (!hasQR) {
                         qrBox.innerHTML = `
-                        <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
-                        <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
-                        <div class="muted" style="margin-bottom:10px">Server didn’t return a QR or TOTP URI. Please try again.</div>
-                        <button type="button" class="btn" id="qr-retry">Try again</button>
-                        </div>`;
+              <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
+                <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
+                <div class="muted" style="margin-bottom:10px">Server didn’t return a QR or TOTP URI. Please try again.</div>
+                <button type="button" class="btn" id="qr-retry">Try again</button>
+              </div>`;
                         $('#qr-retry')?.addEventListener('click', () => genBtn.click());
                         toastPanel('Could not generate TOTP key', 'bad');
                         return;
@@ -854,11 +845,11 @@ input[type="password"]::-webkit-credentials-auto-fill-button{
                     toastPanel('TOTP secret generated', 'ok');
                 } catch (err) {
                     qrBox.innerHTML = `
-                    <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
-                    <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
-                    <div class="muted" style="margin-bottom:10px">Server didn’t return a TOTP secret. Please try again.</div>
-                    <button type="button" class="btn" id="qr-retry">Try again</button>
-                    </div>`;
+            <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
+              <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
+              <div class="muted" style="margin-bottom:10px">Server didn’t return a TOTP secret. Please try again.</div>
+              <button type="button" class="btn" id="qr-retry">Try again</button>
+            </div>`;
                     $('#qr-retry')?.addEventListener('click', () => genBtn.click());
                     toastPanel('Could not generate TOTP key', 'bad');
                 } finally {
@@ -894,7 +885,7 @@ input[type="password"]::-webkit-credentials-auto-fill-button{
                     const j = await r.json().catch(() => ({}));
                     if (!r.ok || j.error) throw new Error(j.error || 'verify failed');
 
-                    setUI(true);
+                    setEnabledUI(true);
                     toastPanel('Two-factor enabled', 'ok');
 
                     if (Array.isArray(j.recovery_codes) && j.recovery_codes.length) {
