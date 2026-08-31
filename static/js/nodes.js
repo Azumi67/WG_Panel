@@ -151,7 +151,7 @@
     if (Empty) Empty.style.display = 'none';
     TBody.innerHTML = lastNodes.map(n => `
       <tr data-id="${esc(n.id)}">
-        <td>
+        <td data-label="Node">
           <div class="node-title">
             <div class="node-avatar"><i class="fas fa-server"></i></div>
             <div>
@@ -160,12 +160,12 @@
             </div>
           </div>
         </td>
-        <td><div class="node-url" title="${esc(n.base_url || '')}">${esc(n.base_url || '—')}</div></td>
-        <td class="status" data-id="${esc(n.id)}">${healthPills(n)}</td>
-        <td class="node-peers" data-id="${esc(n.id)}">${peerSummaryHTML(n.summary?.peers || {})}</td>
-        <td class="node-ifaces" data-id="${esc(n.id)}">${ifaceSummaryHTML(n.summary?.interfaces || {})}</td>
-        <td><span class="node-last time-ago" data-iso="${esc(n.last_seen || '')}">${timeAgoISO(n.last_seen)}</span></td>
-        <td class="nodes-actions-cell">
+        <td data-label="Endpoint"><div class="node-url" title="${esc(n.base_url || '')}">${esc(n.base_url || '—')}</div></td>
+        <td data-label="Health" class="status" data-id="${esc(n.id)}">${healthPills(n)}</td>
+        <td data-label="Peers" class="node-peers" data-id="${esc(n.id)}">${peerSummaryHTML(n.summary?.peers || {})}</td>
+        <td data-label="Interfaces" class="node-ifaces" data-id="${esc(n.id)}">${ifaceSummaryHTML(n.summary?.interfaces || {})}</td>
+        <td data-label="Last seen"><span class="node-last time-ago" data-iso="${esc(n.last_seen || '')}">${timeAgoISO(n.last_seen)}</span></td>
+        <td data-label="Actions" class="nodes-actions-cell">
           <label class="toggle-switch" title="Enable or disable node">
             <input type="checkbox" class="n-enabled" data-id="${esc(n.id)}" ${n.enabled ? 'checked' : ''}>
             <span class="toggle-switch-track"></span><span class="toggle-switch-thumb"></span>
