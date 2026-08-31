@@ -1,13 +1,15 @@
 {% extends 'base.html' %}
 {% block head_extras %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/users.css') }}?v=20260818-interface-client-dns-v1">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/users-page.css') }}?v=20260818-interface-client-dns-v1">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-dark.css') }}?v=20260818-interface-client-dns-v1">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-workspace.css') }}?v=20260810-peer-workspace-v21-toast">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-interface-inline.css') }}?v=20260818-interface-client-dns-v1">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/users.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/users-page.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-dark.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-workspace.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-interface-inline.css') }}">
 
 
 
+{% endblock %}
+{% block responsive_extras %}
 {% endblock %}
 {% block content %}
 
@@ -71,9 +73,6 @@
                          aria-label="WireGuard interfaces"
                          hidden></div>
 
-                    <!-- Compatibility bridge for the existing users.js.
-                         Its own dropdown stays hidden; this visible menu
-                         forwards selection to that existing handler. -->
                     <button type="button"
                             id="iface-picker-trigger"
                             class="iface-picker-compat-trigger"
@@ -97,19 +96,28 @@
     </div>
 </section>
 
-<script src="{{ url_for('static', filename='js/users-scope.js') }}?v=20260807-peer-dark-profile-hoverfix"></script>
+<script src="{{ url_for('static', filename='js/users-scope.js') }}"></script>
 
-<div class="peer-page-actions">
-    <button id="create-peer-btn" class="btn" type="button">
-        <i class="fas fa-plus"></i> Create Peer
-    </button>
-    <button id="bulk-btn" class="btn secondary" type="button">
-        <i class="fas fa-layer-group"></i> Bulk create
-    </button>
-    <button id="create-iface-btn" class="btn secondary" type="button">
-        <i class="fas fa-diagram-project"></i> New interface
-    </button>
-</div>
+<section class="peer-manage-section" aria-label="Manage peers">
+    <div class="peer-manage-mobile-head">
+        <span class="peer-manage-mobile-icon"><i class="fas fa-sliders" aria-hidden="true"></i></span>
+        <div>
+            <strong>Manage peers</strong>
+            <small>Create peers or manage the selected interface.</small>
+        </div>
+    </div>
+    <div class="peer-page-actions">
+        <button id="create-peer-btn" class="btn" type="button">
+            <i class="fas fa-plus"></i> Create Peer
+        </button>
+        <button id="bulk-btn" class="btn secondary" type="button">
+            <i class="fas fa-layer-group"></i> Bulk create
+        </button>
+        <button id="create-iface-btn" class="btn secondary" type="button">
+            <i class="fas fa-diagram-project"></i> New interface
+        </button>
+    </div>
+</section>
 
 <div id="iface-create-modal" class="modal" aria-hidden="true" aria-labelledby="iface-create-title" role="dialog">
     <div class="modal-backdrop" tabindex="-1"></div>
@@ -452,9 +460,9 @@
     </div>
 </div>
 
-<script src="{{ url_for('static', filename='js/users.js') }}?v=20260810-peer-workspace-v21-toast"></script>
-<script src="{{ url_for('static', filename='js/users-more-info.js') }}?v=20260810-peer-workspace-v21-toast"></script>
-<script src="{{ url_for('static', filename='js/peer-ui-stability.js') }}?v=20260810-peer-workspace-v21-toast"></script>
+<script src="{{ url_for('static', filename='js/users.js') }}"></script>
+<script src="{{ url_for('static', filename='js/users-more-info.js') }}"></script>
+<script src="{{ url_for('static', filename='js/peer-ui-stability.js') }}"></script>
 <script>
 (() => {
   const picker = document.getElementById('iface-picker');
@@ -761,6 +769,42 @@
   );
 
   scheduleRender();
+})();
+</script>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-mobile.css') }}">
+<script>
+
+(() => {
+  const mq = window.matchMedia('(max-width: 760px)');
+  const ids = ['peer-modal', 'edit-peer-modal', 'bulk-modal', 'iface-create-modal'];
+  const homes = new Map();
+
+  function syncPeerModalPortal() {
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+
+      if (!homes.has(el)) {
+        homes.set(el, { parent: el.parentNode, next: el.nextSibling });
+      }
+
+      const home = homes.get(el);
+      if (mq.matches) {
+        if (el.parentNode !== document.body) document.body.appendChild(el);
+      } else if (home && el.parentNode !== home.parent) {
+        if (home.next && home.next.parentNode === home.parent) home.parent.insertBefore(el, home.next);
+        else home.parent.appendChild(el);
+      }
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', syncPeerModalPortal, { once: true });
+  } else {
+    syncPeerModalPortal();
+  }
+  if (mq.addEventListener) mq.addEventListener('change', syncPeerModalPortal);
+  else mq.addListener(syncPeerModalPortal);
 })();
 </script>
 {% endblock %}
