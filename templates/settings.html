@@ -19,8 +19,8 @@ html[data-theme="dark"] #set-panels .cards {
   color:#edf3f6;
 }
 </style>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}?v=20260810-settings-actions-v3">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/settings-dark.css') }}?v=20260810-settings-actions-v3">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/settings.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/settings-dark.css') }}">
 {% endblock %}
 
 {% block content %}
@@ -30,7 +30,9 @@ html[data-theme="dark"] #set-panels .cards {
 
 <div class="tabs" id="set-tabs" style="margin-bottom:10px">
     <button class="tab active" data-tab="panel"><i class="fa-solid fa-lock"></i> Panel</button>
+    <button class="tab" data-tab="security"><i class="fa-solid fa-shield-halved"></i> Security</button>
     <button class="tab" data-tab="iface"><i class="fa-solid fa-network-wired"></i> Interface</button>
+    <button class="tab" data-tab="traffic"><i class="fa-solid fa-route"></i> Traffic</button>
     <button class="tab" data-tab="telegram"><i class="fa-brands fa-telegram"></i> Telegram</button>
     <button class="tab" data-tab="template"><i class="fa-solid fa-palette"></i> Template</button>
     <button class="tab" data-tab="admin"><i class="fa-solid fa-user-shield"></i> Admin</button>
@@ -49,6 +51,9 @@ html[data-theme="dark"] #set-panels .cards {
             </button>
             <button class="subtab" role="tab" aria-selected="false" aria-controls="subpanel-runtime" data-sub="runtime">
                 <i class="fa-solid fa-gauge-simple-high"></i> Runtime
+            </button>
+            <button class="subtab" role="tab" aria-selected="false" aria-controls="subpanel-regional" data-sub="regional">
+                <i class="fa-solid fa-clock"></i> Regional
             </button>
         </div>
     
@@ -241,9 +246,335 @@ html[data-theme="dark"] #set-panels .cards {
                 </div>
             </div>
         </div>
+
+        <div class="subpanel" id="subpanel-regional" data-subpanel="regional" role="tabpanel" aria-labelledby="Regional" hidden>
+            <div class="cards">
+                <div class="card full regional-card">
+                    <div class="card-header regional-card__head">
+                        <span class="regional-card__title">
+                            <span class="regional-card__icon"><i class="fa-solid fa-earth-americas"></i></span>
+                            <span>
+                                <strong>Regional time</strong>
+                                <small>One timezone for schedules and every human-facing timestamp.</small>
+                            </span>
+                        </span>
+                        <span class="card-value">
+                            <span id="panel-timezone-status" class="badge gray">Loading…</span>
+                        </span>
+                    </div>
+                    <div class="card-body regional-card__body">
+                        <div class="regional-timezone-grid">
+                            <div class="form-group regional-timezone-field">
+                                <label for="panel-timezone">Panel timezone</label>
+                                <select id="panel-timezone" class="input" aria-label="Panel timezone"></select>
+                                <div class="small-text muted">This is the authoritative timezone for automatic backups, Telegram notifications, security history and displayed panel times. Stored timestamps remain UTC.</div>
+                            </div>
+
+                            <div class="regional-timezone-summary">
+                                <div class="regional-timezone-summary__top">
+                                    <span class="regional-timezone-summary__icon"><i class="fa-solid fa-clock"></i></span>
+                                    <span><b id="panel-timezone-current">—</b><small id="panel-timezone-now">Current local time —</small></span>
+                                </div>
+                                <div class="regional-timezone-uses" aria-label="Timezone usage">
+                                    <span><i class="fa-solid fa-database"></i><b>Storage</b><small>UTC internally</small></span>
+                                    <span><i class="fa-solid fa-calendar-check"></i><b>Backups</b><small>Schedule + display</small></span>
+                                    <span><i class="fa-brands fa-telegram"></i><b>Telegram</b><small>Displayed timestamps</small></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="regional-detect-row">
+                            <div>
+                                <strong>Browser-detected timezone</strong>
+                                <span id="panel-browser-timezone">Detecting…</span>
+                                <small>Use this only when the browser is running in the timezone you want the panel to display.</small>
+                            </div>
+                            <button id="panel-use-browser-timezone" class="btn secondary" type="button">
+                                <i class="fa-solid fa-location-crosshairs"></i> Use browser timezone
+                            </button>
+                        </div>
+
+                        <div class="regional-note">
+                            <i class="fa-solid fa-circle-info"></i>
+                            <span><b>Single source of truth.</b> Backup scheduling continues to convert this local timezone to UTC internally. Telegram and the panel convert UTC back to this timezone for display.</span>
+                        </div>
+
+                        <div class="savebar regional-savebar">
+                            <button class="btn" id="save-regional" type="button"><i class="fa-solid fa-floppy-disk"></i> Save regional settings</button>
+                            <span class="muted">No restart is required for timezone changes.</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     
 
 </section>
+
+
+    <section class="panel security-panel" data-panel="security" id="security-tab">
+        <div class="sec-shell sec-shell--compact">
+            <header class="sec-overview sec-overview--compact">
+                <div class="sec-overview__identity">
+                    <span class="sec-overview__icon"><i class="fa-solid fa-shield-halved"></i></span>
+                    <div class="sec-overview__text">
+                        <span class="sec-kicker">Panel protection</span>
+                        <div class="sec-title-row">
+                            <h2>Security center</h2>
+                            <span class="sec-info-wrap">
+                                <button id="sec-info-trigger" class="sec-info-pulse" type="button" aria-label="How blocking works" aria-haspopup="dialog" aria-expanded="false" title="How blocking works">
+                                    <i class="fa-solid fa-circle-info"></i>
+                                </button>
+                                <div id="sec-info-popover" class="sec-info-popover" role="dialog" aria-label="How blocking works" hidden>
+                                    <div class="sec-info-popover__head">
+                                        <div><strong>How blocking works</strong><span>Application quarantine with optional host-firewall escalation</span></div>
+                                        <button id="sec-info-close" type="button" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+                                    </div>
+                                    <div class="sec-info-steps">
+                                        <div><b>1</b><span><strong>Detect</strong><small>Rejected requests, sensitive paths, repeated 429 responses and failed logins are counted per client.</small></span></div>
+                                        <div><b>2</b><span><strong>Classify</strong><small>Events are labelled as environment, repository, admin scanner, credential/config, rate-limit, authentication or generic traffic.</small></span></div>
+                                        <div><b>3</b><span><strong>Quarantine</strong><small>Temporary blocks return HTTP 403 with <code>Retry-After</code>. Optional nftables escalation can drop repeat offenders before Flask.</small></span></div>
+                                        <div><b>4</b><span><strong>Release</strong><small>Temporary blocks expire automatically or can be released manually. Permanent deny entries remain until removed.</small></span></div>
+                                    </div>
+                                    <div class="sec-info-tls"><i class="fa-solid fa-lock"></i><span><b>HTTPS / TLS compatible.</b> Inspection happens after TLS termination, so the same policy protects HTTP and HTTPS panel traffic.</span></div>
+                                </div>
+                            </span>
+                        </div>
+                        <p>Detect abusive HTTP traffic, quarantine repeat offenders and keep security visibility in one place.</p>
+                    </div>
+                </div>
+                <div class="sec-overview__health" aria-label="Security status">
+                    <span id="sec-status-monitor" class="sec-state neutral"><i class="fa-solid fa-circle"></i> Monitor —</span>
+                    <span id="sec-status-response" class="sec-state neutral"><i class="fa-solid fa-shield"></i> Response —</span>
+                    <span id="sec-status-blocks" class="sec-state neutral"><i class="fa-solid fa-ban"></i> 0 active blocks</span>
+                    <span id="sec-status-24h" class="sec-state neutral"><i class="fa-solid fa-chart-simple"></i> 24h —</span>
+                </div>
+            </header>
+
+            <div class="sec-compact-board">
+                <article class="sec-card sec-card--policy-compact">
+                    <div class="sec-card__head">
+                        <div class="sec-card__title"><span class="sec-card__icon"><i class="fa-solid fa-wave-square"></i></span><div><strong>HTTP protection</strong><small>Engine, response mode and client identity</small></div></div>
+                        <div class="sec-head-actions">
+                            <span id="sec-engine-pill" class="sec-pill neutral">—</span>
+                            <button class="btn secondary sm sec-advanced-trigger" id="sec-advanced-trigger" type="button"><i class="fa-solid fa-sliders"></i> Advanced <span id="sec-advanced-badge" class="sec-advanced-badge">Configured</span></button>
+                            <button class="btn secondary sm" id="sec-apply-recommended" type="button"><i class="fa-solid fa-wand-magic-sparkles"></i> Safe defaults</button>
+                        </div>
+                    </div>
+                    <div class="sec-card__body sec-policy-row">
+                        <label class="sec-toggle-row sec-toggle-row--policy">
+                            <span><b>HTTP security monitor</b><small>Track relevant rejected requests independently of Telegram.</small></span>
+                            <span class="switch sm"><input type="checkbox" id="sec-enabled"><span class="slider"></span></span>
+                        </label>
+                        <div class="sec-field">
+                            <label for="sec-response-mode">Response mode</label>
+                            <select class="input" id="sec-response-mode"><option value="monitor">Monitor only</option><option value="block">Monitor + temporary block</option></select>
+                            <small>Start with Monitor only until the reported client IP is verified.</small>
+                        </div>
+                        <div class="sec-field">
+                            <label for="sec-ip-source">Client IP source</label>
+                            <select class="input" id="sec-ip-source"><option value="direct">Direct socket address</option><option value="effective">Trusted proxy / CDN headers</option></select>
+                            <small id="sec-ip-source-help">Safest when the panel is reached directly.</small>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="sec-card sec-card--tuning">
+                    <div class="sec-card__head">
+                        <div class="sec-card__title"><span class="sec-card__icon"><i class="fa-solid fa-sliders"></i></span><div><strong>Detection &amp; blocking</strong><small>Thresholds, timing and repeat-offender escalation</small></div></div>
+                        <span class="sec-pill good">Auto release</span>
+                    </div>
+                    <div class="sec-card__body sec-tuning-body">
+                        <div class="sec-metrics sec-metrics--dense">
+                            <label class="sec-metric"><span>Generic threshold</span><div><input class="input" id="sec-threshold" type="number" min="3" max="500"><em>requests</em></div><small>Ordinary rejected requests.</small></label>
+                            <label class="sec-metric sec-time-metric"><span>Detection window</span><div class="sec-time-control"><input class="input" id="sec-window-value" type="number" min="1" step="1"><select class="input sec-time-unit" id="sec-window-unit" aria-label="Detection window unit"><option value="60">minutes</option><option value="3600">hours</option><option value="86400">days</option></select></div><input id="sec-window" type="hidden"><small id="sec-window-human">Rolling request window.</small></label>
+                            <label class="sec-metric"><span>Sensitive threshold</span><div><input class="input" id="sec-sensitive-threshold" type="number" min="1" max="50"><em>requests</em></div><small>For .env, .git and similar probes.</small></label>
+                            <label class="sec-metric sec-time-metric"><span>Alert cooldown</span><div class="sec-time-control"><input class="input" id="sec-cooldown-value" type="number" min="1" step="1"><select class="input sec-time-unit" id="sec-cooldown-unit" aria-label="Alert cooldown unit"><option value="60">minutes</option><option value="3600">hours</option><option value="86400">days</option></select></div><input id="sec-cooldown" type="hidden"><small id="sec-cooldown-human">Suppress repeated alerts.</small></label>
+                            <label class="sec-metric sec-time-metric"><span>Initial block</span><div class="sec-time-control"><input class="input" id="sec-block-value" type="number" min="1" step="1"><select class="input sec-time-unit" id="sec-block-unit" aria-label="Initial block unit"><option value="60">minutes</option><option value="3600">hours</option><option value="86400">days</option></select></div><input id="sec-block-seconds" type="hidden"><small id="sec-block-human">First offense duration.</small></label>
+                            <label class="sec-metric sec-time-metric"><span>Maximum block</span><div class="sec-time-control"><input class="input" id="sec-max-block-value" type="number" min="1" step="1"><select class="input sec-time-unit" id="sec-max-block-unit" aria-label="Maximum block unit"><option value="60">minutes</option><option value="3600">hours</option><option value="86400">days</option></select></div><input id="sec-max-block-seconds" type="hidden"><small id="sec-max-block-human">Hard ceiling for escalation.</small></label>
+                        </div>
+                        <div class="sec-escalation-row">
+                            <label class="sec-toggle-row sec-toggle-row--compact">
+                                <span><b>Escalate repeat offenders</b><small>Each new offense doubles the previous duration until the maximum is reached.</small></span>
+                                <span class="switch sm"><input type="checkbox" id="sec-escalate"><span class="slider"></span></span>
+                            </label>
+                            <div class="sec-escalation-preview" id="sec-escalation-preview"><i class="fa-solid fa-arrow-trend-up"></i><span>15m → 30m → 1h → 2h → 4h … capped at 1d</span></div>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="sec-card sec-card--side-compact">
+                    <div class="sec-card__head">
+                        <div class="sec-card__title"><span class="sec-card__icon"><i class="fa-solid fa-user-shield"></i></span><div><strong>Alerts &amp; trusted access</strong><small>Telegram delivery and addresses that bypass temporary blocking</small></div></div>
+                        <span class="sec-pill neutral">Security controls</span>
+                    </div>
+                    <div class="sec-card__body sec-side-compact-body">
+                        <div class="sec-mini-section">
+                            <div class="sec-mini-section__title"><strong>Telegram security alerts</strong><small>These switches never disable protection.</small></div>
+                            <div class="sec-alerts sec-alerts--compact">
+                                <label class="sec-alert-row"><span><i class="fa-solid fa-right-to-bracket"></i><span><b>Successful login</b><small>Account, IP and device.</small></span></span><span class="switch sm"><input type="checkbox" id="tg-n-login-success"><span class="slider"></span></span></label>
+                                <label class="sec-alert-row is-critical"><span><i class="fa-solid fa-triangle-exclamation"></i><span><b>Failed login / 2FA</b><small>Rejected authentication.</small></span></span><span class="switch sm"><input type="checkbox" id="tg-n-login-fail"><span class="slider"></span></span></label>
+                                <label class="sec-alert-row is-critical"><span><i class="fa-solid fa-radar"></i><span><b>Suspicious HTTP</b><small>Monitor-only threshold events.</small></span></span><span class="switch sm"><input type="checkbox" id="tg-n-4xx"><span class="slider"></span></span></label>
+                            </div>
+                            <div class="sec-alert-more"><button class="sec-link-btn" id="sec-alert-options-trigger" type="button"><i class="fa-solid fa-bell"></i> Block / release alert options</button></div>
+                            <div class="sec-note sec-note--compact"><i class="fa-solid fa-circle-info"></i><span>Telegram itself must also be enabled under <b>Settings → Telegram</b>.</span></div>
+                        </div>
+                        <div class="sec-mini-divider"></div>
+                        <div class="sec-mini-section sec-trust">
+                            <div class="sec-mini-section__title"><strong>Trusted IPs / CIDRs</strong><small>Permanent allow list. Keep it intentionally small.</small></div>
+                            <div class="sec-trust__chips" id="sec-trusted-chips" aria-live="polite"></div>
+                            <div class="sec-trust__add">
+                                <input class="input" id="sec-trusted-input" type="text" spellcheck="false" autocomplete="off" placeholder="IP or CIDR, e.g. 10.0.0.10 or 10.0.0.0/24">
+                                <button class="btn secondary" id="sec-trusted-add" type="button"><i class="fa-solid fa-plus"></i> Add</button>
+                            </div>
+                            <div class="sec-trust__hint"><i class="fa-solid fa-circle-info"></i><span>Click × to remove. Advanced Security contains temporary allows and permanent denies.</span></div>
+                        </div>
+                    </div>
+                </article>
+            </div>
+
+            <article class="sec-card sec-card--blocks sec-card--blocks-compact">
+                <div class="sec-card__head">
+                    <div class="sec-card__title"><span class="sec-card__icon"><i class="fa-solid fa-ban"></i></span><div><strong>Active temporary blocks</strong><small>Clients currently quarantined by the panel</small></div></div>
+                    <div class="sec-head-actions">
+                        <button class="btn secondary sm" id="sec-history-trigger" type="button"><i class="fa-solid fa-clock-rotate-left"></i> History</button>
+                        <button class="btn secondary sm" id="sec-refresh-blocks" type="button"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                    </div>
+                </div>
+                <div class="sec-card__body sec-blocks-body">
+                    <div id="sec-blocks-empty" class="sec-empty-state sec-empty-state--compact">
+                        <span class="sec-empty-state__icon"><i class="fa-solid fa-circle-check"></i></span>
+                        <div class="sec-empty-state__copy"><strong>All clear</strong><small>No client is temporarily quarantined. Triggered addresses will appear here automatically.</small></div>
+                    </div>
+                    <div class="table-wrap sec-blocks-table-wrap" id="sec-blocks-table-wrap" hidden>
+                        <table class="table sec-blocks-table" id="sec-blocks-table">
+                            <thead><tr><th>Client IP</th><th>Category / reason</th><th>Offenses</th><th>Blocked until</th><th>Remaining</th><th></th></tr></thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </article>
+
+            <div class="sec-savebar sec-savebar--compact">
+                <div class="sec-savebar__copy"><span class="sec-savebar__dot"></span><div><strong>Security policy</strong><small>Changes apply immediately; no restart is required. Host firewall mode requires nftables permission.</small></div></div>
+                <button class="btn" id="sec-save" type="button"><i class="fa-solid fa-floppy-disk"></i> Save security settings</button>
+            </div>
+        </div>
+    </section>
+
+    <div class="modal sec-security-modal" id="sec-advanced-modal" aria-hidden="true">
+        <div class="modal-backdrop" data-close></div>
+        <div class="modal-content lg sec-security-modal__sheet" role="dialog" aria-modal="true" aria-labelledby="sec-advanced-title">
+            <div class="sec-modal-head">
+                <div><span class="sec-modal-icon"><i class="fa-solid fa-shield-halved"></i></span><div><span class="sec-advanced-titleline"><strong id="sec-advanced-title">Advanced Security</strong><button id="sec-advanced-info-trigger" class="sec-advanced-info-trigger" type="button" aria-label="About advanced security" aria-expanded="false"><i class="fa-solid fa-circle-info"></i></button></span><small>Higher-impact controls; safe defaults keep these conservative.</small></div></div>
+                <button class="sec-modal-close" type="button" data-close aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div id="sec-advanced-info-popover" class="sec-advanced-info-popover" hidden>
+                <div class="sec-advanced-info-popover__head"><strong><i class="fa-solid fa-circle-info"></i> About Advanced Security</strong><button id="sec-advanced-info-close" type="button" aria-label="Close information"><i class="fa-solid fa-xmark"></i></button></div>
+                <div class="sec-advanced-info-grid">
+                    <div><i class="fa-solid fa-floppy-disk"></i><span><b>Saving</b><small>Advanced policy changes are not active until you press <b>Save advanced settings</b> or the main <b>Save security settings</b> button. Temporary Allow entries are the exception: they apply immediately.</small></span></div>
+                    <div><i class="fa-solid fa-earth-europe"></i><span><b>Geo / ASN</b><small>Display-only enrichment for public attacker IPs. The current backend sends the public IP to <code>ipwho.is</code> and caches the result for 24 hours. Country, ASN and provider information never decide whether an address is blocked.</small></span></div>
+                    <div><i class="fa-solid fa-shield-halved"></i><span><b>nftables</b><small>An optional host-firewall second layer for repeat offenders. It uses a dedicated <code>inet wgpanel_security</code> table. Application-level blocking remains fully functional when nftables is unavailable.</small></span></div>
+                    <div><i class="fa-solid fa-triangle-exclamation"></i><span><b>If nftables is unavailable</b><small>The firewall toggle cannot be newly enabled. The panel shows whether the package is missing or the service lacks firewall permission, and provides a copyable remediation command. It never runs package installation or sudo automatically.</small></span></div>
+                </div>
+            </div>
+            <div class="sec-advanced-summary" aria-label="Advanced security status">
+                <span id="sec-adv-status-scope" class="sec-adv-chip"><i class="fa-solid fa-shield"></i> Scope —</span>
+                <span id="sec-adv-status-login" class="sec-adv-chip"><i class="fa-solid fa-key"></i> Login guard —</span>
+                <span id="sec-adv-status-geo" class="sec-adv-chip"><i class="fa-solid fa-earth-europe"></i> Geo/ASN —</span>
+                <span id="sec-adv-status-firewall" class="sec-adv-chip"><i class="fa-solid fa-shield-halved"></i> nftables —</span>
+                <span id="sec-adv-status-deny" class="sec-adv-chip"><i class="fa-solid fa-ban"></i> Deny 0</span>
+                <span id="sec-adv-status-allow" class="sec-adv-chip"><i class="fa-solid fa-clock"></i> Allow 0</span>
+            </div>
+            <div class="sec-modal-body">
+                <section class="sec-advanced-section">
+                    <div class="sec-advanced-title"><strong>Protection policy</strong><small>How and where a quarantine is enforced.</small></div>
+                    <div class="sec-advanced-grid sec-advanced-grid--3">
+                        <div class="sec-field"><label for="sec-block-scope">Block scope</label><select class="input" id="sec-block-scope"><option value="all">Entire panel</option><option value="auth_admin">Authentication &amp; admin routes only</option></select><small>Permanent deny entries always block the whole panel.</small></div>
+                        <label class="sec-metric"><span>429 threshold</span><div><input class="input" id="sec-rate-limit-threshold" type="number" min="1" max="200"><em>responses</em></div><small>Dedicated trigger for rate-limit responses.</small></label>
+                        <label class="sec-toggle-row sec-toggle-row--modal"><span><b>Geo / ASN display</b><small>Display only. Public IPs are looked up externally and never blocked by country/ASN.</small></span><span class="switch sm"><input type="checkbox" id="sec-enrich-ip"><span class="slider"></span></span></label>
+                    </div>
+                </section>
+
+                <section class="sec-advanced-section">
+                    <div class="sec-advanced-title"><strong>Authentication abuse</strong><small>Separate protection for failed password and 2FA attempts.</small></div>
+                    <div class="sec-advanced-grid sec-advanced-grid--2">
+                        <label class="sec-metric"><span>Failed-login threshold</span><div><input class="input" id="sec-login-threshold" type="number" min="2" max="100"><em>failures</em></div><small>Triggers independently of ordinary 4xx traffic.</small></label>
+                        <label class="sec-metric sec-time-metric"><span>Login window</span><div class="sec-time-control"><input class="input" id="sec-login-window-value" type="number" min="1" step="1"><select class="input sec-time-unit" id="sec-login-window-unit"><option value="60">minutes</option><option value="3600">hours</option><option value="86400">days</option></select></div><input id="sec-login-window" type="hidden"><small id="sec-login-window-human">Rolling authentication window.</small></label>
+                    </div>
+                </section>
+
+                <section class="sec-advanced-section">
+                    <div class="sec-advanced-title"><strong>Host firewall escalation</strong><small>Optional second layer for repeat offenders. Application blocking continues even if nftables is unavailable.</small></div>
+                    <div class="sec-firewall-row">
+                        <label class="sec-toggle-row sec-toggle-row--modal"><span><b>Escalate to nftables</b><small>Uses a dedicated <code>inet wgpanel_security</code> table with expiring IPv4/IPv6 sets.</small></span><span class="switch sm"><input type="checkbox" id="sec-firewall-enabled"><span class="slider"></span></span></label>
+                        <label class="sec-metric"><span>After offense</span><div><input class="input" id="sec-firewall-after" type="number" min="1" max="20"><em>level</em></div><small>Recommended: 3.</small></label>
+                        <div id="sec-firewall-status" class="sec-firewall-status"><i class="fa-solid fa-circle"></i><span>Checking nftables…</span></div>
+                        <div id="sec-firewall-remedy" class="sec-firewall-remedy" hidden>
+                            <div><i class="fa-solid fa-screwdriver-wrench"></i><span><b id="sec-firewall-remedy-title">Host firewall unavailable</b><small id="sec-firewall-remedy-text">Application blocking remains active.</small></span></div>
+                            <div class="sec-firewall-remedy__actions"><code id="sec-firewall-remedy-command"></code><button class="btn secondary sm" id="sec-firewall-copy" type="button"><i class="fa-regular fa-copy"></i> Copy</button><button class="btn secondary sm" id="sec-firewall-refresh" type="button"><i class="fa-solid fa-rotate"></i> Recheck</button></div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="sec-advanced-section">
+                    <div class="sec-advanced-title"><strong>Permanent deny list</strong><small>Application-level deny rules. The panel refuses to save a rule that contains your current client IP.</small></div>
+                    <div class="sec-trust__chips sec-deny-chips" id="sec-deny-chips"></div>
+                    <div class="sec-trust__add"><input class="input" id="sec-deny-input" type="text" spellcheck="false" autocomplete="off" placeholder="IP or CIDR to deny"><button class="btn secondary" id="sec-deny-add" type="button"><i class="fa-solid fa-ban"></i> Add deny</button></div>
+                </section>
+
+                <section class="sec-advanced-section">
+                    <div class="sec-advanced-title"><strong>Temporary allow list</strong><small>Bypasses temporary quarantine until expiry. It does not override a permanent deny.</small></div>
+                    <div class="sec-temp-allow-list" id="sec-temp-allow-list"></div>
+                    <div class="sec-temp-allow-add">
+                        <input class="input" id="sec-temp-allow-input" type="text" spellcheck="false" autocomplete="off" placeholder="IP or CIDR">
+                        <input class="input" id="sec-temp-allow-duration-value" type="number" min="1" value="1">
+                        <select class="input" id="sec-temp-allow-duration-unit"><option value="60">minutes</option><option value="3600" selected>hours</option><option value="86400">days</option></select>
+                        <button class="btn secondary" id="sec-temp-allow-add" type="button"><i class="fa-solid fa-clock"></i> Allow</button>
+                    </div>
+                </section>
+
+                <section class="sec-advanced-section" id="sec-alert-options-section">
+                    <div class="sec-advanced-title"><strong>Telegram security event delivery</strong><small>Fine-grained delivery; protection is always independent of these switches.</small></div>
+                    <div class="sec-alert-options-grid">
+                        <label class="sec-alert-row is-critical"><span><i class="fa-solid fa-ban"></i><span><b>Temporary block applied</b><small>Recommended on.</small></span></span><span class="switch sm"><input type="checkbox" id="tg-n-security-block"><span class="slider"></span></span></label>
+                        <label class="sec-alert-row"><span><i class="fa-solid fa-unlock"></i><span><b>Manual release</b><small>Notify when an administrator releases an IP.</small></span></span><span class="switch sm"><input type="checkbox" id="tg-n-security-release"><span class="slider"></span></span></label>
+                        <label class="sec-alert-row"><span><i class="fa-solid fa-clock"></i><span><b>Automatic release</b><small>Off by default to reduce noise.</small></span></span><span class="switch sm"><input type="checkbox" id="tg-n-security-auto-release"><span class="slider"></span></span></label>
+                    </div>
+                </section>
+            </div>
+            <div class="sec-modal-foot sec-modal-foot--actions"><span id="sec-advanced-save-state"><i class="fa-solid fa-circle-check"></i> Saved policy · Temporary Allow entries apply immediately.</span><div><button class="btn" id="sec-advanced-save" type="button"><i class="fa-solid fa-floppy-disk"></i> Save advanced settings</button><button class="btn secondary" type="button" data-close>Done</button></div></div>
+        </div>
+    </div>
+
+    <div class="modal sec-security-modal" id="sec-history-modal" aria-hidden="true">
+        <div class="modal-backdrop" data-close></div>
+        <div class="modal-content lg sec-security-modal__sheet sec-history-sheet" role="dialog" aria-modal="true" aria-labelledby="sec-history-title">
+            <div class="sec-modal-head">
+                <div><span class="sec-modal-icon"><i class="fa-solid fa-clock-rotate-left"></i></span><div><strong id="sec-history-title">Security event history</strong><small>Meaningful threshold, block and release events. Up to 500 events are retained.</small></div></div>
+                <button class="sec-modal-close" type="button" data-close aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="sec-modal-body">
+                <div class="sec-history-stats">
+                    <span><b id="sec-stat-rejected">0</b><small>Rejected</small></span>
+                    <span><b id="sec-stat-sensitive">0</b><small>Sensitive</small></span>
+                    <span><b id="sec-stat-blocks">0</b><small>Blocks</small></span>
+                    <span><b id="sec-stat-logins">0</b><small>Login fails</small></span>
+                    <span><b id="sec-stat-ips">0</b><small>Unique IPs</small></span>
+                </div>
+                <div class="sec-history-toolbar">
+                    <input class="input" id="sec-history-ip" type="search" placeholder="Filter by IP">
+                    <select class="input" id="sec-history-type"><option value="">All events</option><option value="block">Blocks</option><option value="monitor_trigger">Monitor triggers</option><option value="login_trigger">Login triggers</option><option value="manual_release">Manual releases</option><option value="auto_release">Auto releases</option><option value="temporary_allow">Temporary allows</option></select>
+                    <button class="btn secondary" id="sec-history-refresh" type="button"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                    <button class="btn danger" id="sec-history-clear" type="button"><i class="fa-solid fa-trash"></i> Clear</button>
+                </div>
+                <div id="sec-history-empty" class="sec-history-empty"><i class="fa-solid fa-clock-rotate-left"></i><span><b>No security events yet</b><small>Thresholds, blocks and releases will appear here.</small></span></div>
+                <div class="table-wrap sec-history-table-wrap" id="sec-history-table-wrap" hidden>
+                    <table class="table sec-history-table" id="sec-history-table"><thead><tr><th>Time</th><th>IP</th><th>Event</th><th>Category</th><th>Reason</th><th>Network</th></tr></thead><tbody></tbody></table>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <section class="panel" data-panel="iface">
         <div class="cards">
@@ -352,6 +683,185 @@ html[data-theme="dark"] #set-panels .cards {
             </div>
         </div>
     </section>
+
+    <section class="panel" data-panel="traffic" id="traffic-tab">
+        <div class="traffic-shell traffic-shell--control">
+            <div class="traffic-overview">
+                <div class="traffic-overview__identity">
+                    <span class="traffic-overview__icon"><i class="fa-solid fa-route"></i></span>
+                    <div>
+                        <span class="traffic-kicker">WireGuard forwarding policy</span>
+                        <div class="traffic-overview__headline">
+                            <h2>Traffic Control</h2>
+                            <button class="traffic-inline-info" id="traffic-how-trigger" type="button" aria-label="How blocking works" aria-haspopup="dialog" aria-expanded="false" title="How blocking works">
+                                <i class="fa-solid fa-circle-info"></i>
+                            </button>
+                            <div class="traffic-inline-popover" id="traffic-how-popover" role="dialog" aria-label="How blocking works" hidden>
+                                <div class="traffic-inline-popover__head">
+                                    <strong>How blocking works</strong>
+                                    <button class="traffic-inline-popover__close" id="traffic-how-close" type="button" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+                                </div>
+                                <div class="traffic-inline-popover__body">
+                                    <span><i class="fa-solid fa-check"></i><b>Client traffic path</b><small>Filters forwarded WireGuard traffic only.</small></span>
+                                    <span><i class="fa-solid fa-check"></i><b>Peer-safe</b><small>Does not modify AllowedIPs.</small></span>
+                                    <span><i class="fa-solid fa-check"></i><b>Dedicated rules</b><small>Uses only <code>inet wgpanel_traffic</code>.</small></span>
+                                    <span><i class="fa-solid fa-circle-info"></i><b>Domain refresh</b><small>Re-apply if a site's DNS addresses change.</small></span>
+                                </div>
+                            </div>
+                        </div>
+                        <p>Block domains, IP ranges or countries for a whole WireGuard interface or one specific peer.</p>
+                    </div>
+                </div>
+                <div class="traffic-overview__status">
+                    <span class="traffic-state" id="traffic-engine-state"><i class="fa-solid fa-circle"></i> Loading</span>
+                    <span class="traffic-state" id="traffic-rule-state"><i class="fa-solid fa-shield"></i> 0 policies</span>
+                    <div class="traffic-overview__enforcement" id="traffic-capability"><span class="traffic-mini-loading">Checking enforcement…</span></div>
+                    <button class="btn secondary" id="traffic-refresh" type="button"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                </div>
+            </div>
+
+            <div class="traffic-note">
+                <i class="fa-solid fa-circle-info"></i>
+                <div><b>WireGuard traffic only.</b><span>Rules are applied on the forwarded client path. They do not change AllowedIPs or block traffic generated by the server itself.</span></div>
+            </div>
+
+            
+
+            <section class="traffic-card traffic-policies-card">
+                <header class="traffic-card__head traffic-policy-head">
+                    <div class="traffic-card__title"><span class="traffic-card__icon"><i class="fa-solid fa-list-check"></i></span><div><strong>Policies</strong><small>Choose a policy to inspect, test or edit.</small></div></div>
+                    <div class="traffic-policy-head__actions">
+                        <span class="traffic-dirty" id="traffic-dirty" hidden><i class="fa-solid fa-spinner fa-spin"></i> Applying changes…</span>
+                        <button class="btn traffic-add-policy-main" id="traffic-add-policy" type="button"><i class="fa-solid fa-plus"></i> Add policy</button>
+                    </div>
+                </header>
+                <div class="traffic-card__body">
+                    <div class="traffic-empty" id="traffic-empty"><i class="fa-solid fa-route"></i><span><b>No traffic policies yet</b><small>Create a policy and it will be saved and applied automatically.</small></span></div>
+                    <div class="traffic-policy-list" id="traffic-policy-list"></div>
+                </div>
+            </section>
+
+            <section class="traffic-card traffic-verify-card" id="traffic-verify-card" hidden>
+                <header class="traffic-card__head">
+                    <div class="traffic-card__title"><span class="traffic-card__icon"><i class="fa-solid fa-shield-circle-check"></i></span><div><strong id="traffic-verify-heading">Check policy setup</strong><small>Confirms that the live WireGuard and nftables rules are ready for this policy.</small></div></div>
+                    <button class="btn secondary sm" id="traffic-verify-close" type="button"><i class="fa-solid fa-xmark"></i> Close</button>
+                </header>
+                <div class="traffic-card__body" id="traffic-verify-result"></div>
+            </section>
+
+            <section class="traffic-card traffic-manual-card" id="traffic-manual-card" hidden>
+                <header class="traffic-card__head">
+                    <div class="traffic-card__title"><span class="traffic-card__icon"><i class="fa-solid fa-crosshairs"></i></span><div><strong id="traffic-manual-heading">Test destination</strong><small>Check whether a domain or IP would be blocked by one selected policy.</small></div></div>
+                    <button class="btn secondary sm" id="traffic-manual-close" type="button"><i class="fa-solid fa-xmark"></i> Close</button>
+                </header>
+                <div class="traffic-card__body">
+                    <div class="traffic-manual-selected" id="traffic-manual-selected"></div>
+                    <div class="traffic-manual-test traffic-manual-test--standalone">
+                        <div class="traffic-manual-test__controls traffic-autocomplete-wrap">
+                            <div class="traffic-autocomplete-field">
+                                <input class="input" id="traffic-test-target" type="text" autocomplete="off" spellcheck="false" placeholder="Type a domain, URL or IP — e.g. youtube.com">
+                                <div class="traffic-autocomplete" id="traffic-test-autocomplete" hidden></div>
+                            </div>
+                            <button class="btn" id="traffic-test-target-run" type="button"><i class="fa-solid fa-play"></i> Test destination</button>
+                        </div>
+                        <div class="traffic-manual-test__quick" id="traffic-test-quick"></div>
+                        <div class="traffic-manual-result" id="traffic-test-target-result" hidden></div>
+                        <div class="traffic-manual-test__note"><i class="fa-solid fa-circle-info"></i><span>This checks the live nftables sets and the exact WireGuard peer/interface rule. It predicts the live verdict but does not impersonate the peer or generate fake peer traffic.</span></div>
+                    </div>
+                </div>
+            </section>
+
+            <div class="traffic-apply-notice" id="traffic-apply-notice" hidden><i class="fa-solid fa-rotate fa-spin"></i><span><b>Applying Traffic Control changes…</b><small>Policy changes are saved and activated automatically.</small></span></div>
+
+            <div class="traffic-policy-modal" id="traffic-policy-modal" hidden aria-hidden="true">
+                <div class="traffic-policy-modal__backdrop" data-traffic-editor-close></div>
+                <section class="traffic-policy-dialog" role="dialog" aria-modal="true" aria-labelledby="traffic-editor-title">
+                    <header class="traffic-policy-dialog__head">
+                        <div class="traffic-card__title"><span class="traffic-card__icon"><i class="fa-solid fa-sliders"></i></span><div><strong id="traffic-editor-title">Add policy</strong><small id="traffic-editor-subtitle">Choose who is protected and what destinations should be blocked. Changes are saved and applied automatically.</small></div></div>
+                        <button class="traffic-dialog-close" id="traffic-policy-close" type="button" aria-label="Close policy editor"><i class="fa-solid fa-xmark"></i></button>
+                    </header>
+                    <div class="traffic-policy-dialog__body">
+                        <input type="hidden" id="traffic-policy-id">
+                        <div class="traffic-form-grid traffic-form-grid--top traffic-form-grid--modal">
+                            <div class="form-group traffic-form-group--wide">
+                                <label for="traffic-policy-name">Policy name</label>
+                                <input class="input" id="traffic-policy-name" maxlength="80" placeholder="e.g. Block Iran for PS5">
+                            </div>
+                            <div class="form-group">
+                                <label for="traffic-location">Runs on</label>
+                                <select class="input" id="traffic-location"><option value="local">Local panel</option><option value="node">Remote node</option></select>
+                            </div>
+                            <div class="form-group" id="traffic-node-wrap" hidden>
+                                <label for="traffic-node">Node</label>
+                                <select class="input" id="traffic-node"></select>
+                            </div>
+                            <div class="form-group">
+                                <label for="traffic-interface">WireGuard interface</label>
+                                <select class="input" id="traffic-interface"></select>
+                            </div>
+                            <div class="form-group">
+                                <label for="traffic-source-mode">Protect</label>
+                                <select class="input" id="traffic-source-mode"><option value="interface">Every peer on this interface</option><option value="peer">One specific peer</option></select>
+                            </div>
+                            <div class="form-group" id="traffic-peer-wrap" hidden>
+                                <label for="traffic-peer">WireGuard peer</label>
+                                <select class="input" id="traffic-peer"></select>
+                                <div class="small-text muted" id="traffic-peer-address"></div>
+                            </div>
+                        </div>
+
+                        <div class="traffic-block-builder">
+                            <div class="traffic-block-builder__head"><div><b>What should this policy block?</b><small>Add one or more destinations. Each item becomes a removable chip.</small></div></div>
+                            <div class="traffic-destination-grid traffic-destination-grid--tokens">
+                                <div class="traffic-destination-card traffic-token-card" data-traffic-token-card="domains">
+                                    <div class="traffic-destination-card__head"><span><i class="fa-solid fa-globe"></i><b>Domains / sites</b></span><span class="traffic-mini-badge">DNS based</span></div>
+                                    <div class="traffic-token-list" id="traffic-domains-chips"></div>
+                                    <div class="traffic-token-entry">
+                                        <input class="input" id="traffic-domain-entry" autocomplete="off" spellcheck="false" placeholder="Type a domain, e.g. youtube.com">
+                                        <button class="btn secondary sm" type="button" data-traffic-token-add="domains"><i class="fa-solid fa-plus"></i> Add</button>
+                                    </div>
+                                    <div class="traffic-token-suggestions" id="traffic-domain-suggestions" hidden></div>
+                                    <textarea id="traffic-domains" hidden></textarea>
+                                    <small>Suggestions use real domains already saved in Traffic Control. Start typing to filter, or focus the field to browse saved destinations.</small>
+                                </div>
+                                <div class="traffic-destination-card traffic-token-card" data-traffic-token-card="cidrs">
+                                    <div class="traffic-destination-card__head"><span><i class="fa-solid fa-network-wired"></i><b>IP / CIDR</b></span><span class="traffic-mini-badge">IPv4 + IPv6</span></div>
+                                    <div class="traffic-token-list" id="traffic-cidrs-chips"></div>
+                                    <div class="traffic-token-entry">
+                                        <input class="input" id="traffic-cidr-entry" autocomplete="off" spellcheck="false" placeholder="e.g. 1.1.1.1/32 or 203.0.113.0/24">
+                                        <button class="btn secondary sm" type="button" data-traffic-token-add="cidrs"><i class="fa-solid fa-plus"></i> Add</button>
+                                    </div>
+                                    <div class="traffic-token-suggestions" id="traffic-cidr-suggestions" hidden></div>
+                                    <textarea id="traffic-cidrs" hidden></textarea>
+                                    <small>Suggestions use real IP/CIDR values already saved in Traffic Control. Start typing to filter, or focus the field to browse saved destinations.</small>
+                                </div>
+                                <div class="traffic-destination-card traffic-token-card" data-traffic-token-card="countries">
+                                    <div class="traffic-destination-card__head"><span><i class="fa-solid fa-earth-asia"></i><b>Countries</b></span><span class="traffic-mini-badge">Geo IP</span></div>
+                                    <div class="traffic-token-list" id="traffic-countries-chips"></div>
+                                    <div class="traffic-token-entry">
+                                        <input class="input" id="traffic-country-entry" autocomplete="off" spellcheck="false" placeholder="Type Iran or IR">
+                                        <button class="btn secondary sm" type="button" data-traffic-token-add="countries"><i class="fa-solid fa-plus"></i> Add</button>
+                                    </div>
+                                    <div class="traffic-token-suggestions" id="traffic-country-suggestions" hidden></div>
+                                    <textarea id="traffic-countries" hidden></textarea>
+                                    <small>Type a country name or two-letter code. The best matches appear first; for example, China becomes CN and Iran becomes IR.</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <footer class="traffic-policy-dialog__foot">
+                        <label class="traffic-policy-toggle"><span><b>Policy enabled</b><small>Disabled policies stay saved but are not loaded into nftables.</small></span><span class="switch sm"><input id="traffic-policy-enabled" type="checkbox" checked><span class="slider"></span></span></label>
+                        <div class="traffic-policy-dialog__actions">
+                            <button class="btn secondary" id="traffic-policy-cancel" type="button">Cancel</button>
+                            <button class="btn traffic-add-btn" id="traffic-policy-save" type="button"><i class="fa-solid fa-plus"></i> Add policy</button>
+                        </div>
+                    </footer>
+                </section>
+            </div>
+        </div>
+    </section>
+
+
 
     <section class="panel" data-panel="telegram">
         <div class="cards">
@@ -564,50 +1074,6 @@ html[data-theme="dark"] #set-panels .cards {
                                                 </span>
                                                 <span class="switch sm">
                                                     <input type="checkbox" id="tg-n-peer-limit">
-                                                    <span class="slider"></span>
-                                                </span>
-                                            </label>
-                                        </div>
-                                    </section>
-
-                                    <section class="tg-notify-group">
-                                        <header>
-                                            <span class="tg-notify-group-icon security"><i class="fa-solid fa-shield-halved"></i></span>
-                                            <div>
-                                                <strong>Security</strong>
-                                                <small>Authentication and suspicious request activity.</small>
-                                            </div>
-                                        </header>
-                                        <div class="tg-notify-grid">
-                                            <label class="tg-notify-row">
-                                                <span class="tg-notify-copy">
-                                                    <b>Successful admin login</b>
-                                                    <small>Includes account, IP address, device, and time.</small>
-                                                </span>
-                                                <span class="switch sm">
-                                                    <input type="checkbox" id="tg-n-login-success">
-                                                    <span class="slider"></span>
-                                                </span>
-                                            </label>
-
-                                            <label class="tg-notify-row critical">
-                                                <span class="tg-notify-copy">
-                                                    <b>Failed login or 2FA</b>
-                                                    <small>Reports rejected login and verification attempts.</small>
-                                                </span>
-                                                <span class="switch sm">
-                                                    <input type="checkbox" id="tg-n-login-fail">
-                                                    <span class="slider"></span>
-                                                </span>
-                                            </label>
-
-                                            <label class="tg-notify-row critical">
-                                                <span class="tg-notify-copy">
-                                                    <b>Suspicious 4xx activity</b>
-                                                    <small>Reports bursts of rejected or unauthorized requests.</small>
-                                                </span>
-                                                <span class="switch sm">
-                                                    <input type="checkbox" id="tg-n-4xx">
                                                     <span class="slider"></span>
                                                 </span>
                                             </label>
@@ -931,7 +1397,7 @@ html[data-theme="dark"] #set-panels .cards {
     </section>
 
     
-    <script defer src="{{ url_for('static', filename='js/settings.js') }}?v=20260810-settings-actions-v3"></script>
+    <script defer src="{{ url_for('static', filename='js/settings.js') }}"></script>
     <script defer src="{{ url_for('static', filename='js/qrcode.min.js') }}"></script>
 
 
