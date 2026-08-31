@@ -1,7 +1,8 @@
 {% extends 'base.html' %}
 {% block head_extras %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/subscriptions.css') }}?v=20260820-studio-v16-3">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/subscription-dark.css') }}?v=20260820-studio-v16-3">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/subscriptions.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/subscription-dark.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/subscription-mobile.css') }}">
 {% endblock %}
 {% block content %}
 <script defer src="{{ url_for('static', filename='js/csrf.js') }}"></script>
@@ -850,7 +851,7 @@
             <div class="studio8-preview-playback"><button type="button" id="studio-preview-motion-toggle" class="active" aria-pressed="true" title="Pause or resume the animated preview"><i class="fas fa-pause"></i><span>Pause motion</span></button></div>
           </div>
         </div>
-        <div class="studio8-frame-stage" data-preview-device="desktop" data-preview-fit="width"><div class="studio8-frame-canvas"><iframe id="studio-preview-frame" title="Public subscription preview" scrolling="no"></iframe></div></div>
+        <div class="studio8-frame-stage" data-preview-device="desktop" data-preview-fit="width"><div class="studio8-frame-canvas"><iframe id="studio-preview-frame" title="Public subscription preview" scrolling="auto"></iframe></div></div>
         <div class="studio8-preview-summary"><span id="preview-layout-name">PS5</span><span id="preview-accent-name">Mint</span><span id="preview-stats-name">Hybrid</span><span id="preview-motion-name">Balanced</span></div>
       </section>
     </div>
@@ -916,5 +917,5 @@
 
 
 
-<script defer src="{{ url_for('static', filename='js/subscriptions.js') }}?v=20260820-studio-v16-3"></script>
+<script defer src="{{ url_for('static', filename='js/subscriptions.js') }}"></script>
 {% endblock %}
