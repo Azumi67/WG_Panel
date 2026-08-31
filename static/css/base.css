@@ -542,3 +542,15 @@ html {
   .sb2.is-collapsed .userbox,
   .sb2.is-collapsed .sb2-version { width: 46px !important; height: 40px !important; }
 }
+
+.wg-mobile-brand img,
+.sidebar.sb2 .logo .wg-logo-img{
+  display:block!important;
+  object-fit:contain!important;
+  max-width:none!important;
+}
+.wg-mobile-brand img{width:28px!important;height:28px!important;flex:0 0 28px!important;}
+.sidebar.sb2 .logo .wg-logo-img{width:26px!important;height:26px!important;flex:0 0 26px!important;}
+@media (min-width:761px){
+  .wg-mobile-topbar,.wg-mobile-menu-backdrop{display:none!important;}
+}
