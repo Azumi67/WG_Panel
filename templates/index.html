@@ -1,6 +1,10 @@
 {% extends 'base.html' %}
+{% block head_extras %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}">
+{% endblock %}
+{% block responsive_extras %}
+{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/index.css') }}?v=20260804-dashboard-overview-textfix1">
 
 <div class="dashboard-topbar">
     <h1 class="page-title">
@@ -394,5 +398,5 @@
         {% endif %}
     </div>
         
-    <script defer src="{{ url_for('static', filename='js/index.js') }}?v=20260804-dashboard-overview-textfix1"></script>
+    <script defer src="{{ url_for('static', filename='js/index.js') }}"></script>
 {% endblock %}
