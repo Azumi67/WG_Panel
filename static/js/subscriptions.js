@@ -286,10 +286,79 @@ function subxUpdateModalBodyState(){
   const anyOpen = !!document.querySelector(
     '#sub-modal.open, #details-modal.open, #sub-settings-modal.open, #label-edit-modal.open'
   );
+
   document.body.classList.toggle('subx-modal-open', anyOpen);
+
+  if (anyOpen && window.matchMedia('(max-width: 760px)').matches) {
+    document.body.classList.remove('wg-mobile-menu-open');
+
+    const menuButton = document.getElementById('wg-mobile-menu-btn');
+    if (menuButton) {
+      menuButton.setAttribute('aria-expanded', 'false');
+      menuButton.setAttribute('aria-label', 'Open menu');
+    }
+  }
 }
+(function setupSubscriptionMobileSidebarGuard(){
+  const selectors = [
+    '#sub-modal',
+    '#details-modal',
+    '#sub-settings-modal',
+    '#label-edit-modal'
+  ];
+
+  function sync(){
+    if (!window.matchMedia('(max-width: 760px)').matches) {
+      return;
+    }
+
+    const open = selectors.some(selector => {
+      const el = document.querySelector(selector);
+      return el && (
+        el.classList.contains('open') ||
+        el.getAttribute('aria-hidden') === 'false'
+      );
+    });
+
+    if (!open) return;
+
+    document.body.classList.remove('wg-mobile-menu-open');
+
+    const menuButton = document.getElementById('wg-mobile-menu-btn');
+
+    if (menuButton) {
+      menuButton.setAttribute('aria-expanded', 'false');
+      menuButton.setAttribute('aria-label', 'Open menu');
+    }
+  }
+
+  function init(){
+    const targets = selectors
+      .map(selector => document.querySelector(selector))
+      .filter(Boolean);
+
+    if (!targets.length) return;
+
+    targets.forEach(target => {
+      new MutationObserver(sync).observe(target, {
+        attributes: true,
+        attributeFilter: ['class', 'aria-hidden', 'hidden']
+      });
+    });
+
+    sync();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init, {once:true});
+  } else {
+    init();
+  }
+})();
 
 function openModal(){
+  document.body.classList.remove('wg-mobile-menu-open');
+
   $('#sub-modal').classList.add('open');
   $('#sub-modal').setAttribute('aria-hidden','false');
   subxUpdateModalBodyState();
@@ -304,6 +373,8 @@ function closeModal(){
 }
 
 function openDetails(){
+  document.body.classList.remove('wg-mobile-menu-open');
+
   $('#details-modal').classList.add('open');
   $('#details-modal').setAttribute('aria-hidden','false');
   subxUpdateModalBodyState();
@@ -323,9 +394,10 @@ function openSettings(){
     document.body.appendChild(modal);
   }
 
-  document.body.classList.remove('mobile-nav-open');
+  document.body.classList.remove('wg-mobile-menu-open');
   document.body.classList.add('mobile-sub-studio-open');
-  document.getElementById('mobile-nav-toggle')?.setAttribute('aria-expanded','false');
+
+  document.getElementById('wg-mobile-menu-btn')?.setAttribute('aria-expanded','false');
 
   modal.classList.add('open');
   modal.setAttribute('aria-hidden','false');
