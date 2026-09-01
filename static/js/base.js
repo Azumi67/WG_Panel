@@ -164,22 +164,22 @@
     }
 
     const closeForForegroundControl = [
-      '#theme-switcher',
-      '[data-theme-choice]',
-      '.panel-theme-switch',
-      '.subx-theme-action',
-      '#subx-panel-theme-toggle',
-      '#sub-settings-modal',
-      '[data-preview-theme]',
-      '[data-preview-device]',
-      '[data-preview-fit]',
-      '[data-studio-tab]',
-      '[data-studio-section]',
-      '[data-template]',
-      '[data-template-settings]',
-      '[data-open-template]',
-      '[data-open-studio]'
-    ].join(',');
+  '#theme-switcher',
+  '[data-theme-choice]',
+  '.panel-theme-switch',
+  '.subx-theme-action',
+  '#subx-panel-theme-toggle',
+  '#sub-settings-modal',
+  '[data-preview-theme]',
+  '[data-preview-device]',
+  '[data-preview-fit]',
+  '[data-studio-tab]',
+  '[data-studio-section]',
+  '[data-template]',
+  '[data-template-settings]',
+  '[data-open-template]',
+  '[data-open-studio]'
+].join(',');
 
     document.addEventListener('click', (event) => {
       if (!mobile()) return;
