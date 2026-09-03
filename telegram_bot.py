@@ -47,36 +47,74 @@ _TG_TIMEZONE_CACHE = {
     "name": "",
     "tz": None,
     "expires": 0.0,
+    "settings_mtime_ns": None,
 }
 
 
 def _tg_system_timezone():
     """
-    Resolve the current global panel timezone at call time.
+    Resolve the saved global panel timezone at call time.
 
+    Never fall back to the host OS timezone: the host may run in UTC or a
+    different region. The panel setting is the only human-facing timezone.
     """
-    try:
-        response = api.get(
-            f"{PANEL}/api/timezone",
-            timeout=8,
-        )
-        response.raise_for_status()
-
-        payload = response.json() or {}
-        timezone_name = str(
-            payload.get("timezone") or ""
-        ).strip()
-
-        if timezone_name:
-            return ZoneInfo(timezone_name)
-
-    except Exception:
-        pass
+    now_mono = time.monotonic()
+    timezone_name = ""
+    settings_path = globals().get("PANEL_SETTINGS_FILE")
+    settings_mtime_ns = None
 
     try:
-        return datetime.now().astimezone().tzinfo or timezone.utc
+        if settings_path:
+            settings_mtime_ns = Path(settings_path).stat().st_mtime_ns
     except Exception:
-        return timezone.utc
+        settings_mtime_ns = None
+
+    cached_tz = _TG_TIMEZONE_CACHE.get("tz")
+    cache_matches_file = (
+        settings_mtime_ns is None
+        or settings_mtime_ns == _TG_TIMEZONE_CACHE.get("settings_mtime_ns")
+    )
+    if (
+        cached_tz is not None
+        and cache_matches_file
+        and now_mono < float(_TG_TIMEZONE_CACHE.get("expires") or 0)
+    ):
+        return cached_tz
+
+    try:
+        if settings_path:
+            payload = json.loads(Path(settings_path).read_text(encoding="utf-8")) or {}
+            timezone_name = str(payload.get("timezone") or "").strip()
+    except Exception:
+        timezone_name = ""
+
+    if not timezone_name:
+        try:
+            panel = str(globals().get("PANEL") or "").rstrip("/")
+            getter = globals().get("_get")
+            if panel and callable(getter):
+                response = getter(f"{panel}/api/timezone", session="auto", timeout=8)
+            else:
+                response = api.get(f"{panel}/api/timezone", timeout=8)
+            response.raise_for_status()
+            payload = response.json() or {}
+            timezone_name = str(payload.get("timezone") or "").strip()
+        except Exception:
+            timezone_name = ""
+
+    try:
+        resolved = ZoneInfo(timezone_name or "UTC")
+    except Exception:
+        timezone_name = "UTC"
+        resolved = ZoneInfo("UTC")
+
+    _TG_TIMEZONE_CACHE.update({
+        "name": timezone_name,
+        "tz": resolved,
+        "expires": now_mono + 2.0,
+        "settings_mtime_ns": settings_mtime_ns,
+    })
+    return resolved
 
 def _tg_parse_datetime(value):
     if value in (None, "", "—"):
@@ -150,7 +188,7 @@ def _tg_relative(seconds):
 def tg_time(
     value,
     *,
-    relative=True,
+    relative=False,
     seconds=False,
     fallback="—",
 ):
@@ -2925,7 +2963,7 @@ def _subscription_time(row: dict) -> str:
 
     return tg_time(
         expires,
-        relative=True,
+        relative=False,
         fallback="Not started",
     )
 
@@ -4157,8 +4195,9 @@ def _save_backup_state(st: dict) -> None:
         pass
 
 def _auto_backupname(kind: str = "full", ts: datetime | None = None) -> str:
-    ts = ts or datetime.utcnow()
-    stamp = ts.strftime("%Y%m%d_%H%M%S")
+    parsed = _tg_parse_datetime(ts or datetime.now(timezone.utc))
+    local_dt = (parsed or datetime.now(timezone.utc)).astimezone(_tg_system_timezone())
+    stamp = local_dt.strftime("%Y%m%d_%H%M%S")
     return f"auto_{kind}_{stamp}.zip"
 
 def _p_autobackups(kind: str, keep: int) -> None:
@@ -4247,7 +4286,7 @@ def _last_backup() -> int | None:
 def _fmt_backup_datetime(value, *, fallback="—") -> str:
     return tg_time(
         value,
-        relative=True,
+        relative=False,
         fallback=fallback,
     )
     
@@ -4257,7 +4296,7 @@ def _fmt_when(ts: int | None) -> str:
 
     return tg_time(
         ts,
-        relative=True,
+        relative=False,
         fallback="Never",
     )
 
@@ -4265,7 +4304,7 @@ def _fmt_when(ts: int | None) -> str:
 def _backup_filename(kind: str, when_ts: int | None = None) -> str:
     safe = {"db":"db", "settings":"settings", "full":"full"}.get(kind, "backup")
     ts = int(when_ts or time.time())
-    stamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(ts))
+    stamp = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(_tg_system_timezone()).strftime("%Y-%m-%d_%H-%M-%S")
     return f"{safe}-backup-{stamp}.zip"
 
 
@@ -5752,7 +5791,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         enabled = bool(sched.get("enabled"))
         when = str(sched.get("time") or "03:00")
         freq = str(sched.get("freq") or "daily")
-        tz = str(sched.get("timezone") or "UTC")
+        tz = str(_tg_system_timezone())
         next_run = _fmt_backup_datetime(sched.get("next_run"))
         header = "\n".join([
             "▣ <b>Backup center</b>",
@@ -5786,14 +5825,11 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
            or "03:00"
         )
 
-        timezone_name = str(
-            s.get("timezone")
-            or "UTC"
-        ).strip() or "UTC"
+        timezone_name = str(_tg_system_timezone())
 
         next_run = tg_time(
             s.get("next_run"),
-            relative=True,
+            relative=False,
         )
 
         keep = int(
@@ -7824,13 +7860,8 @@ TG_BACKUP_TICK_SEC = 30
 TG_BACKUP_SCHEDULER_ENABLED = os.getenv("TG_BACKUP_SCHEDULER_ENABLED", "0") == "1"  
 
 def _bot_tz_schedule(sched: dict):
-    from datetime import timezone
-    try:
-        from zoneinfo import ZoneInfo
-        tzname = (sched.get("timezone") or "UTC").strip()
-        return ZoneInfo(tzname)
-    except Exception:
-        return timezone.utc
+    # Regional time is authoritative for schedules as well as display.
+    return _tg_system_timezone()
 
 
 def _hhmm(s: str):
