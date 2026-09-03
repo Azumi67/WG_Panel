@@ -1230,13 +1230,47 @@ function getScopeId() {
     if (typeof v === 'number') return normEpoch(v);
     const s = String(v).trim();
     if (/^\d{10,13}$/.test(s)) return normEpoch(Number(s));
-    const d = new Date(s);
+    const d = (typeof window.wgPanelDate === 'function')
+      ? window.wgPanelDate(s)
+      : new Date(
+          /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?$/.test(s)
+            ? s.replace(' ', 'T') + 'Z'
+            : s
+        );
+    if (!d) return null;
     return isNaN(d) ? null : Math.floor(d.getTime() / 1000);
   }
+  function effectiveExpiryTs(p) {
+    const raw = (p.expires_at_ts != null && p.expires_at_ts !== '')
+      ? normEpoch(Number(p.expires_at_ts))
+      : tsFrom(p.expires_at);
+    const started = !p.start_on_first_use || !!p.first_used_at_ts || !!p.first_used_at;
+    const ttl = (p.ttl_seconds != null && p.ttl_seconds !== '')
+      ? Number(p.ttl_seconds)
+      : null;
+    if (!p.unlimited && started && Number.isFinite(ttl)) {
+      const fromCountdown = nowSec() + Math.max(0, Math.floor(ttl));
+      if (!raw || Math.abs(raw - fromCountdown) > 5) return fromCountdown;
+    }
+    return raw;
+  }
+  const formatEventDetails = value => (
+    typeof window.wgPanelFormatDateTimesInText === 'function'
+      ? window.wgPanelFormatDateTimesInText(value)
+      : String(value ?? '')
+  );
   function fmtLocalTs(ts) {
     if (ts == null) return '–';
-    const d = new Date(ts * 1000); const pad = n => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    if (typeof window.wgPanelFormatDateTime === 'function') {
+      return window.wgPanelFormatDateTime(Number(ts), { fallback: '–' });
+    }
+    // Safe fallback: never use the browser timezone.
+    const d = new Date(Number(ts) * 1000);
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: String(window.WG_PANEL_TIMEZONE || 'UTC'),
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+    }).format(d).replace(',', '');
   }
   function leftTtl(ttl) {
     const s = Math.max(0, Math.floor(ttl || 0));
@@ -1280,8 +1314,9 @@ function getScopeId() {
         return `Active since ${fmtLocalTs(firstTs)}`;
       }
 
-      const createdTs = p.created_at_ts != null ? Number(p.created_at_ts) : tsFrom(p.created_at);
-      return createdTs ? `Active since ${fmtLocalTs(createdTs)}` : 'Unlimited';
+      // Created is not Started. An unlimited peer has no "active since"
+      // value until WireGuard reports its first real handshake.
+      return 'Unlimited · not used yet';
     }
 
     const started = itStarted(p);
@@ -1560,16 +1595,18 @@ function cardHTML(p, i) {
   const timerStr   = timeBadge(p);
   const epStr      = endpointDisplay(p);
 
-  const first      = (p.first_used_at_ts != null) ? fmtLocalTs(p.first_used_at_ts)
-                   : (p.first_used_at ? fmtLocalTs(tsFrom(p.first_used_at)) : '–');
-  const created    = (p.created_at_ts != null) ? fmtLocalTs(p.created_at_ts)
-                   : (p.created_at ? fmtLocalTs(tsFrom(p.created_at)) : '–');
+  const first      = p.first_used_at_display || ((p.first_used_at_ts != null) ? fmtLocalTs(p.first_used_at_ts)
+                   : (p.first_used_at ? fmtLocalTs(tsFrom(p.first_used_at)) : '–'));
+  const created    = p.created_at_display || ((p.created_at_ts != null) ? fmtLocalTs(p.created_at_ts)
+                   : (p.created_at ? fmtLocalTs(tsFrom(p.created_at)) : '–'));
 
-  const expTs      = (p.expires_at_ts != null) ? p.expires_at_ts : tsFrom(p.expires_at);
-  const exp        = expTs ? fmtLocalTs(expTs) : '–';
+  const expTs      = effectiveExpiryTs(p);
+  const exp        = p.expires_at_display || (expTs ? fmtLocalTs(expTs) : '–');
   const ttl        = (p.ttl_seconds != null) ? p.ttl_seconds : (expTs ? Math.max(0, expTs - nowSec()) : null);
-  const activeSince = first !== '–' ? first : created;
-  const remainTime = p.unlimited ? (activeSince !== '–' ? `Active since ${activeSince}` : 'Unlimited') : (ttl != null ? prettyTtl(ttl) : '–');
+  const activeSince = first;
+  const remainTime = p.unlimited
+    ? (activeSince !== '–' ? `Active since ${activeSince}` : 'Unlimited · not used yet')
+    : (ttl != null ? prettyTtl(ttl) : '–');
 
   const totalBytes = usedBytes(p);
   const totalMiB   = Math.round(totalBytes / 1048576);
@@ -1942,21 +1979,21 @@ function updateCard(card, p, i) {
     }
   }
 
-  const first = (p.first_used_at_ts != null)
+  const first = p.first_used_at_display || ((p.first_used_at_ts != null)
       ? fmtLocalTs(p.first_used_at_ts)
-      : (p.start_on_first_use ? '—' : 'n/a');
+      : (p.start_on_first_use ? '—' : 'n/a'));
 
-  const created = (p.created_at_ts != null)
+  const created = p.created_at_display || ((p.created_at_ts != null)
       ? fmtLocalTs(p.created_at_ts)
-      : (p.created_at ? fmtLocalTs(tsFrom(p.created_at)) : '—');
+      : (p.created_at ? fmtLocalTs(tsFrom(p.created_at)) : '—'));
 
-  const expTs = (p.expires_at_ts != null) ? p.expires_at_ts : tsFrom(p.expires_at);
+  const expTs = effectiveExpiryTs(p);
   const ttl   = started
       ? ((p.ttl_seconds != null) ? Number(p.ttl_seconds)
          : (expTs ? Math.max(0, expTs - nowSec()) : null))
       : null;
 
-  const exp   = (started && expTs) ? fmtLocalTs(expTs) : '—';
+  const exp   = p.expires_at_display || ((started && expTs) ? fmtLocalTs(expTs) : '—');
   const remainTime = p.unlimited ? 'Unlimited' : (started && ttl != null ? prettyTtl(ttl) : '—');
 
   const totalBytes = usedBytes(p);
@@ -2472,6 +2509,7 @@ function clearPeers(container) {
 }
 
 async function refreshPeers(opts = {}) {
+  try { await (window.WG_PANEL_TIMEZONE_READY || Promise.resolve()); } catch (_) {}
   const ifaceId   = (opts.ifaceId ?? SELECTED_IFACE_ID);
   const abortPrev = !!opts.abortPrev;
   const quiet    = !!opts.quiet;
@@ -2541,6 +2579,9 @@ if (!quiet && opts.forceLoading) {
 
     const data = await res.json();
     const peers = data?.peers || [];
+    if (peers[0]?.display_timezone && typeof window.wgPanelApplyTimezone === 'function') {
+      window.wgPanelApplyTimezone(peers[0].display_timezone, false);
+    }
     window._peers = peers;
     renderPeerSummary(peers);
 
@@ -3146,7 +3187,12 @@ function openLogs(id) {
       }
       return r.json();
     })
-    .then(({ logs }) => {
+    .then(payload => {
+      const logs = payload?.logs || [];
+      const logPeer = payload?.peer || peer;
+      if (logPeer.display_timezone && typeof window.wgPanelApplyTimezone === 'function') {
+        window.wgPanelApplyTimezone(logPeer.display_timezone, false);
+      }
       const overview = $in('#logs-overview', logsModal);
       const toLocalStr = (val) => {
         if (val == null) return null;
@@ -3155,14 +3201,19 @@ function openLogs(id) {
       };
 
       const createdEvt  = (logs || []).find(l => l.event === 'created');
-      const createdWhen = toLocalStr(createdEvt?.time) || (peer.created_at ? toLocalStr(peer.created_at) : null);
+      const createdWhen = logPeer.created_at_display || ((logPeer.created_at_ts != null)
+        ? fmtLocalTs(normEpoch(Number(logPeer.created_at_ts)))
+        : (logPeer.created_at ? toLocalStr(logPeer.created_at) : (createdEvt?.time_display || toLocalStr(createdEvt?.time))));
       if (createdWhen) overview.innerHTML += `<div class="logs-pill"><i class="fas fa-calendar-plus"></i><strong>Created:</strong>&nbsp;${createdWhen}</div>`;
 
       const firstUsedEvt  = (logs || []).find(l => l.event === 'first_use');
-      const firstUsedWhen = peer.first_used_at ? toLocalStr(peer.first_used_at) : toLocalStr(firstUsedEvt?.time);
+      const firstUsedWhen = logPeer.first_used_at_display || ((logPeer.first_used_at_ts != null)
+        ? fmtLocalTs(normEpoch(Number(logPeer.first_used_at_ts)))
+        : (logPeer.first_used_at ? toLocalStr(logPeer.first_used_at) : (firstUsedEvt?.time_display || toLocalStr(firstUsedEvt?.time))));
       if (firstUsedWhen) overview.innerHTML += `<div class="logs-pill"><i class="fas fa-bolt"></i><strong>First used:</strong>&nbsp;${firstUsedWhen}</div>`;
 
-      const expiresWhen = peer.expires_at ? toLocalStr(peer.expires_at) : null;
+      const logExpiryTs = effectiveExpiryTs(logPeer);
+      const expiresWhen = logPeer.expires_at_display || (logExpiryTs ? fmtLocalTs(logExpiryTs) : null);
       if (expiresWhen) overview.innerHTML += `<div class="logs-pill"><i class="fas fa-hourglass-end"></i><strong>Expires:</strong>&nbsp;${expiresWhen}</div>`;
 
       const tbody = $in('#logs-tbody', logsModal);
@@ -3180,7 +3231,7 @@ function openLogs(id) {
           .map(l => {
             const ic = eventIcon[l.event] || 'fa-info-circle';
             const t  = (typeof l.time === 'number') ? normEpoch(l.time) : tsFrom(l.time);
-            const when = t ? fmtLocalTs(t) : (l.time || '');
+            const when = l.time_display || (t ? fmtLocalTs(t) : (l.time || ''));
             const whenRel = (() => {
               const s = Math.max(0, nowSec() - (t ?? nowSec()));
               const r = (n,u) => `${n} ${u}${n>1?'s':''} ago`;
@@ -3199,7 +3250,7 @@ function openLogs(id) {
                     <i class="fas ${ic}"></i>${l.event.replace(/_/g,' ')}
                   </span>
                 </td>
-                <td style="padding:.5rem .5rem;border-bottom:1px solid #f1f5f9;">${(l.details || '').replace(/\n/g, '<br>')}</td>
+                <td style="padding:.5rem .5rem;border-bottom:1px solid #f1f5f9;">${formatEventDetails(l.details).replace(/\n/g, '<br>')}</td>
                 <td style="padding:.5rem .5rem;border-bottom:1px solid #f1f5f9;white-space:nowrap;color:#64748b">${whenRel}</td>
               </tr>`;
           }).join('');
@@ -3213,8 +3264,10 @@ function openLogs(id) {
       if (btnExport) {
         btnExport.onclick = () => {
           const csv = ['time,event,details'].concat((logs || []).map(l => {
-            const det = (l.details || '').replaceAll('"', '""').replaceAll('\n', '; ');
-            return `"${l.time}","${l.event}","${det}"`;
+            const rawTs = (typeof l.time === 'number') ? normEpoch(l.time) : tsFrom(l.time);
+            const csvTime = l.time_display || (rawTs ? fmtLocalTs(rawTs) : (l.time || ''));
+            const det = formatEventDetails(l.details).replaceAll('"', '""').replaceAll('\n', '; ');
+            return `"${csvTime}","${l.event}","${det}"`;
           })).join('\n');
           const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
           const url = URL.createObjectURL(blob);
