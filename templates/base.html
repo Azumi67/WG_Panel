@@ -93,7 +93,29 @@
     {% endif %}
     <script defer src="{{ url_for('static', filename='js/toast.js') }}"></script>
     <script defer src="{{ url_for('static', filename='js/csrf.js') }}"></script>
-    <script defer src="{{ url_for('static', filename='js/base.js') }}"></script>
+    <script>
+      // Seed from the rendered page, then verify against the live authoritative
+      // endpoint before any peer/subscription data is first rendered. This
+      // defeats stale HTML/proxy caches and never consults the browser timezone.
+      window.WG_PANEL_TIMEZONE = {{ PANEL_TIMEZONE|default('UTC', true)|tojson }};
+      window.WG_PANEL_TIMEZONE_READY = fetch(
+        {{ url_for('api_timezone')|tojson }} + '?_=' + Date.now(),
+        { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } }
+      ).then(function (response) {
+        if (!response.ok) throw new Error('timezone endpoint returned ' + response.status);
+        return response.json();
+      }).then(function (payload) {
+        var timezone = String((payload && payload.timezone) || '').trim();
+        if (!timezone) throw new Error('timezone endpoint returned an empty timezone');
+        new Intl.DateTimeFormat('en', { timeZone: timezone }).format(new Date());
+        window.WG_PANEL_TIMEZONE = timezone;
+        return timezone;
+      }).catch(function () {
+        return window.WG_PANEL_TIMEZONE || 'UTC';
+      });
+      window.WG_TZ_FIX_BUILD = '20260903-v6';
+    </script>
+    <script defer src="{{ url_for('static', filename='js/base.js', v='20260903-time-v6') }}"></script>
 </head>
 
 <body data-preview="{{ '1' if preview|default(false) else '0' }}">
