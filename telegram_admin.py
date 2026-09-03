@@ -394,6 +394,14 @@ def time_text(g, row):
     return g["human_ttl"](ttl)
 
 
+def absolute_time(g, value, fallback="—"):
+    """Format an API UTC instant through Telegram's panel-timezone helper."""
+    formatter = g.get("tg_time")
+    if not callable(formatter):
+        return fallback if value in (None, "", "—") else str(value)
+    return formatter(value, relative=False, fallback=fallback)
+
+
 def _limit_bytes(row):
     """Accept both current and legacy subscription API field names."""
     raw = row.get("limit_bytes")
@@ -513,6 +521,9 @@ def render_client(g, sid):
         "",
         f"◫ <b>Data</b>   {_html(g, data_text(r))}",
         f"◷ <b>Time</b>   {_html(g, time_text(g, r))}",
+        f"◷ <b>Created</b>   {_html(g, absolute_time(g, r.get('created_at')))}",
+        f"◷ <b>Active since</b>   {_html(g, absolute_time(g, r.get('first_used_at'), 'Not started'))}",
+        f"◷ <b>Expires</b>   {_html(g, absolute_time(g, r.get('expires_at'), 'No expiry'))}",
         f"⌘ <b>Configs</b> <code>{total}</code>   ● {active}   ○ {disabled}   ⊘ {blocked}",
     ]
 
@@ -638,6 +649,8 @@ def render_config(g, sid, link):
         f"Address: <code>{_html(g, loc.get('address') or '—')}</code>",
         f"Endpoint: <code>{_html(g, loc.get('endpoint') or '—')}</code>",
         f"Status: <code>{_html(g, loc.get('status') or '—')}</code>",
+        f"First used: <code>{_html(g, absolute_time(g, loc.get('first_used_at'), 'Not started'))}</code>",
+        f"Last activity: <code>{_html(g, absolute_time(g, loc.get('last_activity_at'), 'No activity'))}</code>",
         "",
         (
             f"🔗 <b>Short link</b>: "
