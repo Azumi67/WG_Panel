@@ -364,7 +364,7 @@
     </div>
     <div class="toast" id="toast">Copied</div>
     <script>let DATA = {{ data| tojson }}; const PREVIEW_MODE = {{ 'true' if preview_mode|default (false) else 'false' }}; const TOKEN = {{ sub.token| tojson }}; const CONFIG_URL = {{ url_for('subscription_public_config', token = sub.token, _external = True) | tojson }}; const API_URL = {{ url_for('subscription_public_api', token = sub.token, _external = True) | tojson }}; const PUBLIC_SETTINGS = {{ ps| tojson }};</script>
-    <script defer src="{{ url_for('static', filename='js/subscription_public.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/subscription_public.js', v='20260903-time-v7') }}"></script>
   </body>
 
   </html>
