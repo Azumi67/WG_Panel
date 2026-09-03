@@ -127,10 +127,10 @@
                     </div>
 
                     <div class="auto-label">
-                        <span>Local time</span>
-                        <small>Convert UTC → local</small>
+                        <span>Panel timezone</span>
+                        <small id="logs-panel-timezone">{{ PANEL_TIMEZONE|default('UTC', true) }}</small>
                         <label class="switch sw-black">
-                            <input id="local-time" type="checkbox" aria-label="Show local time">
+                            <input id="local-time" type="checkbox" checked disabled aria-label="Use panel timezone">
                             <span class="track"><span class="thumb"></span></span>
                         </label>
                     </div>
@@ -195,7 +195,7 @@
                     <table class="table compact" id="logs-table" style="width:100%;min-width:0">
                         <thead>
                             <tr>
-                                <th style="width:200px">Time (UTC)</th>
+                                <th style="width:200px">Time ({{ PANEL_TIMEZONE|default('UTC', true) }})</th>
                                 <th style="width:110px">Level</th>
                                 <th style="width:140px">Source</th>
                                 <th>Message</th>
@@ -496,12 +496,19 @@
         function toEpoch(v) {
             if (v == null) return null;
             if (typeof v === 'number') return v > 1e12 ? Math.floor(v / 1000) : v;
-            const d = new Date(v); return isNaN(d) ? null : Math.floor(d.getTime() / 1000);
+            if (typeof window.wgPanelDate === 'function') {
+                const d = window.wgPanelDate(v); return d ? Math.floor(d.getTime() / 1000) : null;
+            }
+            let raw=String(v).trim();
+            if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(raw)) raw=raw.replace(' ','T')+'Z';
+            const d = new Date(raw); return isNaN(d) ? null : Math.floor(d.getTime() / 1000);
         }
         function pad(n) { return String(n).padStart(2, '0'); }
         function fmtLocal(ts) {
-            const d = new Date(ts * 1000);
-            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+            if (typeof window.wgPanelFormatDateTime === 'function') return window.wgPanelFormatDateTime(ts, {seconds:true, fallback:'—'});
+            const d = new Date(ts * 1000), tz = String(window.WG_PANEL_TIMEZONE || 'UTC');
+            const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(d).map(x=>[x.type,x.value]));
+            return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
         }
         function fmtUTC(ts) {
             const d = new Date(ts * 1000);
@@ -510,7 +517,7 @@
         function showTime(rawTs) {
             const e = toEpoch(rawTs);
             if (!e) return rawTs ?? '—';
-            return localToggle?.checked ? fmtLocal(e) : fmtUTC(e);
+            return fmtLocal(e);
         }
 
         window.renderLogRow = function (rec) {
@@ -518,7 +525,7 @@
 
             const tdT = document.createElement('td');
             const raw = rec.ts || rec.time || rec.when || rec.date || '';
-            tdT.textContent = showTime(raw);
+            tdT.textContent = rec.time_display || showTime(raw);
             tdT.title = String(raw);
 
             const lvl = (rec.level || rec.kind || rec.lvl || 'info').toLowerCase();
@@ -531,7 +538,7 @@
         };
 
         localToggle?.addEventListener('change', () => {
-            if (thTime) thTime.textContent = localToggle.checked ? 'Time (local)' : 'Time (UTC)';
+            if (thTime) thTime.textContent = `Time (${String(window.WG_PANEL_TIMEZONE || 'UTC')})`;
             tbody.querySelectorAll('tr').forEach(tr => {
                 const td = tr.firstElementChild; if (!td) return;
                 const raw = td.title || td.textContent;
@@ -539,10 +546,13 @@
             });
         });
 
-        if (thTime && localToggle) thTime.textContent = localToggle.checked ? 'Time (local)' : 'Time (UTC)';
+        if (thTime && localToggle) thTime.textContent = `Time (${String(window.WG_PANEL_TIMEZONE || 'UTC')})`;
+        window.addEventListener('wgpanel:timezone-change',()=>{
+            if (thTime) thTime.textContent = `Time (${String(window.WG_PANEL_TIMEZONE || 'UTC')})`;
+        });
     })();
 </script>
 
-<script defer src="{{ url_for('static', filename='js/logs.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/logs.js', v='20260903-time-v7') }}"></script>
 
 {% endblock %}
