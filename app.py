@@ -270,6 +270,17 @@ def _peer_schema():
         statements.append('ALTER TABLE peer ADD COLUMN address_host VARCHAR(64)')
     if 'peer_endpoint' not in peer_cols:
         statements.append('ALTER TABLE peer ADD COLUMN peer_endpoint VARCHAR(128)')
+    if 'timer_started_at' not in peer_cols:
+        statements.append('ALTER TABLE peer ADD COLUMN timer_started_at DATETIME')
+
+    if insp.has_table('subscription'):
+        subscription_cols = {
+            c['name'] for c in insp.get_columns('subscription')
+        }
+        if 'timer_started_at' not in subscription_cols:
+            statements.append(
+                'ALTER TABLE subscription ADD COLUMN timer_started_at DATETIME'
+            )
 
     if insp.has_table('subscription_peer'):
         link_cols = {c['name'] for c in insp.get_columns('subscription_peer')}
@@ -628,10 +639,7 @@ def activate_apipeer_profile():
         active=name,
     )
 
-# ============================================================
 # Subscription profiles
-# Reusable profiles for the subscription create-client workflow
-# ============================================================
 
 SUBSCRIPTION_PROFILES_FILE = os.path.join(
     app.instance_path,
@@ -1278,10 +1286,20 @@ LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
 os.makedirs(app.instance_path, exist_ok=True)
 APP_LOG_FILE = os.path.join(app.instance_path, 'app.log')
 
+
+def _utc_log_formatter(pattern: str) -> logging.Formatter:
+    """Create an unambiguous UTC formatter for every new application log."""
+    formatter = logging.Formatter(
+        pattern,
+        datefmt='%Y-%m-%dT%H:%M:%SZ',
+    )
+    formatter.converter = time.gmtime
+    return formatter
+
 if not app.logger.handlers:
     handler = RotatingFileHandler(APP_LOG_FILE, maxBytes=1_000_000, backupCount=3, encoding='utf-8')
     handler.setLevel(logging.INFO)
-    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    fmt = _utc_log_formatter("%(asctime)s [%(levelname)s] %(message)s")
     handler.setFormatter(fmt)
     app.logger.addHandler(handler)
     app.logger.setLevel(logging.INFO)
@@ -1296,7 +1314,7 @@ def _unhandled(e):
     app.logger.exception("Unhandled exception")
     return "Internal Server Error", 500
 
-_formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
+_formatter = _utc_log_formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
 _file = RotatingFileHandler(APP_LOG_FILE, maxBytes=2_000_000, backupCount=5, encoding='utf-8')
 _file.setLevel(LOG_LEVEL)
 _file.setFormatter(_formatter)
@@ -1342,7 +1360,19 @@ def inject_nav_flags():
     v = set(current_app.view_functions.keys())
     return {'HAS_NODES': 'nodes' in v, 'HAS_SETTINGS': 'settings_page' in v}
 
+@app.context_processor
+def inject_panel_timezone():
+    try:
+        timezone_name = (
+            _panel_timezone_name()
+            or 'UTC'
+        )
+    except Exception:
+        timezone_name = 'UTC'
 
+    return {
+        'PANEL_TIMEZONE': timezone_name
+    }
 #--------------------------
 # Allow Plain Http
 #_________________________
@@ -1361,7 +1391,19 @@ def _log_request(resp):
 
 @app.after_request
 def cache_headers(resp):
-    if request.path.startswith('/static/') and (request.path.endswith('.css') or request.path.endswith('.js')):
+    if request.path == '/api/timezone':
+        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        resp.headers['Pragma'] = 'no-cache'
+        resp.headers['Expires'] = '0'
+        resp.headers['Vary'] = 'Cookie, Authorization'
+    elif resp.mimetype == 'text/html':
+        # The base template contains the selected panel timezone.  Never let a
+        # browser, reverse proxy or CDN reuse HTML rendered for an older zone.
+        resp.headers['Cache-Control'] = 'private, no-store, no-cache, must-revalidate, max-age=0'
+        resp.headers['Pragma'] = 'no-cache'
+        resp.headers['Expires'] = '0'
+        resp.headers['Vary'] = 'Cookie'
+    elif request.path.startswith('/static/') and (request.path.endswith('.css') or request.path.endswith('.js')):
         resp.headers['Cache-Control'] = 'no-cache, must-revalidate'
     return resp
 
@@ -1689,13 +1731,48 @@ def _whoami_logs() -> tuple[str, str]:
 #----------------------------------
 # Accept several common formats
 #__________________________________
+def _app_log_timestamp_utc(value: str) -> str:
+    """Normalize new UTC log stamps and legacy host-local stamps to UTC."""
+    raw = str(value or '').strip().replace(' ', 'T').replace(',', '.')
+    if not raw:
+        return ''
+
+    try:
+        has_explicit_zone = bool(
+            raw.endswith(('Z', 'z'))
+            or re.search(r'[+-]\d{2}:?\d{2}$', raw)
+        )
+
+        if raw.endswith(('Z', 'z')):
+            parsed = datetime.fromisoformat(raw[:-1] + '+00:00')
+        else:
+            parsed = datetime.fromisoformat(raw)
+
+        if not has_explicit_zone:
+            # Python logging.Formatter used host-local time in older releases.
+            # Attach that host timezone before converting; never label the
+            # legacy wall clock as UTC directly.
+            parsed = parsed.astimezone()
+        elif parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+
+        return (
+            parsed.astimezone(timezone.utc)
+            .isoformat(timespec='seconds')
+            .replace('+00:00', 'Z')
+        )
+    except Exception:
+        return ''
+
+
 def _app_log_line(s: str):
     s = (s or '').rstrip('\n')
-    m = re.match(r'^(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:,\d{3})?)\s+([A-Z]+)\s+([^:]+):\s*(.*)$', s)
+    stamp = r'(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:[,.]\d{1,6})?(?:Z|[+-]\d\d:?\d\d)?)'
+    m = re.match(r'^' + stamp + r'\s+\[?([A-Z]+)\]?\s+([^:]+):\s*(.*)$', s)
     if m:
         ts, level, _name, msg = m.groups()
     else:
-        m = re.match(r'^(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:,\d{3})?)\s+([A-Z]+)\s+(.*)$', s)
+        m = re.match(r'^' + stamp + r'\s+\[?([A-Z]+)\]?\s+(.*)$', s)
         if m:
             ts, level, msg = m.group(1), m.group(2), m.group(3)
         else:
@@ -1704,7 +1781,7 @@ def _app_log_line(s: str):
             ts = ''
             msg = s
     if ts:
-        ts = ts.replace(' ', 'T').split(',')[0] + 'Z'
+        ts = _app_log_timestamp_utc(ts)
     return {'ts': ts, 'level': level.lower(), 'msg': msg}
 
 
@@ -2356,8 +2433,16 @@ def app_logs():
             continue
         if q and q not in (rec['msg'] or '').lower():
             continue
+        if rec.get('ts'):
+            rec['time_display'] = _panel_display_datetime(
+                rec['ts'],
+                seconds=True,
+            )
         out.append(rec)
-    return jsonify(logs=out[-limit:])
+    return jsonify(
+        logs=out[-limit:],
+        display_timezone=_panel_timezone_name(),
+    )
 
 
 def _norm_adminlog(entry: dict):
@@ -2993,9 +3078,6 @@ def _send_telegram_event(
     if not bot_token or not recipients:
         return
 
-    # -----------------
-    # Deduplication
-    # -----------------
 
     event_identity = (
         event_key,
@@ -3034,8 +3116,6 @@ def _send_telegram_event(
             event_identity
         ] = monotonic_now
 
-        # Prevent the dedupe dictionary
-        # from growing forever.
         if len(_TG_EVENT_LAST) > 1000:
 
             expiry_time = (
@@ -3164,14 +3244,6 @@ def _send_telegram_event(
         'scheduled for',
     }
 
-    # These are fixed schedule timestamps.
-    # Relative text such as "(just now)"
-    # is not useful for them.
-    absolute_only_time_labels = {
-        'schedule time',
-        'scheduled for',
-    }
-
     rows = []
 
     for label, value in (
@@ -3195,24 +3267,9 @@ def _send_telegram_event(
             clean_label.lower()
         )
 
-        # --------------------------
-        # Human-readable timestamps
-        # --------------------------
-
         if label_key in time_labels:
 
-            clean_value = (
-                _tg_human_datetime(
-                    value,
-                    relative=(
-                        label_key
-                        not in
-                        absolute_only_time_labels
-                    ),
-                    seconds=False,
-                    fallback='—',
-                )
-            )
+            clean_value = _tg_human_datetime(value,relative=False,seconds=False,fallback='—',)
 
         else:
 
@@ -4587,9 +4644,6 @@ def http_security_settings_post():
             ip=current_ip,
         ), 409
 
-    # Host-firewall escalation is optional. Never persist it as enabled when
-    # this process cannot actually use nftables. The Flask application-level
-    # blocker remains fully functional either way.
     if bool(proposed.get("firewall_enabled")):
         firewall_status = _http_security_nft_status(proposed)
 
@@ -4981,8 +5035,6 @@ def _check_local_notifications(
 
     next_interfaces = {}
 
-    # Two consecutive monitor readings must agree before
-    # a state transition becomes official.
     confirmation_checks = 2
 
     for interface_name, current in (
@@ -5000,8 +5052,6 @@ def _check_local_notifications(
             )
         )
 
-        # First observation:
-        # establish state silently.
         if not isinstance(
             previous,
             dict,
@@ -10795,31 +10845,138 @@ def tg_heartbeat():
         server_ts=rec['ts'],
     )
 
-#______ Current time ________
+# -------------------------------------------------
+# Database DateTime values are stored as naive UTC.
+# Unix timestamps are always absolute UTC instants.
+# Regional timezone is ONLY used when displaying time.
+# -------------------------------------------------
+
 def now_ts() -> int:
     return int(time.time())
-#________Convert___________
-def to_ts(dt):
-    if not dt:
+
+
+def to_ts(value):
+    if value is None:
         return None
-    return int(dt.timestamp())
-#_____Local > Native__________
+
+    if isinstance(value, (int, float)):
+        return int(value)
+
+    if not isinstance(value, datetime):
+        return None
+
+    # server's local timezone.
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+
+    return int(value.timestamp())
+
+
 def from_ts(ts):
     if ts is None:
         return None
-    return datetime.fromtimestamp(int(ts))
-#______ add Days to base ts_________
-def add_days_ts(base_ts, days_float):
-    if base_ts is None or not days_float:
-        return None
-    return int(base_ts + float(days_float) * 86400)
-#_______ISO string for Clients_______
-def isoz(dt):
 
-    if not dt:
+    # Database columns are DateTime without timezone=True,
+    return (
+        datetime
+        .fromtimestamp(int(ts), tz=timezone.utc)
+        .replace(tzinfo=None)
+    )
+
+
+def add_days_ts(base_ts, days_float):
+    if base_ts is None or days_float in (None, ''):
         return None
-    ts = to_ts(dt)
-    return datetime.utcfromtimestamp(ts).isoformat() + 'Z'
+
+    try:
+        duration_seconds = int(round(float(days_float) * 86400.0))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    if duration_seconds <= 0:
+        return None
+
+    return int(base_ts) + duration_seconds
+
+
+def _timer_duration_days(record):
+    """Return a valid positive timer duration, otherwise ``None``."""
+    try:
+        days = float(getattr(record, 'time_limit_days', 0) or 0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return days if days > 0 else None
+
+
+def _timer_anchor_ts(record):
+    """Return the one UTC anchor for the record's current timer cycle."""
+    if bool(getattr(record, 'start_on_first_use', False)):
+        return to_ts(getattr(record, 'first_used_at', None))
+
+    return (
+        to_ts(getattr(record, 'timer_started_at', None))
+        or to_ts(getattr(record, 'created_at', None))
+    )
+
+
+def _effective_expiry_ts(record):
+    """Calculate expiry from one anchor and one duration.
+
+    ``expires_at`` remains stored for compatibility, but it is never trusted
+    as a second source of truth.  This is what keeps enforcement, countdowns,
+    detail cards, logs and subscriptions on the same instant.
+    """
+    if bool(getattr(record, 'unlimited', False)):
+        return None
+
+    days = _timer_duration_days(record)
+    anchor_ts = _timer_anchor_ts(record)
+    if not days or not anchor_ts:
+        return None
+
+    return add_days_ts(anchor_ts, days)
+
+
+def _sync_effective_expiry(record):
+    """Persist the canonical expiry and report whether the row changed."""
+    expected_ts = _effective_expiry_ts(record)
+    current_ts = to_ts(getattr(record, 'expires_at', None))
+    if current_ts == expected_ts:
+        return False
+
+    record.expires_at = from_ts(expected_ts)
+    return True
+
+
+def _start_timer_cycle(record, anchor_ts=None):
+    """Start/restart an immediate timer at an absolute UTC instant."""
+    anchor_ts = int(anchor_ts or now_ts())
+    record.timer_started_at = from_ts(anchor_ts)
+    return _sync_effective_expiry(record)
+
+
+def _clear_timer_cycle(record):
+    record.timer_started_at = None
+    record.expires_at = None
+
+
+def isoz(value):
+    if value is None:
+        return None
+
+    ts = to_ts(value)
+
+    if ts is None:
+        return None
+
+    return (
+        datetime
+        .fromtimestamp(ts, tz=timezone.utc)
+        .isoformat(timespec='seconds')
+        .replace('+00:00', 'Z')
+    )
 
 # -----------------
 # WireGuard stuff
@@ -11866,7 +12023,7 @@ def api_settings():
     except Exception:
         next_url = None
 
-    return jsonify(ok=True, settings=payload, next_url=next_url, requires_restart=True)
+    return jsonify(ok=True, settings=payload, next_url=next_url, requires_restart=False)
 
 @app.get("/api/timezone")
 @require_api_key_or_login
@@ -11884,7 +12041,9 @@ def api_timezone():
 
     return jsonify(
         ok=True,
+        build="20260903-v8",
         timezone=tz_name,
+        server_epoch=now_ts(),
         utc_now=now_utc.isoformat(
             timespec="seconds"
         ).replace(
@@ -12146,7 +12305,7 @@ def user_peer(token):
     if usage_changed:
         db.session.commit()
     used_live = 0
-    exp_ts = to_ts(getattr(p, 'expires_at', None))
+    exp_ts = _effective_expiry_ts(p)
     ttl_seconds = max(0, exp_ts - now_ts()) if exp_ts else None
     used_db = int(getattr(p, 'used_bytes_total', 0) or 0)
     unit = getattr(p, 'data_limit_unit', 'Mi') or 'Mi'
@@ -12176,9 +12335,12 @@ def user_peer(token):
     'used_bytes_db': used_db,
     'used_effective_bytes': used_eff,
     'time_limit_days': getattr(p, 'time_limit_days', None),
+    'display_timezone': _panel_timezone_name(),
     'start_on_first_use': bool(getattr(p, 'start_on_first_use', False)),
     'first_used_at': isoz(getattr(p, 'first_used_at', None)),
-    'expires_at': isoz(getattr(p, 'expires_at', None)),
+    'first_used_at_display': _panel_display_datetime(getattr(p, 'first_used_at', None)),
+    'expires_at': isoz(from_ts(exp_ts)),
+    'expires_at_display': _panel_display_datetime(from_ts(exp_ts)),
     'first_used_at_ts': to_ts(getattr(p, 'first_used_at', None)),
     'expires_at_ts': exp_ts,
     'ttl_seconds': ttl_seconds,
@@ -12990,18 +13152,71 @@ def _available_ips(iface, limit=MAX_ENUMERATED_HOSTS):
 
 
 def log_event(peer, event, details=''):
-    e = PeerEvent(peer_id=peer.id, event=event, details=details)
+    e = PeerEvent(
+        peer_id=peer.id,
+        timestamp=from_ts(now_ts()),
+        event=event,
+        details=details,
+    )
     db.session.add(e)
     db.session.commit()
 
 def _conv_time_limit(payload):
+    """Return the requested duration as fractional days.
+
+    Browser forms send separate day/hour/minute components.  Older profiles
+    can contain a fractional ``time_limit_days`` value *and* a separate hours
+    value.  Adding both reproduces the old timezone-looking bug (for example a
+    hidden two-hour fraction plus one entered hour becomes three hours).  When
+    component fields are present, only the whole-day part of the day field is
+    used.  API callers that send only ``time_limit_days`` may still send a
+    fractional value.
+    """
     try:
-        d = float(payload.get('time_limit_days') or 0)
-        h = float(payload.get('time_limit_hours') or 0)
-        h = max(0.0, min(23.0, h))
-        ttl = d + (h / 24.0)
-        return ttl if ttl > 0 else None
-    except Exception:
+        raw_days = max(0.0, float(payload.get('time_limit_days') or 0))
+
+        has_components = (
+            'time_limit_hours' in payload
+            or 'time_limit_minutes' in payload
+        )
+
+        days = float(int(raw_days)) if has_components else raw_days
+
+        hours = max(
+            0.0,
+            min(
+                23.0,
+                float(
+                    payload.get(
+                        'time_limit_hours'
+                    )
+                    or 0
+                ),
+            ),
+        )
+
+        minutes = max(
+            0.0,
+            min(
+                59.0,
+                float(
+                    payload.get(
+                        'time_limit_minutes'
+                    )
+                    or 0
+                ),
+            ),
+        )
+
+        total_minutes = int(round(days * 1440.0 + hours * 60.0 + minutes))
+
+        return (
+            total_minutes / 1440.0
+            if total_minutes > 0
+            else None
+        )
+
+    except (TypeError, ValueError, OverflowError):
         return None
 
 def _peer_in_conf(conf_path, public_key):
@@ -13546,6 +13761,21 @@ def _panel_local_datetime(value):
 
     return parsed.astimezone(
         _panel_timezone()
+    )
+
+
+def _panel_display_datetime(value, *, seconds=False):
+    """Format one UTC instant in the saved panel timezone on the server.
+
+    Browser code receives this alongside the epoch value.  Human-facing panel
+    screens prefer this field, so a browser/HTML cache cannot silently replace
+    Asia/Tehran with the device timezone.
+    """
+    local_value = _panel_local_datetime(value)
+    if local_value is None:
+        return None
+    return local_value.strftime(
+        '%Y-%m-%d %H:%M:%S' if seconds else '%Y-%m-%d %H:%M'
     )
 
 def _load_panel_settings():
@@ -14424,18 +14654,7 @@ def _expire():
 
     for peer in Peer.query.all():
 
-        should_track_first_use = bool(
-            getattr(
-                peer,
-                'start_on_first_use',
-                False,
-            )
-            or getattr(
-                peer,
-                'unlimited',
-                False,
-            )
-        )
+        should_track_first_use = True
 
         if (
             should_track_first_use
@@ -14453,6 +14672,7 @@ def _expire():
                 peer.first_used_at = from_ts(
                     hs
                 )
+                peer.timer_started_at = from_ts(hs)
 
                 if (
                     getattr(
@@ -14478,9 +14698,7 @@ def _expire():
                         ),
                     )
 
-                    peer.expires_at = from_ts(
-                        first_use_expiry_ts
-                    )
+                    peer.expires_at = from_ts(first_use_expiry_ts)
 
                 log_event(
                     peer,
@@ -14515,25 +14733,12 @@ def _expire():
                 False,
             )
         ):
-            anchor_ts = (
-                to_ts(
-                    getattr(
-                        peer,
-                        'first_used_at',
-                        None,
-                    )
+            if not getattr(peer, 'timer_started_at', None):
+                peer.timer_started_at = (
+                    getattr(peer, 'created_at', None)
+                    or from_ts(now)
                 )
-                or now
-            )
-
-            peer.expires_at = from_ts(
-                add_days_ts(
-                    anchor_ts,
-                    float(
-                        peer.time_limit_days
-                    ),
-                )
-            )
+            _sync_effective_expiry(peer)
 
             changed = True
 
@@ -14585,13 +14790,11 @@ def _expire():
         # Time-limit 
         # -----------
 
-        expiry_ts = to_ts(
-            getattr(
-                peer,
-                'expires_at',
-                None,
-            )
-        )
+        # Enforce the same derived value returned to every UI/API consumer.
+        expiry_ts = _effective_expiry_ts(peer)
+        if to_ts(getattr(peer, 'expires_at', None)) != expiry_ts:
+            peer.expires_at = from_ts(expiry_ts)
+            changed = True
 
         if (
             expiry_ts
@@ -15010,6 +15213,230 @@ def repoint_endpoints():
 
     _write_lastip(cur)
 
+
+_TIME_REPAIR_BACKUP = os.path.join(
+    app.instance_path,
+    'wg_panel.db.pre-time-fix-v5.bak',
+)
+
+
+def _latest_peer_timer_event_ts(peer_id, event_names, *, details_needles=()):
+    """Return the newest canonical UTC timestamp for a timer-anchor event."""
+    try:
+        rows = (
+            PeerEvent.query
+            .filter(PeerEvent.peer_id == int(peer_id))
+            .filter(PeerEvent.event.in_(tuple(event_names)))
+            .order_by(PeerEvent.timestamp.desc())
+            .limit(20)
+            .all()
+        )
+    except Exception:
+        return None
+
+    for row in rows:
+        if details_needles:
+            details = str(getattr(row, 'details', '') or '').lower()
+            if not any(needle in details for needle in details_needles):
+                continue
+        timestamp = to_ts(getattr(row, 'timestamp', None))
+        if timestamp:
+            return timestamp
+    return None
+
+
+def _assign_repaired_expiry(record, expected_ts):
+    current_ts = to_ts(getattr(record, 'expires_at', None))
+    if expected_ts is None:
+        if current_ts is None:
+            return False
+        record.expires_at = None
+        return True
+
+    expected_ts = int(expected_ts)
+    if current_ts is not None and abs(int(current_ts) - expected_ts) <= 2:
+        return False
+
+    record.expires_at = from_ts(expected_ts)
+    return True
+
+
+def _repair_legacy_timer_rows():
+    """Repair old peer/subscription expiries without applying a timezone shift.
+
+    Timezones change presentation only.  A timer is reconstructed from its
+    canonical UTC anchor plus its exact duration.  Reset/enable audit events
+    are used as the anchor when a timer was intentionally restarted.
+    """
+    repaired_peers = 0
+    repaired_subscriptions = 0
+
+    # Preserve the original database before the first automatic repair.
+    try:
+        if (
+            os.path.isfile(DB_PATH)
+            and not os.path.exists(_TIME_REPAIR_BACKUP)
+        ):
+            shutil.copy2(DB_PATH, _TIME_REPAIR_BACKUP)
+    except Exception:
+        app.logger.warning(
+            'Could not create pre-time-fix database backup',
+            exc_info=True,
+        )
+
+    for peer in Peer.query.order_by(Peer.id.asc()).all():
+        if list(getattr(peer, 'subscription_links', []) or []):
+            continue
+
+        try:
+            duration_days = float(getattr(peer, 'time_limit_days', 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            duration_days = 0.0
+
+        expected_ts = None
+        anchor_ts = None
+        if not bool(getattr(peer, 'unlimited', False)) and duration_days > 0:
+            if bool(getattr(peer, 'start_on_first_use', False)):
+                anchor_ts = to_ts(getattr(peer, 'first_used_at', None))
+            else:
+                anchor_ts = to_ts(getattr(peer, 'created_at', None))
+
+                restarted_ts = _latest_peer_timer_event_ts(
+                    peer.id,
+                    ('enabled', 'reset_timer'),
+                )
+                edited_ts = _latest_peer_timer_event_ts(
+                    peer.id,
+                    ('edited',),
+                    details_needles=(
+                        'time_limit_days',
+                        'start_on_first_use',
+                        'unlimited',
+                    ),
+                )
+                anchor_ts = max(
+                    [value for value in (anchor_ts, restarted_ts, edited_ts) if value]
+                    or [0]
+                ) or None
+
+            expected_ts = add_days_ts(anchor_ts, duration_days)
+
+        if to_ts(getattr(peer, 'timer_started_at', None)) != anchor_ts:
+            peer.timer_started_at = from_ts(anchor_ts)
+            repaired_peers += 1
+
+        if _assign_repaired_expiry(peer, expected_ts):
+            repaired_peers += 1
+
+        if (
+            expected_ts
+            and expected_ts <= now_ts()
+            and str(getattr(peer, 'status', '') or '') == 'blocked'
+        ):
+            latest_expired = (
+                PeerEvent.query
+                .filter_by(peer_id=peer.id, event='expired')
+                .order_by(PeerEvent.timestamp.desc())
+                .first()
+            )
+            if (
+                latest_expired
+                and (to_ts(getattr(latest_expired, 'timestamp', None)) or 0)
+                >= int(anchor_ts or 0)
+            ):
+                corrected_detail = f'Expired at {isoz(from_ts(expected_ts))}'
+                if str(latest_expired.details or '') != corrected_detail:
+                    latest_expired.details = corrected_detail
+                    repaired_peers += 1
+
+    for sub in Subscription.query.order_by(Subscription.id.asc()).all():
+        try:
+            duration_days = float(getattr(sub, 'time_limit_days', 0) or 0)
+        except (TypeError, ValueError, OverflowError):
+            duration_days = 0.0
+
+        expected_ts = None
+        anchor_ts = None
+        if not bool(getattr(sub, 'unlimited', False)) and duration_days > 0:
+            if bool(getattr(sub, 'start_on_first_use', False)):
+                anchor_ts = to_ts(getattr(sub, 'first_used_at', None))
+            else:
+                anchor_ts = to_ts(getattr(sub, 'created_at', None))
+                peer_ids = [
+                    int(link.peer_id)
+                    for link in (getattr(sub, 'links', []) or [])
+                    if getattr(link, 'peer_id', None)
+                ]
+                if peer_ids:
+                    reset_event = (
+                        PeerEvent.query
+                        .filter(PeerEvent.peer_id.in_(peer_ids))
+                        .filter(PeerEvent.event == 'subscription_reset_timer')
+                        .order_by(PeerEvent.timestamp.desc())
+                        .first()
+                    )
+                    reset_ts = to_ts(
+                        getattr(reset_event, 'timestamp', None)
+                    ) if reset_event else None
+                    if reset_ts:
+                        anchor_ts = max(anchor_ts or 0, reset_ts)
+
+            expected_ts = add_days_ts(anchor_ts, duration_days)
+
+        if to_ts(getattr(sub, 'timer_started_at', None)) != anchor_ts:
+            sub.timer_started_at = from_ts(anchor_ts)
+            repaired_subscriptions += 1
+
+        if _assign_repaired_expiry(sub, expected_ts):
+            repaired_subscriptions += 1
+
+        for link in (getattr(sub, 'links', []) or []):
+            peer = getattr(link, 'peer', None)
+            if not peer:
+                continue
+            peer_changed = False
+            desired_days = duration_days or None
+            desired_start = bool(getattr(sub, 'start_on_first_use', False))
+            desired_unlimited = bool(getattr(sub, 'unlimited', False))
+            desired_first_used = getattr(sub, 'first_used_at', None)
+            desired_timer_started = getattr(sub, 'timer_started_at', None)
+
+            if getattr(peer, 'time_limit_days', None) != desired_days:
+                peer.time_limit_days = desired_days
+                peer_changed = True
+            if bool(getattr(peer, 'start_on_first_use', False)) != desired_start:
+                peer.start_on_first_use = desired_start
+                peer_changed = True
+            if bool(getattr(peer, 'unlimited', False)) != desired_unlimited:
+                peer.unlimited = desired_unlimited
+                peer_changed = True
+            if to_ts(getattr(peer, 'first_used_at', None)) != to_ts(desired_first_used):
+                peer.first_used_at = desired_first_used
+                peer_changed = True
+            if to_ts(getattr(peer, 'timer_started_at', None)) != to_ts(desired_timer_started):
+                peer.timer_started_at = desired_timer_started
+                peer_changed = True
+            if _assign_repaired_expiry(peer, expected_ts):
+                peer_changed = True
+
+            if peer_changed:
+                repaired_peers += 1
+
+    if repaired_peers or repaired_subscriptions:
+        db.session.commit()
+        app.logger.warning(
+            'Canonical UTC timer repair completed: peers=%s subscriptions=%s',
+            repaired_peers,
+            repaired_subscriptions,
+        )
+    else:
+        db.session.rollback()
+
+    return {
+        'peers': repaired_peers,
+        'subscriptions': repaired_subscriptions,
+    }
+
 # -----------
 # Bootstrap
 # ___________
@@ -15020,6 +15447,7 @@ def _migrate_schema():
         _peer_schema()
         _interface_schema()
         _shortlink_schema()
+        _repair_legacy_timer_rows()
     except Exception as exc:
         raise SchemaMigrationError(str(exc)) from exc
 
@@ -17426,18 +17854,36 @@ def node_peers(nid):
                 live_total = int(getattr(p, 'bytes_offset', 0) or 0)
                 used_live = int(getattr(p, 'used_bytes_total', 0) or 0)
 
-            if getattr(p, 'start_on_first_use', False) and not getattr(p, 'first_used_at', None) and live_total > 0:
-                p.first_used_at = datetime.utcnow()
-                tl_days = getattr(p, 'time_limit_days', None)
-                if tl_days:
-                    try:
-                        p.expires_at = p.first_used_at + timedelta(days=float(tl_days))
-                    except Exception:
-                        p.expires_at = None
-                dirty = True
+            if not getattr(p, 'first_used_at', None):
+
+                try:
+                    handshake_ts = int((r or {}).get('latest_handshake')or 0)
+                except Exception:
+                    handshake_ts = 0
+
+                if handshake_ts > 0:
+                    p.first_used_at = from_ts(
+                        handshake_ts
+                    )
+                    p.timer_started_at = from_ts(handshake_ts)
+
+                    if (
+                        getattr(p,'start_on_first_use',False,)
+                        and getattr(p,'time_limit_days',None,)
+                        and not getattr(p,'unlimited',False,)):
+                        p.expires_at = from_ts(
+                            add_days_ts(
+                                handshake_ts,
+                                float(
+                                    p.time_limit_days
+                                ),
+                            )
+                        )
+
+                    dirty = True
 
 
-            exp_ts      = to_ts(getattr(p, 'expires_at', None))
+            exp_ts      = _effective_expiry_ts(p)
             ttl_seconds = max(0, exp_ts - now_ts()) if exp_ts else None
 
             p_iface    = p.iface
@@ -17478,11 +17924,15 @@ def node_peers(nid):
                 'limit_unit': getattr(p, 'data_limit_unit', None),
                 'unlimited': getattr(p, 'unlimited', False),
                 'time_limit_days': getattr(p, 'time_limit_days', None),
+                'display_timezone': _panel_timezone_name(),
                 'start_on_first_use': getattr(p, 'start_on_first_use', False),
                 'first_used_at': isoz(getattr(p, 'first_used_at', None)),
-                'expires_at': isoz(getattr(p, 'expires_at', None)),
+                'first_used_at_display': _panel_display_datetime(getattr(p, 'first_used_at', None)),
+                'expires_at': isoz(from_ts(exp_ts)),
+                'expires_at_display': _panel_display_datetime(from_ts(exp_ts)),
                 'first_used_at_ts': to_ts(getattr(p, 'first_used_at', None)),
                 'created_at': isoz(getattr(p, 'created_at', None)),
+                'created_at_display': _panel_display_datetime(getattr(p, 'created_at', None)),
                 'created_at_ts': to_ts(getattr(p, 'created_at', None)),
                 'expires_at_ts': exp_ts,
                 'ttl_seconds': ttl_seconds,
@@ -17565,12 +18015,15 @@ def node_peers(nid):
 
     compensation = PeerCreateCompensation()
     compensation.register_node(n, pub)
+    created_ts = now_ts()
     try:
         peer = Peer(
             iface_id=iface.id,
             name=(data.get('name') or '').strip() or 'peer',
             public_key=pub,
             private_key=priv,
+            created_at=from_ts(created_ts),
+            timer_started_at=from_ts(created_ts),
             address=address,
             allowed_ips=allowed_ips,
             endpoint=(data.get('endpoint') or '').strip() or None,
@@ -17587,6 +18040,16 @@ def node_peers(nid):
             phone_number=(data.get('phone_number') or '').strip(),
             telegram_id=(data.get('telegram_id') or '').strip(),
         )
+
+        if (
+            peer.time_limit_days
+            and not peer.start_on_first_use
+            and not peer.unlimited
+        ):
+            peer.expires_at = from_ts(
+                add_days_ts(created_ts, peer.time_limit_days)
+            )
+
         db.session.add(peer)
         db.session.commit()
     except Exception as exc:
@@ -17784,6 +18247,7 @@ def node_enable_peer(nid, pub):
         p.bytes_offset = current_live_total
         p.used_bytes_total = 0
         p.first_used_at = None
+        p.timer_started_at = None
 
         try:
             time_limit_days = float(
@@ -17799,12 +18263,7 @@ def node_enable_peer(nid, pub):
             p.expires_at = None
 
         elif time_limit_days > 0:
-            p.expires_at = from_ts(
-                add_days_ts(
-                    now_ts(),
-                    time_limit_days
-                )
-            )
+            _start_timer_cycle(p)
 
         else:
             p.expires_at = None
@@ -17943,6 +18402,7 @@ def node_reset_peer_timer_only(nid, pub):
         tl_days_f = 0.0
 
     p.first_used_at = None
+    p.timer_started_at = None
 
     if getattr(p, 'unlimited', False) or tl_days_f <= 0:
         p.expires_at = None
@@ -17951,7 +18411,7 @@ def node_reset_peer_timer_only(nid, pub):
         p.expires_at = None
         detail = 'Node timer cleared; will start on first use; peer re-enabled'
     else:
-        p.expires_at = from_ts(add_days_ts(now_ts(), tl_days_f))
+        _start_timer_cycle(p)
         detail = f'Node timer restarted for {tl_days_f} days; peer re-enabled'
 
     payload = {}
@@ -18583,9 +19043,34 @@ def users():
         pub  = subprocess.check_output(['wg', 'pubkey'], input=priv.encode()).strip().decode()
 
         combined_days = _conv_time_limit({
-            'time_limit_days': getattr(form, 'time_limit_days', None) and form.time_limit_days.data,
-            'time_limit_hours': getattr(form, 'time_limit_hours', None) and form.time_limit_hours.data,
+            'time_limit_days': (
+                getattr(
+                    form,
+                    'time_limit_days',
+                    None,
+                )
+                and form.time_limit_days.data
+            ),
+
+            'time_limit_hours': (
+                getattr(
+                    form,
+                    'time_limit_hours',
+                    None,
+                )
+                and form.time_limit_hours.data
+            ),
+
+            'time_limit_minutes': (
+                getattr(
+                    form,
+                    'time_limit_minutes',
+                    None,
+                )
+                and form.time_limit_minutes.data
+            ),
         })
+        created_ts = now_ts()
 
         peer = Peer(
             iface_id=iface.id,
@@ -18602,15 +19087,27 @@ def users():
             data_limit_value=int(getattr(form, 'data_limit', None) and (form.data_limit.data or 0)),
             data_limit_unit=getattr(form, 'limit_unit', None) and form.limit_unit.data,
             time_limit_days=combined_days,
+            created_at=from_ts(created_ts),
+            timer_started_at=from_ts(created_ts),
             start_on_first_use=bool(getattr(form, 'start_on_first_use', None) and form.start_on_first_use.data),
             unlimited=bool(getattr(form, 'unlimited', None) and form.unlimited.data),
             phone_number=getattr(form, 'phone_number', None) and form.phone_number.data,
             telegram_id=getattr(form, 'telegram_id', None) and form.telegram_id.data,
         )
 
-        if peer.time_limit_days and not peer.start_on_first_use and not peer.unlimited:
-            exp_ts = add_days_ts(now_ts(), float(peer.time_limit_days))
-            peer.expires_at = from_ts(exp_ts)
+        if (
+            peer.time_limit_days
+            and not peer.start_on_first_use
+            and not peer.unlimited
+        ):
+            peer.expires_at = from_ts(
+                add_days_ts(
+                    created_ts,
+                    float(
+                         peer.time_limit_days
+                    ),
+                )
+            )
 
         installed = False
 
@@ -18629,16 +19126,23 @@ def users():
                 installed = True
                 peer.status = 'online'
 
-                db.session.add(PeerEvent(
-                    peer_id=peer.id,
-                    event='created',
-                    details=(
-                        f"iface={iface.name}; "
-                        f"limit={getattr(peer,'data_limit_value',0)}"
-                        f"{getattr(peer,'data_limit_unit','')}; "
-                        f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
-                    ),
-                ))
+                db.session.add(
+                    PeerEvent(
+                        peer_id=peer.id,
+
+                        timestamp=peer.created_at,
+
+                        event='created',
+
+                        details=(
+                            f"iface={iface.name}; "
+                            f"limit={getattr(peer,'data_limit_value',0)}"
+                            f"{getattr(peer,'data_limit_unit','')}; "
+                            f"days={peer.time_limit_days}; "
+                            f"unlimited={peer.unlimited}"
+                        ),
+                    )
+                )
                 db.session.commit()
                 flash('Peer created & enabled', 'success')
 
@@ -19312,6 +19816,7 @@ def peers_create():
         tg = (data.get('telegram_id') or data.get('telegram') or '').strip()
 
         combined_days = _conv_time_limit(data)
+        created_ts = now_ts()
 
         data_limit_value = _as_int(
             data.get('data_limit_value') if data.get('data_limit_value') is not None else data.get('data_limit'),
@@ -19432,6 +19937,8 @@ def peers_create():
                 name=name,
                 public_key=pub,
                 private_key=priv,
+                created_at=from_ts(created_ts),
+                timer_started_at=from_ts(created_ts),
                 address=addr,
                 allowed_ips=allowed_ips,
                 endpoint=endpoint or None,
@@ -19449,9 +19956,19 @@ def peers_create():
                 telegram_id=tg or '',
             )
 
-            if peer.time_limit_days and not peer.start_on_first_use and not peer.unlimited:
-                exp_ts = add_days_ts(now_ts(), float(peer.time_limit_days))
-                peer.expires_at = from_ts(exp_ts)
+            if (
+                peer.time_limit_days
+                and not peer.start_on_first_use
+                and not peer.unlimited
+            ):
+                peer.expires_at = from_ts(
+                    add_days_ts(
+                        created_ts,
+                        float(
+                            peer.time_limit_days
+                        ),
+                    )
+                )
         except Exception as e:
             cleanup_failures = compensation.rollback()
             db.session.rollback()
@@ -19556,6 +20073,7 @@ def peers_create():
         return jsonify(error="key_generation_failed", detail=str(e)), 500
 
     combined_days = _conv_time_limit(data)
+    created_ts = now_ts()
 
     phone = (data.get('phone_number') or data.get('phone') or '').strip()
     tg = (data.get('telegram_id') or data.get('telegram') or '').strip()
@@ -19582,6 +20100,8 @@ def peers_create():
         name=(data.get('name') or '').strip() or 'peer',
         public_key=pub,
         private_key=priv,
+        created_at=from_ts(created_ts),
+        timer_started_at=from_ts(created_ts),
         allowed_ips=allowed_ips,
         endpoint=endpoint or None,
         peer_endpoint=peer_endpoint or None,
@@ -19599,7 +20119,7 @@ def peers_create():
     )
 
     if peer.time_limit_days and not peer.start_on_first_use and not peer.unlimited:
-        exp_ts = add_days_ts(now_ts(), float(peer.time_limit_days))
+        exp_ts = add_days_ts(created_ts, float(peer.time_limit_days))
         peer.expires_at = from_ts(exp_ts)
 
     short_token = None
@@ -19811,15 +20331,8 @@ def panel_peers():
                 )
             )
 
-            expires_at = getattr(
-                peer,
-                'expires_at',
-                None,
-            )
-
-            expires_timestamp = to_ts(
-                expires_at
-            )
+            expires_timestamp = _effective_expiry_ts(peer)
+            expires_at = from_ts(expires_timestamp)
 
             ttl_seconds = (
                 max(
@@ -19949,6 +20462,12 @@ def panel_peers():
                     )
                 ),
 
+                'display_timezone': _panel_timezone_name(),
+
+                'created_at_display': _panel_display_datetime(
+                    getattr(peer, 'created_at', None)
+                ),
+
                 'created_at_ts': to_ts(
                     getattr(
                         peer,
@@ -19965,6 +20484,10 @@ def panel_peers():
                     )
                 ),
 
+                'first_used_at_display': _panel_display_datetime(
+                    getattr(peer, 'first_used_at', None)
+                ),
+
                 'first_used_at_ts': to_ts(
                     getattr(
                         peer,
@@ -19974,6 +20497,10 @@ def panel_peers():
                 ),
 
                 'expires_at': isoz(
+                    expires_at
+                ),
+
+                'expires_at_display': _panel_display_datetime(
                     expires_at
                 ),
 
@@ -20070,6 +20597,7 @@ def panel_peers_bulk():
         combined_days = _conv_time_limit({
             'time_limit_days': data.get('time_limit_days'),
             'time_limit_hours': data.get('time_limit_hours'),
+            'time_limit_minutes': data.get('time_limit_minutes'),
         })
 
         allowed_ips = (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip()
@@ -20225,6 +20753,7 @@ def panel_peers_bulk():
                 ).strip().decode()
 
                 name = f"{prefix}{next_num + i}"
+                created_ts = now_ts()
 
                 try:
                     addr = node_install_peer(
@@ -20248,6 +20777,8 @@ def panel_peers_bulk():
                     name=name,
                     public_key=pub,
                     private_key=priv,
+                    created_at=from_ts(created_ts),
+                    timer_started_at=from_ts(created_ts),
                     address=addr,
                     allowed_ips=allowed_ips,
                     endpoint=endpoint or None,
@@ -20265,9 +20796,19 @@ def panel_peers_bulk():
                     telegram_id=tgs[i] if i < len(tgs) else '',
                 )
 
-                if peer.time_limit_days and not peer.start_on_first_use and not peer.unlimited:
-                    exp_ts = add_days_ts(now_ts(), float(peer.time_limit_days))
-                    peer.expires_at = from_ts(exp_ts)
+                if (
+                    peer.time_limit_days
+                    and not peer.start_on_first_use
+                    and not peer.unlimited
+                ):
+                    peer.expires_at = from_ts(
+                        add_days_ts(
+                            created_ts,
+                            float(
+                                peer.time_limit_days
+                            ), 
+                        )
+                    )
 
                 db.session.add(peer)
                 db.session.flush()
@@ -20285,15 +20826,25 @@ def panel_peers_bulk():
                     )
 
                 try:
-                    db.session.add(PeerEvent(
-                        peer_id=peer.id,
-                        event='created',
-                        details=(
-                            f"node bulk; node_id={nid}; iface={iface_name}; "
-                            f"Limit={peer.data_limit_value}{peer.data_limit_unit or ''}; "
-                            f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
-                        )
-                    ))
+                    db.session.add(
+                        PeerEvent(
+                            peer_id=peer.id,
+
+                            timestamp=peer.created_at,
+
+                            event='created',
+
+                            details=(
+                                f"node bulk; "
+                                f"node_id={nid}; "
+                                f"iface={iface_name}; "
+                                f"Limit={peer.data_limit_value}"
+                                f"{peer.data_limit_unit or ''}; "
+                                f"days={peer.time_limit_days}; "
+                                f"unlimited={peer.unlimited}"
+                        ),
+                    )
+                )
                 except Exception:
                     pass
 
@@ -20427,6 +20978,7 @@ def panel_peers_bulk():
     combined_days = _conv_time_limit({
         'time_limit_days': data.get('time_limit_days'),
         'time_limit_hours': data.get('time_limit_hours'),
+        'time_limit_minutes': data.get('time_limit_minutes'),
     })
 
     rx = re.compile(rf'^{re.escape(prefix)}(\d+)$')
@@ -20491,10 +21043,13 @@ def panel_peers_bulk():
                 priv = subprocess.check_output(['wg', 'genkey']).strip().decode()
                 pub  = subprocess.check_output(['wg', 'pubkey'], input=priv.encode()).strip().decode()
                 name = f"{prefix}{next_num + i}"
+                created_ts = now_ts()
 
                 peer = Peer(
                     iface_id=iface.id, name=name,
                     public_key=pub, private_key=priv,
+                    created_at=from_ts(created_ts),
+                    timer_started_at=from_ts(created_ts),
                     address=addr, allowed_ips=allowed_ips,
                     endpoint=endpoint or None,
                     peer_endpoint=peer_endpoint or None,
@@ -20510,9 +21065,19 @@ def panel_peers_bulk():
                     telegram_id=tgs[i] if i < len(tgs) else '',
                 )
 
-                if peer.time_limit_days and not peer.start_on_first_use and not peer.unlimited:
-                    exp_ts = add_days_ts(now_ts(), float(peer.time_limit_days))
-                    peer.expires_at = from_ts(exp_ts)
+                if (
+                    peer.time_limit_days
+                    and not peer.start_on_first_use
+                    and not peer.unlimited
+                ):
+                    peer.expires_at = from_ts(
+                        add_days_ts(
+                            created_ts,
+                            float(
+                                peer.time_limit_days
+                            ),
+                        )
+                    )
 
                 db.session.add(peer)
                 db.session.flush()
@@ -20520,14 +21085,23 @@ def panel_peers_bulk():
                 install_local_peer(peer)
                 installed = True
 
-                db.session.add(PeerEvent(
-                    peer_id=peer.id,
-                    event='created',
-                    details=(
-                        f"bulk; Limit={peer.data_limit_value}{peer.data_limit_unit or ''}; "
-                        f"days={peer.time_limit_days}; unlimited={peer.unlimited}"
-                    ),
-                ))
+                db.session.add(
+                    PeerEvent(
+                        peer_id=peer.id,
+
+                        timestamp=peer.created_at,
+
+                        event='created',
+
+                        details=(
+                            f"bulk; "
+                            f"Limit={peer.data_limit_value}"
+                            f"{peer.data_limit_unit or ''}; "
+                            f"days={peer.time_limit_days}; "
+                            f"unlimited={peer.unlimited}"
+                        ),
+                    )
+                )
                 db.session.commit()
                 created.append(peer)
 
@@ -22051,6 +22625,7 @@ def api_enable(pid):
         p.bytes_offset = live_total
         p.used_bytes_total = 0
         p.first_used_at = None
+        p.timer_started_at = None
 
         try:
             time_limit_days = float(
@@ -22074,12 +22649,7 @@ def api_enable(pid):
             p.expires_at = None
 
         elif time_limit_days > 0:
-            p.expires_at = from_ts(
-                add_days_ts(
-                    now_ts(),
-                    time_limit_days
-                )
-            )
+            _start_timer_cycle(p)
 
         else:
             p.expires_at = None
@@ -22266,6 +22836,7 @@ def api_reset_timer(pid):
 
     try:
         p.first_used_at = None
+        p.timer_started_at = None
 
         if getattr(p, 'unlimited', False) or time_limit <= 0:
             p.expires_at = None
@@ -22276,12 +22847,7 @@ def api_reset_timer(pid):
             detail = 'Timer cleared; timer will start on first use'
 
         else:
-            p.expires_at = from_ts(
-                add_days_ts(
-                    now_ts(),
-                    time_limit
-                )
-            )
+            _start_timer_cycle(p)
             detail = f'Timer restarted for {time_limit:g} days'
 
         is_node_peer = (
@@ -22759,7 +23325,7 @@ def api_edit(pid):
             'unlimited',
             False,
         ):
-            p.expires_at = None
+            _clear_timer_cycle(p)
 
         elif getattr(
             p,
@@ -22778,31 +23344,17 @@ def api_edit(pid):
                     None,
                 )
             ):
-                p.expires_at = None
+                _clear_timer_cycle(p)
 
             else:
-                anchor_ts = (
-                    to_ts(
-                        getattr(
-                            p,
-                            'first_used_at',
-                            None,
-                        )
-                    )
-                    or now_ts()
-                )
-
-                p.expires_at = from_ts(
-                    add_days_ts(
-                        anchor_ts,
-                        float(
-                            p.time_limit_days
-                        ),
-                    )
-                )
+                if getattr(p, 'start_on_first_use', False):
+                    p.timer_started_at = getattr(p, 'first_used_at', None)
+                    _sync_effective_expiry(p)
+                else:
+                    _start_timer_cycle(p)
 
         else:
-            p.expires_at = None
+            _clear_timer_cycle(p)
 
     external_fields = {
         'address',
@@ -23082,6 +23634,9 @@ def peer_logs(pid):
             'time': timestamp,
             'ts': timestamp,
             'timestamp': timestamp,
+            'time_display': _panel_display_datetime(
+                getattr(event, 'timestamp', None)
+            ),
 
             'event': event_name,
             'details': details,
@@ -23178,10 +23733,51 @@ def peer_logs(pid):
         peer={
             'id': p.id,
             'name': p.name or '',
-            'panel_status': (
-                p.status
-                or 'offline'
+            'display_timezone': _panel_timezone_name(),
+
+            'created_at': isoz(
+                getattr(
+                    p,
+                    'created_at',
+                    None,
+                )
             ),
+
+            'created_at_ts': to_ts(getattr(p,'created_at',None,)),
+
+            'created_at_display': _panel_display_datetime(
+                getattr(p, 'created_at', None)
+            ),
+
+            'first_used_at': isoz(getattr(p,'first_used_at',None,)),
+
+            'first_used_at_ts': to_ts(getattr(p,'first_used_at',None,)),
+
+            'first_used_at_display': _panel_display_datetime(
+                getattr(p, 'first_used_at', None)
+            ),
+
+            'expires_at': isoz(from_ts(_effective_expiry_ts(p))),
+
+            'expires_at_display': _panel_display_datetime(
+                from_ts(_effective_expiry_ts(p))
+            ),
+
+            'expires_at_ts': _effective_expiry_ts(p),
+
+            'ttl_seconds': (
+                max(0, _effective_expiry_ts(p) - now_ts())
+                if _effective_expiry_ts(p)
+                else None
+            ),
+
+            'time_limit_days': getattr(p, 'time_limit_days', None),
+
+            'start_on_first_use': bool(
+                getattr(p, 'start_on_first_use', False)
+            ),
+
+            'panel_status': (p.status or 'offline'),
 
             'scope': (
                 'node'
@@ -24934,7 +25530,7 @@ def _sub_used_bytes(sub):
     return int(total)
 
 def _sub_ttl_seconds(sub):
-    exp_ts = to_ts(getattr(sub, 'expires_at', None))
+    exp_ts = _effective_expiry_ts(sub)
     return max(0, exp_ts - now_ts()) if exp_ts else None
 
 def _sub_public_url(sub):
@@ -24943,7 +25539,7 @@ def _sub_public_url(sub):
 def _sub_config_url(sub):
     return url_for('subscription_public_config', token=sub.token, _external=True)
 
-def _apply_subscription_timer(sub):
+def _apply_subscription_timer(sub, *, restart=False):
 
     unlimited = bool(
         getattr(
@@ -24962,43 +25558,43 @@ def _apply_subscription_timer(sub):
     )
 
     if unlimited or not days:
-        sub.expires_at = None
+        _clear_timer_cycle(sub)
         return
 
-    if bool(
+    start_on_first_use = bool(
         getattr(
             sub,
             'start_on_first_use',
             False,
         )
-    ):
+    )
+
+    if start_on_first_use:
+
         first_used_at = getattr(
             sub,
             'first_used_at',
             None,
         )
 
-        if first_used_at:
-            sub.expires_at = from_ts(
-                add_days_ts(
-                    to_ts(first_used_at),
-                    days,
-                )
-            )
-        else:
-            sub.expires_at = None
+        if not first_used_at:
+            _clear_timer_cycle(sub)
+            return
+
+        sub.timer_started_at = first_used_at
+        _sync_effective_expiry(sub)
 
         return
 
-    if not getattr(sub, 'first_used_at', None):
-        sub.first_used_at = from_ts(now_ts())
-
-    sub.expires_at = from_ts(
-        add_days_ts(
-            to_ts(sub.first_used_at),
-            days,
-        )
-    )
+    if restart:
+        _start_timer_cycle(sub)
+    else:
+        if not getattr(sub, 'timer_started_at', None):
+            sub.timer_started_at = (
+                getattr(sub, 'created_at', None)
+                or from_ts(now_ts())
+            )
+        _sync_effective_expiry(sub)
 
 def _sync_peer_subscription(peer, sub, idx=None, rename=True):
     if rename:
@@ -25015,7 +25611,7 @@ def _sync_peer_subscription(peer, sub, idx=None, rename=True):
     peer.unlimited = bool(getattr(sub, 'unlimited', False))
     peer.phone_number = getattr(sub, 'phone_number', '') or ''
     peer.telegram_id = getattr(sub, 'telegram_id', '') or ''
-    peer.first_used_at = getattr(sub, 'first_used_at', None)
+    peer.timer_started_at = getattr(sub, 'timer_started_at', None)
     peer.expires_at = getattr(sub, 'expires_at', None)
     return peer
 
@@ -25797,7 +26393,7 @@ def _subscription_row(sub):
     if subscription_changed:
         if unlimited:
             try:
-                sub.expires_at = None
+                _clear_timer_cycle(sub)
             except Exception:
                 pass
 
@@ -26180,6 +26776,10 @@ def _subscription_row(sub):
                 peer_first_used
             ),
 
+            'first_used_at_display': _panel_display_datetime(
+                peer_first_used
+            ),
+
             'first_used_at_ts': to_ts(
                 peer_first_used
             ),
@@ -26399,15 +26999,7 @@ def _subscription_row(sub):
         None,
     )
 
-    expires_at = (
-        None
-        if unlimited
-        else getattr(
-            sub,
-            'expires_at',
-            None,
-        )
-    )
+    expires_at = from_ts(_effective_expiry_ts(sub)) if not unlimited else None
 
     ttl_seconds = (
         None
@@ -26422,6 +27014,7 @@ def _subscription_row(sub):
         'name': sub.name,
         'token': sub.token,
         'note': sub.note or '',
+        'display_timezone': _panel_timezone_name(),
 
         'data_limit_value': int(
             getattr(
@@ -26480,6 +27073,10 @@ def _subscription_row(sub):
             created_at
         ),
 
+        'created_at_display': _panel_display_datetime(
+            created_at
+        ),
+
         'created_at_ts': to_ts(
             created_at
         ),
@@ -26488,11 +27085,19 @@ def _subscription_row(sub):
             first_used_at
         ),
 
+        'first_used_at_display': _panel_display_datetime(
+            first_used_at
+        ),
+
         'first_used_at_ts': to_ts(
             first_used_at
         ),
 
         'expires_at': isoz(
+            expires_at
+        ),
+
+        'expires_at_display': _panel_display_datetime(
             expires_at
         ),
 
@@ -26651,6 +27256,7 @@ def _create_subscription_peer(target, payload, compensation=None):
     pub = subprocess.check_output(['wg', 'pubkey'], input=priv.encode()).strip().decode()
     payload = dict(payload)
     peer_endpoint = (payload.pop('peer_endpoint', '') or '').strip()
+    created_ts = now_ts()
 
     if scope == 'node':
         nid = _sub_int(target.get('node_id'))
@@ -26682,9 +27288,21 @@ def _create_subscription_peer(target, payload, compensation=None):
             allowed_ips=payload.get('allowed_ips') or '0.0.0.0/0, ::/0',
         )
         peer = Peer(
-            iface_id=iface.id, public_key=pub, private_key=priv,
-            address=addr, peer_endpoint=peer_endpoint or None,
-            status='online', **payload
+            iface_id=iface.id,
+
+            public_key=pub,
+            private_key=priv,
+
+            created_at=from_ts(created_ts),
+            timer_started_at=from_ts(created_ts),
+
+            address=addr,
+
+            peer_endpoint=(peer_endpoint or None),
+
+            status='online',
+
+            **payload,
         )
         db.session.add(peer)
         db.session.flush()
@@ -26702,9 +27320,21 @@ def _create_subscription_peer(target, payload, compensation=None):
         addr = allocate_peer_address(iface, requested=requested)
 
         peer = Peer(
-            iface_id=iface.id, public_key=pub, private_key=priv,
-            address=addr, peer_endpoint=peer_endpoint or None,
-            status='online', **payload
+            iface_id=iface.id,
+
+            public_key=pub,
+            private_key=priv,
+
+            created_at=from_ts(created_ts),
+            timer_started_at=from_ts(created_ts),
+
+            address=addr,
+
+            peer_endpoint=(peer_endpoint or None),
+
+            status='online',
+
+            **payload,
         )
         db.session.add(peer)
         db.session.flush()
@@ -26761,10 +27391,13 @@ def _update_subscription_payload(sub, data, reset_timer=False):
         sub.telegram_id = (data.get('telegram_id') or '').strip()
     if 'enabled' in data:
         sub.enabled = _sub_bool(data.get('enabled'))
-    if reset_timer or old_name != sub.name or any(k in data for k in ('time_limit_days', 'start_on_first_use', 'unlimited')):
+    timer_policy_changed = any(
+        k in data for k in ('time_limit_days', 'start_on_first_use', 'unlimited')
+    )
+    if reset_timer or timer_policy_changed:
         if reset_timer or not getattr(sub, 'start_on_first_use', False):
             sub.first_used_at = None
-        _apply_subscription_timer(sub)
+        _apply_subscription_timer(sub, restart=True)
     else:
         _apply_subscription_timer(sub)
     _sync_all_subscription_peers(sub, rename=True)
@@ -26877,7 +27510,7 @@ def _reset_subscription_timer(sub):
     }
 
     sub.first_used_at = None
-    _apply_subscription_timer(sub)
+    _apply_subscription_timer(sub, restart=True)
 
     data_exhausted = _subscription_data_exhausted(sub)
 
@@ -27949,17 +28582,31 @@ def api_subscriptions():
         db.session.commit()
         return jsonify(subscriptions=[_subscription_row(s) for s in rows])
     data = request.get_json(silent=True) or {}
+    created_ts = now_ts()
     sub = Subscription(
-        name=(data.get('name') or 'Subscription').strip(),
+        name=(data.get('name')or 'Subscription').strip(),
+
         token=_token(),
-        note=(data.get('note') or '').strip(),
-        data_limit_value=_sub_int(data.get('data_limit_value'), 0),
-        data_limit_unit=(data.get('data_limit_unit') or 'Gi'),
-        time_limit_days=_sub_float(data.get('time_limit_days'), 0),
+
+        created_at=from_ts(created_ts),
+        timer_started_at=from_ts(created_ts),
+
+        note=(data.get('note')or '').strip(),
+
+        data_limit_value=_sub_int(data.get('data_limit_value'),0,),
+
+        data_limit_unit=(data.get('data_limit_unit')or 'Gi'),
+
+        time_limit_days=_sub_float(data.get('time_limit_days'),0,),
+
         start_on_first_use=_sub_bool(data.get('start_on_first_use')),
+
         unlimited=_sub_bool(data.get('unlimited')),
-        phone_number=(data.get('phone_number') or '').strip(),
-        telegram_id=(data.get('telegram_id') or '').strip(),
+
+        phone_number=(data.get('phone_number')or '').strip(),
+
+        telegram_id=(data.get('telegram_id')or '').strip(),
+
         enabled=True,
     )
     _apply_subscription_timer(sub)
@@ -28783,7 +29430,7 @@ def subscription_access(sub, used_bytes=None) -> dict:
     if bool(getattr(sub, 'unlimited', False)):
         return {'allowed': True, 'reason': '', 'message': ''}
 
-    expires_ts = to_ts(getattr(sub, 'expires_at', None))
+    expires_ts = _effective_expiry_ts(sub)
     if expires_ts and expires_ts <= now_ts():
         return {
             'allowed': False,
@@ -28913,7 +29560,7 @@ def _subscription_public_payload(sub) -> dict:
         except Exception:
             db.session.rollback()
 
-    exp_ts = to_ts(getattr(sub, 'expires_at', None))
+    exp_ts = _effective_expiry_ts(sub)
     ttl_seconds = max(0, exp_ts - now_ts()) if exp_ts else None
 
     if limit_bytes is not None:
@@ -28923,6 +29570,7 @@ def _subscription_public_payload(sub) -> dict:
         'id': sub.id,
         'name': sub.name,
         'token': sub.token,
+        'display_timezone': _panel_timezone_name(),
         'enabled': bool(getattr(sub, 'enabled', True)),
         'unlimited': bool(getattr(sub, 'unlimited', False)),
         'limit_bytes': limit_bytes,
@@ -28931,7 +29579,9 @@ def _subscription_public_payload(sub) -> dict:
         'data_limit_unit': getattr(sub, 'data_limit_unit', 'Gi') or 'Gi',
         'start_on_first_use': bool(getattr(sub, 'start_on_first_use', False)),
         'first_used_at': isoz(getattr(sub, 'first_used_at', None)),
-        'expires_at': isoz(getattr(sub, 'expires_at', None)),
+        'first_used_at_display': _panel_display_datetime(getattr(sub, 'first_used_at', None)),
+        'expires_at': isoz(from_ts(exp_ts)),
+        'expires_at_display': _panel_display_datetime(from_ts(exp_ts)),
         'expires_at_ts': exp_ts,
         'ttl_seconds': ttl_seconds,
         'access': access,
