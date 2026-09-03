@@ -62,23 +62,42 @@
 
 const fmtBytes=b=>{b=Number(b||0);const u=['B','KiB','MiB','GiB','TiB'];let i=0;while(b>=1024&&i<u.length-1){b/=1024;i++}return `${b.toFixed(i?2:0)} ${u[i]}`};
 const humanTTL=s=>{if(s==null)return 'No timer';s=Number(s||0);const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60);return d?`${d}d ${h}h left`:h?`${h}h ${m}m left`:`${m}m left`};
-function formatDateTime(value){
+let SUBSCRIPTION_TIMEZONE = String((typeof DATA!=='undefined' && DATA.display_timezone) || 'UTC');
+function publicDate(value){
+  if(value===null||value===undefined||value==='') return null;
+  if(typeof value==='number') { const d=new Date(Math.abs(value)<1e12?value*1000:value); return Number.isNaN(d.getTime())?null:d; }
+  let raw=String(value).trim();
+  if(/^\d{10,13}(?:\.\d+)?$/.test(raw)){const n=Number(raw);const d=new Date(raw.split('.')[0].length<=10?n*1000:n);return Number.isNaN(d.getTime())?null:d;}
+  if(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?$/.test(raw)) raw=raw.replace(' ','T')+'Z';
+  const d=new Date(raw);return Number.isNaN(d.getTime())?null:d;
+}
+function applySubscriptionTimezone(value){
+  const timezone=String(value||'').trim();
+  if(!timezone)return SUBSCRIPTION_TIMEZONE;
+  try{new Intl.DateTimeFormat('en',{timeZone:timezone}).format(new Date());SUBSCRIPTION_TIMEZONE=timezone;}catch(_){}
+  return SUBSCRIPTION_TIMEZONE;
+}
+function formatDateTime(value, serverDisplay=''){
+  if(serverDisplay) return String(serverDisplay);
   if(!value) return '';
-  const d = new Date(value);
-  if(Number.isNaN(d.getTime())) return String(value);
+  const d = publicDate(value);
+  if(!d) return String(value);
 
   try {
-    return d.toLocaleString([], {
+    return new Intl.DateTimeFormat(undefined, {
+      timeZone: SUBSCRIPTION_TIMEZONE,
       year: 'numeric',
       month: 'short',
       day: '2-digit',
       hour: '2-digit',
-      minute: '2-digit'
-    });
+      minute: '2-digit',
+      hourCycle:'h23'
+    }).format(d);
   } catch(_) {
-    return d.toLocaleString();
+    return new Intl.DateTimeFormat('en-CA',{timeZone:'UTC',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(d);
   }
 }
+applySubscriptionTimezone(SUBSCRIPTION_TIMEZONE);
 
 function accessState(){
   const access = DATA.access || {};
@@ -119,7 +138,8 @@ function timeSubText() {
   if (DATA.unlimited) {
     return DATA.first_used_at
       ? `First connected ${formatDateTime(
-          DATA.first_used_at
+          DATA.first_used_at,
+          DATA.first_used_at_display
         )}`
       : 'Waiting for the first WireGuard connection.';
   }
@@ -139,7 +159,8 @@ function timeSubText() {
 
   if (DATA.expires_at) {
     return `Expires ${formatDateTime(
-      DATA.expires_at
+      DATA.expires_at,
+      DATA.expires_at_display
     )}`;
   }
 
@@ -388,6 +409,7 @@ async function refreshData(silent=false){
     if(!r.ok) throw new Error('bad status');
     const j=await r.json();
     DATA=j.subscription||DATA;
+    applySubscriptionTimezone(DATA.display_timezone);
     render();
     if(!silent) showToast('Updated');
   }catch(e){
