@@ -1397,6 +1397,9 @@ html[data-theme="dark"] #set-panels .cards {
     </section>
 
     
+    <script>
+        window.PANEL_TIMEZONE = {{ PANEL_TIMEZONE|default('UTC')|tojson }};
+    </script>
     <script defer src="{{ url_for('static', filename='js/settings.js') }}"></script>
     <script defer src="{{ url_for('static', filename='js/qrcode.min.js') }}"></script>
 
