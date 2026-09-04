@@ -2061,7 +2061,7 @@ def logs_backup():
             if p.exists():
                 z.write(p, arcname=p.name)
     mem.seek(0)
-    ts = dt.datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    ts = _panel_filename_stamp()
     return send_file(mem, mimetype='application/zip',
                      as_attachment=True, download_name=f'logs_backup_{source}_{ts}.zip')
 
@@ -2442,6 +2442,7 @@ def app_logs():
     return jsonify(
         logs=out[-limit:],
         display_timezone=_panel_timezone_name(),
+        server_epoch=now_ts(),
     )
 
 
@@ -2534,26 +2535,21 @@ def admin_logs():
         to_s     = request.args.get('to') or ''
         logs     = _read_admin_logs(max_lines=max(1000, limit * 5))
 
-        def _iso_z(s: str):
-            if not s:
-                return None
-            try:
-                if s.endswith('Z'):
-                    s = s[:-1]
-                return datetime.fromisoformat(s)
-            except Exception:
-                return None
-
-        from_dt = _iso_z(from_s)
-        to_dt   = _iso_z(to_s)
+        from_dt = _panel_filter_datetime_utc_naive(from_s)
+        to_dt = _panel_filter_datetime_utc_naive(to_s)
 
         def in_range(ts_iso: str) -> bool:
-            try:
-                t = datetime.strptime(ts_iso, "%Y-%m-%dT%H:%M:%SZ")
-            except Exception:
+            t = _panel_filter_datetime_utc_naive(ts_iso)
+
+            if t is None:
                 return True
-            if from_dt and t < from_dt: return False
-            if to_dt   and t > to_dt:   return False
+
+            if from_dt and t < from_dt:
+                return False
+
+            if to_dt and t > to_dt:
+                return False
+
             return True
 
         def matches(rec: dict) -> bool:
@@ -2569,7 +2565,28 @@ def admin_logs():
             return True
 
         out = [r for r in logs if matches(r)]
-        return jsonify(logs=out[:limit])
+        visible = []
+
+        for rec in out[:limit]:
+            row = dict(rec)
+            normalized = _utc_timestamp_iso(
+                row.get('ts')
+            )
+
+            if normalized:
+                row['ts'] = normalized
+                row['time_display'] = _panel_display_datetime(
+                    normalized,
+                    seconds=True,
+                )
+
+            visible.append(row)
+
+        return jsonify(
+            logs=visible,
+            display_timezone=_panel_timezone_name(),
+            server_epoch=now_ts(),
+        )
 
     if request.method == 'DELETE':
         try:
@@ -2959,16 +2976,16 @@ def _tg_human_delta(seconds: float) -> str:
 def _tg_human_datetime(
     value,
     *,
-    relative: bool = True,
+    relative: bool = False,
     seconds: bool = False,
     fallback: str = "—",
 ) -> str:
     """
-    Human-friendly Telegram datetime in the server/system timezone.
+    Human-friendly Telegram datetime in the saved panel timezone.
 
     Example:
-        23 Aug 2026 · 22:31 (5 minutes ago)
-        24 Aug 2026 · 03:00 (in 4 hours)
+        23 Aug 2026 · 22:31
+
     """
     parsed = _tg_parse_datetime(value)
 
@@ -5963,19 +5980,76 @@ def _save_tg_settings(partial):
 
 
 def _load_tg_admins():
-    a = _json_load(TELEGRAM_ADMINS_FILE, [])
+    a = _json_load(
+        TELEGRAM_ADMINS_FILE,
+        [],
+    )
+
     out = []
+
     for x in a:
+        created_at = _utc_timestamp_iso(
+            x.get('created_at')
+        )
+
         out.append({
-            'id': str(x.get('id') or x.get('tg_id') or ''),
-            'username': (x.get('username') or '').lstrip('@'),
+            'id': str(
+                x.get('id')
+                or x.get('tg_id')
+                or ''
+            ),
+            'username': (
+                x.get('username')
+                or ''
+            ).lstrip('@'),
             'note': x.get('note') or '',
-            'muted': bool(x.get('muted', False))
+            'muted': bool(
+                x.get('muted', False)
+            ),
+            'created_at': created_at,
+            'created_at_display': _panel_display_datetime(
+                created_at
+            ),
         })
-    return [x for x in out if x['id']]
+
+    return [
+        x
+        for x in out
+        if x['id']
+    ]
+
 
 def _save_tg_admins(admins):
-    _json_save(TELEGRAM_ADMINS_FILE, admins)
+    rows = []
+
+    for admin in admins or []:
+        rows.append({
+            'id': str(
+                admin.get('id')
+                or admin.get('tg_id')
+                or ''
+            ),
+            'username': (
+                admin.get('username')
+                or ''
+            ).lstrip('@'),
+            'note': admin.get('note') or '',
+            'muted': bool(
+                admin.get('muted', False)
+            ),
+            'created_at': _utc_timestamp_iso(
+                admin.get('created_at')
+            ),
+        })
+
+    _json_save(
+        TELEGRAM_ADMINS_FILE,
+        [
+            row
+            for row in rows
+            if row['id']
+        ],
+    )
 
 # -------------------------------------------------
 # Telegram security notifications
@@ -6423,7 +6497,9 @@ def tg_token_clear():
 @require_api_key_or_login
 def tg_admins_get():
     return jsonify(
-        admins=_load_tg_admins()
+        admins=_load_tg_admins(),
+        display_timezone=_panel_timezone_name(),
+        server_epoch=now_ts(),
     )
 
 @app.post('/api/telegram/admins')
@@ -6440,9 +6516,19 @@ def tg_admins_post():
     admins = _load_tg_admins()
     found = next((a for a in admins if a['id'] == tg_id), None)
     if found:
-        found.update({'username': username, 'note': note, 'muted': muted})
+        found.update({
+            'username': username,
+            'note': note,
+            'muted': muted,
+        })
     else:
-        admins.append({'id': tg_id, 'username': username, 'note': note, 'muted': muted})
+        admins.append({
+            'id': tg_id,
+            'username': username,
+            'note': note,
+            'muted': muted,
+            'created_at': _now_iso(),
+        })
     _save_tg_admins(admins)
     return jsonify(ok=True, admins=admins)
 
@@ -6489,7 +6575,19 @@ def tg_logs_get():
         })
 
     out = out[-max(50, min(limit, 2000)):]
-    return jsonify(logs=out)
+
+    for row in out:
+        if row.get('ts'):
+            row['time_display'] = _panel_display_datetime(
+                row['ts'],
+                seconds=True,
+            )
+
+    return jsonify(
+        logs=out,
+        display_timezone=_panel_timezone_name(),
+        server_epoch=now_ts(),
+    )
 
 
 @app.delete('/api/telegram/logs')
@@ -7208,7 +7306,7 @@ def _save_autobackup(data_bytes: bytes, keep: int | None = None) -> dict:
     root = Path(BACKUP_AUTO_DIR)
     root.mkdir(parents=True, exist_ok=True)
 
-    ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    ts = _panel_filename_stamp()
     name = f"auto_full_{ts}.zip"
     path = root / name
 
@@ -8642,7 +8740,7 @@ def backup_db():
         z.writestr('meta/created.txt', datetime.utcnow().isoformat(timespec='seconds') + 'Z')
     mem.seek(0)
 
-    ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    ts = _panel_filename_stamp()
     fname = f'wgpanel_db_{ts}.zip'
 
     try:
@@ -8706,7 +8804,7 @@ def backup_settings():
         z.writestr('meta/created.txt', datetime.utcnow().isoformat(timespec='seconds') + 'Z')
     mem.seek(0)
 
-    ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    ts = _panel_filename_stamp()
     fname = f'wgpanel_settings_{ts}.zip'
 
     try:
@@ -9193,7 +9291,7 @@ def backup_full():
 
     mem.seek(0)
 
-    ts = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    ts = _panel_filename_stamp()
     fname = f'wgpanel_full_backup_{ts}.zip'
     data = mem.getvalue()
 
@@ -11731,7 +11829,18 @@ def iface_logs(iid):
             msg = s[br+1:].strip()
         out.append({'ts': ts, 'level': lvl, 'text': msg})
 
-    return jsonify({'logs': out})
+    for row in out:
+        if row.get('ts'):
+            row['time_display'] = _panel_display_datetime(
+                row['ts'],
+                seconds=True,
+            )
+
+    return jsonify({
+        'logs': out,
+        'display_timezone': _panel_timezone_name(),
+        'server_epoch': now_ts(),
+    })
 
 def _clear_retention():
     ret = _load_retention()["iface"]
@@ -12041,7 +12150,7 @@ def api_timezone():
 
     return jsonify(
         ok=True,
-        build="20260903-v8",
+        build="20260904-v9",
         timezone=tz_name,
         server_epoch=now_ts(),
         utc_now=now_utc.isoformat(
@@ -12120,13 +12229,32 @@ def _parse_tg(s: str):
 def _in_range(dt, from_s, to_s):
     if not dt:
         return True
+
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(
+            timezone.utc
+        ).replace(
+            tzinfo=None
+        )
+
     ok = True
+
     if from_s:
-        try: ok = ok and dt >= datetime.fromisoformat(from_s.replace('Z',''))
-        except: pass
+        boundary = _panel_filter_datetime_utc_naive(
+            from_s
+        )
+
+        if boundary is not None:
+            ok = ok and dt >= boundary
+
     if to_s:
-        try: ok = ok and dt <= datetime.fromisoformat(to_s.replace('Z',''))
-        except: pass
+        boundary = _panel_filter_datetime_utc_naive(
+            to_s
+        )
+
+        if boundary is not None:
+            ok = ok and dt <= boundary
+
     return ok
 
 ret = _load_retention()["tg_admin"]
@@ -12135,14 +12263,38 @@ _may_autoclear(Path(TELEGRAM_ADMIN_LOG_FILE), ret, persist_key="tg_admin")
 @app.get('/api/telegram/admin_logs')
 @login_required
 def tg_admin_logs():
-    tail = _read_tail(TELEGRAM_ADMIN_LOG_FILE, 20000)
+    tail = _read_tail(
+        TELEGRAM_ADMIN_LOG_FILE,
+        20000,
+    )
+
     rows = []
+
     for line in tail.splitlines():
         try:
-            rows.append(json.loads(line))
+            row = json.loads(line)
+
+            normalized = _utc_timestamp_iso(
+                row.get('ts')
+            )
+
+            if normalized:
+                row['ts'] = normalized
+                row['time_display'] = _panel_display_datetime(
+                    normalized,
+                    seconds=True,
+                )
+
+            rows.append(row)
+
         except Exception:
             continue
-    return jsonify({"logs": rows})
+
+    return jsonify({
+        'logs': rows,
+        'display_timezone': _panel_timezone_name(),
+        'server_epoch': now_ts(),
+    })
 
 @app.delete('/api/telegram/admin_logs')
 @login_required
@@ -13776,6 +13928,71 @@ def _panel_display_datetime(value, *, seconds=False):
         return None
     return local_value.strftime(
         '%Y-%m-%d %H:%M:%S' if seconds else '%Y-%m-%d %H:%M'
+    )
+
+def _panel_filename_stamp(value=None):
+    """human timestamp in the panel timezone."""
+    parsed = _tg_parse_datetime(
+        value if value is not None else datetime.now(timezone.utc)
+    )
+    if parsed is None:
+        parsed = datetime.now(timezone.utc)
+    return parsed.astimezone(_panel_timezone()).strftime('%Y%m%d_%H%M%S')
+
+
+def _utc_timestamp_iso(value):
+    """Return a canonical UTC API instant without changing stored data."""
+    parsed = _tg_parse_datetime(value)
+    if parsed is None:
+        return None
+    return parsed.astimezone(timezone.utc).isoformat(
+        timespec='seconds'
+    ).replace('+00:00', 'Z')
+
+
+def _panel_filter_datetime_utc_naive(value):
+    """Convert an API filter value to a naive UTC datetime for comparison.
+    """
+    if value in (None, ''):
+        return None
+
+    try:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, (int, float)):
+            parsed = datetime.fromtimestamp(
+                float(value),
+                tz=timezone.utc,
+            )
+        else:
+            raw = str(value).strip()
+
+            if not raw:
+                return None
+
+            if re.fullmatch(r'\d+(?:\.\d+)?', raw):
+                parsed = datetime.fromtimestamp(
+                    float(raw),
+                    tz=timezone.utc,
+                )
+            else:
+                if raw.endswith('Z'):
+                    raw = raw[:-1] + '+00:00'
+
+                parsed = datetime.fromisoformat(raw)
+
+    except Exception:
+        return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(
+            tzinfo=_panel_timezone()
+        )
+
+    return parsed.astimezone(
+        timezone.utc
+    ).replace(
+        tzinfo=None
     )
 
 def _load_panel_settings():
