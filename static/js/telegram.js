@@ -2,6 +2,40 @@
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 
+  let panelTimezone = String(window.PANEL_TIMEZONE || 'UTC');
+  function parseUtc(value) {
+    let raw = String(value ?? '').trim();
+    if (!raw) return null;
+    if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(raw)) {
+      raw = raw.replace(' ', 'T') + 'Z';
+    }
+    const valueDate = new Date(raw);
+    return Number.isNaN(valueDate.getTime()) ? null : valueDate;
+  }
+  function panelDateTime(value) {
+    const valueDate = parseUtc(value);
+    if (!valueDate) return '';
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        timeZone:panelTimezone,
+        year:'numeric', month:'short', day:'2-digit',
+        hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false,
+      }).format(valueDate);
+    } catch {
+      return valueDate.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    }
+  }
+  async function syncPanelTimezone() {
+    const response = await fetch(`/api/timezone?_=${Date.now()}`, {
+      credentials:'same-origin', headers:{Accept:'application/json'}, cache:'no-store'
+    });
+    if (response.ok) {
+      const payload = await response.json();
+      if (payload?.timezone) panelTimezone = String(payload.timezone);
+    }
+  }
+  const panelTimezoneReady = syncPanelTimezone().catch(() => null);
+
 function getCSRF() {
     const m = document.cookie && document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
     return m ? decodeURIComponent(m[1]) : '';
@@ -60,7 +94,7 @@ async function api(path, opts = {}) {
         <td>${a.tg_id}</td>
         <td>${a.username ? ('@' + a.username.replace(/^@/, '')) : ''}</td>
         <td>${a.note || ''}</td>
-        <td>${a.created_at || ''}</td>
+        <td>${a.created_at_display || panelDateTime(a.created_at)}</td>
         <td style="text-align:right">
           <button class="btn danger admin-del" data-id="${a.tg_id}">
             <i class="fas fa-trash"></i>
@@ -71,6 +105,7 @@ async function api(path, opts = {}) {
   }
 
   async function loadAdmins() {
+    await panelTimezoneReady;
     const { admins, has_token } = await api('/api/telegram/admins');
     renderAdmins(admins || []);
     const chip = $('#tg-bot-status');
