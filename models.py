@@ -22,6 +22,9 @@ class InterfaceConfig(db.Model):
     endpoint_host = db.Column(db.String(255))
     endpoint_port = db.Column(db.Integer)
     private_key = db.Column(db.String(256), nullable=False)
+    # Server interface public key. Local ifaces can derive it from private_key;
+    # node mirrors store '(remote)' as private_key, so this must be persisted.
+    public_key  = db.Column(db.String(128))
     mtu         = db.Column(db.Integer)
     dns         = db.Column(db.String(128))
     post_up     = db.Column(db.Text)

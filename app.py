@@ -369,6 +369,10 @@ def _interface_schema():
         statements.append(
             'ALTER TABLE interface_config ADD COLUMN endpoint_port INTEGER'
         )
+    if 'public_key' not in cols:
+        statements.append(
+            'ALTER TABLE interface_config ADD COLUMN public_key VARCHAR(128)'
+        )
 
     if statements:
         with db.engine.begin() as conn:
@@ -10834,6 +10838,86 @@ def iface_devname(iface):
     name = iface.name or os.path.splitext(os.path.basename(iface.path))[0]
     return name.split(':')[-1]
 
+
+_WG_KEY_RE = re.compile(r'^[A-Za-z0-9+/]{43}=$')
+
+
+def _valid_wg_key(value) -> str:
+    s = (value or '').strip()
+    return s if s and _WG_KEY_RE.fullmatch(s) else ''
+
+
+def _node_id_from_iface(iface):
+    nid = getattr(iface, 'node_id', None)
+    if nid is not None:
+        return nid
+    name = getattr(iface, 'name', '') or ''
+    if ':' not in name:
+        return None
+    prefix = name.split(':', 1)[0]
+    if prefix[:1] == 'n' and prefix[1:].isdigit():
+        return int(prefix[1:])
+    return None
+
+
+def _assign_iface_public_key(iface, value) -> str:
+    pk = _valid_wg_key(value)
+    if iface is not None and pk and getattr(iface, 'public_key', None) != pk:
+        iface.public_key = pk
+    return pk
+
+
+def _derive_wg_public_key(priv) -> str:
+    priv = (priv or '').strip()
+    if not priv or priv == '(remote)':
+        return ''
+
+    # Deriving a public key is deterministic, so memoize per request to avoid
+    # spawning `wg pubkey` once per peer when building bulk configs (zips).
+    cache = None
+    try:
+        cache = g._wg_pubkey_cache
+    except Exception:
+        try:
+            cache = g._wg_pubkey_cache = {}
+        except Exception:
+            cache = None
+    if cache is not None and priv in cache:
+        return cache[priv]
+
+    try:
+        out = subprocess.check_output(
+            ['wg', 'pubkey'],
+            input=(priv + '\n').encode(),
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+        )
+        pk = _valid_wg_key(out.decode().strip())
+    except Exception:
+        pk = ''
+
+    if cache is not None:
+        cache[priv] = pk
+    return pk
+
+
+def _copy_local_iface_from_parsed(existing, parsed):
+    new_priv = getattr(parsed, 'private_key', None)
+    if (existing.private_key or '') != (new_priv or ''):
+        existing.public_key = None
+    existing.path = parsed.path
+    existing.address = parsed.address
+    existing.listen_port = parsed.listen_port
+    existing.private_key = new_priv
+    existing.mtu = parsed.mtu
+    existing.dns = parsed.dns
+    existing.post_up = parsed.post_up
+    existing.post_down = parsed.post_down
+    pk = _derive_wg_public_key(new_priv)
+    if pk:
+        _assign_iface_public_key(existing, pk)
+    return existing
+
 def _wg_transfer(peer):
     rx, tx = _wg_rx_tx(peer)
     return rx + tx
@@ -12190,7 +12274,9 @@ def user_peer(token):
 def userpeer_config(token):
     p = _peer_from_shortlink_token(token)
 
-    cfg = _client_conf_txt(p)
+    cfg, err = _peer_client_conf_or_502(p)
+    if err:
+        return err
 
     safe_name = re.sub(
         r'[^A-Za-z0-9_.-]+',
@@ -12859,6 +12945,7 @@ def ensure_node_mirror_iface(node, iface_name, remote_iface=None, *, mtu=None, d
             dns=remote_iface.get('dns') or dns,
             node_id=node.id,
         )
+        _assign_iface_public_key(iface, remote_iface.get('public_key'))
         db.session.add(iface)
         db.session.flush()
         return iface
@@ -12878,6 +12965,10 @@ def ensure_node_mirror_iface(node, iface_name, remote_iface=None, *, mtu=None, d
         changed = True
     if getattr(iface, 'node_id', None) != node.id:
         iface.node_id = node.id
+        changed = True
+    before_pk = getattr(iface, 'public_key', None)
+    _assign_iface_public_key(iface, remote_iface.get('public_key'))
+    if getattr(iface, 'public_key', None) != before_pk:
         changed = True
 
     if changed:
@@ -14002,32 +14093,201 @@ def resolve_client_endpoint_cheap(iface, explicit=None):
         return ''
 
 
-def _server_publickey(iface):
+def _public_key_from_node_payload(payload) -> str:
+    if isinstance(payload, str):
+        direct = _valid_wg_key(payload)
+        if direct:
+            return direct
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            return ''
+    if isinstance(payload, dict):
+        return _valid_wg_key(payload.get('public_key') or '')
+    return ''
+
+
+def _persist_iface_public_key(iface, pk: str) -> str:
+    pk = _assign_iface_public_key(iface, pk)
+    iface_id = getattr(iface, 'id', None) if iface is not None else None
+    if not pk or not iface_id:
+        return pk
     try:
-        nid = getattr(iface, 'node_id', None)
-        if nid is not None:
-            from models import Node
-            n = db.session.get(Node, nid)
-            dev = iface_devname(iface)
-            try:
-                j = node_get(n, f"/api/iface/{dev}/pubkey", timeout=6)
-                pk = (j.get("public_key") or "").strip()
-                if pk:
-                    return pk
-            except Exception:
-                pass
+        with db.engine.begin() as conn:
+            conn.execute(
+                text(
+                    'UPDATE interface_config SET public_key = :pk WHERE id = :iface_id'
+                ),
+                {'pk': pk, 'iface_id': iface_id},
+            )
     except Exception:
-        pass
+        # The in-memory value is already set above; the DB write is best-effort.
+        current_app.logger.warning(
+            'Could not persist public_key for interface %s',
+            getattr(iface, 'name', '?'),
+            exc_info=True,
+        )
+    return pk
+
+
+def _http_error_is_pubkey_unavailable(exc) -> bool:
+    response = getattr(exc, 'response', None)
+    status = getattr(response, 'status_code', None)
+    if status == 404:
+        return True
+    if response is None:
+        return False
+    try:
+        payload = _node_payload(response)
+    except Exception:
+        return False
+    return (
+        isinstance(payload, dict)
+        and (payload.get('error') or '') == 'pubkey_unavailable'
+    )
+
+
+def _fetch_node_iface_public_key(iface) -> str:
+    nid = _node_id_from_iface(iface)
+    if nid is None:
+        return ''
+    n = db.session.get(Node, nid)
+    if n is None:
+        current_app.logger.warning(
+            'No node row for interface %s (node_id=%s)',
+            getattr(iface, 'name', '?'),
+            nid,
+        )
+        return ''
+
+    dev = iface_devname(iface)
+    use_list = False
 
     try:
-        out = subprocess.check_output(
-            ['wg', 'pubkey'],
-            input=(iface.private_key + '\n').encode(),
-            stderr=subprocess.DEVNULL, timeout=2.0
+        j = node_get(n, f'/api/iface/{dev}/pubkey', timeout=6)
+        pk = _public_key_from_node_payload(j)
+        if pk:
+            return pk
+        if isinstance(j, dict) and (j.get('error') or '') == 'pubkey_unavailable':
+            use_list = True
+    except requests.HTTPError as exc:
+        if _http_error_is_pubkey_unavailable(exc):
+            use_list = True
+        else:
+            current_app.logger.warning(
+                'Node pubkey endpoint failed for interface %s',
+                getattr(iface, 'name', '?'),
+                exc_info=True,
+            )
+            return ''
+    except requests.RequestException:
+        current_app.logger.warning(
+            'Node pubkey endpoint unreachable for interface %s',
+            getattr(iface, 'name', '?'),
+            exc_info=True,
         )
-        return out.decode().strip()
-    except Exception:
         return ''
+    except Exception:
+        current_app.logger.warning(
+            'Node pubkey endpoint failed for interface %s',
+            getattr(iface, 'name', '?'),
+            exc_info=True,
+        )
+        return ''
+
+    if not use_list:
+        return ''
+
+    try:
+        data = node_get(n, '/api/interfaces?fast=1', timeout=6) or {}
+        rows = data.get('interfaces') if isinstance(data, dict) else data
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get('name') or '') == str(dev):
+                pk = _valid_wg_key(row.get('public_key') or '')
+                if pk:
+                    return pk
+                break
+    except requests.RequestException:
+        current_app.logger.warning(
+            'Node interface listing failed while resolving public key for %s',
+            getattr(iface, 'name', '?'),
+            exc_info=True,
+        )
+        return ''
+    except Exception:
+        current_app.logger.warning(
+            'Node interface listing failed while resolving public key for %s',
+            getattr(iface, 'name', '?'),
+            exc_info=True,
+        )
+
+    return ''
+
+
+def _server_publickey(iface, *, persist=False):
+    # Resolve the server-side public key for an interface. Persistence is
+    # opt-in so read/GET config paths never trigger a DB write (avoids SQLite
+    # write-lock contention and unrelated ORM session flushes). Write/sync
+    # paths persist the key directly, so read paths can stay side-effect free.
+    if iface is None:
+        return ''
+
+    # Memoize per request keyed by interface id, so bulk config builds (zips)
+    # resolve each interface's key once instead of per peer (a node fetch or
+    # `wg pubkey` spawn per peer).
+    iface_id = getattr(iface, 'id', None)
+    cache = None
+    if iface_id is not None:
+        try:
+            cache = g._server_pubkey_cache
+        except Exception:
+            try:
+                cache = g._server_pubkey_cache = {}
+            except Exception:
+                cache = None
+        if cache is not None and iface_id in cache:
+            return cache[iface_id]
+
+    result = _resolve_server_publickey(iface, persist=persist)
+    if cache is not None:
+        cache[iface_id] = result
+    return result
+
+
+def _resolve_server_publickey(iface, *, persist=False):
+    if _iface_is_node(iface):
+        stored = _valid_wg_key(getattr(iface, 'public_key', None) or '')
+        pk = _fetch_node_iface_public_key(iface) if not stored else ''
+        if not pk and stored:
+            return stored
+        if pk:
+            if persist and pk != stored:
+                _persist_iface_public_key(iface, pk)
+            return pk
+        current_app.logger.error(
+            'No server public key for node interface %s',
+            getattr(iface, 'name', '?'),
+        )
+        return ''
+
+    pk = _derive_wg_public_key(getattr(iface, 'private_key', None))
+    if pk:
+        stored = _valid_wg_key(getattr(iface, 'public_key', None) or '')
+        if persist and pk != stored:
+            _persist_iface_public_key(iface, pk)
+        return pk
+
+    stored = _valid_wg_key(getattr(iface, 'public_key', None) or '')
+    if stored:
+        return stored
+
+    current_app.logger.error(
+        'No server public key for interface %s',
+        getattr(iface, 'name', '?'),
+    )
+    return ''
 
 # ------------------------------------------------------------
 # Node peer config / QR export
@@ -14064,7 +14324,9 @@ def _node_peer_by_publickey(nid: int, pub: str):
 def node_peer_config(nid, pub):
     peer = _node_peer_by_publickey(nid, pub)
 
-    text = _client_conf_txt(peer)
+    text, err = _peer_client_conf_or_502(peer)
+    if err:
+        return err
 
     if request.args.get("download"):
         resp = make_response(text)
@@ -14085,10 +14347,9 @@ def node_peer_config(nid, pub):
 def node_peer_config_qr(nid, pub):
     peer = _node_peer_by_publickey(nid, pub)
 
-    text = _client_conf_txt(peer)
-
-    if not text:
-        abort(404)
+    text, err = _peer_client_conf_or_502(peer)
+    if err:
+        return err
 
     img = qrcode.make(text)
     bio = BytesIO()
@@ -14247,15 +14508,30 @@ def _effective_client_endpoint(peer: Peer) -> str:
     )
 
 
+class ClientConfigIncomplete(Exception):
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
 def _client_conf_txt(peer: Peer) -> str:
 
     iface = peer.iface
     server_pub = ""
     try:
         if iface is not None:
-            server_pub = _server_publickey(iface)
+            server_pub = _valid_wg_key(_server_publickey(iface))
     except Exception:
+        current_app.logger.warning(
+            'Could not resolve server public key for peer %s',
+            getattr(peer, 'id', '?'),
+            exc_info=True,
+        )
         server_pub = ""
+
+    if not server_pub:
+        raise ClientConfigIncomplete('server_public_key_unavailable')
 
     dns_val = ""
     try:
@@ -14277,8 +14553,7 @@ def _client_conf_txt(peer: Peer) -> str:
         lines.append(f"MTU = {mtu_val}")
     lines.append("")
     lines.append("[Peer]")
-    if server_pub:
-        lines.append(f"PublicKey = {server_pub}")
+    lines.append(f"PublicKey = {server_pub}")
     if ep:
         lines.append(f"Endpoint = {ep}")
     lines.append(f"AllowedIPs = {peer.allowed_ips or '0.0.0.0/0, ::/0'}")
@@ -14290,6 +14565,30 @@ def _client_conf_txt(peer: Peer) -> str:
 
 def _client_config_txt(peer: Peer) -> str:
     return _client_conf_txt(peer)
+
+
+def _peer_client_conf_or_502(peer: Peer):
+    try:
+        return _client_conf_txt(peer), None
+    except ClientConfigIncomplete as exc:
+        iface = getattr(peer, 'iface', None)
+        current_app.logger.error(
+            'Cannot build client config for peer id=%s iface=%s: %s',
+            getattr(peer, 'id', '?'),
+            getattr(iface, 'name', '?'),
+            exc.reason,
+        )
+        return None, (
+            jsonify(
+                ok=False,
+                error='server_public_key_unavailable',
+                message=(
+                    'The server PublicKey for this interface is not available. '
+                    'The config would not connect.'
+                ),
+            ),
+            502,
+        )
 
 # ------------------------------------------------------------------
 # Config / QR fallback by public key
@@ -14317,7 +14616,9 @@ def _peer_by_public_key_or_404(public_key: str):
 def api_peer_config_by_public_key(public_key):
     peer = _peer_by_public_key_or_404(public_key)
 
-    cfg = _client_conf_txt(peer)
+    cfg, err = _peer_client_conf_or_502(peer)
+    if err:
+        return err
 
     if not cfg or not cfg.strip():
         return jsonify(
@@ -14353,7 +14654,9 @@ def api_peer_config_by_public_key(public_key):
 def api_peer_config_qr_by_public_key(public_key):
     peer = _peer_by_public_key_or_404(public_key)
 
-    cfg = _client_conf_txt(peer)
+    cfg, err = _peer_client_conf_or_502(peer)
+    if err:
+        return err
 
     if not cfg or not cfg.strip():
         return jsonify(
@@ -15077,20 +15380,12 @@ def bootstrap():
             name = os.path.splitext(os.path.basename(conf))[0]
             existing = (InterfaceConfig.query.filter_by(name=name).first())
             if not existing:
+                pk = _derive_wg_public_key(parsed.private_key)
+                if pk:
+                    parsed.public_key = pk
                 db.session.add(parsed)
                 continue
-            existing.path = parsed.path
-            existing.address = parsed.address
-            existing.listen_port = (
-                parsed.listen_port
-            )
-            existing.private_key = (
-                parsed.private_key
-            )
-            existing.mtu = parsed.mtu
-            existing.dns = parsed.dns
-            existing.post_up = parsed.post_up
-            existing.post_down = parsed.post_down
+            _copy_local_iface_from_parsed(existing, parsed)
         db.session.commit()
 
 
@@ -15106,12 +15401,29 @@ def bootstrap():
 # ------------
 # Node proxy
 # ____________
+def _node_payload(r):
+    ctype = (r.headers.get('content-type') or '').split(';', 1)[0].strip().lower()
+    if ctype == 'application/json' or ctype.endswith('+json'):
+        try:
+            return r.json()
+        except ValueError:
+            return r.text
+    text = r.text
+    stripped = (text or '').lstrip()
+    if stripped[:1] in '{[':
+        try:
+            return json.loads(text)
+        except ValueError:
+            pass
+    return text
+
+
 def node_get(n: Node, path: str, timeout=6):
     r = requests.get(f"{n.base_url}{path}",
                      headers={'Authorization': f'Bearer {_read_api_key(n)}'},
                      timeout=timeout)
     r.raise_for_status()
-    return r.json() if r.headers.get('content-type','').startswith('application/json') else r.text
+    return _node_payload(r)
 
 def node_post(n: Node, path: str, payload=None, timeout=8):
     r = requests.post(f"{n.base_url}{path}",
@@ -15119,7 +15431,7 @@ def node_post(n: Node, path: str, payload=None, timeout=8):
                                'Content-Type':'application/json'},
                       json=payload or {}, timeout=timeout)
     r.raise_for_status()
-    return r.json() if r.headers.get('content-type','').startswith('application/json') else r.text
+    return _node_payload(r)
 
 def node_delete(n: Node, path: str, payload=None, timeout=8):
     headers = {
@@ -15137,7 +15449,7 @@ def node_delete(n: Node, path: str, payload=None, timeout=8):
 
     r = requests.delete(f"{n.base_url}{path}", **kwargs)
     r.raise_for_status()
-    return r.json() if r.headers.get('content-type', '').startswith('application/json') else r.text
+    return _node_payload(r)
 
 @app.route('/api/nodes/<int:nid>/health')
 @admin_required
@@ -15742,6 +16054,12 @@ def node_ifaces(nid):
                 except Exception:
                     pass
 
+                pk = _valid_wg_key(created_iface.get('public_key') or '')
+                if pk:
+                    _assign_iface_public_key(iface, pk)
+                else:
+                    iface.public_key = None
+
                 db.session.add(iface)
 
             else:
@@ -15766,6 +16084,12 @@ def node_ifaces(nid):
                     iface.node_id = node.id
                 except Exception:
                     pass
+
+                pk = _valid_wg_key(created_iface.get('public_key') or '')
+                if pk:
+                    _assign_iface_public_key(iface, pk)
+                else:
+                    iface.public_key = None
 
             db.session.commit()
 
@@ -16023,6 +16347,9 @@ def node_ifaces(nid):
         mirror = InterfaceConfig.query.filter_by(name=f'n{nid}:{name}').first()
 
         if mirror is not None:
+            remote_pk = _valid_wg_key(item.get('public_key') or '')
+            if remote_pk:
+                _persist_iface_public_key(mirror, remote_pk)
 
             override = iface_endpoint_override(mirror)
             host = (getattr(mirror, 'endpoint_host', None) or '').strip() or None
@@ -20713,16 +21040,12 @@ def get_interfaces():
 
         existing = InterfaceConfig.query.filter_by(name=name).first()
         if not existing:
+            pk = _derive_wg_public_key(parsed.private_key)
+            if pk:
+                parsed.public_key = pk
             db.session.add(parsed)
         else:
-            existing.path        = conf
-            existing.address     = parsed.address
-            existing.listen_port = parsed.listen_port
-            existing.private_key = parsed.private_key
-            existing.mtu         = parsed.mtu
-            existing.dns         = parsed.dns
-            existing.post_up     = parsed.post_up
-            existing.post_down   = parsed.post_down
+            _copy_local_iface_from_parsed(existing, parsed)
             db.session.add(existing)
     db.session.commit()
 
@@ -26727,6 +27050,13 @@ def _create_subscription_peer(target, payload, compensation=None):
 
         iface = ensure_node_mirror_iface(
             node, iface_name,
+            {
+                'listen_port': _sub_int(target.get('listen_port'), 51820),
+                'address': target.get('server_cidr') or target.get('interface_address'),
+                'mtu': payload.get('mtu'),
+                'dns': payload.get('dns'),
+                'public_key': target.get('public_key'),
+            },
             listen_port=_sub_int(target.get('listen_port'), 51820),
             server_cidr=target.get('server_cidr') or target.get('interface_address'),
             mtu=payload.get('mtu'),
@@ -29224,6 +29554,7 @@ def subscription_public_config(token):
 
     mem = BytesIO()
     used_names = set()
+    skipped_incomplete = 0
 
     with zipfile.ZipFile(
         mem,
@@ -29299,14 +29630,36 @@ def subscription_public_config(token):
                 normalized = entry.lower()
                 suffix += 1
 
+            try:
+                cfg = _client_config_txt(peer)
+            except ClientConfigIncomplete as exc:
+                skipped_incomplete += 1
+                current_app.logger.error(
+                    'Skipping subscription config for peer id=%s iface=%s: %s',
+                    getattr(peer, 'id', '?'),
+                    getattr(getattr(peer, 'iface', None), 'name', '?'),
+                    exc.reason,
+                )
+                continue
+
             used_names.add(normalized)
 
             z.writestr(
                 entry,
-                _client_config_txt(peer),
+                cfg,
             )
 
     mem.seek(0)
+
+    if not used_names and skipped_incomplete:
+        return jsonify(
+            ok=False,
+            error='server_public_key_unavailable',
+            message=(
+                'No client configs could be built because a server '
+                'PublicKey is missing.'
+            ),
+        ), 502
 
     fname = re.sub(
         r'[^A-Za-z0-9_.-]+',
@@ -29351,7 +29704,9 @@ def subscription_public_inbound_config(
 
     peer = link.peer or abort(404)
 
-    cfg = _client_config_txt(peer)
+    cfg, err = _peer_client_conf_or_502(peer)
+    if err:
+        return err
 
     safe_name = re.sub(
         r'[^A-Za-z0-9_.-]+',
@@ -29395,7 +29750,10 @@ def subscription_public_inbound_qr(token, link_id):
 
     link = SubscriptionPeer.query.filter_by(id=link_id, subscription_id=sub.id).first() or abort(404)
     peer = link.peer or abort(404)
-    img = qrcode.make(_client_config_txt(peer))
+    cfg, err = _peer_client_conf_or_502(peer)
+    if err:
+        return err
+    img = qrcode.make(cfg)
     bio = BytesIO()
     img.save(bio, format='PNG')
     bio.seek(0)
