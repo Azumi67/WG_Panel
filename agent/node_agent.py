@@ -249,6 +249,45 @@ def validate_requested_host_cidr(host_cidr: str, iface_addr_field: str) -> str:
 
     return f"{host}/{32 if host.version == 4 else 128}"
 
+_WG_KEY_RE = re.compile(r'^[A-Za-z0-9+/]{43}=$')
+
+
+def _valid_wg_key(value):
+    s = (value or '').strip()
+    return s if s and _WG_KEY_RE.fullmatch(s) else ''
+
+
+def _pubkey_from_priv(priv):
+    priv = (priv or '').strip()
+    if not priv:
+        return ''
+    try:
+        out = subprocess.check_output(
+            ['wg', 'pubkey'],
+            input=(priv + '\n').encode(),
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+        ).decode().strip()
+        return _valid_wg_key(out)
+    except Exception:
+        return ''
+
+
+def _iface_live_public_key(name):
+    name = (name or '').strip()
+    if not name:
+        return ''
+    try:
+        out = subprocess.check_output(
+            ['wg', 'show', name, 'public-key'],
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+        ).decode().strip()
+        return _valid_wg_key(out)
+    except Exception:
+        return ''
+
+
 def _read_iface(path):
     address = None
     listen_port = None
@@ -326,16 +365,24 @@ def _read_iface(path):
     ):
         return None
 
+    name = os.path.splitext(
+        os.path.basename(path)
+    )[0]
+
+    public_key = (
+        _pubkey_from_priv(private_key)
+        or _iface_live_public_key(name)
+    )
+
     return {
-        'name': os.path.splitext(
-            os.path.basename(path)
-        )[0],
+        'name': name,
 
         'path': path,
         'address': address,
         'listen_port': listen_port,
         'mtu': mtu,
         'dns': dns,
+        'public_key': public_key or None,
 
         'post_up': '\n'.join(post_up),
         'post_down': '\n'.join(post_down),
@@ -1899,6 +1946,7 @@ def create_interface():
             'listen_port': listen_port,
             'mtu': mtu,
             'dns': dns,
+            'public_key': _pubkey_from_priv(private_key) or None,
         }
         meta['dns'] = dns
         meta['is_up'] = _iface_up(name)
@@ -4676,15 +4724,9 @@ def iface_delete(name):
 @require_api_key
 def iface_pubkey(name):
 
-    try:
-        out = subprocess.check_output(
-            ['wg', 'show', name, 'public-key'],
-            stderr=subprocess.DEVNULL, timeout=2.0
-        ).decode().strip()
-        if out:
-            return jsonify(public_key=out)
-    except Exception:
-        pass
+    pk = _iface_live_public_key(name)
+    if pk:
+        return jsonify(public_key=pk)
 
     try:
         conf_path = os.path.join(WG_CONF_PATH, f"{name}.conf")
@@ -4693,7 +4735,7 @@ def iface_pubkey(name):
         with open(conf_path, 'r') as f:
             for raw in f:
                 s = raw.strip()
-                if not s or s.startswith('#'): 
+                if not s or s.startswith('#'):
                     continue
                 if s.startswith('[') and s.endswith(']'):
                     in_iface = (s[1:-1].lower() == 'interface')
@@ -4703,16 +4745,15 @@ def iface_pubkey(name):
                     if k.lower() == 'privatekey':
                         priv = v
                         break
-        if priv:
-            out = subprocess.check_output(
-                ['wg', 'pubkey'],
-                input=(priv + '\n').encode(),
-                stderr=subprocess.DEVNULL, timeout=2.0
-            ).decode().strip()
-            if out:
-                return jsonify(public_key=out)
+        pk = _pubkey_from_priv(priv)
+        if pk:
+            return jsonify(public_key=pk)
     except Exception:
-        pass
+        app.logger.warning(
+            'Could not derive public key from %s.conf',
+            name,
+            exc_info=True,
+        )
 
     return jsonify(error='pubkey_unavailable'), 404
 
@@ -5195,7 +5236,7 @@ def _traffic_apply(policies):
                 rule_lines.append(
                     f"{base} {family} daddr "
                     f"@{set_name} counter drop "
-                    f'comment "wgpanel:{row["id"]}:'
+                    f'comment "wgpanel:{safe_id}:'
                     f'direct:v{version}"'
                 )
 
@@ -5211,7 +5252,7 @@ def _traffic_apply(policies):
                     f"{base} {family} daddr "
                     f"@geo_{cc}_v{version} "
                     "counter drop "
-                    f'comment "wgpanel:{row["id"]}:'
+                    f'comment "wgpanel:{safe_id}:'
                     f'geo:{cc}:v{version}"'
                 )
 

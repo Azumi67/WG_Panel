@@ -92,6 +92,7 @@ html[data-motion="off"] #particles,html[data-motion="minimal"] #particles{displa
 .icon-action:hover,.client-links a:hover,.loc-btn:hover{transform:translateY(-1px);border-color:color-mix(in srgb,var(--accent2) 45%,var(--line))}
 .icon-action.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#071820;border-color:transparent}
 .auto-chip{height:44px;padding:0 13px;border:1px solid var(--line);border-radius:14px;background:color-mix(in srgb,var(--panel-solid) 65%,transparent)}
+.auto-chip.loading i{width:14px;height:14px;border-radius:999px;border:2px solid color-mix(in srgb,var(--accent) 28%,transparent);border-top-color:var(--accent);font-size:0;animation:orbitSpin .75s linear infinite}
 .quick-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:7px}
 .quick-stats article{padding:11px 13px;border-radius:calc(var(--radius-sm) - 2px);display:grid;gap:2px}
 .quick-stats article+article{border-left:1px solid var(--line)}
@@ -117,11 +118,14 @@ html[data-motion="off"] #particles,html[data-motion="minimal"] #particles{displa
 .ring::after{content:"";width:60px;height:60px;border-radius:50%;background:var(--panel-solid)}
 html[data-surface="glass"] .ring::after{background:color-mix(in srgb,var(--panel-solid) 92%,transparent)}
 .ring span{position:absolute;z-index:1;font-size:12px;font-weight:900}
+.stat-card.is-unlimited .ring{background:linear-gradient(145deg,color-mix(in srgb,var(--c) 24%,transparent),color-mix(in srgb,#fff 4.5%,transparent));box-shadow:0 0 24px color-mix(in srgb,var(--c) 18%,transparent)}
+.stat-card.is-unlimited .ring span{font-size:18px}
 .stat-copy{min-width:0}
 .big{font-size:clamp(22px,3.2vw,30px);font-weight:900;letter-spacing:-.035em}
 .subline{margin-top:2px;font-size:10.5px;color:var(--muted);white-space:normal}
 .meter{height:8px;border-radius:999px;background:color-mix(in srgb,var(--muted) 22%,transparent);overflow:hidden;margin-top:13px}
 .meter span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.meter.warn span{background:linear-gradient(90deg,var(--warn),var(--danger))}
 html[data-stat-style="bars"] .ring{display:none}
 html[data-stat-style="bars"] .stat-body{grid-template-columns:1fr}
 html[data-stat-style="rings"] .meter{display:none}
