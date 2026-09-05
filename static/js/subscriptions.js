@@ -2802,7 +2802,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   function showError(text){const el=q('#sub-route-error');if(!el)return;el.textContent=text||'';el.hidden=!text}
   function routeChip(route){
     const isDetected=detected().includes(route);
-    return `<span class="adv8-route-chip ${isDetected?'detected':''}" data-route="${escapeHtml(route)}"><span>${escapeHtml(route)}</span>${isDetected?'<small class="route-origin">detected</small>':''}<button type="button" aria-label="Remove '+escapeHtml(route)+'" title="Remove route"><i class="fas fa-times"></i></button></span>`;
+    return `<span class="adv8-route-chip ${isDetected?'detected':''}" data-route="${escapeHtml(route)}"><span>${escapeHtml(route)}</span>${isDetected?'<small class="route-origin">detected</small>':''}<button type="button" aria-label="Remove ${escapeHtml(route)}" title="Remove route"><i class="fas fa-times"></i></button></span>`;
   }
   function escapeHtml(v){return String(v??'').replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]))}
   function renderChips(){

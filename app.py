@@ -2431,16 +2431,9 @@ def _recovery(rec: Admin2FA, code: str) -> bool:
 
 @csrf.exempt
 @app.route('/api/admin_logs', methods=['GET', 'POST', 'DELETE'])
+@require_api_key_or_login
 def admin_logs():
     if request.method == 'GET':
-        try:
-            from flask_login import current_user as cu
-            if not (getattr(cu, "is_authenticated", False) or request.headers.get("X-API-KEY")):
-                return jsonify(error="auth_required"), 401
-        except Exception:
-            if not request.headers.get("X-API-KEY"):
-                return jsonify(error="auth_required"), 401
-
         q        = (request.args.get('q') or '').strip().lower()
         action   = (request.args.get('action') or '').strip().lower()
         channel  = (request.args.get('channel') or '').strip().lower()
@@ -2514,14 +2507,6 @@ def admin_logs():
         except Exception:
             pass
         return jsonify(ok=True)
-
-    if not request.headers.get("X-API-KEY"):
-        try:
-            from flask_login import current_user as cu
-            if not getattr(cu, "is_authenticated", False):
-                return jsonify(error="auth_required"), 401
-        except Exception:
-            return jsonify(error="auth_required"), 401
 
     data = request.get_json(silent=True) or {}
     if not isinstance(data, dict):
@@ -3364,6 +3349,7 @@ def _send_telegram_event(
 _HTTP_4XX_STATE_FILE = os.path.join(app.instance_path, "suspicious_4xx_state.json")
 _HTTP_4XX_LOCK_FILE = os.path.join(app.instance_path, "suspicious_4xx_state.lock")
 _HTTP_SECURITY_SETTINGS_FILE = os.path.join(app.instance_path, "http_security_settings.json")
+_HTTP_SECURITY_SETTINGS_CACHE = {"stamp": None, "settings": {}}
 _HTTP_4XX_STATUSES = {401, 403, 404, 405, 429}
 
 _HTTP_SECURITY_DEFAULTS = {
@@ -3441,6 +3427,17 @@ def _http_security_normalize_networks(value):
 
 
 def _load_http_security_settings():
+    # A before_request hook calls this for every request, static assets
+    # included, so re-reading and re-coercing the file each time is pure
+    # overhead. The mtime tells us when a save actually changed it.
+    try:
+        stamp = os.stat(_HTTP_SECURITY_SETTINGS_FILE).st_mtime_ns
+    except OSError:
+        stamp = 0
+
+    if _HTTP_SECURITY_SETTINGS_CACHE["stamp"] == stamp:
+        return dict(_HTTP_SECURITY_SETTINGS_CACHE["settings"])
+
     raw = _json_load(_HTTP_SECURITY_SETTINGS_FILE, {})
     if not isinstance(raw, dict):
         raw = {}
@@ -3476,6 +3473,8 @@ def _load_http_security_settings():
     )
     settings["trusted_networks"] = _http_security_normalize_networks(settings.get("trusted_networks"))
     settings["deny_networks"] = _http_security_normalize_networks(settings.get("deny_networks"))
+
+    _HTTP_SECURITY_SETTINGS_CACHE.update(stamp=stamp, settings=dict(settings))
     return settings
 
 
@@ -13924,9 +13923,30 @@ def iface_endpoint_override(iface):
     return _norm_hostport(host, int(port))
 
 
+def _safe_explicit_endpoint(explicit):
+    """A stored per-peer endpoint, or '' when it is not a clean host:port.
+
+    Rendered configs are served over public subscription links, so a value
+    carrying newlines would add attacker-chosen lines to the client's
+    ``[Peer]`` block. Rows written before validation existed are dropped here
+    rather than trusted.
+    """
+    explicit = (explicit or '').strip()
+    if not explicit:
+        return ''
+
+    try:
+        return parse_endpoint_string(explicit)
+    except EndpointValidationError as exc:
+        current_app.logger.warning(
+            'Ignoring malformed peer endpoint %r: %s', explicit, exc.detail,
+        )
+        return ''
+
+
 def resolve_client_endpoint(iface, explicit=None, *, node=None, remote_iface=None):
 
-    explicit = (explicit or '').strip()
+    explicit = _safe_explicit_endpoint(explicit)
     if explicit:
         return explicit
 
@@ -13958,7 +13978,7 @@ def resolve_client_endpoint(iface, explicit=None, *, node=None, remote_iface=Non
 
 def resolve_client_endpoint_cheap(iface, explicit=None):
 
-    explicit = (explicit or '').strip()
+    explicit = _safe_explicit_endpoint(explicit)
     if explicit:
         return explicit
 
@@ -16008,13 +16028,17 @@ def node_ifaces(nid):
             host = (getattr(mirror, 'endpoint_host', None) or '').strip() or None
             port = getattr(mirror, 'endpoint_port', None)
 
+            # This listing skips auto-detection (it would add a probe per
+            # interface), so it can only report an override. 'none' keeps the
+            # UI honest; the per-interface endpoint-default route fills in the
+            # auto-detected value.
             item.update({
                 'endpoint_host': host,
                 'endpoint_port': int(port) if port else None,
                 'endpoint_override': override,
                 'auto_endpoint': '',
                 'effective_endpoint': override,
-                'endpoint_source': 'override' if override else 'auto',
+                'endpoint_source': 'override' if override else 'none',
             })
         else:
 
@@ -16024,7 +16048,7 @@ def node_ifaces(nid):
                 'endpoint_override': '',
                 'auto_endpoint': '',
                 'effective_endpoint': '',
-                'endpoint_source': 'auto',
+                'endpoint_source': 'none',
             })
 
         try:
@@ -16285,7 +16309,7 @@ def node_iface_delete(nid, name):
     )
 
 @app.route('/api/iface/<int:iid>', methods=['GET', 'POST'])
-@login_required
+@require_api_key_or_login
 def iface_settings(iid):
     iface = db.session.get(InterfaceConfig, iid) or abort(404)
 
@@ -16744,17 +16768,45 @@ def _endpoint_default_payload(iface, *, scope=None, node=None, remote_iface=None
     return payload
 
 
-@app.get('/api/iface/<int:iid>/endpoint-default')
-@require_api_key_or_login
-def api_iface_endpoint_default_get(iid):
+def _local_iface_or_error(iid):
+    """(iface, None) for a local interface, else (None, error response).
+
+    Node mirror rows are addressable by id but must go through the node API,
+    which also checks that the node is reachable. Mirrors the guard in
+    ``iface_settings``.
+    """
     iface = db.session.get(InterfaceConfig, iid)
 
     if iface is None:
-        return jsonify(
+        return None, (jsonify(
             ok=False,
             error='iface_not_found',
             detail=f'Interface {iid} was not found.',
-        ), 404
+        ), 404)
+
+    if (
+        getattr(iface, 'node_id', None) is not None
+        or ':' in (getattr(iface, 'name', '') or '')
+    ):
+        return None, (jsonify(
+            ok=False,
+            error='remote_interface',
+            detail=(
+                'This interface belongs to a remote node. '
+                'Use the node interface API instead.'
+            ),
+        ), 400)
+
+    return iface, None
+
+
+@app.get('/api/iface/<int:iid>/endpoint-default')
+@require_api_key_or_login
+def api_iface_endpoint_default_get(iid):
+    iface, error = _local_iface_or_error(iid)
+
+    if error is not None:
+        return error
 
     return jsonify(ok=True, **_endpoint_default_payload(iface))
 
@@ -16762,14 +16814,10 @@ def api_iface_endpoint_default_get(iid):
 @app.put('/api/iface/<int:iid>/endpoint-default')
 @require_api_key_or_login
 def api_iface_endpoint_default_put(iid):
-    iface = db.session.get(InterfaceConfig, iid)
+    iface, error = _local_iface_or_error(iid)
 
-    if iface is None:
-        return jsonify(
-            ok=False,
-            error='iface_not_found',
-            detail=f'Interface {iid} was not found.',
-        ), 404
+    if error is not None:
+        return error
 
     data = request.get_json(silent=True)
 
@@ -17002,13 +17050,10 @@ def _apply_request_flags(data):
 @app.post('/api/iface/<int:iid>/endpoint-default/apply')
 @require_api_key_or_login
 def api_iface_endpoint_default_apply(iid):
-    iface = db.session.get(InterfaceConfig, iid)
+    iface, error = _local_iface_or_error(iid)
 
-    if iface is None:
-        return jsonify(
-            ok=False, error='iface_not_found',
-            detail=f'Interface {iid} was not found.',
-        ), 404
+    if error is not None:
+        return error
 
     dry_run, overwrite_explicit = _apply_request_flags(
         request.get_json(silent=True)
@@ -17091,7 +17136,7 @@ def api_node_iface_endpoint_default_apply(nid, name):
 
 
 @app.post('/api/iface/<int:iid>/<action>')
-@login_required
+@require_api_key_or_login
 def iface_updown(iid, action):
     iface = (
         db.session.get(
@@ -19561,7 +19606,12 @@ def peers_create():
     tg = (data.get('telegram_id') or data.get('telegram') or '').strip()
 
     allowed_ips = (data.get('allowed_ips') or '0.0.0.0/0, ::/0').strip()
-    endpoint = (data.get('endpoint') or '').strip()
+
+    try:
+        endpoint = parse_endpoint_string(data.get('endpoint'))
+    except EndpointValidationError as exc:
+        return jsonify(error=exc.code, detail=exc.detail, field='endpoint'), 400
+
     peer_endpoint = (data.get('peer_endpoint') or '').strip()
     keepalive = _clean_keepalive(data.get('persistent_keepalive'))
     mtu = _clean_mtu(data.get('mtu'))
@@ -20704,7 +20754,7 @@ def get_interfaces():
             'endpoint_override': override,
             'auto_endpoint': '',
             'effective_endpoint': override,
-            'endpoint_source': 'override' if override else 'auto',
+            'endpoint_source': 'override' if override else 'none',
         })
         out.append(row)
 
@@ -22495,6 +22545,21 @@ def api_edit(pid):
                 if value is not None
                 else ''
             )
+
+    if 'endpoint' in data:
+        try:
+            data['endpoint'] = parse_endpoint_string(
+                data['endpoint']
+            )
+
+        except EndpointValidationError as exc:
+            return jsonify(
+                success=False,
+                ok=False,
+                error=exc.code,
+                detail=exc.detail,
+                field='endpoint',
+            ), 400
 
     for field in (
         'persistent_keepalive',
@@ -26625,7 +26690,7 @@ def _peer_payload_subscription(sub,target,data,idx=0,total=1,):
     return {
         'name': name,
         'allowed_ips': allowed_ips,
-        'endpoint': (data.get('endpoint')or '').strip(),
+        'endpoint': parse_endpoint_string(data.get('endpoint')),
         'peer_endpoint': (data.get('peer_endpoint')or '').strip(),
         'persistent_keepalive':data.get('persistent_keepalive') or None,
         'mtu':data.get('mtu') or None,
@@ -29887,7 +29952,7 @@ def _traffic_apply_local(policies):
                 rule_lines.append(
                     f"{base} {family} daddr "
                     f"@{set_name} counter drop "
-                    f'comment "wgpanel:{row["id"]}:'
+                    f'comment "wgpanel:{safe_id}:'
                     f'direct:v{version}"'
                 )
 
@@ -29903,7 +29968,7 @@ def _traffic_apply_local(policies):
                     f"{base} {family} daddr "
                     f"@geo_{cc}_v{version} "
                     "counter drop "
-                    f'comment "wgpanel:{row["id"]}:'
+                    f'comment "wgpanel:{safe_id}:'
                     f'geo:{cc}:v{version}"'
                 )
 
@@ -30018,16 +30083,18 @@ def _traffic_local_status():
 
 
 def _traffic_targets_payload():
+    peers_by_iface = {}
+    for peer in Peer.query.order_by(Peer.name.asc()).all():
+        peers_by_iface.setdefault(peer.iface_id, []).append({
+            "id": peer.id,
+            "name": peer.name,
+            "address": peer.address,
+            "public_key": peer.public_key,
+        })
+
     interfaces = []
     for iface in InterfaceConfig.query.order_by(InterfaceConfig.node_id.asc().nullsfirst(), InterfaceConfig.name.asc()).all():
-        peers = []
-        for peer in Peer.query.filter(Peer.iface_id == iface.id).order_by(Peer.name.asc()).all():
-            peers.append({
-                "id": peer.id,
-                "name": peer.name,
-                "address": peer.address,
-                "public_key": peer.public_key,
-            })
+        peers = peers_by_iface.get(iface.id, [])
         interfaces.append({
             "id": iface.id,
             "name": iface.name,
@@ -30042,7 +30109,12 @@ def _traffic_targets_payload():
 
 def _traffic_normalize_policy(data):
     data = data or {}
-    policy_id = str(data.get("id") or secrets.token_hex(8)).strip()[:32]
+    # The id reaches nftables comments and set names, which are fed to
+    # `nft -f -` as root: anything outside this charset could close the quoted
+    # comment and inject rules.
+    policy_id = re.sub(
+        r"[^A-Za-z0-9_-]", "", str(data.get("id") or "")
+    )[:32] or secrets.token_hex(8)
     name = str(data.get("name") or "Traffic policy").strip()[:80]
     location = str(data.get("location") or "local").strip().lower()
     if location not in {"local", "node"}:

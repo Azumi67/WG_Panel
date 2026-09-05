@@ -5195,7 +5195,7 @@ def _traffic_apply(policies):
                 rule_lines.append(
                     f"{base} {family} daddr "
                     f"@{set_name} counter drop "
-                    f'comment "wgpanel:{row["id"]}:'
+                    f'comment "wgpanel:{safe_id}:'
                     f'direct:v{version}"'
                 )
 
@@ -5211,7 +5211,7 @@ def _traffic_apply(policies):
                     f"{base} {family} daddr "
                     f"@geo_{cc}_v{version} "
                     "counter drop "
-                    f'comment "wgpanel:{row["id"]}:'
+                    f'comment "wgpanel:{safe_id}:'
                     f'geo:{cc}:v{version}"'
                 )
 
