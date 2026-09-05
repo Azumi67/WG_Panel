@@ -7,8 +7,8 @@
 {% endblock %}
 
 {% block head_extras %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/backup.css') }}?v=20260830-light-mobile-v3">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/backup-dark.css') }}?v=20260830-light-mobile-v3">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/backup.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/backup-dark.css') }}">
 {% endblock %}
 {% block responsive_extras %}
 {% endblock %}
@@ -293,5 +293,5 @@
 {% endblock %}
 
 {% block body_extras %}
-<script defer src="{{ url_for('static', filename='js/backup.js') }}?v=20260830-backup-v3"></script>
+<script defer src="{{ url_for('static', filename='js/backup.js') }}"></script>
 {% endblock %}

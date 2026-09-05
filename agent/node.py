@@ -1141,6 +1141,9 @@ def install_step_1():
         if confirm("Use it as root (no clone)?", True):
             set_root(dest_path)
             ok(f"Root set: {_paths(str(dest_path))}")
+
+            node_command()
+
         pause()
         return
 
@@ -1166,9 +1169,13 @@ def install_step_1():
     set_root(dest_path)
     ok(f"Cloned and set root: {_paths(str(dest_path))}")
 
+    node_command()
+
     print(hr("─", DIM))
     info("Install requirements")
     install_requirements(_root())
+
+    node_command()
 
 
 def install_step_2():
@@ -2617,19 +2624,51 @@ def status_lines(root: Path) -> List[str]:
 def node_command():
     if not isitroot():
         return
+
     target = Path("/usr/local/bin/node")
-    script = Path(__file__).resolve()
-    if target.exists():
-        try:
-            if str(script) in target.read_text(encoding="utf-8", errors="ignore"):
-                return
-        except Exception:
-            return
-    _write(target, f"""#!/usr/bin/env bash
+    current_script = Path(__file__).resolve()
+
+    root = _root()
+    installed_script = (root / "agent" / "node.py").resolve()
+
+    if installed_script.is_file():
+        script = installed_script
+
+        venv_python = (
+            root / "agent" / "venv" / "bin" / "python"
+        ).resolve()
+
+        if venv_python.is_file():
+            launcher = f"""#!/usr/bin/env bash
+exec "{venv_python}" "{script}" "$@"
+"""
+        else:
+            launcher = f"""#!/usr/bin/env bash
 exec /usr/bin/env python3 "{script}" "$@"
-""")
-    try: target.chmod(0o755)
-    except Exception: pass
+"""
+    else:
+        script = current_script
+        launcher = f"""#!/usr/bin/env bash
+exec /usr/bin/env python3 "{script}" "$@"
+"""
+
+    try:
+        if target.exists():
+            current = target.read_text(
+                encoding="utf-8",
+                errors="ignore",
+            )
+            if current == launcher:
+                return
+    except Exception:
+        pass
+
+    _write(target, launcher)
+
+    try:
+        target.chmod(0o755)
+    except Exception:
+        pass
 
 def main_menu():
     while True:

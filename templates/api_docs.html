@@ -9,7 +9,7 @@
 <div class="api-orb o1"></div><div class="api-orb o2"></div>
 <header class="api-hero">
 <div class="hero-grid">
-<div><h1 class="hero-title"><span class="badge-logo"><i class="fa-solid fa-code"></i></span><span>API Docs</span></h1><p class="hero-sub">Current panel and node-agent API synchronized with the August 30, 2026 Python sources. This revision documents live subscription WireGuard connection state, enriched peer logs with runtime metadata, node handshake/probe fields, subscription profiles, interface management, backup/restore, updates, Telegram policy, public links, and node health.</p></div>
+<div><h1 class="hero-title"><span class="badge-logo"><i class="fa-solid fa-code"></i></span><span>API Docs</span></h1><p class="hero-sub">Current panel, Telegram, and node-agent API synchronized with the September 3, 2026 Python sources (timezone contract build <code>20260903-v8</code>). This revision documents canonical UTC timestamps, regional display fields, application-log normalization, timezone-aware subscriptions and public links, Telegram scheduling/display behavior, live WireGuard runtime state, backup/restore, and node health.</p></div>
 <div class="stat-stack"><div class="stat-card"><b>184</b><span>Panel API</span></div><div class="stat-card"><b>25</b><span>Panel pages</span></div><div class="stat-card"><b>25</b><span>Node API</span></div></div>
 </div>
 </header>
@@ -40,13 +40,10 @@
 </div>
 </nav>
 <main class="content">
-<div class="quick-cards"><div class="quick-card"><div class="quick-icon"><i class="fa-solid fa-key"></i></div><h3>Access</h3><p>Use your panel session in the browser. For scripts, send <code>Authorization: Bearer &lt;PANEL_API_KEY&gt;</code>. Node-agent examples use <code>&lt;NODE_API_KEY&gt;</code>.</p></div><div class="quick-card"><div class="quick-icon"><i class="fa-solid fa-terminal"></i></div><h3>Commands</h3><p>Each API route includes a copy-ready command. Page routes show the browser URL because they are meant for the panel UI.</p></div><div class="quick-card"><div class="quick-icon"><i class="fa-solid fa-flask"></i></div><h3>Testing</h3><p>Start with health checks and list routes. Try create or update actions on a test interface before changing real peers.</p></div></div>
+<div class="quick-cards"><div class="quick-card"><div class="quick-icon"><i class="fa-solid fa-key"></i></div><h3>Access</h3><p>Use your panel session in the browser. For scripts, send <code>Authorization: Bearer &lt;PANEL_API_KEY&gt;</code>. Node-agent examples use <code>&lt;NODE_API_KEY&gt;</code>.</p></div><div class="quick-card"><div class="quick-icon"><i class="fa-solid fa-clock"></i></div><h3>Time fields</h3><p>Use <code>*_ts</code> or UTC ISO fields for calculations and <code>*_display</code> for text shown to people. <code>ttl_seconds</code> and other durations never receive a timezone offset.</p></div><div class="quick-card"><div class="quick-icon"><i class="fa-solid fa-flask"></i></div><h3>Testing</h3><p>Change Settings → Panel → Regional, then verify <code>/api/timezone</code>, peer logs, subscriptions, public links, app logs, and Telegram without restarting the panel.</p></div></div>
 <div class="api-security-note" style="margin: 0 0 18px;">
-<b>Current operational behavior — source synchronized 2026-08-30.</b>
-  The panel watchdog sends <code>app_down</code> and <code>app_up</code> independently;
-  suspicious HTTP activity is detected as a rolling 4xx burst rather than one alert per request;
-  automatic full backups expose the retained archive name, size, and timestamp in response headers;
-  and updated node agents return interface state directly from <code>/api/health</code>; subscription rows derive Connected/Disconnected from recent WireGuard handshakes; and peer log responses include a current runtime snapshot.
+<b>Regional time contract — source synchronized 2026-09-03.</b>
+  Settings → Panel → Regional is the single source of truth for every human-facing timestamp. Database values, epoch values, WireGuard handshakes, and canonical API ISO strings remain absolute UTC instants. Panel responses add the effective <code>display_timezone</code> and localized <code>*_display</code> fields where needed. Changing the saved IANA timezone changes display values immediately without rewriting stored data or restarting the service. Relative values such as <code>ttl_seconds</code>, “59m left,” and “2 hours ago” measure elapsed time and therefore do not change with the timezone.
 </div>
 <div class="no-results" id="noResults" x-show="noResults" x-transition.opacity="">No matching routes found.</div>
 <section class="doc-section" data-section="System" id="sec-System">
@@ -1072,11 +1069,11 @@ https://panel.example.com/register/twofa_confirm" type="button"><i class="fa-reg
 </div>
 </div>
 </article>
-<article class="route-row" data-text="settings &amp; profiles get /api/settings api_settings endpoint for settings.">
+<article class="route-row" data-text="settings &amp; profiles get /api/settings api_settings reads panel settings timezone regional IANA.">
 <button aria-expanded="false" class="route-main" type="button">
 <span class="method m-get">GET</span>
 <code class="route-path">/api/settings</code>
-<span class="route-desc">Endpoint for settings.</span>
+<span class="route-desc">Returns panel settings, including the saved Regional timezone.</span>
 <span class="auth-pill">Login session</span>
 <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
 </button>
@@ -1084,7 +1081,8 @@ https://panel.example.com/register/twofa_confirm" type="button"><i class="fa-reg
 <div class="detail-grid">
 <div class="detail-card">
 <div class="detail-title">What it does</div>
-<p>Endpoint for settings.</p>
+<p>Returns the persisted panel settings. The <code>timezone</code> field is the authoritative IANA timezone used for human-facing panel, log, subscription, backup, security, and Telegram times.</p>
+<div class="api-security-note">A GET only reports configuration. Use <code>GET /api/timezone</code> when a client also needs the current UTC/local time pair, UTC offset, server epoch, and timezone contract build.</div>
 <div class="meta-line"><span>app.py</span><span>handler: <code>api_settings</code></span></div>
 </div>
 <div class="detail-card command-card">
@@ -1097,11 +1095,11 @@ https://panel.example.com/register/twofa_confirm" type="button"><i class="fa-reg
 </div>
 </div>
 </article>
-<article class="route-row" data-text="settings &amp; profiles post /api/settings api_settings endpoint for settings.">
+<article class="route-row" data-text="settings &amp; profiles post /api/settings api_settings saves panel settings timezone regional IANA no restart.">
 <button aria-expanded="false" class="route-main" type="button">
 <span class="method m-post">POST</span>
 <code class="route-path">/api/settings</code>
-<span class="route-desc">Endpoint for settings.</span>
+<span class="route-desc">Saves panel settings and validates the Regional IANA timezone.</span>
 <span class="auth-pill">Login session</span>
 <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
 </button>
@@ -1109,7 +1107,8 @@ https://panel.example.com/register/twofa_confirm" type="button"><i class="fa-reg
 <div class="detail-grid">
 <div class="detail-card">
 <div class="detail-title">What it does</div>
-<p>Endpoint for settings.</p>
+<p>Saves panel settings. Send <code>timezone</code> as a valid IANA name such as <code>Asia/Tehran</code>, <code>Europe/Amsterdam</code>, or <code>America/Los_Angeles</code>. An invalid value returns HTTP <code>400</code> with <code>error: "invalid_timezone"</code>.</p>
+<div class="api-security-note">The successful response includes <code>requires_restart: false</code>. The new timezone applies immediately; stored UTC timestamps are not rewritten. This endpoint saves the complete panel settings payload, so API clients should GET the current object, merge the intended change, and POST all current TLS/domain/port values with it.</div>
 <div class="meta-line"><span>app.py</span><span>handler: <code>api_settings</code></span></div>
 </div>
 <div class="detail-card command-card">
@@ -1117,11 +1116,27 @@ https://panel.example.com/register/twofa_confirm" type="button"><i class="fa-reg
 <pre><code>curl -X POST "https://panel.example.com/api/settings" \
   -H "Authorization: Bearer &lt;PANEL_API_KEY&gt;" \
   -H "Content-Type: application/json" \
-  --data '{}'</code></pre>
+  --data '{
+  "timezone": "Asia/Tehran",
+  "tls_enabled": true,
+  "domain": "panel.example.com",
+  "force_https_redirect": true,
+  "hsts": true,
+  "http_port": 5000,
+  "https_port": 443
+}'</code></pre>
 <button class="copy-btn" data-copy="curl -X POST &quot;https://panel.example.com/api/settings&quot; \
   -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot; \
   -H &quot;Content-Type: application/json&quot; \
-  --data '{}'" type="button"><i class="fa-regular fa-copy"></i> Copy</button>
+  --data '{
+  &quot;timezone&quot;: &quot;Asia/Tehran&quot;,
+  &quot;tls_enabled&quot;: true,
+  &quot;domain&quot;: &quot;panel.example.com&quot;,
+  &quot;force_https_redirect&quot;: true,
+  &quot;hsts&quot;: true,
+  &quot;http_port&quot;: 5000,
+  &quot;https_port&quot;: 443
+}'" type="button"><i class="fa-regular fa-copy"></i> Copy</button>
 </div>
 </div>
 </div>
@@ -1246,11 +1261,31 @@ https://panel.example.com/settings" type="button"><i class="fa-regular fa-copy">
 <div class="route-detail"><div class="detail-grid"><div class="detail-card"><div class="detail-title">What it does</div><p>Deletes a saved subscription profile and updates the active selection if needed.</p><div class="meta-line"><span>app.py</span><span>handler: <code>subscription_profile_delete</code></span></div></div>
 <div class="detail-card command-card"><div class="detail-title">Example command</div><pre><code>curl -X DELETE "https://panel.example.com/api/subscription_profiles/&lt;path:profile_name&gt;" \
   -H "Authorization: Bearer &lt;PANEL_API_KEY&gt;"</code></pre><button class="copy-btn" data-copy='curl -X DELETE "https://panel.example.com/api/subscription_profiles/&lt;path:profile_name&gt;" \
-  -H "Authorization: Bearer &lt;PANEL_API_KEY&gt;"' type="button"><i class="fa-regular fa-copy"></i> Copy</button></div></div></div></article><article class="route-row" data-text="settings &amp; profiles get /api/timezone api_timezone returns the panel’s effective timezone together with current utc and localized timestamps.">
-<button aria-expanded="false" class="route-main" type="button"><span class="method m-get">GET</span><code class="route-path">/api/timezone</code><span class="route-desc">Returns the panel’s effective timezone together with current UTC and localized timestamps.</span><span class="auth-pill">Login or API key</span><span class="chev"><i class="fa-solid fa-chevron-down"></i></span></button>
-<div class="route-detail"><div class="detail-grid"><div class="detail-card"><div class="detail-title">What it does</div><p>Returns the panel’s effective timezone together with current UTC and localized timestamps.</p><div class="api-security-note">Used by the panel to keep humanized/local time displays consistent without requiring each caller to manually calculate the offset.</div><div class="meta-line"><span>app.py</span><span>handler: <code>api_timezone</code></span></div></div>
-<div class="detail-card command-card"><div class="detail-title">Example command</div><pre><code>curl -X GET "https://panel.example.com/api/timezone"
-  -H "Authorization: Bearer &lt;PANEL_API_KEY&gt;"</code></pre><button class="copy-btn" data-copy="curl -X GET &quot;https://panel.example.com/api/timezone&quot;
+  -H "Authorization: Bearer &lt;PANEL_API_KEY&gt;"' type="button"><i class="fa-regular fa-copy"></i> Copy</button></div></div></div></article><article class="route-row" data-text="settings &amp; profiles get /api/timezone api_timezone authoritative regional IANA UTC local offset epoch build telegram.">
+<button aria-expanded="false" class="route-main" type="button"><span class="method m-get">GET</span><code class="route-path">/api/timezone</code><span class="route-desc">Returns the authoritative Regional timezone and synchronized UTC/local clock values.</span><span class="auth-pill">Login or API key</span><span class="chev"><i class="fa-solid fa-chevron-down"></i></span></button>
+<div class="route-detail"><div class="detail-grid"><div class="detail-card"><div class="detail-title">What it does</div><p>Returns the effective saved IANA timezone used by the panel and Telegram. Callers can compare the same instant as an epoch, UTC ISO string, and localized ISO string.</p>
+<div class="api-param-list">
+<div><code>timezone</code><span>Effective IANA name, for example <code>Asia/Tehran</code>.</span></div>
+<div><code>server_epoch</code><span>Current Unix epoch in seconds. Absolute and timezone-independent.</span></div>
+<div><code>utc_now</code><span>Current UTC instant as ISO 8601 with <code>Z</code>.</span></div>
+<div><code>local_now</code><span>The same instant localized to the saved Regional timezone.</span></div>
+<div><code>utc_offset</code><span>Current numeric offset in <code>±HHMM</code> form; daylight-saving changes are reflected by the IANA zone.</span></div>
+<div><code>build</code><span>Timezone contract revision; this source returns <code>20260903-v8</code>.</span></div>
+</div>
+<div class="api-security-note">This endpoint is read-only. Save the timezone with <code>POST /api/settings</code>. Do not derive panel time from the browser timezone or host OS timezone.</div><div class="meta-line"><span>app.py</span><span>handler: <code>api_timezone</code></span></div></div>
+<div class="detail-card command-card"><div class="detail-title">Example command</div><pre><code>curl -X GET "https://panel.example.com/api/timezone" \
+  -H "Authorization: Bearer &lt;PANEL_API_KEY&gt;"</code></pre>
+<div class="detail-title">Response example</div>
+<pre><code>{
+  "ok": true,
+  "build": "20260903-v8",
+  "timezone": "Asia/Tehran",
+  "server_epoch": 1788448140,
+  "utc_now": "2026-09-03T15:09:00Z",
+  "local_now": "2026-09-03T18:39:00+03:30",
+  "utc_offset": "+0330"
+}</code></pre>
+<button class="copy-btn" data-copy="curl -X GET &quot;https://panel.example.com/api/timezone&quot; \
   -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot;" type="button"><i class="fa-regular fa-copy"></i> Copy</button></div></div></div></article></div>
 </section>
 <section class="doc-section" data-section="HTTP Security" id="sec-HTTP-Security">
@@ -1958,11 +1993,11 @@ https://panel.example.com/settings" type="button"><i class="fa-regular fa-copy">
 </div>
 </div>
 </article>
-<article class="route-row" data-text="peers delete /api/peer/&lt;int:pid&gt;/logs clear_peer_logs endpoint for peer logs.">
+<article class="route-row" data-text="peers delete /api/peer/&lt;int:pid&gt;/logs clear_peer_logs clears peer event history.">
 <button aria-expanded="false" class="route-main" type="button">
 <span class="method m-del">DELETE</span>
 <code class="route-path">/api/peer/&lt;int:pid&gt;/logs</code>
-<span class="route-desc">Endpoint for peer logs.</span>
+<span class="route-desc">Clears the selected peer's stored event history.</span>
 <span class="auth-pill">Login session</span>
 <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
 </button>
@@ -1970,7 +2005,7 @@ https://panel.example.com/settings" type="button"><i class="fa-regular fa-copy">
 <div class="detail-grid">
 <div class="detail-card">
 <div class="detail-title">What it does</div>
-<p>Endpoint for peer logs.</p>
+<p>Deletes all stored <code>PeerEvent</code> rows for the selected peer. This does not change the peer, its expiry, or current WireGuard runtime state.</p>
 <div class="meta-line"><span>app.py</span><span>handler: <code>clear_peer_logs</code></span></div>
 </div>
 <div class="detail-card command-card">
@@ -1983,7 +2018,7 @@ https://panel.example.com/settings" type="button"><i class="fa-regular fa-copy">
 </div>
 </div>
 </article>
-<article class="route-row" data-text="peers get /api/peer/&lt;int:pid&gt;/logs peer_logs event history runtime connection handshake">
+<article class="route-row" data-text="peers get /api/peer/&lt;int:pid&gt;/logs peer_logs event history runtime connection handshake timezone display UTC created expires">
 <button aria-expanded="false" class="route-main" type="button">
 <span class="method m-get">GET</span>
 <code class="route-path">/api/peer/&lt;int:pid&gt;/logs</code>
@@ -1995,7 +2030,8 @@ https://panel.example.com/settings" type="button"><i class="fa-regular fa-copy">
 <div class="detail-grid">
 <div class="detail-card">
 <div class="detail-title">What it does</div>
-<p>Reads the newest 500 <code>PeerEvent</code> rows and normalizes each event into <code>time</code>, <code>ts</code>, <code>timestamp</code>, <code>event</code>, <code>details</code>, <code>level</code>, and <code>text</code>. The response also adds a <code>peer</code> summary and a live <code>runtime</code> object generated by the same subscription runtime helper used by the subscription page.</p>
+<p>Reads the newest 500 <code>PeerEvent</code> rows. Every event includes canonical UTC aliases <code>time</code>, <code>ts</code>, and <code>timestamp</code>, plus Regional <code>time_display</code>, <code>event</code>, <code>details</code>, <code>level</code>, and <code>text</code>. The response also adds a <code>peer</code> summary and a live <code>runtime</code> object.</p>
+<div class="api-security-note">The peer summary pairs <code>created_at</code>, <code>first_used_at</code>, and <code>expires_at</code> with <code>*_ts</code> epochs and <code>*_display</code> strings. <code>display_timezone</code> identifies the saved zone. Use UTC/epoch fields for logic, display fields for UI text, and <code>ttl_seconds</code> for countdowns.</div>
 <div class="api-security-note">The event list is historical panel activity. The <code>runtime</code> object is a current snapshot, not a historical connect/disconnect event stream. For node peers, current activity is resolved from node handshake data; if runtime lookup fails, <code>runtime_available</code> is false.</div>
 <div class="meta-line"><span>app.py</span><span>handler: <code>peer_logs</code></span></div>
 </div>
@@ -2009,6 +2045,14 @@ https://panel.example.com/settings" type="button"><i class="fa-regular fa-copy">
   "peer": {
     "id": 42,
     "name": "client-1",
+    "display_timezone": "Asia/Tehran",
+    "created_at": "2026-09-03T15:10:00Z",
+    "created_at_ts": 1788448200,
+    "created_at_display": "2026-09-03 18:40",
+    "expires_at": "2026-09-03T16:10:00Z",
+    "expires_at_ts": 1788451800,
+    "expires_at_display": "2026-09-03 19:40",
+    "ttl_seconds": 3600,
     "panel_status": "online",
     "scope": "node",
     "node_name": "Frankfurt",
@@ -2026,7 +2070,10 @@ https://panel.example.com/settings" type="button"><i class="fa-regular fa-copy">
   },
   "logs": [
     {
-      "time": "2026-08-18T17:20:00Z",
+      "time": "2026-09-03T15:10:00Z",
+      "ts": "2026-09-03T15:10:00Z",
+      "timestamp": "2026-09-03T15:10:00Z",
+      "time_display": "2026-09-03 18:40",
       "event": "peer_edit",
       "details": "endpoint updated",
       "level": "info",
@@ -3441,6 +3488,7 @@ https://panel.example.com/ui/nodes" type="button"><i class="fa-regular fa-copy">
 </section>
 <section class="doc-section" data-section="Subscriptions" id="sec-Subscriptions">
 <div class="section-head"><div><h2>Subscriptions</h2><p>22 documented methods</p></div><a class="top-link" href="#top">Top</a></div>
+<div class="api-security-note" style="margin:0 0 14px"><b>Timezone-aware rows.</b> Every response produced by <code>_subscription_row()</code> includes <code>display_timezone</code>; canonical <code>created_at</code>, <code>first_used_at</code>, and <code>expires_at</code>; matching <code>*_ts</code> epochs; and matching <code>*_display</code> strings. A timezone change alters only the display strings, never expiry duration or the underlying instant.</div>
 <div class="route-list">
 <article class="route-row" data-text="subscriptions get /api/subscriptions api_subscriptions list subscriptions live connection handshake runtime local node">
 <button aria-expanded="false" class="route-main" type="button">
@@ -3454,7 +3502,7 @@ https://panel.example.com/ui/nodes" type="button"><i class="fa-regular fa-copy">
 <div class="detail-grid">
 <div class="detail-card">
 <div class="detail-title">What it does</div>
-<p>Returns each subscription through <code>_subscription_row()</code>. Administrative peer state remains separate from live tunnel state. Each location includes <code>connected</code>, <code>connection_status</code>, <code>connection_label</code>, <code>conn_reason</code>, <code>latest_handshake</code>, <code>latest_handshake_age</code>, <code>last_activity_at</code>, and <code>runtime_available</code>. The subscription also includes an aggregate <code>connection</code> object describing the active location with the newest handshake.</p>
+<p>Returns <code>{"subscriptions": [...]}</code>, with each subscription produced by <code>_subscription_row()</code>. Administrative peer state remains separate from live tunnel state. Each location includes <code>connected</code>, <code>connection_status</code>, <code>connection_label</code>, <code>conn_reason</code>, <code>latest_handshake</code>, <code>latest_handshake_age</code>, <code>last_activity_at</code>, and <code>runtime_available</code>. The subscription also includes an aggregate <code>connection</code> object describing the active location with the newest handshake.</p>
 <div class="api-security-note">Live connection state is handshake-based. The panel uses <code>WG_SUBSCRIPTION_CONNECTED_WINDOW</code> when present; otherwise it defaults to 180 seconds, with a 30-second minimum. Local runtime is read from WireGuard directly. Node runtime is read from the node agent's <code>/api/peers</code> response and cached once per node for the current Flask request.</div>
 <div class="meta-line"><span>app.py</span><span>handler: <code>api_subscriptions</code></span><span>runtime: <code>_subscription_peer_runtime</code></span></div>
 </div>
@@ -3462,8 +3510,19 @@ https://panel.example.com/ui/nodes" type="button"><i class="fa-regular fa-copy">
 <div class="detail-title">Example command</div>
 <pre><code>curl -X GET "https://panel.example.com/api/subscriptions" \
   -H "Authorization: Bearer &lt;PANEL_API_KEY&gt;"</code></pre>
-<div class="detail-title">Connection fields</div>
+<div class="detail-title">Fields in each subscription item</div>
 <pre><code>{
+  "display_timezone": "Asia/Tehran",
+  "created_at": "2026-09-03T15:10:00Z",
+  "created_at_ts": 1788448200,
+  "created_at_display": "2026-09-03 18:40",
+  "first_used_at": null,
+  "first_used_at_ts": null,
+  "first_used_at_display": null,
+  "expires_at": "2026-10-03T15:10:00Z",
+  "expires_at_ts": 1791040200,
+  "expires_at_display": "2026-10-03 18:40",
+  "ttl_seconds": 2592000,
   "connection": {
     "connected": true,
     "status": "connected",
@@ -3545,7 +3604,7 @@ https://panel.example.com/ui/nodes" type="button"><i class="fa-regular fa-copy">
 <button aria-expanded="false" class="route-main" type="button">
 <span class="method m-del">DELETE</span>
 <code class="route-path">/api/subscriptions/&lt;int:sid&gt;</code>
-<span class="route-desc">Reads, updates, or deletes one subscription client.</span>
+<span class="route-desc">Deletes one subscription and applies its peer ownership rules.</span>
 <span class="auth-pill">Login or API key</span>
 <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
 </button>
@@ -3572,7 +3631,7 @@ https://panel.example.com/ui/nodes" type="button"><i class="fa-regular fa-copy">
 <button aria-expanded="false" class="route-main" type="button">
 <span class="method m-get">GET</span>
 <code class="route-path">/api/subscriptions/&lt;int:sid&gt;</code>
-<span class="route-desc">Reads, updates, or deletes one subscription client.</span>
+<span class="route-desc">Returns one timezone-aware subscription row with live runtime state.</span>
 <span class="auth-pill">Login or API key</span>
 <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
 </button>
@@ -3580,7 +3639,7 @@ https://panel.example.com/ui/nodes" type="button"><i class="fa-regular fa-copy">
 <div class="detail-grid">
 <div class="detail-card">
 <div class="detail-title">What it does</div>
-<p>Reads, updates, or deletes one subscription client.</p>
+<p>Returns <code>{"subscription": {...}}</code> using the same complete <code>_subscription_row()</code> schema as <code>GET /api/subscriptions</code>, including canonical UTC/epoch fields, Regional display fields, countdown values, locations, and aggregate connection state.</p>
 <div class="meta-line"><span>app.py</span><span>handler: <code>api_subscription_get</code></span></div>
 </div>
 <div class="detail-card command-card">
@@ -4002,12 +4061,13 @@ https://panel.example.com/subscriptions" type="button"><i class="fa-regular fa-c
 </section>
 <section class="doc-section" data-section="Public Links" id="sec-Public-Links">
 <div class="section-head"><div><h2>Public Links</h2><p>10 documented methods</p></div><a class="top-link" href="#top">Top</a></div>
+<div class="api-security-note" style="margin:0 0 14px"><b>Public display time.</b> Subscription public pages and their JSON API use the saved panel timezone, not the visitor's browser timezone. Because the JSON also retains UTC/epoch values, changing Regional settings updates public display text without changing the subscription's real expiry instant.</div>
 <div class="route-list">
-<article class="route-row" data-text="public links get /api/u/&lt;token&gt; user_peer endpoint for u.">
+<article class="route-row" data-text="public links get /api/u/&lt;token&gt; user_peer public peer status timezone display UTC expiry ttl.">
 <button aria-expanded="false" class="route-main" type="button">
 <span class="method m-get">GET</span>
 <code class="route-path">/api/u/&lt;token&gt;</code>
-<span class="route-desc">Endpoint for u.</span>
+<span class="route-desc">Returns public peer status with canonical and Regional time fields.</span>
 <span class="auth-pill">Public link</span>
 <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
 </button>
@@ -4015,15 +4075,25 @@ https://panel.example.com/subscriptions" type="button"><i class="fa-regular fa-c
 <div class="detail-grid">
 <div class="detail-card">
 <div class="detail-title">What it does</div>
-<p>Endpoint for u.</p>
+<p>Returns public peer usage and status. Time data includes <code>display_timezone</code>; canonical <code>first_used_at</code> and <code>expires_at</code>; matching epochs; Regional <code>*_display</code> values; and timezone-independent <code>ttl_seconds</code>.</p>
+<div class="api-security-note">This route is public by possession of the short-link token; no Authorization header is required. The token must be protected like a credential.</div>
 <div class="meta-line"><span>app.py</span><span>handler: <code>user_peer</code></span></div>
 </div>
 <div class="detail-card command-card">
 <div class="detail-title">Example command</div>
-<pre><code>curl -X GET "https://panel.example.com/api/u/example-token" \
-  -H "Authorization: Bearer &lt;PANEL_API_KEY&gt;"</code></pre>
-<button class="copy-btn" data-copy='curl -X GET "https://panel.example.com/api/u/example-token" \
-  -H "Authorization: Bearer &lt;PANEL_API_KEY&gt;"' type="button"><i class="fa-regular fa-copy"></i> Copy</button>
+<pre><code>curl -X GET "https://panel.example.com/api/u/example-token"</code></pre>
+<div class="detail-title">Time fields</div>
+<pre><code>{
+  "display_timezone": "Asia/Tehran",
+  "first_used_at": null,
+  "first_used_at_ts": null,
+  "first_used_at_display": null,
+  "expires_at": "2026-09-03T16:10:00Z",
+  "expires_at_ts": 1788451800,
+  "expires_at_display": "2026-09-03 19:40",
+  "ttl_seconds": 3600
+}</code></pre>
+<button class="copy-btn" data-copy='curl -X GET "https://panel.example.com/api/u/example-token"' type="button"><i class="fa-regular fa-copy"></i> Copy</button>
 </div>
 </div>
 </div>
@@ -4103,11 +4173,11 @@ https://panel.example.com/s/example-token" type="button"><i class="fa-regular fa
 </div>
 </div>
 </article>
-<article class="route-row" data-text="public links get /s/&lt;token&gt;/api subscription_public_api public subscription page or file endpoint.">
+<article class="route-row" data-text="public links get /s/&lt;token&gt;/api subscription_public_api subscription status timezone display UTC expiry ttl locations.">
 <button aria-expanded="false" class="route-main" type="button">
 <span class="method m-get">GET</span>
 <code class="route-path">/s/&lt;token&gt;/api</code>
-<span class="route-desc">Public subscription page or file endpoint.</span>
+<span class="route-desc">Returns public subscription status with canonical and Regional time fields.</span>
 <span class="auth-pill">Public link</span>
 <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
 </button>
@@ -4115,15 +4185,35 @@ https://panel.example.com/s/example-token" type="button"><i class="fa-regular fa
 <div class="detail-grid">
 <div class="detail-card">
 <div class="detail-title">What it does</div>
-<p>Public subscription page or file endpoint.</p>
+<p>Returns the public subscription payload used by the subscription page. It includes the saved <code>display_timezone</code>, canonical <code>first_used_at</code> and <code>expires_at</code>, Regional <code>first_used_at_display</code> and <code>expires_at_display</code>, absolute <code>expires_at_ts</code>, timezone-independent <code>ttl_seconds</code>, usage, access state, and locations.</p>
+<div class="api-security-note">This is a token-authenticated public link and does not require a panel API key. Treat the token as a secret. A browser should render the supplied <code>*_display</code> values or convert the canonical instant explicitly with <code>display_timezone</code>; it must not silently use the device timezone.</div>
 <div class="meta-line"><span>app.py</span><span>handler: <code>subscription_public_api</code></span></div>
 </div>
 <div class="detail-card command-card">
 <div class="detail-title">Example command</div>
-<pre><code>Open in browser:
-https://panel.example.com/s/example-token/api</code></pre>
-<button class="copy-btn" data-copy="Open in browser:
-https://panel.example.com/s/example-token/api" type="button"><i class="fa-regular fa-copy"></i> Copy</button>
+<pre><code>curl -X GET "https://panel.example.com/s/example-token/api"</code></pre>
+<div class="detail-title">Response fields</div>
+<pre><code>{
+  "id": 7,
+  "name": "client-01",
+  "display_timezone": "Asia/Tehran",
+  "first_used_at": null,
+  "first_used_at_display": null,
+  "expires_at": "2026-10-03T15:10:00Z",
+  "expires_at_display": "2026-10-03 18:40",
+  "expires_at_ts": 1791040200,
+  "ttl_seconds": 2592000,
+  "enabled": true,
+  "access": {
+    "allowed": true,
+    "reason": "",
+    "message": "",
+    "inbound_count": 0,
+    "has_inbounds": false
+  },
+  "locations": []
+}</code></pre>
+<button class="copy-btn" data-copy="curl -X GET &quot;https://panel.example.com/s/example-token/api&quot;" type="button"><i class="fa-regular fa-copy"></i> Copy</button>
 </div>
 </div>
 </div>
@@ -4256,6 +4346,7 @@ https://panel.example.com/u/example-token" type="button"><i class="fa-regular fa
 </section>
 <section class="doc-section" data-section="Backup &amp; Restore" id="sec-Backup--Restore">
 <div class="section-head"><div><h2>Backup &amp; Restore</h2><p>19 documented methods</p></div><a class="top-link" href="#top">Top</a></div>
+<div class="api-security-note" style="margin:0 0 14px"><b>Regional scheduling.</b> Automatic backup wall-clock schedules use the currently saved panel timezone. <code>next_run</code> and recorded backup instants remain UTC ISO strings for transport; panel and Telegram displays localize them. Changing Regional settings therefore moves future wall-clock scheduling to the new zone without corrupting stored instants.</div>
 <div class="route-list">
 <article class="route-row" data-text="backup &amp; restore get /api/backup/db backup_db handles backup download, inspection, scheduling, or restore.">
 <button aria-expanded="false" class="route-main" type="button">
@@ -4583,11 +4674,11 @@ X-Backup-Saved-Timestamp: 1785864300</code></pre>
 </div>
 </div>
 </article>
-<article class="route-row" data-text="backup &amp; restore get /api/backup/schedule backup_schedule_get handles backup download, inspection, scheduling, or restore.">
+<article class="route-row" data-text="backup &amp; restore get /api/backup/schedule backup_schedule_get reads timezone aware automatic backup schedule next run UTC.">
 <button aria-expanded="false" class="route-main" type="button">
 <span class="method m-get">GET</span>
 <code class="route-path">/api/backup/schedule</code>
-<span class="route-desc">Handles backup download, inspection, scheduling, or restore.</span>
+<span class="route-desc">Returns the automatic-backup schedule in the saved Regional timezone.</span>
 <span class="auth-pill">Login or API key</span>
 <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
 </button>
@@ -4595,7 +4686,8 @@ X-Backup-Saved-Timestamp: 1785864300</code></pre>
 <div class="detail-grid">
 <div class="detail-card">
 <div class="detail-title">What it does</div>
-<p>Handles backup download, inspection, scheduling, or restore.</p>
+<p>Returns schedule settings plus the effective <code>timezone</code> and next absolute run as UTC <code>next_run</code>. The <code>time</code> value is a local wall-clock <code>HH:MM</code> in that timezone.</p>
+<div class="api-security-note">Supported <code>freq</code> values are <code>daily</code>, <code>weekly</code>, and <code>monthly</code>. Weekly schedules use <code>dow</code>; monthly schedules use <code>dom</code>.</div>
 <div class="meta-line"><span>app.py</span><span>handler: <code>backup_schedule_get</code></span></div>
 </div>
 <div class="detail-card command-card">
@@ -4608,11 +4700,11 @@ X-Backup-Saved-Timestamp: 1785864300</code></pre>
 </div>
 </div>
 </article>
-<article class="route-row" data-text="backup &amp; restore post /api/backup/schedule backup_schedule_post handles backup download, inspection, scheduling, or restore.">
+<article class="route-row" data-text="backup &amp; restore post /api/backup/schedule backup_schedule_post saves timezone aware automatic backup schedule.">
 <button aria-expanded="false" class="route-main" type="button">
 <span class="method m-post">POST</span>
 <code class="route-path">/api/backup/schedule</code>
-<span class="route-desc">Handles backup download, inspection, scheduling, or restore.</span>
+<span class="route-desc">Saves an automatic-backup wall-clock schedule.</span>
 <span class="auth-pill">Login or API key</span>
 <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
 </button>
@@ -4620,7 +4712,7 @@ X-Backup-Saved-Timestamp: 1785864300</code></pre>
 <div class="detail-grid">
 <div class="detail-card">
 <div class="detail-title">What it does</div>
-<p>Handles backup download, inspection, scheduling, or restore.</p>
+<p>Saves the automatic-backup schedule and returns its recalculated <code>next_run</code>. The server always binds the schedule to the authoritative panel timezone; a client-supplied <code>timezone</code> cannot override Regional settings.</p>
 <div class="meta-line"><span>app.py</span><span>handler: <code>backup_schedule_post</code></span></div>
 </div>
 <div class="detail-card command-card">
@@ -4630,18 +4722,22 @@ X-Backup-Saved-Timestamp: 1785864300</code></pre>
   -H "Content-Type: application/json" \
   --data '{
   "enabled": true,
-  "frequency": "daily",
+  "freq": "daily",
   "time": "03:00",
-  "keep_last": 7
+  "keep": 7,
+  "include_wg": true,
+  "send_to_telegram": false
 }'</code></pre>
 <button class="copy-btn" data-copy="curl -X POST &quot;https://panel.example.com/api/backup/schedule&quot; \
   -H &quot;Authorization: Bearer &lt;PANEL_API_KEY&gt;&quot; \
   -H &quot;Content-Type: application/json&quot; \
   --data '{
   &quot;enabled&quot;: true,
-  &quot;frequency&quot;: &quot;daily&quot;,
+  &quot;freq&quot;: &quot;daily&quot;,
   &quot;time&quot;: &quot;03:00&quot;,
-  &quot;keep_last&quot;: 7
+  &quot;keep&quot;: 7,
+  &quot;include_wg&quot;: true,
+  &quot;send_to_telegram&quot;: false
 }'" type="button"><i class="fa-regular fa-copy"></i> Copy</button>
 </div>
 </div>
@@ -4832,12 +4928,13 @@ https://panel.example.com/backup" type="button"><i class="fa-regular fa-copy"></
 </section>
 <section class="doc-section" data-section="Logs" id="sec-Logs">
 <div class="section-head"><div><h2>Logs</h2><p>8 documented methods</p></div><a class="top-link" href="#top">Top</a></div>
+<div class="api-security-note" style="margin:0 0 14px"><b>Log timestamp rule.</b> New application log lines are written with explicit UTC <code>Z</code> timestamps. The API normalizes older unzoned log lines from the host's historical local timezone into UTC, then adds <code>time_display</code> using the saved Regional timezone. The UI must not run <code>new Date(time_display)</code> or apply a second offset.</div>
 <div class="route-list">
-<article class="route-row" data-text="logs delete /api/app_logs app_logs reads or clears application logs.">
+<article class="route-row" data-text="logs delete /api/app_logs app_logs clears application log file.">
 <button aria-expanded="false" class="route-main" type="button">
 <span class="method m-del">DELETE</span>
 <code class="route-path">/api/app_logs</code>
-<span class="route-desc">Reads or clears application logs.</span>
+<span class="route-desc">Clears the application log file.</span>
 <span class="auth-pill">Login session</span>
 <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
 </button>
@@ -4845,7 +4942,7 @@ https://panel.example.com/backup" type="button"><i class="fa-regular fa-copy"></
 <div class="detail-grid">
 <div class="detail-card">
 <div class="detail-title">What it does</div>
-<p>Reads or clears application logs.</p>
+<p>Truncates the application log file and records the clear time for retention state. Returns <code>{"ok": true}</code>.</p>
 <div class="meta-line"><span>app.py</span><span>handler: <code>app_logs</code></span></div>
 </div>
 <div class="detail-card command-card">
@@ -4858,11 +4955,11 @@ https://panel.example.com/backup" type="button"><i class="fa-regular fa-copy"></
 </div>
 </div>
 </article>
-<article class="route-row" data-text="logs get /api/app_logs app_logs reads or clears application logs.">
+<article class="route-row" data-text="logs get /api/app_logs app_logs reads application logs UTC time_display timezone legacy normalization query level limit.">
 <button aria-expanded="false" class="route-main" type="button">
 <span class="method m-get">GET</span>
 <code class="route-path">/api/app_logs</code>
-<span class="route-desc">Reads or clears application logs.</span>
+<span class="route-desc">Returns normalized UTC log records plus Regional display timestamps.</span>
 <span class="auth-pill">Login session</span>
 <span class="chev"><i class="fa-solid fa-chevron-down"></i></span>
 </button>
@@ -4870,14 +4967,32 @@ https://panel.example.com/backup" type="button"><i class="fa-regular fa-copy"></
 <div class="detail-grid">
 <div class="detail-card">
 <div class="detail-title">What it does</div>
-<p>Reads or clears application logs.</p>
+<p>Reads the application log tail, parses recognized timestamps, normalizes each parsed instant to UTC in <code>ts</code>, and adds localized <code>time_display</code> with seconds. The top-level <code>display_timezone</code> identifies the saved IANA zone.</p>
+<div class="api-param-list">
+<div><code>q</code><span>Optional case-insensitive text filter applied to <code>msg</code>.</span></div>
+<div><code>level</code><span>Optional normalized level such as <code>info</code>, <code>warning</code>, or <code>error</code>.</span></div>
+<div><code>limit</code><span>Number of newest parsed records; clamped from 10 through 2000 and defaults to 500.</span></div>
+</div>
+<div class="api-security-note">Lines without a recognizable timestamp keep an empty <code>ts</code> and have no <code>time_display</code>. Legacy unzoned timestamps are interpreted in the host timezone that produced them before conversion to UTC; they are never blindly relabeled as UTC.</div>
 <div class="meta-line"><span>app.py</span><span>handler: <code>app_logs</code></span></div>
 </div>
 <div class="detail-card command-card">
 <div class="detail-title">Example command</div>
-<pre><code>curl -X GET "https://panel.example.com/api/app_logs" \
+<pre><code>curl -X GET "https://panel.example.com/api/app_logs?level=info&amp;limit=500" \
   -H "Authorization: Bearer &lt;PANEL_API_KEY&gt;"</code></pre>
-<button class="copy-btn" data-copy='curl -X GET "https://panel.example.com/api/app_logs" \
+<div class="detail-title">Response example</div>
+<pre><code>{
+  "display_timezone": "Asia/Tehran",
+  "logs": [
+    {
+      "ts": "2026-09-03T15:09:00Z",
+      "time_display": "2026-09-03 18:39:00",
+      "level": "info",
+      "msg": "DB query — SELECT"
+    }
+  ]
+}</code></pre>
+<button class="copy-btn" data-copy='curl -X GET "https://panel.example.com/api/app_logs?level=info&amp;limit=500" \
   -H "Authorization: Bearer &lt;PANEL_API_KEY&gt;"' type="button"><i class="fa-regular fa-copy"></i> Copy</button>
 </div>
 </div>
@@ -5080,6 +5195,7 @@ https://panel.example.com/logs" type="button"><i class="fa-regular fa-copy"></i>
 </section>
 <section class="doc-section" data-section="Telegram" id="sec-Telegram">
 <div class="section-head"><div><h2>Telegram</h2><p>15 documented methods</p></div><a class="top-link" href="#top">Top</a></div>
+<div class="api-security-note" style="margin:0 0 14px"><b>Telegram time source.</b> <code>telegram_bot.py</code> and <code>telegram_admin.py</code> resolve the saved panel timezone at call time: first from <code>instance/panel_settings.json</code>, then from authenticated <code>GET /api/timezone</code>. They do not fall back to the bot host's OS timezone. Peer/subscription Created, First used, Expires, security events, backup history, backup filenames, schedules, and next-run text all use this zone. Absolute Telegram timestamps omit relative suffixes by default; durations and countdowns remain timezone-independent.</div>
 <div class="route-list">
 <article class="route-row" data-text="telegram post /api/telegram/admin_log tg_adminlog manages telegram bot settings, admins, logs, or heartbeat.">
 <button aria-expanded="false" class="route-main" type="button">
@@ -5580,6 +5696,7 @@ https://panel.example.com/" type="button"><i class="fa-regular fa-copy"></i> Cop
 </section>
 <section class="doc-section" data-section="Node Agent" id="sec-Node-Agent">
 <div class="section-head"><div><h2>Node Agent</h2><p>25 documented methods</p></div><a class="top-link" href="#top">Top</a></div>
+<div class="api-security-note" style="margin:0 0 14px"><b>Node time contract.</b> The node agent intentionally stays timezone-neutral. Unix values such as health <code>now</code> and WireGuard <code>latest_handshake</code> are absolute epoch seconds; ISO timestamps and backup metadata use UTC <code>Z</code>. The panel or Telegram converts those instants once with the saved Regional timezone. Localizing inside <code>node_agent.py</code> would double-apply the offset.</div>
 <div class="route-list">
 <article class="route-row" data-text="backup &amp; restore get /api/backup/wg node_backup_wg creates a node backup containing all wireguard interface configs and the node-agent .env file when available.">
 <button aria-expanded="false" class="route-main" type="button">
@@ -5680,7 +5797,7 @@ PORT=9898
 <div class="detail-card">
 <div class="detail-title">What it does</div>
 <p>Provides the primary node-monitor response. Updated panels use the embedded <code>interfaces</code> list for interface up/down monitoring and call <code>/api/interfaces?fast=1</code> only as a compatibility fallback for older agents.</p>
-<div class="api-security-note">Node availability is determined by this health request. A later fallback interface request failing must not by itself mark the whole node offline.</div>
+<div class="api-security-note">Node availability is determined by this health request. A later fallback interface request failing must not by itself mark the whole node offline. The <code>now</code> field is Unix epoch seconds in UTC semantics, not a node-local wall-clock value.</div>
 <div class="meta-line"><span>node_agent.py</span><span>handler: <code>health</code></span></div>
 </div>
 <div class="detail-card command-card">

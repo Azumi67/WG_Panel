@@ -63,9 +63,13 @@ class Peer(db.Model):
     data_limit_unit      = db.Column(db.String(2))    
     bytes_offset         = db.Column(db.BigInteger, default=0)  
 
-    time_limit_days      = db.Column(db.Integer)      
+    time_limit_days      = db.Column(db.Float,default=0,)   
     start_on_first_use   = db.Column(db.Boolean, default=False)
     first_used_at        = db.Column(db.DateTime)    
+    # Canonical UTC instant at which the current timer cycle began.  Keeping
+    # this separate from created_at/first_used_at means reset and edit actions
+    # cannot make the countdown and displayed expiry disagree.
+    timer_started_at     = db.Column(db.DateTime)
     expires_at           = db.Column(db.DateTime)    
 
     unlimited            = db.Column(db.Boolean, default=False)
@@ -74,7 +78,11 @@ class Peer(db.Model):
     telegram_id          = db.Column(db.String(64))
 
     events               = db.relationship('PeerEvent', backref='peer', lazy=True, cascade="all, delete-orphan")
-    created_at           = db.Column(db.DateTime, server_default=db.func.now())
+    created_at = db.Column(
+    db.DateTime,
+    default=datetime.utcnow,
+    nullable=False,
+    )
     used_bytes_total = db.Column(BigInteger, default=0)
 
     def limit_bytes(self):
@@ -104,7 +112,10 @@ class ShortLink(db.Model):
         index=True,
     )
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    created_at = db.Column(
+    db.DateTime,
+    default=datetime.utcnow,
+    nullable=False,)
     last_used_at = db.Column(db.DateTime)
 
     peer = db.relationship("Peer", backref=db.backref("short_links", cascade="all, delete-orphan"))
@@ -129,11 +140,16 @@ class Subscription(db.Model):
     time_limit_days      = db.Column(db.Float, default=0)
     start_on_first_use   = db.Column(db.Boolean, default=False)
     first_used_at        = db.Column(db.DateTime)
+    timer_started_at     = db.Column(db.DateTime)
     expires_at           = db.Column(db.DateTime)
     unlimited            = db.Column(db.Boolean, default=False)
     phone_number         = db.Column(db.String(32))
     telegram_id          = db.Column(db.String(64))
-    created_at           = db.Column(db.DateTime, server_default=db.func.now())
+    created_at = db.Column(
+    db.DateTime,
+    default=datetime.utcnow,
+    nullable=False,
+    )
     enabled              = db.Column(db.Boolean, default=True)
 
     links = db.relationship('SubscriptionPeer', backref='subscription', lazy=True, cascade='all, delete-orphan')

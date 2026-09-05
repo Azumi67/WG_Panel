@@ -15,14 +15,14 @@
   const state = {
     pane:'view', source:'app', ifaceId:'',
     auto:false, timer:null, settings:null,
-    friendly:true, localTime:false,
+    friendly:true, localTime:true,
     ifaceScope: 'local',
     nodeId: '' 
   };
-  function humanIso(iso) {
+function humanIso(iso) {
   if (!iso) return 'Never';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
+  const d = parseLogDate(iso);
+  if (!d || Number.isNaN(d.getTime())) return iso;
 
   const diff = Date.now() - d.getTime();
   if (diff < 0) return 'Just now';
@@ -48,7 +48,7 @@
     }
     if (saved.ifaceId) state.ifaceId = saved.ifaceId;
     if (typeof saved.friendly === 'boolean') state.friendly = saved.friendly;
-    if (typeof saved.localTime === 'boolean') state.localTime = saved.localTime;
+    state.localTime = true;
     if (saved.ifaceScope) state.ifaceScope = saved.ifaceScope;
     if (saved.nodeId)     state.nodeId     = saved.nodeId;
     if (typeof saved.auto === 'boolean')   state.auto = saved.auto;
@@ -168,30 +168,41 @@ function formatMessage(x, src, rawMsg, niceMsg){
   </div>`;
 }
 
-  const isoLocalToZ = s => {
-    if(!s) return '';
-    const d=new Date(s);
-    if(isNaN(d)) return '';
-    return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,19)+'Z';
-  };
-
-  function fmtTsDisplay(ts, asLocal){
+  function panelTimezone(){return String((typeof window.wgPanelTimezone==='function'&&window.wgPanelTimezone())||window.WG_PANEL_TIMEZONE||'UTC')}
+  function parseLogDate(ts){
     if (!ts) return '';
-    let d;
-    if (/^\d{4}-\d{2}-\d{2}T/.test(ts)) d = new Date(ts);
-    else if (/^\d{4}-\d{2}-\d{2} /.test(ts)) d = new Date(ts.replace(' ', 'T')+'Z');
-    else if (/^\d{10,13}$/.test(String(ts))) d = new Date(Number(String(ts).padEnd(13,'0').slice(0,13)));
-    else d = new Date(ts);
-    if (isNaN(d)) return String(ts);
+    if(typeof window.wgPanelDate==='function')return window.wgPanelDate(ts);
+    let raw=String(ts).trim();
+    if(/^\d{10,13}$/.test(raw))return new Date(Number(raw.padEnd(13,'0').slice(0,13)));
+    if(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(raw))raw=raw.replace(' ','T')+'Z';
+    const d=new Date(raw);return Number.isNaN(d.getTime())?null:d;
+  }
+  function isoLocalToZ(s){
+    if(!s)return '';
+    const m=String(s).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+    if(!m)return '';
+    const target=Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5],+(m[6]||0));
+    let instant=target;
+    const formatter=new Intl.DateTimeFormat('en-CA',{timeZone:panelTimezone(),year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
+    for(let i=0;i<3;i++){
+      const p=Object.fromEntries(formatter.formatToParts(new Date(instant)).map(x=>[x.type,x.value]));
+      const represented=Date.UTC(+p.year,+p.month-1,+p.day,+p.hour,+p.minute,+p.second);
+      instant+=target-represented;
+    }
+    return new Date(instant).toISOString().replace(/\.\d{3}Z$/,'Z');
+  }
 
-    const pad = n => String(n).padStart(2,'0');
-    const y  = asLocal ? d.getFullYear()        : d.getUTCFullYear();
-    const m  = pad((asLocal ? d.getMonth()      : d.getUTCMonth()) + 1);
-    const dd = pad(asLocal ? d.getDate()        : d.getUTCDate());
-    const hh = pad(asLocal ? d.getHours()       : d.getUTCHours());
-    const mm = pad(asLocal ? d.getMinutes()     : d.getUTCMinutes());
-    const ss = pad(asLocal ? d.getSeconds()     : d.getUTCSeconds());
-    return `${y}-${m}-${dd} ${hh}:${mm}:${ss}` + (asLocal ? '' : 'Z');
+  function fmtTsDisplay(ts){
+    if (!ts) return '';
+    if(typeof window.wgPanelFormatDateTime==='function')return window.wgPanelFormatDateTime(ts,{seconds:true,fallback:String(ts)});
+    const d=parseLogDate(ts);if(!d)return String(ts);
+    const p=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:panelTimezone(),year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).formatToParts(d).map(x=>[x.type,x.value]));
+    return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
+  }
+  function panelTimeText(value){
+    return typeof window.wgPanelFormatDateTimesInText==='function'
+      ? window.wgPanelFormatDateTimesInText(value)
+      : String(value??'');
   }
 
   const levelBadge = lvl => {
@@ -478,8 +489,8 @@ function buildURL() {
 
 function relativeTime(ts){
   if (!ts) return '';
-  let d = new Date(ts);
-  if (Number.isNaN(d.getTime())) return '';
+  const d = parseLogDate(ts);
+  if (!d || Number.isNaN(d.getTime())) return '';
   const diff = Date.now() - d.getTime();
   const future = diff < 0;
   const sec = Math.abs(Math.floor(diff / 1000));
@@ -545,7 +556,7 @@ function renderizeRows(rows){
 
   const html = arr.map(x => {
     const tsRaw  = x.ts || x.time || x.timestamp || x.when || '';
-    const tsShow = fmtTsDisplay(tsRaw, state.localTime);
+    const tsShow = x.time_display || fmtTsDisplay(tsRaw);
     const tsHuman = state.friendly ? relativeTime(tsRaw) : '';
 
     const rawMsg = String(
@@ -556,8 +567,8 @@ function renderizeRows(rows){
 
     const lvl = x.kind || x.level || parseLevel(rawMsg) || (x.action ? 'action' : 'info');
     const summary = state.friendly ? humanSummary(x, state.source, rawMsg) : {main: rawMsg || '—', sub:''};
-    const main = summary.main || '—';
-    const sub = summary.sub || '';
+    const main = panelTimeText(summary.main || '—');
+    const sub = panelTimeText(summary.sub || '');
     const rawTitle = escapeHtml(redactSecrets(rawMsg).replace(/\s+/g,' ').trim());
 
     return `<tr>
@@ -573,6 +584,7 @@ function renderizeRows(rows){
 }
 
   async function getLogs(){
+    try{await(window.WG_PANEL_TIMEZONE_READY||Promise.resolve())}catch(_){}
     const url = buildURL(); if (!url) return;
     const r = await fetch(url, { credentials:'same-origin' });
     if (!r.ok){ renderizeRows([]); return; }
@@ -676,13 +688,13 @@ function renderizeRows(rows){
       ...rows.map(x=>{
         const ts  = (x.ts || x.time || x.timestamp || '');
         const lvl = (x.kind || x.level || (x.action?'action':'info')).toUpperCase();
-        const msg = redactSecrets(
+        const msg = panelTimeText(redactSecrets(
           (x.msg || x.message || x.text ||
             (x.action ? (x.details?`${x.action} • ${x.details}`:x.action) : (x.details||x.raw||'')))
-          ).replace(/\n/g,' ').replace(/"/g,'""');
+          )).replace(/\n/g,' ').replace(/"/g,'""');
 
         const srcCfg = SOURCES[state.source] || SOURCES.app;
-        return `"${ts}","${lvl}","${srcCfg.label}","${msg}"`;
+        return `"${x.time_display || fmtTsDisplay(ts)}","${lvl}","${srcCfg.label}","${msg}"`;
       })
     ].join('\n');
     dlBlob(`${state.source}_logs.csv`, csv, 'text/csv;charset=utf-8;');
@@ -1089,7 +1101,7 @@ nodeSel?.addEventListener('change', async () => {
 });
 
     const fm = $('#friendly-mode'); if (fm) { fm.checked = !!state.friendly; }
-    const lt = $('#local-time');    if (lt) { lt.checked = !!state.localTime; }
+    const lt = $('#local-time');    if (lt) { lt.checked = true; lt.disabled = true; }
     const auto = $('#auto-refresh');
     if (auto) {
       auto.checked = !!state.auto;
@@ -1097,7 +1109,11 @@ nodeSel?.addEventListener('change', async () => {
     }
 
     const thTime = $('#logs-table thead th:first-child');
-    const applyTimeHdr = () => { if (thTime) thTime.textContent = (lt?.checked ? 'Time (local)' : 'Time (UTC)'); };
+    const applyTimeHdr = () => {
+      const timezone=panelTimezone();
+      if(thTime)thTime.textContent=`Time (${timezone})`;
+      const label=$('#logs-panel-timezone');if(label)label.textContent=timezone;
+    };
     applyTimeHdr();
 
     fm?.addEventListener('change', async () => {
@@ -1119,25 +1135,7 @@ nodeSel?.addEventListener('change', async () => {
   await getLogs();
 });
 
-lt?.addEventListener('change', async () => {
-  state.localTime = Boolean(
-    lt.checked
-  );
-
-  persistState();
-
-  try {
-    localStorage.setItem(
-      'logs_local_time',
-      JSON.stringify(
-        state.localTime
-      )
-    );
-  } catch {}
-
-  applyTimeHdr();
-  await getLogs();
-});
+window.addEventListener('wgpanel:timezone-change',async()=>{state.localTime=true;applyTimeHdr();await getLogs()});
 
     const toggle = $('#filters-toggle');
     const adv = document.querySelector('.filters-advanced');

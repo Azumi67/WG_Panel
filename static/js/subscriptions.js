@@ -214,25 +214,52 @@ function subConfirm(opts = {}) {
   });
 }
 const fmtBytes = b => { b=Number(b||0); const u=['B','KiB','MiB','GiB','TiB']; let i=0; while(b>=1024&&i<u.length-1){b/=1024;i++} return `${b.toFixed(i?2:0)} ${u[i]}`; };
-function subDate(value) {
+function subscriptionDateObject(value) {
+  if (typeof window.wgPanelDate === 'function') return window.wgPanelDate(value);
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') {
+    const d = new Date(Math.abs(value) < 1e12 ? value * 1000 : value);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  let raw = String(value).trim();
+  if (/^\d{10,13}(?:\.\d+)?$/.test(raw)) {
+    const n = Number(raw);
+    const d = new Date(raw.split('.')[0].length <= 10 ? n * 1000 : n);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?$/.test(raw)) raw = raw.replace(' ', 'T') + 'Z';
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+function subDate(value, serverDisplay='') {
+  if (serverDisplay) return String(serverDisplay);
   if (!value) return 'Not used yet';
-  const d = new Date(value);if (Number.isNaN(d.getTime())) {return String(value);
-  }return d.toLocaleString([], {year: 'numeric',month: 'short',day: '2-digit',hour: '2-digit',minute: '2-digit',});}
-function subscriptionTimeLabel(s) {if (s.unlimited) {return s.first_used_at? `Active since ${subDate(s.first_used_at)}`: 'Unlimited · not used yet';}return ttlText(s.ttl_seconds);}
+  if (typeof window.wgPanelFormatDateTime === 'function') {
+    return window.wgPanelFormatDateTime(value, {monthStyle:'short', fallback:String(value)});
+  }
+  const d = subscriptionDateObject(value);
+  if (!d || Number.isNaN(d.getTime())) return String(value);
+  return new Intl.DateTimeFormat(undefined, {
+    timeZone:String(window.WG_PANEL_TIMEZONE || 'UTC'), year:'numeric', month:'short', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', hourCycle:'h23'
+  }).format(d);
+}
+function subscriptionTimeLabel(s) {if (s.unlimited) {return s.first_used_at? `Active since ${subDate(s.first_used_at,s.first_used_at_display)}`: 'Unlimited · not used yet';}return ttlText(s.ttl_seconds);}
 
 function subscriptionTimePresentation(s){
   const unlimited = !!s.unlimited || !Number(s.limit_bytes || 0);
   const locs = Array.isArray(s.locations) ? s.locations : [];
   const startedAt = s.first_used_at || locs.map(x=>x.first_used_at).filter(Boolean).sort()[0] || null;
+  const startedAtDisplay = s.first_used_at_display || locs.map(x=>x.first_used_at_display).filter(Boolean)[0] || '';
 
   if(unlimited){
     return {
       title: 'Active since',
-      value: startedAt
+      value: startedAtDisplay || (startedAt
         ? subDate(startedAt)
-        : (s.enabled === false ? 'Not started' : 'Waiting for first use'),
+        : (s.enabled === false ? 'Not started' : 'Waiting for first use')),
       hint: s.enabled === false ? 'Subscription disabled' : 'No expiry limit',
-      top: startedAt ? `Active since ${subDate(startedAt)}` : (s.enabled === false ? 'Not started' : 'Waiting for first use'),
+      top: startedAtDisplay ? `Active since ${startedAtDisplay}` : (startedAt ? `Active since ${subDate(startedAt)}` : (s.enabled === false ? 'Not started' : 'Waiting for first use')),
       percent: 100
     };
   }
@@ -276,7 +303,7 @@ function setLiveState(text, cls=''){
   if(bar) bar.className = 'subx-livebar' + (cls ? ' '+cls : '');
 }
 function nowClock(){
-  try { return new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit'}); }
+  try { return new Intl.DateTimeFormat(undefined, {timeZone:String(window.WG_PANEL_TIMEZONE || 'UTC'), hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'}).format(new Date()); }
   catch(_) { return 'now'; }
 }
 function detailsIsOpen(){ return $('#details-modal')?.classList.contains('open'); }
@@ -1066,6 +1093,7 @@ function rowHtml(s){
 }
 
 async function loadSubs(opts={}){
+  try { await (window.WG_PANEL_TIMEZONE_READY || Promise.resolve()); } catch (_) {}
   if(SUBS_LOADING) return;
   if(!opts.force && modalIsOpen()) return;
   SUBS_LOADING = true;
@@ -1075,6 +1103,7 @@ async function loadSubs(opts={}){
     const j=await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(j.detail || j.error || 'Load failed');
     const next = j.subscriptions || [];
+    if(next[0]?.display_timezone && typeof window.wgPanelApplyTimezone === 'function') window.wgPanelApplyTimezone(next[0].display_timezone, false);
     const nextJson = JSON.stringify(next);
     SUBS = next;
     if(opts.force || nextJson !== SUBS_LAST_JSON){
@@ -1807,13 +1836,9 @@ function statusBadgeClass(status){
 
 function subxRelativeTime(value){
   if(value === null || value === undefined || value === '') return '';
-  let ms;
-  if(typeof value === 'number' && Number.isFinite(value)) ms = value < 1e12 ? value * 1000 : value;
-  else {
-    const parsed = Date.parse(String(value));
-    if(!Number.isFinite(parsed)) return String(value);
-    ms = parsed;
-  }
+  const parsedDate = subscriptionDateObject(value);
+  if(!parsedDate) return String(value);
+  const ms = parsedDate.getTime();
   const diff = Math.round((Date.now() - ms) / 1000);
   const future = diff < 0;
   const sec = Math.abs(diff);
@@ -1831,8 +1856,10 @@ function subxRelativeTime(value){
 
 function subxExactTime(value){
   if(!value) return '';
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? String(value) : d.toLocaleString([], {dateStyle:'medium', timeStyle:'medium'});
+  if(typeof window.wgPanelFormatDateTime === 'function') return window.wgPanelFormatDateTime(value,{seconds:true,monthStyle:'short',fallback:String(value)});
+  const d = subscriptionDateObject(value);
+  if(!d || Number.isNaN(d.getTime())) return String(value);
+  return new Intl.DateTimeFormat(undefined,{timeZone:String(window.WG_PANEL_TIMEZONE||'UTC'),dateStyle:'medium',timeStyle:'medium'}).format(d);
 }
 
 function subscriptionConnectionPresentation(s){
@@ -1874,6 +1901,12 @@ function subscriptionLogEventLabel(value){
   return String(value || 'event').replace(/[_-]+/g, ' ').replace(/\b\w/g, ch=>ch.toUpperCase());
 }
 
+function subxFormatDateTimesInText(value){
+  return typeof window.wgPanelFormatDateTimesInText==='function'
+    ? window.wgPanelFormatDateTimesInText(value)
+    : String(value??'');
+}
+
 function renderSubscriptionLogRows(logs){
   const rows = Array.isArray(logs) ? logs : [];
   if(!rows.length){
@@ -1886,12 +1919,12 @@ function renderSubscriptionLogRows(logs){
     const source = row.source_name || 'Attached config';
     const level = String(row.level || 'info').toLowerCase();
     const relative = time ? subxRelativeTime(time) : '';
-    const exact = time ? subxExactTime(time) : '';
+    const exact = row.time_display || (time ? subxExactTime(time) : '');
     return `<article class="subx-peer-log-row level-${esc(level)}">
       <span class="subx-peer-log-dot"></span>
       <div class="subx-peer-log-copy">
         <div class="subx-log-mainline"><span class="subx-log-event"><b>${esc(subscriptionLogEventLabel(event))}</b><span class="subx-log-source">${esc(source)}</span></span>${time ? `<time title="${esc(exact)}">${esc(relative || exact)}</time>` : ''}</div>
-        <p>${esc(details || 'No additional details.')}</p>
+        <p>${esc(subxFormatDateTimesInText(details || 'No additional details.'))}</p>
       </div>
     </article>`;
   }).join('')}</div>`;
@@ -1960,8 +1993,8 @@ async function openSubscriptionLogs(subscription, opts={}){
       return rows;
     }));
     const logs = responses.flat().sort((a,b)=>{
-      const at = Date.parse(a.time || a.ts || 0) || 0;
-      const bt = Date.parse(b.time || b.ts || 0) || 0;
+      const at = subscriptionDateObject(a.time || a.ts || 0)?.getTime() || 0;
+      const bt = subscriptionDateObject(b.time || b.ts || 0)?.getTime() || 0;
       return bt-at;
     }).slice(0,500);
     panel.innerHTML = `<div class="subx-peer-log-head">
@@ -1994,6 +2027,9 @@ function renderDetails(s, opts={}){
           <div class="detail-card"><span>Inbounds</span><b>${locs.length}</b></div>
           <div class="detail-card"><span>Used</span><b>${used}</b></div>
           <div class="detail-card"><span>${subscriptionTimePresentation(s).title}</span><b>${esc(subscriptionTimePresentation(s).value)}</b><small>${esc(subscriptionTimePresentation(s).hint)}</small></div>
+          <div class="detail-card"><span>Created</span><b>${esc(subDate(s.created_at,s.created_at_display))}</b><small>${esc(s.display_timezone || String(window.WG_PANEL_TIMEZONE || 'UTC'))}</small></div>
+          <div class="detail-card"><span>Active since</span><b>${esc(s.first_used_at ? subDate(s.first_used_at,s.first_used_at_display) : 'Not started')}</b></div>
+          <div class="detail-card"><span>Expires</span><b>${esc(s.expires_at ? subDate(s.expires_at,s.expires_at_display) : 'No expiry')}</b></div>
         </div>
       </section>
       <section class="detail-panel">
@@ -2051,6 +2087,7 @@ function renderDetails(s, opts={}){
                     <div class="detail-meta-row clean-meta">
                       ${peerName ? `<span class="detail-meta-pill"><i class="fas fa-user-shield"></i> ${esc(peerName)}</span>` : ''}
                       ${endpoint ? `<span class="detail-meta-pill"><i class="fas fa-globe"></i> ${esc(endpoint)}</span>` : ''}
+                      ${l.first_used_at ? `<span class="detail-meta-pill"><i class="fas fa-clock"></i> ${esc(subDate(l.first_used_at,l.first_used_at_display))}</span>` : ''}
                     </div>
                   </div>
                   <div class="detail-actions">
@@ -2397,7 +2434,7 @@ function subxTimeHint(s){
   const ttl = s.ttl_seconds == null ? null : Number(s.ttl_seconds || 0);
   if(s.start_on_first_use && !s.first_used_at && ttl !== 0) return 'Starts on first use';
   if(ttl !== null && ttl <= 0) return 'Time limit reached';
-  if(s.expires_at) return 'Expires on a set date';
+  if(s.expires_at) return `Expires ${subDate(s.expires_at,s.expires_at_display)}`;
   if(ttl === null) return 'No expiry limit';
   return 'Time remaining';
 }
@@ -2699,6 +2736,7 @@ function renderSubscriptions(){
 }
 
 async function loadSubs(opts={}){
+  try { await (window.WG_PANEL_TIMEZONE_READY || Promise.resolve()); } catch (_) {}
   if(SUBS_LOADING) return;
   if(!opts.force && modalIsOpen()) return;
   SUBS_LOADING = true;
@@ -2709,6 +2747,7 @@ async function loadSubs(opts={}){
     if(!r.ok) throw new Error(j.detail || j.error || 'Load failed');
 
     const next = j.subscriptions || [];
+    if(next[0]?.display_timezone && typeof window.wgPanelApplyTimezone === 'function') window.wgPanelApplyTimezone(next[0].display_timezone, false);
     const nextJson = JSON.stringify(next);
     SUBS = next;
     if(SUBX_MOBILE_MANAGE_ID != null && !SUBS.some(x => String(x.id) === String(SUBX_MOBILE_MANAGE_ID))){
@@ -2741,6 +2780,11 @@ async function loadSubs(opts={}){
 }
 
 setTimeout(()=>renderSubscriptions(), 0);
+
+window.addEventListener('wgpanel:timezone-change',()=>{
+  SUBS_LAST_JSON='';
+  loadSubs({force:true}).catch(()=>{});
+});
 
 
 

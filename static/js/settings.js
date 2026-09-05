@@ -2,29 +2,126 @@
 (() => {
   const $  = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
-  function _parseTs(any){
-  if (!any && any!==0) return null;
-  if (any instanceof Date) return isNaN(any)?null:any;
-  const n = Number(any);
-  if (Number.isFinite(n) && String(any).trim()!=='') {
-    const ms = n >= 1e12 ? n : n*1000;
-    const d = new Date(ms); return isNaN(d)?null:d;
-  }
-  const s = String(any).trim(); if (!s) return null;
-  const d = new Date(s); return isNaN(d)?null:d;
-}
-function _fmtLocal(d){
-  return d.toLocaleString(undefined, {year:'numeric',month:'short',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'});
-}
-function _fmtAgo(d){
-  const sec = Math.max(0, Math.floor((Date.now()-d.getTime())/1000));
-  const m = Math.floor(sec/60), h=Math.floor(m/60), d2=Math.floor(h/24);
-  if (d2>0) return `${d2}d ${h%24}h ago`;
-  if (h>0)  return `${h}h ${m%60}m ago`;
-  if (m>0)  return `${m}m ago`;
-  return `${sec}s ago`;
-}
 
+  const PANEL_CLOCK = {
+    timezone: String(window.PANEL_TIMEZONE || 'UTC'),
+    serverEpochMs: null,
+    syncedAt: null,
+  };
+
+  function _normalizeUtcText(value) {
+    const text = String(value ?? '').trim();
+    if (!text) return '';
+    // Backend/database timestamps without an explicit offset are UTC.
+    if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(text)) {
+      return text.replace(' ', 'T') + 'Z';
+    }
+    return text;
+  }
+
+  function _parseTs(any){
+    if (!any && any!==0) return null;
+    if (any instanceof Date) return isNaN(any)?null:any;
+    const n = Number(any);
+    if (Number.isFinite(n) && String(any).trim()!=='') {
+      const ms = n >= 1e12 ? n : n*1000;
+      const d = new Date(ms); return isNaN(d)?null:d;
+    }
+    const s = _normalizeUtcText(any);
+    if (!s) return null;
+    const d = new Date(s); return isNaN(d)?null:d;
+  }
+
+  function _panelNowMs() {
+    if (Number.isFinite(PANEL_CLOCK.serverEpochMs) && Number.isFinite(PANEL_CLOCK.syncedAt)) {
+      return PANEL_CLOCK.serverEpochMs + (performance.now() - PANEL_CLOCK.syncedAt);
+    }
+    return Date.now();
+  }
+
+  function _applyClockPayload(payload) {
+    if (payload?.timezone) {
+      PANEL_CLOCK.timezone = String(payload.timezone);
+      window.PANEL_TIMEZONE = PANEL_CLOCK.timezone;
+    }
+    const epoch = Number(payload?.server_epoch);
+    if (Number.isFinite(epoch)) {
+      PANEL_CLOCK.serverEpochMs = epoch * 1000;
+      PANEL_CLOCK.syncedAt = performance.now();
+    }
+  }
+
+  async function syncPanelClock() {
+    const response = await fetch(`/api/timezone?_=${Date.now()}`, {
+      credentials:'same-origin',
+      headers:{Accept:'application/json'},
+      cache:'no-store',
+    });
+    if (!response.ok) throw new Error(`Timezone sync failed (${response.status})`);
+    const payload = await response.json();
+    _applyClockPayload(payload);
+    return payload;
+  }
+
+  function _fmtLocal(any, options = {}) {
+    const d = _parseTs(any);
+    if (!d) return '—';
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        timeZone:PANEL_CLOCK.timezone,
+        year:'numeric', month:'short', day:'2-digit',
+        hour:'2-digit', minute:'2-digit', second:'2-digit',
+        hour12:false,
+        ...options,
+      }).format(d);
+    } catch {
+      return d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    }
+  }
+
+  function _fmtAgo(any) {
+    const d = _parseTs(any);
+    if (!d) return '';
+    const signed = Math.floor((_panelNowMs() - d.getTime()) / 1000);
+    const future = signed < -4;
+    const sec = Math.abs(signed);
+    if (sec < 5) return 'just now';
+    const min = Math.floor(sec/60), hr=Math.floor(min/60), day=Math.floor(hr/24);
+    const value = day > 0 ? `${day}d ${hr%24}h` : hr > 0 ? `${hr}h ${min%60}m` : min > 0 ? `${min}m` : `${sec}s`;
+    return future ? `in ${value}` : `${value} ago`;
+  }
+
+  function _formatStamp(rowOrValue) {
+    const row = rowOrValue && typeof rowOrValue === 'object' && !(rowOrValue instanceof Date)
+      ? rowOrValue : null;
+    const value = row ? (row.ts ?? row.time ?? row.timestamp) : rowOrValue;
+    const d = _parseTs(value);
+    return {
+      text: row?.time_display || _fmtLocal(d),
+      ago: _fmtAgo(d),
+    };
+  }
+
+  function _panelFileStamp() {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone:PANEL_CLOCK.timezone,
+      year:'numeric', month:'2-digit', day:'2-digit',
+      hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false,
+    }).formatToParts(new Date(_panelNowMs()));
+    const get = type => parts.find(part => part.type === type)?.value || '00';
+    return `${get('year')}-${get('month')}-${get('day')}_${get('hour')}-${get('minute')}-${get('second')}`;
+  }
+
+  const panelClockReady = syncPanelClock().catch(() => null);
+  window.panelTime = {
+    sync:syncPanelClock,
+    format:_fmtLocal,
+    relative:_fmtAgo,
+    stamp:_formatStamp,
+    fileStamp:_panelFileStamp,
+    timezone:() => PANEL_CLOCK.timezone,
+    now:() => new Date(_panelNowMs()),
+  };
 
   (function restoreTabAttr() {
     const KEY_NEW    = 'settings:activeTab';
@@ -305,7 +402,7 @@ function _fmtAgo(d){
           timeZone: tz,
           year:'numeric', month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit',
           hour12:false,
-        }).format(new Date());
+        }).format(new Date(_panelNowMs()));
       } catch {
         nowEl.textContent = 'Current local time unavailable';
       }
@@ -313,6 +410,7 @@ function _fmtAgo(d){
   }
 
   async function loadPanelSettings() {
+    await panelClockReady;
     const j = await jfetch('/api/settings');
     const tlsOn = !!j.tls_enabled;
 
@@ -337,6 +435,12 @@ function _fmtAgo(d){
     }
 
     const timezoneName = String(j.timezone || 'UTC');
+    if (timezoneName !== PANEL_CLOCK.timezone) {
+      await syncPanelClock().catch(() => {
+        PANEL_CLOCK.timezone = timezoneName;
+        window.PANEL_TIMEZONE = timezoneName;
+      });
+    }
     populatePanelTimezone(timezoneName);
     updateRegionalPreview(timezoneName);
 
@@ -471,6 +575,7 @@ function _fmtAgo(d){
         }
       });
       toast(`Panel timezone saved: ${timezoneName}`, 'success');
+      await syncPanelClock().catch(() => null);
       await loadPanelSettings();
     } catch (e) {
       console.error(e);
@@ -564,6 +669,7 @@ document.getElementById('rt-restart')
   }
 
   document.addEventListener('DOMContentLoaded', async () => {
+    await panelClockReady;
     const savedSub = localStorage.getItem('settings:panelSubtab') || 'tls';
     subtab(savedSub);
 
@@ -597,6 +703,14 @@ document.getElementById('rt-restart')
       populatePanelTimezone(detected);
       updateRegionalPreview(detected);
       toast(`Selected browser timezone: ${detected}. Save to apply.`, 'info');
+    });
+    setInterval(() => {
+      const selected = document.getElementById('panel-timezone')?.value || PANEL_CLOCK.timezone;
+      updateRegionalPreview(selected);
+    }, 1000);
+    setInterval(() => syncPanelClock().catch(() => null), 300000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) syncPanelClock().catch(() => null);
     });
     document.getElementById('save-runtime')?.addEventListener('click', () =>
       rtSave().catch(e => toast('Runtime save failed: ' + (e?.message || 'unknown'), 'error'))
@@ -1197,15 +1311,9 @@ document.getElementById('rt-restart')
   }
 
   updateLog();
-    function humanDate(d = new Date()) {
-    const day   = d.getDate(); 
-    const month = d.toLocaleString(undefined, { month: 'long' }); 
-    const year  = d.getFullYear();
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    const ss = String(d.getSeconds()).padStart(2, '0');
-    return `${day}_${month}_${year}_${hh}-${mm}-${ss}`;
-  }
+    function humanDate() {
+      return _panelFileStamp();
+    }
 
 
   async function loadLogsScope() {
@@ -1249,7 +1357,9 @@ document.getElementById('rt-restart')
         if (Array.isArray(j?.logs)) {
           return j.logs.map(x => {
             if (typeof x === 'string') return x;
-            const ts  = x.ts || x.time || x.timestamp || '';
+            const rawTs = x.ts || x.time || x.timestamp || '';
+            const convertedTs = rawTs ? _fmtLocal(rawTs) : '';
+            const ts = x.time_display || (convertedTs && convertedTs !== '—' ? convertedTs : rawTs);
             const lvl = (x.level || x.lvl || '').toString().toUpperCase();
             const msg = x.msg || x.message || x.text || JSON.stringify(x);
             return `${ts ? '[' + ts + '] ' : ''}${lvl ? lvl + ' ' : ''}${msg}`;
@@ -1801,7 +1911,7 @@ document.getElementById('rt-restart')
           <td><code class="sec-ip-code"><i class="fa-solid fa-user-lock"></i> ${escapeHtml(block.ip || '')}</code>${networkText ? `<small class="sec-ip-meta">${escapeHtml(networkText)}</small>` : ''}</td>
           <td><span class="sec-category">${escapeHtml(category || 'security trigger')}</span><span class="sec-reason">${escapeHtml(block.reason || 'Threshold reached')}</span>${block.firewall ? '<small class="sec-firewall-badge"><i class="fa-solid fa-shield"></i> host firewall</small>' : ''}</td>
           <td><span class="sec-offense">${Number(block.offenses || 1)}</span></td>
-          <td>${until && !isNaN(until) ? escapeHtml(until.toLocaleString()) : '—'}</td>
+          <td>${until && !isNaN(until) ? escapeHtml(_fmtLocal(until)) : '—'}</td>
           <td><span class="sec-remaining"><i class="fa-regular fa-clock"></i> ${humanSeconds(block.remaining_seconds)}</span></td>
           <td><button class="btn secondary sm sec-unblock" type="button" data-ip="${escapeHtml(block.ip || '')}"><i class="fa-solid fa-unlock"></i> Release</button></td>`;
         body.appendChild(tr);
@@ -1968,7 +2078,7 @@ document.getElementById('rt-restart')
           const geo = row.geo || {};
           const network = [geo.country_code, geo.asn, geo.provider].filter(Boolean).join(' · ');
           const tr = document.createElement('tr');
-          tr.innerHTML = `<td>${date && !isNaN(date) ? escapeHtml(date.toLocaleString()) : '—'}</td><td><code>${escapeHtml(row.ip || '—')}</code></td><td><span class="sec-event-type">${escapeHtml(String(row.type || 'event').replaceAll('_',' '))}</span></td><td>${escapeHtml(String(row.category || '—').replaceAll('_',' '))}</td><td>${escapeHtml(row.reason || '—')}</td><td>${escapeHtml(network || '—')}</td>`;
+          tr.innerHTML = `<td>${date && !isNaN(date) ? escapeHtml(_fmtLocal(date)) : '—'}</td><td><code>${escapeHtml(row.ip || '—')}</code></td><td><span class="sec-event-type">${escapeHtml(String(row.type || 'event').replaceAll('_',' '))}</span></td><td>${escapeHtml(String(row.category || '—').replaceAll('_',' '))}</td><td>${escapeHtml(row.reason || '—')}</td><td>${escapeHtml(network || '—')}</td>`;
           body.appendChild(tr);
         }
       } catch (e) { if (showErrors) toast('History load failed: ' + (e?.message || 'unknown'), 'error'); }
@@ -2117,8 +2227,7 @@ document.getElementById('rt-restart')
 
   (function telegram() {
     function fmtLocal(iso) {
-      if (!iso) return '—'; const d = new Date(iso);
-      return d.toLocaleString(undefined, { year:'numeric', month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+      return _fmtLocal(iso);
     }
 
     function updateChips(state) {
@@ -2314,46 +2423,21 @@ document.getElementById('rt-restart')
       }).catch(e => toast('Save failed: ' + (e.message || e), 'error'));
     }
 
-    function _parseTs(any) {
-      if (!any && any !== 0) return null;
-      if (any instanceof Date) return isNaN(any) ? null : any;
-      const n = Number(any);
-      if (Number.isFinite(n) && String(any).trim() !== '') {
-        const ms = n >= 1e12 ? n : n * 1000;
-        const d = new Date(ms); return isNaN(d) ? null : d;
-      }
-      const s = String(any).trim(); if (!s) return null;
-      const d = new Date(s); return isNaN(d) ? null : d;
-    }
-    function _fmtLocal(d) {
-      if (!d) return '—';
-      return d.toLocaleString(undefined, { year:'numeric', month:'short', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
-    }
-    function _fmtAgo(d) {
-      if (!d) return '';
-      const sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
-      const min = Math.floor(sec / 60), hr = Math.floor(min / 60), day = Math.floor(hr / 24);
-      if (day > 0) return `${day}d ${hr % 24}h ago`;
-      if (hr > 0) return `${hr}h ${min % 60}m ago`;
-      if (min > 0) return `${min}m ago`;
-      return `${sec}s ago`;
-    }
-    function _isoLocalToZ(s) { if (!s) return ''; const d = new Date(s); if (isNaN(d.getTime())) return ''; return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 19) + 'Z'; }
     function badge(kind) {
       const k = (kind || 'info').toLowerCase();
       const map = { error:{cls:'lvl-badge lvl-error',text:'ERROR'}, warning:{cls:'lvl-badge lvl-warning',text:'WARN'}, info:{cls:'lvl-badge lvl-info',text:'INFO'}, heartbeat:{cls:'lvl-badge lvl-heartbeat',text:'HEART'} };
       const m = map[k] || map.info; return `<span class="${m.cls}">${m.text}</span>`;
     }
     function escapeHtml(s) { return String(s).replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-    function formatStamp(any) { const d = _parseTs(any); return { text:_fmtLocal(d), ago:_fmtAgo(d) }; }
+    function formatStamp(row) { return _formatStamp(row); }
     
 
     async function loadTgLogs() {
       const list = $('#tg-logs-list');
       const q = ($('#tg-q')?.value || '').trim();
       const level = ($('#tg-level')?.value || '').trim();
-      const fromV = _isoLocalToZ($('#tg-from')?.value || '');
-      const toV   = _isoLocalToZ($('#tg-to')?.value || '');
+      const fromV = $('#tg-from')?.value || '';
+      const toV   = $('#tg-to')?.value || '';
       const params = new URLSearchParams({ format:'json', limit:'800' });
       if (q) params.set('q', q); if (level) params.set('level', level);
       if (fromV) params.set('from', fromV); if (toV) params.set('to', toV);
@@ -2361,7 +2445,7 @@ document.getElementById('rt-restart')
       const logs = Array.isArray(j.logs) ? j.logs : [];
       if (!logs.length) { list.innerHTML = `<div class="log-row" style="opacity:.7">(no logs yet)</div>`; return; }
       list.innerHTML = logs.map(x => {
-        const dt = formatStamp(x.ts || x.time || x.timestamp);
+        const dt = formatStamp(x);
         const ts = `<span class="log-ts">[${dt.text}] · ${dt.ago}</span>`;
         return `<div class="log-row">${ts}${badge(x.kind)} ${escapeHtml(x.text || '')}</div>`;
       }).join('');
@@ -2679,45 +2763,7 @@ document.getElementById('rt-restart')
       }[ch]));
     }
 
-    function pad2(n) { return String(n).padStart(2, '0'); }
-
-    function formatStamp(any) {
-      const d = (function parse(any) {
-        if (!any && any !== 0) return null;
-        if (any instanceof Date) return isNaN(any) ? null : any;
-
-        const n = Number(any);
-        if (Number.isFinite(n) && String(any).trim() !== '') {
-          const ms = n >= 1e12 ? n : n * 1000;  
-          const dd = new Date(ms);
-          return isNaN(dd) ? null : dd;
-        }
-
-        const s = String(any).trim();
-        if (!s) return null;
-        const dd = new Date(s);
-        return isNaN(dd) ? null : dd;
-      })(any);
-
-      if (!d) return { text: '—', ago: '—' };
-
-      const text =
-        `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ` +
-        `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
-
-      const sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
-      const min = Math.floor(sec / 60);
-      const hr  = Math.floor(min / 60);
-      const day = Math.floor(hr / 24);
-
-      const ago =
-        day > 0 ? `${day}d ${hr % 24}h ago` :
-        hr  > 0 ? `${hr}h ${min % 60}m ago` :
-        min > 0 ? `${min}m ago` :
-                  `${sec}s ago`;
-
-      return { text, ago };
-    }
+    function formatStamp(row) { return _formatStamp(row); }
   function prettylog(a) {
   const s = String(a || '').trim();
   if (!s) return '';
@@ -2778,7 +2824,7 @@ async function loadAdminLogs() {
       const j = await jfetch(`${ENDPOINT}?${qs.toString()}`);
 
       const rows = (j.logs || []).map(x => {
-      const stamp = formatStamp(x.ts || x.time || x.timestamp);
+      const stamp = formatStamp(x);
 
       const adminId   = escapeHTML(x.admin_id || '—');
       const adminName = escapeHTML((x.admin_username || x.admin || x.username || x.user || '').trim());
@@ -2845,7 +2891,7 @@ async function loadAdminLogs() {
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `admin_logs_${new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19)}.csv`;
+      a.download = `admin_logs_${_panelFileStamp()}.csv`;
       document.body.appendChild(a);
       a.click();
       URL.revokeObjectURL(a.href);
