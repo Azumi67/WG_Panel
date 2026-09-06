@@ -663,7 +663,6 @@ input {
             const closeBtn = $('#twofa-close');
 
             const qrBox = $('#twofa-qr');
-            const genBtn = $('#twofa-generate');
             const secretEl = $('#twofa-secret');
             const copyBtn = $('#twofa-copy');
 
@@ -767,7 +766,10 @@ input {
                     document.getElementById('qr-retry')?.addEventListener('click', onGenerate);
                     toastPanel('Could not generate TOTP key', 'bad');
                 } finally {
-                    if (genBtn) { genBtn.disabled = false; genBtn.textContent = 'Generate'; }
+                    // The button captured above was replaced along with qrBox's
+                    // contents, so re-resolve whichever one is on screen now.
+                    const btn = document.getElementById('twofa-generate');
+                    if (btn) { btn.disabled = false; btn.textContent = 'Generate'; }
                     inFlight = false;
                 }
             }
@@ -786,76 +788,6 @@ input {
             });
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape' && modal && !modal.hasAttribute('hidden')) closeModal();
-            });
-
-            genBtn?.addEventListener('click', async () => {
-                if (inFlight) return;
-                inFlight = true;
-                genBtn.disabled = true; genBtn.textContent = 'Generating…';
-
-                qrBox.innerHTML = `
-          <div class="qr-skel">
-            <div class="skel-inner">Preparing secret…</div>
-          </div>
-        `;
-
-                const userInp = document.querySelector('#username');
-                const username = (userInp?.value || 'admin').trim();
-
-                try {
-                    const r = await fetch(API.init, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', ...(CSRF ? { 'X-CSRFToken': CSRF } : {}) },
-                        credentials: 'same-origin',
-                        body: JSON.stringify({ username })
-                    });
-                    if (!r.ok) throw new Error('init failed');
-                    const j = await r.json();
-                    const issuer = j.issuer || 'WG Panel';
-                    let uri = j.otp_uri || '';
-
-                    if (!uri && j.secret) {
-                        const enc = encodeURIComponent;
-                        uri = `otpauth://totp/${enc(issuer)}:${enc(username)}?secret=${enc(j.secret)}&issuer=${enc(issuer)}&digits=6&period=30&algorithm=SHA1`;
-                    }
-
-                    const hasQR = Boolean(j.qr_svg || j.qr_png || uri);
-                    if (!hasQR) {
-                        qrBox.innerHTML = `
-              <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
-                <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
-                <div class="muted" style="margin-bottom:10px">Server didn’t return a QR or TOTP URI. Please try again.</div>
-                <button type="button" class="btn" id="qr-retry">Try again</button>
-              </div>`;
-                        $('#qr-retry')?.addEventListener('click', () => genBtn.click());
-                        toastPanel('Could not generate TOTP key', 'bad');
-                        return;
-                    }
-
-                    secretEl.textContent = j.secret || '—';
-                    if (j.qr_svg) {
-                        qrBox.innerHTML = j.qr_svg;
-                    } else if (j.qr_png) {
-                        qrBox.innerHTML = `<img src="${j.qr_png}" alt="QR">`;
-                    } else {
-                        qrBox.innerHTML = '';
-                        if (window.QRCode) new QRCode(qrBox, { text: uri, width: 180, height: 180 });
-                        else qrBox.textContent = uri; 
-                    }
-                    toastPanel('TOTP secret generated', 'ok');
-                } catch (err) {
-                    qrBox.innerHTML = `
-            <div style="border:1px solid var(--line); border-radius:10px; padding:12px; background: var(--chip);">
-              <div style="font-weight:700; margin-bottom:6px; color:var(--bad)">Couldn’t generate key</div>
-              <div class="muted" style="margin-bottom:10px">Server didn’t return a TOTP secret. Please try again.</div>
-              <button type="button" class="btn" id="qr-retry">Try again</button>
-            </div>`;
-                    $('#qr-retry')?.addEventListener('click', () => genBtn.click());
-                    toastPanel('Could not generate TOTP key', 'bad');
-                } finally {
-                    genBtn.disabled = false; genBtn.textContent = 'Generate';
-                    inFlight = false;
-                }
             });
 
             copyBtn?.addEventListener('click', async () => {

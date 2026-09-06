@@ -42,6 +42,7 @@ logs/
 .vscode/
 .idea/
 .DS_Store
+.serena/
 
 # Developers
 my-notes/

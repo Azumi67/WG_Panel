@@ -3570,6 +3570,14 @@
 
   // QR & logs
   let qrModal;
+  let qrObjectUrl = null;
+
+  function releaseQRObjectUrl() {
+    if (!qrObjectUrl) return;
+    URL.revokeObjectURL(qrObjectUrl);
+    qrObjectUrl = null;
+  }
+
   function itsQR() {
     if (qrModal) return qrModal;
     qrModal = document.createElement("div");
@@ -3593,13 +3601,15 @@
         </div>
       </div>`;
     document.body.appendChild(qrModal);
-    $("#qr-close", qrModal)?.addEventListener("click", () =>
-      closeModal(qrModal),
-    );
+    $("#qr-close", qrModal)?.addEventListener("click", () => {
+      releaseQRObjectUrl();
+      closeModal(qrModal);
+    });
   }
   async function openQR(id) {
     itsQR();
     openModal(qrModal);
+    releaseQRObjectUrl();
     const wrap = $("#qr-img-wrap", qrModal);
     wrap.innerHTML =
       '<span class="qr-loading"><i class="fas fa-circle-notch fa-spin"></i> Generating…</span>';
@@ -3617,6 +3627,7 @@
       if (r.ok) {
         const blob = await r.blob();
         const url = URL.createObjectURL(blob);
+        qrObjectUrl = url;
         wrap.innerHTML = `<img src="${url}" alt="Peer WireGuard QR code">`;
         dl.href = url;
         dl.download = `peer-${id}.png`;
@@ -4300,7 +4311,7 @@
   function refreshBulkIface(iface) {
     applyInternalNetworks(
       "bulk",
-      document.getElementById("bulk-allowed_ips"),
+      document.querySelector("#bulk-allowed-ips, #bulk-allowed_ips"),
       iface,
     );
     const input = document.querySelector("#bulk-endpoint");

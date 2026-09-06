@@ -109,8 +109,10 @@
         sel.dispatchEvent(new Event('change', { bubbles: true }));
     });
 
+    const picker = trigger.closest('.peer-scope-picker');
+
     document.addEventListener('click', (e) => {
-        if (!menu.hidden && !document.getElementById('scope-row')?.contains(e.target)) {
+        if (!menu.hidden && !picker?.contains(e.target)) {
             closeMenu();
         }
     });
