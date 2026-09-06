@@ -350,10 +350,18 @@ def install_requirements(root: Path):
         return
 
     run(["apt-get","update","-y"], "apt-get update")
-    run(["apt-get","install","-y",
-     "-o","Dpkg::Options::=--force-confnew",
-     "git","curl","ca-certificates","python3-venv","python3-pip","iptables","iproute2"],
-    "system deps")
+    run([
+    "apt-get", "install", "-y",
+    "-o", "Dpkg::Options::=--force-confnew",
+    "git",
+    "curl",
+    "ca-certificates",
+    "python3-venv",
+    "python3-pip",
+    "iptables",
+    "nftables",
+    "iproute2",
+    ], "system deps") 
 
     venv = a / "venv"
     pip  = venv / "bin" / "pip"
@@ -379,7 +387,7 @@ def _wireguard_installed() -> bool:
         err("WireGuard install requires sudo/root.")
         return False
     run(["apt-get","update","-y"], "apt-get update")
-    run(["apt-get","install","-y","wireguard","wireguard-tools"], "install wireguard")
+    run(["apt-get","install","-y","wireguard","wireguard-tools","iptables","nftables",], "install wireguard")
     return _cmd("wg") and _cmd("wg-quick")
 
 def _ip_forwarding():
