@@ -542,10 +542,24 @@ def render_status(root: Path) -> str:
 
 
 APT_PACKAGES = [
-    "ca-certificates", "curl", "git", "jq",
-    "python3", "python3-venv", "python3-pip", "python3-dev",
-    "build-essential", "libffi-dev", "libssl-dev",
-    "wireguard", "wireguard-tools", "iptables",
+    "ca-certificates",
+    "curl",
+    "git",
+    "jq",
+
+    "python3",
+    "python3-venv",
+    "python3-pip",
+    "python3-dev",
+
+    "build-essential",
+    "libffi-dev",
+    "libssl-dev",
+
+    "wireguard",
+    "wireguard-tools",
+    "iptables",
+    "nftables",
 ]
 
 def _debian() -> bool:
@@ -2046,7 +2060,32 @@ def telegram_option(root: Path):
 
 
 def _quick_setup():
-    root = get_project()  
+    root = get_project()
+
+    if not _cmd("nft"):
+        warn("nftables is not installed.")
+        if confirm("Install nftables now?", True):
+            if not isitroot():
+                err("Installing nftables requires sudo/root.")
+                pause()
+                return
+
+            if not _debian():
+                pause()
+                return
+
+            rc = _apt_install(
+                ["nftables"],
+                "Install nftables",
+            )
+
+            if rc != 0 or not _cmd("nft"):
+                err("nftables installation failed.")
+                pause()
+                return
+
+            ok("nftables installed.")
+
     clear()
     header("Panel Quick Setup", "recommended")
     print(box("What this will do", [
