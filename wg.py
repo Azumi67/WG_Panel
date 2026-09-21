@@ -620,19 +620,39 @@ def install_requirements():
     pause()
 
 
-def clone_repo():
+def _bootstrap_only_directory(target: Path) -> bool:
+    """Recognize only the two directories written by older wg.sh launchers.
+
+    Do not treat real installations, unknown files, or symlinks as disposable.
+    """
+    if not target.is_dir() or target.is_symlink():
+        return False
+    try:
+        children = list(target.iterdir())
+        return bool(children) and all(
+            entry.name in ("venv", ".cache")
+            and entry.is_dir()
+            and not entry.is_symlink()
+            for entry in children
+        )
+    except OSError:
+        return False
+
+
+def clone_repo() -> bool:
     if not _cmd("git"):
         err("git not installed. Run system requirements first.")
         pause()
-        return
+        return False
 
     default_target = f"/usr/local/bin/{REPO_DIRNAME_DEFAULT}"
 
     clear()
-    header("Git Clone", REPO_URL)
+    header("Git Clone / Reuse", REPO_URL)
     print(box("Tips", [
         c("Choose the FULL target folder path.", BR_WHT),
-        c("Git clones into the folder you specify (no folder-in-folder).", BR_GRN),
+        c("Existing WG Panel installations are reused, not overwritten.", BR_GRN),
+        c("Old launcher-only venv/.cache folders can be moved aside safely.", BR_YEL),
         "",
         c("Recommended:", BR_YEL) + " " + c(_paths(default_target), BR_CYN),
     ], border_color=BR_YEL))
@@ -641,49 +661,109 @@ def clone_repo():
     if not target_in:
         warn("Canceled.")
         pause()
-        return
+        return False
 
     target = Path(target_in).expanduser()
-
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        err("Cannot create parent directory.")
+    except OSError as exc:
+        err(f"Cannot create parent directory: {exc}")
         pause()
-        return
+        return False
 
-    if target.exists() and (target / ".git").exists():
-        info(f"Repo already exists: {_paths(str(target))}")
+    if target.is_dir() and (target / "app.py").is_file() and (target / "requirements.txt").is_file():
+        info(f"Existing WG Panel installation: {_paths(str(target))}")
         set_project(target)
-        ok("Project root updated.")
-        if confirm("Run git pull now?", default_yes=False):
-            _live(["git", "-C", str(target), "pull", "--ff-only"], "git pull --ff-only")
+        ok("Existing installation selected; no application data was changed.")
+        if (target / ".git").is_dir():
+            info("Use the Update menu for a backed-up update, or optionally git pull.")
+            if confirm("Run git pull --ff-only now?", default_yes=False):
+                _live(["git", "-C", str(target), "pull", "--ff-only"], "git pull --ff-only")
+            pause()
+            return True
+        info("This installation has no .git directory. The Update menu supports it.")
+        if confirm("Run the backed-up Update workflow now?", default_yes=False):
+            update_project(target)
+            return True
         pause()
-        return
+        return True
 
+    old_bootstrap = None
     if target.exists():
+        if target.is_symlink() or not target.is_dir():
+            err("Target is a file or symlink, not an installable directory.")
+            pause()
+            return False
         try:
-            if any(target.iterdir()):
-                err("Target exists and is not empty. Choose another path.")
-                pause()
-                return
-        except Exception:
+            nonempty = any(target.iterdir())
+        except OSError:
             err("Cannot access target directory.")
             pause()
-            return
+            return False
+        if nonempty and _bootstrap_only_directory(target):
+            warn("Found only venv/.cache left by the old launcher; no panel files detected.")
+            if not confirm("Move this bootstrap-only directory aside and clone here?", default_yes=True):
+                warn("Canceled. No files changed.")
+                pause()
+                return False
+            old_bootstrap = target.with_name(
+                target.name + ".bootstrap-backup-"
+                + datetime.now().strftime("%Y%m%d-%H%M%S")
+                + "-" + secrets.token_hex(4)
+            )
+            try:
+                target.rename(old_bootstrap)
+            except OSError as exc:
+                err(f"Could not move old bootstrap files: {exc}")
+                pause()
+                return False
+            ok(f"Old bootstrap files preserved at: {_paths(str(old_bootstrap))}")
+        elif nonempty:
+            err("Target contains unrecognized files or an incomplete installation; refusing to overwrite it.")
+            info("Inspect the directory and recover it, or select a different install path.")
+            pause()
+            return False
 
     if not confirm(f"Clone into {_paths(str(target))} ?", default_yes=True):
         warn("Canceled.")
+        if old_bootstrap is not None:
+            try:
+                if not target.exists():
+                    old_bootstrap.rename(target)
+                    ok("Old bootstrap directory restored.")
+                else:
+                    warn(f"Old bootstrap files remain at: {_paths(str(old_bootstrap))}")
+            except OSError as exc:
+                warn(f"Could not automatically restore bootstrap directory: {exc}")
         pause()
-        return
+        return False
 
     rc = _live(["git", "clone", REPO_URL, str(target)], "git clone")
-    if rc == 0 and (target / "app.py").exists():
+    if rc == 0 and (target / "app.py").is_file() and (target / "requirements.txt").is_file():
         set_project(target)
         ok(f"Project root set: {_paths(str(target))}")
-    else:
-        warn("Clone finished but app.py not found. Check your target path.")
+        if old_bootstrap is not None:
+            info(f"Previous bootstrap files remain at: {_paths(str(old_bootstrap))}")
+        pause()
+        return True
+
+    err("Clone failed or required panel files were not found.")
+    if old_bootstrap is not None:
+        try:
+            if target.is_dir() and not any(target.iterdir()):
+                target.rmdir()
+            if not target.exists():
+                old_bootstrap.rename(target)
+                ok("Old bootstrap directory restored after clone failure.")
+            else:
+                warn(f"Old files are safe at: {_paths(str(old_bootstrap))}")
+                warn(f"Check incomplete clone at: {_paths(str(target))}")
+        except OSError as exc:
+            warn(f"Automatic bootstrap restore failed: {exc}")
+            info(f"Preserved backup: {_paths(str(old_bootstrap))}")
     pause()
+    return False
+
 
 def _venv_requirements(root: Path):
     req = root / "requirements.txt"
@@ -2150,7 +2230,10 @@ def install_everything():
         install_requirements()
 
     if confirm("Step 2: Git clone + set project directory?", True):
-        clone_repo()
+        if not clone_repo():
+            warn("Project selection/clone did not finish. Guided installation stopped safely.")
+            pause()
+            return
 
     root = get_project()  
 
