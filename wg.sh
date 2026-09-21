@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="${VENV_DIR:-$SCRIPT_DIR/venv}"
+BOOTSTRAP_DIR="${WG_BOOTSTRAP_DIR:-${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/wg-panel-bootstrap}"
+VENV_DIR="${VENV_DIR:-$BOOTSTRAP_DIR/venv}"
 PY="$VENV_DIR/bin/python"
 
 DEFAULT_WG_URL="https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main/wg.py"
@@ -45,12 +44,14 @@ Usage: $0 [options] [WG_PY_RAW_URL] [-- wg.py args...]
 Options:
   --no-apt         Do not install OS packages
   --venv PATH      Venv directory (default: $VENV_DIR)
+  --wg-py PATH     Use a local wg.py (for testing/installing a patched pair)
   --force-fetch    Always re-download wg.py even if cached
   -h, --help       Show help
 
 Examples:
   sudo $0
   sudo $0 --force-fetch
+  sudo $0 --wg-py /root/wg-fixed.py
   sudo $0 https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main/wg.py
   sudo $0 -- --no-color
 EOF
@@ -58,6 +59,7 @@ EOF
 
 DO_APT=1
 FORCE_FETCH=0
+WG_PY_FILE=""
 
 is_url() { [[ "${1:-}" =~ ^https?:// ]]; }
 
@@ -65,6 +67,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --no-apt) DO_APT=0; shift ;;
     --venv) VENV_DIR="${2:-}"; [ -n "$VENV_DIR" ] || die "Missing value for --venv"; shift 2 ;;
+    --wg-py) WG_PY_FILE="${2:-}"; [ -n "$WG_PY_FILE" ] || die "Missing value for --wg-py"; shift 2 ;;
     --force-fetch) FORCE_FETCH=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
@@ -157,7 +160,7 @@ _venv() {
 
 _fetch_wg_py() {
   local url="$1"
-  local cache_dir="$SCRIPT_DIR/.cache"
+  local cache_dir="$BOOTSTRAP_DIR/cache"
   mkdir -p "$cache_dir"
   local out="$cache_dir/wg.py"
 
@@ -262,7 +265,14 @@ main() {
   fi
 
   local wg_py
-  wg_py="$(_fetch_wg_py "$url")"
+  if [ -n "$WG_PY_FILE" ]; then
+    [ -s "$WG_PY_FILE" ] || die "Local wg.py not found or empty: $WG_PY_FILE"
+    python3 -m py_compile "$WG_PY_FILE" || die "Local wg.py failed Python syntax validation."
+    wg_py="$(realpath "$WG_PY_FILE")"
+    log "Using local wg.py: $wg_py"
+  else
+    wg_py="$(_fetch_wg_py "$url")"
+  fi
 
   install_requirements "$wg_py"
   _run_wg "$wg_py" "$@"
