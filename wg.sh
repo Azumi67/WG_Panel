@@ -51,7 +51,7 @@ Options:
 Examples:
   sudo $0
   sudo $0 --force-fetch
-  sudo $0 --wg-py /root/wg-fixed.py
+  sudo $0 --wg-py /root/wg.py
   sudo $0 https://raw.githubusercontent.com/Azumi67/WG_Panel/refs/heads/main/wg.py
   sudo $0 -- --no-color
 EOF
@@ -262,6 +262,18 @@ main() {
   if is_url "${1:-}"; then
     url="$1"
     shift
+  fi
+
+  # When the user downloads wg.sh and wg.py together, use the matching local
+  # installer instead of silently fetching/caching an outdated upstream wg.py.
+  # bash -c has no real script filename, so never guess from its working dir.
+  if [ -z "$WG_PY_FILE" ] && [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+    local sibling
+    sibling="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/wg.py"
+    if [ -s "$sibling" ]; then
+      WG_PY_FILE="$sibling"
+      log "Detected matching local installer: $WG_PY_FILE"
+    fi
   fi
 
   local wg_py
