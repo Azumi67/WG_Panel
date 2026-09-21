@@ -639,6 +639,26 @@ def _bootstrap_only_directory(target: Path) -> bool:
         return False
 
 
+
+def _only_empty_instance(target: Path) -> bool:
+    """Recognize a pre-install status directory without risking user data."""
+    if not target.is_dir() or target.is_symlink():
+        return False
+    try:
+        entries = list(target.iterdir())
+        if len(entries) != 1:
+            return False
+        instance = entries[0]
+        return (
+            instance.name == "instance"
+            and instance.is_dir()
+            and not instance.is_symlink()
+            and not any(instance.iterdir())
+        )
+    except OSError:
+        return False
+
+
 def clone_repo() -> bool:
     if not _cmd("git"):
         err("git not installed. Run system requirements first.")
@@ -689,6 +709,7 @@ def clone_repo() -> bool:
         return True
 
     old_bootstrap = None
+    empty_instance = False
     if target.exists():
         if target.is_symlink() or not target.is_dir():
             err("Target is a file or symlink, not an installable directory.")
@@ -700,7 +721,11 @@ def clone_repo() -> bool:
             err("Cannot access target directory.")
             pause()
             return False
-        if nonempty and _bootstrap_only_directory(target):
+        if nonempty and _only_empty_instance(target):
+            info("Found only an empty instance/ directory from a previous setup.")
+            info("It will be removed using rmdir (which refuses non-empty directories).")
+            empty_instance = True
+        elif nonempty and _bootstrap_only_directory(target):
             warn("Found only venv/.cache left by the old launcher; no panel files detected.")
             if not confirm("Move this bootstrap-only directory aside and clone here?", default_yes=True):
                 warn("Canceled. No files changed.")
@@ -719,10 +744,31 @@ def clone_repo() -> bool:
                 return False
             ok(f"Old bootstrap files preserved at: {_paths(str(old_bootstrap))}")
         elif nonempty:
-            err("Target contains unrecognized files or an incomplete installation; refusing to overwrite it.")
-            info("Inspect the directory and recover it, or select a different install path.")
-            pause()
-            return False
+            try:
+                entries = sorted(entry.name for entry in target.iterdir())
+            except OSError:
+                err("Cannot inspect the existing installation directory.")
+                pause()
+                return False
+            warn("The install directory contains files, but is not a complete WG Panel installation.")
+            info("Existing entries: " + ", ".join(entries[:12]) + (" ..." if len(entries) > 12 else ""))
+            warn("They may include configuration, databases, or private keys; nothing will be deleted.")
+            if not confirm("Move the ENTIRE directory to a timestamped backup and clone fresh?", default_yes=False):
+                warn("Canceled. Existing files were left untouched.")
+                pause()
+                return False
+            old_bootstrap = target.with_name(
+                target.name + ".preinstall-backup-"
+                + datetime.now().strftime("%Y%m%d-%H%M%S")
+                + "-" + secrets.token_hex(4)
+            )
+            try:
+                target.rename(old_bootstrap)
+            except OSError as exc:
+                err(f"Could not preserve the existing directory: {exc}")
+                pause()
+                return False
+            ok(f"Entire previous directory preserved at: {_paths(str(old_bootstrap))}")
 
     if not confirm(f"Clone into {_paths(str(target))} ?", default_yes=True):
         warn("Canceled.")
@@ -730,20 +776,33 @@ def clone_repo() -> bool:
             try:
                 if not target.exists():
                     old_bootstrap.rename(target)
-                    ok("Old bootstrap directory restored.")
+                    ok("Previous directory restored.")
                 else:
-                    warn(f"Old bootstrap files remain at: {_paths(str(old_bootstrap))}")
+                    warn(f"Previous directory remains backed up at: {_paths(str(old_bootstrap))}")
             except OSError as exc:
                 warn(f"Could not automatically restore bootstrap directory: {exc}")
         pause()
         return False
+
+    if empty_instance:
+        if not _only_empty_instance(target):
+            err("The instance directory changed; refusing to remove any data.")
+            pause()
+            return False
+        try:
+            (target / "instance").rmdir()
+            target.rmdir()
+        except OSError as exc:
+            err(f"Cannot clear the empty instance directory: {exc}")
+            pause()
+            return False
 
     rc = _live(["git", "clone", REPO_URL, str(target)], "git clone")
     if rc == 0 and (target / "app.py").is_file() and (target / "requirements.txt").is_file():
         set_project(target)
         ok(f"Project root set: {_paths(str(target))}")
         if old_bootstrap is not None:
-            info(f"Previous bootstrap files remain at: {_paths(str(old_bootstrap))}")
+            info(f"Previous directory backup: {_paths(str(old_bootstrap))}")
         pause()
         return True
 
@@ -754,12 +813,12 @@ def clone_repo() -> bool:
                 target.rmdir()
             if not target.exists():
                 old_bootstrap.rename(target)
-                ok("Old bootstrap directory restored after clone failure.")
+                ok("Previous directory restored after clone failure.")
             else:
-                warn(f"Old files are safe at: {_paths(str(old_bootstrap))}")
+                warn(f"Previous files are safe at: {_paths(str(old_bootstrap))}")
                 warn(f"Check incomplete clone at: {_paths(str(target))}")
         except OSError as exc:
-            warn(f"Automatic bootstrap restore failed: {exc}")
+            warn(f"Automatic directory restore failed: {exc}")
             info(f"Preserved backup: {_paths(str(old_bootstrap))}")
     pause()
     return False
@@ -2718,7 +2777,9 @@ def _public_ipv4(root: Optional[Path] = None) -> str:
             ip = valid_ipv4(out.splitlines()[0] if out else "")
             if ip:
                 try:
-                    if root is not None:
+                    if (root is not None
+                            and (root / "app.py").is_file()
+                            and (root / "requirements.txt").is_file()):
                         p = root / "instance" / "last_public_ipv4.txt"
                         p.parent.mkdir(parents=True, exist_ok=True)
                         p.write_text(ip + "\n", encoding="utf-8")
