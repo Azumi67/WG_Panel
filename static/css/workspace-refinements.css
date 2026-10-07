@@ -1034,3 +1034,256 @@ html[data-design="modern"][data-theme] #panel-sidebar.is-collapsed .theme-switch
     margin-inline:auto!important;
   }
 }
+
+html[data-design="modern"][data-theme] #panel-update-modal .pu-dialog{
+  width:min(880px,calc(100vw - 40px))!important;
+  max-height:min(680px,calc(100dvh - 40px))!important;
+  margin:20px auto!important;
+  border-radius:15px!important;
+}
+
+html[data-design="modern"][data-theme] #panel-update-modal .pu-head{
+  padding:15px 18px!important;
+  gap:14px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-title-wrap{
+  gap:10px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-logo{
+  width:36px!important;
+  height:36px!important;
+  border-radius:10px!important;
+  font-size:14px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-head h2{
+  font-size:20px!important;
+  line-height:1.05!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-head p{
+  margin-top:2px!important;
+  font-size:10.5px!important;
+  line-height:1.35!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-head .ws-eyebrow{
+  font-size:8.5px!important;
+  letter-spacing:.13em!important;
+  margin-bottom:3px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-close{
+  width:32px!important;
+  height:32px!important;
+  min-height:32px!important;
+}
+
+html[data-design="modern"][data-theme] #panel-update-modal .pu-summary{
+  padding:9px 18px!important;
+  gap:16px!important;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto!important;
+  align-items:center!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-summary>div{
+  flex-direction:row!important;
+  align-items:center!important;
+  gap:7px!important;
+  min-width:0!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-summary>div>span{
+  font-size:10px!important;
+  white-space:nowrap!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-summary strong{
+  font-size:11.5px!important;
+  white-space:nowrap!important;
+  overflow:hidden!important;
+  text-overflow:ellipsis!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-refresh{
+  min-height:30px!important;
+  height:30px!important;
+  padding:0 10px!important;
+  font-size:10.5px!important;
+}
+
+html[data-design="modern"][data-theme] #panel-update-modal .pu-body{
+  padding:13px 18px 15px!important;
+}
+html[data-design="modern"] #panel-update-modal .ws-update-intro{
+  min-height:0!important;
+  margin:0 0 12px!important;
+  padding:11px 14px!important;
+  border-radius:10px!important;
+}
+html[data-design="modern"] #panel-update-modal .ws-update-intro h3{
+  margin:0 0 3px!important;
+  font-size:15px!important;
+  line-height:1.2!important;
+}
+html[data-design="modern"] #panel-update-modal .ws-update-intro p{
+  font-size:10px!important;
+  line-height:1.35!important;
+}
+html[data-design="modern"] #panel-update-modal .ws-update-intro>i{
+  margin-left:12px!important;
+  font-size:24px!important;
+}
+html[data-design="modern"] #panel-update-modal .ws-update-intro .ws-eyebrow{
+  font-size:8px!important;
+  margin-bottom:4px!important;
+}
+
+html[data-design="modern"][data-theme] #panel-update-modal .pu-target{
+  padding:0!important;
+  border-radius:11px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-target-main{
+  grid-template-columns:36px minmax(0,1fr) auto!important;
+  gap:11px!important;
+  padding:11px 12px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-target-icon{
+  width:36px!important;
+  height:36px!important;
+  border-radius:10px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-target-title strong{
+  font-size:12.5px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-pill{
+  padding:2px 7px!important;
+  font-size:8px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-versions{
+  gap:9px!important;
+  margin-top:4px!important;
+  font-size:10px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-update-btn{
+  min-height:34px!important;
+  padding:7px 12px!important;
+  border-radius:9px!important;
+  font-size:10.5px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-progress{
+  padding:0 12px 10px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-progress-top{
+  margin-bottom:4px!important;
+  font-size:9.5px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-track{
+  height:5px!important;
+}
+
+html[data-design="modern"][data-theme] #panel-update-modal .pu-section-title{
+  margin:12px 1px 7px!important;
+  gap:10px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-section-title strong{
+  font-size:11.5px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-section-title span{
+  font-size:9.5px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-update-all{
+  min-height:30px!important;
+  height:30px!important;
+  padding:0 10px!important;
+  font-size:9.5px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-node-list{
+  gap:7px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-node-main{
+  padding:9px 10px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-empty{
+  padding:16px!important;
+  font-size:10px!important;
+}
+
+html[data-design="modern"][data-theme] #panel-update-modal .pu-foot{
+  padding:8px 16px!important;
+  gap:10px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-safety{
+  font-size:9px!important;
+  line-height:1.3!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal .pu-log-toggle{
+  min-height:30px!important;
+  height:30px!important;
+  padding:0 10px!important;
+  font-size:10px!important;
+}
+html[data-design="modern"][data-theme] #panel-update-modal #pu-log-output{
+  height:130px!important;
+}
+
+@media (max-width:760px){
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-dialog{
+    width:calc(100vw - 12px)!important;
+    max-height:calc(100dvh - 12px)!important;
+    margin:6px auto!important;
+    border-radius:13px!important;
+  }
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-head{
+    padding:12px!important;
+  }
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-head h2{
+    font-size:18px!important;
+  }
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-head p{
+    display:none!important;
+  }
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-summary{
+    grid-template-columns:minmax(0,1fr) auto!important;
+    padding:8px 12px!important;
+  }
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-summary>div:nth-child(2){
+    display:none!important;
+  }
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-body{
+    padding:10px 12px 12px!important;
+  }
+  html[data-design="modern"] #panel-update-modal .ws-update-intro{
+    padding:9px 11px!important;
+    margin-bottom:9px!important;
+  }
+  html[data-design="modern"] #panel-update-modal .ws-update-intro h3{
+    font-size:13px!important;
+    margin:0!important;
+  }
+  html[data-design="modern"] #panel-update-modal .ws-update-intro p,
+  html[data-design="modern"] #panel-update-modal .ws-update-intro>i{
+    display:none!important;
+  }
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-target-main{
+    grid-template-columns:32px minmax(0,1fr)!important;
+    gap:9px!important;
+    padding:10px!important;
+  }
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-target-icon{
+    width:32px!important;
+    height:32px!important;
+  }
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-update-btn{
+    grid-column:1/-1!important;
+    width:100%!important;
+    min-height:34px!important;
+  }
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-section-title{
+    margin-top:10px!important;
+  }
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-foot{
+    padding:8px 10px!important;
+    flex-direction:row!important;
+    align-items:center!important;
+  }
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-safety span{
+    display:none!important;
+  }
+  html[data-design="modern"][data-theme] #panel-update-modal .pu-log-toggle{
+    width:auto!important;
+    margin-left:auto!important;
+  }
+}
