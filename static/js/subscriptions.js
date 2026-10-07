@@ -3,6 +3,7 @@ const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 function subToast(msg, type='success', duration=3000){
+  if(document.documentElement.dataset.design==='modern' && window.toast) return window.toast(msg,type,{duration});
   let box=document.getElementById('subx-toast-box');
   if(!box){
     box=document.createElement('div');
@@ -292,7 +293,8 @@ let SUBS_LIVE_TIMER=null, SUBS_LOADING=false, SUBS_LAST_JSON='';
 let SUBX_MOBILE_MANAGE_ID = null;
 let CURRENT_SELECTED = new Set();
 let OPEN_SUBSCRIPTION_LOGS_SID = null;
-const SUBS_REFRESH_MS = 8000;
+const SUBS_REFRESH_MS = 15000;
+let SUBS_FAILURES = 0;
 const EXISTING_GROUP_PAGE = 36;
 let EXISTING_GROUP_LIMITS = {};
 function existingLimitFor(groupKey){ return EXISTING_GROUP_LIMITS[groupKey] || EXISTING_GROUP_PAGE; }
@@ -307,7 +309,7 @@ function nowClock(){
   catch(_) { return 'now'; }
 }
 function detailsIsOpen(){ return $('#details-modal')?.classList.contains('open'); }
-function modalIsOpen(){ return $('#sub-modal')?.classList.contains('open') || $('#sub-settings-modal')?.classList.contains('open'); }
+function modalIsOpen(){ return !!document.querySelector('.subscription-menu[open]') || $('#sub-modal')?.classList.contains('open') || $('#sub-settings-modal')?.classList.contains('open'); }
 
 function subxUpdateModalBodyState(){
   const anyOpen = !!document.querySelector(
@@ -445,7 +447,7 @@ async function loadSubscriptionSettings(sid=null){
   const endpoint = SUB_STUDIO_TARGET_ID
     ? `/api/subscriptions/${SUB_STUDIO_TARGET_ID}/portal-settings`
     : '/api/subscriptions/settings';
-  const r = await fetch(endpoint, {credentials:'same-origin', cache:'no-store'});
+  const r = await fetch(endpoint, {credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(15000)});
   const j = await r.json().catch(()=>({}));
   if(!r.ok) throw new Error(j.detail || j.message || j.error || 'Could not load template settings.');
   if(SUB_STUDIO_TARGET_ID){
@@ -542,7 +544,7 @@ async function saveSubscriptionSettings(){
     : '/api/subscriptions/settings';
 
   const r = await fetch(endpoint, {
-    method:'POST', headers:csrfHeaders(true), credentials:'same-origin', cache:'no-store', body:JSON.stringify(body)
+    method:'POST', headers:csrfHeaders(true), credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(15000), body:JSON.stringify(body)
   });
   const j = await r.json().catch(()=>({}));
   if(!r.ok){ toastBad(j.detail || j.message || j.error || 'Settings save failed.'); return; }
@@ -1040,6 +1042,35 @@ function subscriptionState(s){
   return {label:'No inbounds', cls:'offline', sub:''};
 }
 
+function showSubscriptionDiagnosis(s){
+  document.getElementById('sub-diagnosis')?.remove();
+  const dialog=document.createElement('dialog');dialog.id='sub-diagnosis';dialog.className='sub-diagnosis';dialog.setAttribute('aria-labelledby','sub-diagnosis-title');
+  const access=s.access||{},locations=s.locations||[];
+  const status=access.allowed===true?'Allowed':access.allowed===false?String(access.reason||'Restricted').replaceAll('_',' '):!s.enabled?'Disabled':'Not reported';
+  dialog.innerHTML=`<header><h2 id="sub-diagnosis-title"><i class="fas fa-stethoscope" aria-hidden="true"></i> Subscription diagnosis</h2><button type="button" data-close aria-label="Close diagnosis">×</button></header><div class="diagnosis-body"><p><strong>${esc(s.name||'Client')}</strong> · Access and usage from the last refresh. Check a peer below to test its connection.</p><dl>${[['Access policy',status],['Data used',fmtBytes(s.used_bytes)],['Data allowance',s.limit_bytes?fmtBytes(s.limit_bytes):'Unlimited'],['Time limit',subscriptionTimeLabel(s)]].map(([k,v])=>`<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl><h3>Attached configurations · ${locations.length}</h3><p>${locations.length?'Check each peer’s interface and connection. These checks do not change settings.':'Attach a configuration from Manage inbounds before checking a connection.'}</p><ul>${locations.map(l=>`<li><span>${esc(l.location_label||l.iface||l.interface||'WireGuard')}<small>${esc(l.node_name||l.scope||'Local panel')}</small></span>${window.WG_PANEL_IS_ADMIN===true&&Number.isInteger(Number(l.peer_id))&&Number(l.peer_id)>0?`<button type="button" data-diagnose-config="${Number(l.peer_id)}">Check peer</button>`:'<small>Peer diagnosis unavailable</small>'}</li>`).join('')}</ul><p class="diagnosis-note">${esc(access.reason==='expired'?'The time limit has ended. Review the client’s time allowance before resetting its timer.':access.reason==='data_exhausted'?'The data allowance is used up. Review the limit before resetting usage.':!s.enabled?'This client is disabled. Review its limits before enabling access.':'Check the attached peers below if the client cannot connect.')}</p><button type="button" data-diagnosis-edit="${Number(s.id)}">Open client limits</button></div>`;
+  document.body.append(dialog);dialog.querySelector('[data-close]').onclick=()=>dialog.close();
+  dialog.addEventListener('click',e=>{if(e.target.closest('[data-diagnosis-edit]')){dialog.close();openDiagnosisClient(s.id);return;}const b=e.target.closest('[data-diagnose-config]');if(b){const peerId=Number(b.dataset.diagnoseConfig);dialog.close();window.dispatchEvent(new CustomEvent('wgpanel:peer-diagnose',{detail:{peerId}}));}});
+  window.wgMountDiagnosisActions?.(dialog.querySelector('.diagnosis-body'),{subscription_id:s.id},async()=>{await loadSubs({force:true});const fresh=SUBS.find(x=>String(x.id)===String(s.id));if(fresh){dialog.close();showSubscriptionDiagnosis(fresh);}});
+  dialog.showModal();
+}
+
+function modernSubscriptionActions(s){
+  const state = subxSubscriptionState(s);
+  const enable = state.cls === 'blocked' || !s.enabled || state.cls === 'disabled';
+  const actions = [
+    ['sub-diagnose','fa-stethoscope','Subscription diagnosis'],
+    ['subscription-logs','fa-clock-rotate-left','Activity logs'],
+    ['template','fa-wand-magic-sparkles','Portal theme'],
+    [enable ? 'sub-enable' : 'sub-disable','fa-power-off',enable ? 'Enable and reset' : 'Disable client'],
+    ['reset-data','fa-gauge-high','Reset used data'],
+    ['reset-timer','fa-clock','Reset time limit'],
+    ['inbounds','fa-network-wired','Manage inbounds'],
+    ['more','fa-circle-info','Client details'],
+    ['del','fa-trash','Delete client']
+  ];
+  return `<div class="subscription-menu-items">${actions.map(([action,icon,label])=>`<button type="button" data-${action}="${s.id}"${action==='del'?' class="danger"':''}><i class="fas ${icon}" aria-hidden="true"></i><span>${label}</span></button>`).join('')}</div>`;
+}
+
 function rowHtml(s){
   const locs=s.locations||[], pct=s.limit_bytes?Math.min(100,Number(s.usage_pct||0)):100;
   const state = subscriptionState(s);
@@ -1085,7 +1116,7 @@ function rowHtml(s){
         <button class="subx-icon-btn" title="Reset timer" data-reset-timer="${s.id}"><i class="fas fa-clock-rotate-left"></i></button>
         <button class="subx-icon-btn" title="Manage inbounds" data-inbounds="${s.id}"><i class="fas fa-network-wired"></i></button>
         <button class="subx-icon-btn" title="Customize public template for this client" data-template="${s.id}"><i class="fas fa-wand-magic-sparkles"></i></button><button class="subx-icon-btn" title="Edit client" data-edit="${s.id}"><i class="fas fa-pen"></i></button>
-        <button class="subx-icon-btn" title="More information" data-more="${s.id}"><i class="fas fa-circle-info"></i></button>
+        <button class="subx-icon-btn" title="Diagnose access" data-sub-diagnose="${s.id}"><i class="fas fa-stethoscope"></i></button><button class="subx-icon-btn" title="More information" data-more="${s.id}"><i class="fas fa-circle-info"></i></button>
         <button class="subx-icon-btn danger" title="Delete" data-del="${s.id}"><i class="fas fa-trash"></i></button>
       </div>
     </div>
@@ -1095,17 +1126,24 @@ function rowHtml(s){
 async function loadSubs(opts={}){
   try { await (window.WG_PANEL_TIMEZONE_READY || Promise.resolve()); } catch (_) {}
   if(SUBS_LOADING) return;
-  if(!opts.force && modalIsOpen()) return;
+  if(!opts.force && (document.hidden || modalIsOpen() || window.WGSubscriptionPaused)) return;
   SUBS_LOADING = true;
-  setLiveState('Refreshing…', 'loading');
+  if(!SUBS_LAST_JSON) setLiveState('Loading…', 'loading');
   try {
-    const r=await fetch('/api/subscriptions',{credentials:'same-origin', cache:'no-store'});
+    const r=await fetch('/api/subscriptions',{credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(15000)});
     const j=await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(j.detail || j.error || 'Load failed');
     const next = j.subscriptions || [];
     if(next[0]?.display_timezone && typeof window.wgPanelApplyTimezone === 'function') window.wgPanelApplyTimezone(next[0].display_timezone, false);
     const nextJson = JSON.stringify(next);
     SUBS = next;
+    const repairClient=new URLSearchParams(location.search).get('diagnosis_client');
+    if(repairClient&&!window.__diagnosisClientOpened){
+      window.__diagnosisClientOpened=true;
+      const cleanURL=new URL(location.href);cleanURL.searchParams.delete('diagnosis_client');history.replaceState(history.state,'',cleanURL);
+      if(SUBS.some(s=>String(s.id)===repairClient))setTimeout(()=>openDiagnosisClient(repairClient),0);
+      else toastBad('The requested client is unavailable. It may have been removed.');
+    }
     if(opts.force || nextJson !== SUBS_LAST_JSON){
       $('#subs-list').innerHTML=SUBS.map(rowHtml).join('');
       $('#subs-empty').hidden=SUBS.length>0;
@@ -1115,14 +1153,19 @@ async function loadSubs(opts={}){
     $('#st-inbounds').textContent=SUBS.reduce((a,s)=>a+(s.locations||[]).length,0);
     const blocked = SUBS.reduce((a,s)=> a + (subscriptionState(s).cls === 'blocked' ? 1 : 0), 0);
     $('#st-blocked').textContent = blocked;
+
     if(detailsIsOpen()){
       const openId = $('#details-modal')?.dataset?.sid;
       const current = SUBS.find(x=>String(x.id)===String(openId));
       if(current) renderDetails(current, {keepOpen:true});
     }
-    setLiveState(`Updated ${nowClock()}`);
+    SUBS_FAILURES = 0;
+    setLiveState('Up to date');
+    const status = document.getElementById('subx-live-state');
+    if(status) status.title = `Last successful refresh: ${nowClock()}`;
   } catch(err) {
-    setLiveState(`Live update failed: ${err.message || err}`, 'error');
+    SUBS_FAILURES = Math.min(SUBS_FAILURES + 1, 3);
+    setLiveState('Update unavailable · retrying', 'error');
   } finally {
     SUBS_LOADING = false;
   }
@@ -1897,8 +1940,145 @@ function subscriptionConnectionPresentation(s){
   };
 }
 
-function subscriptionLogEventLabel(value){
-  return String(value || 'event').replace(/[_-]+/g, ' ').replace(/\b\w/g, ch=>ch.toUpperCase());
+function subscriptionLogEventLabel(value, duplicateCount=1){
+  const event=String(value || 'event').trim().toLowerCase();
+  const many=Number(duplicateCount || 1) > 1;
+  const labels={
+    subscription_reset_timer:'Subscription timer reset',
+    subscription_reset_data:'Subscription data reset',
+    subscription_expired:'Subscription expired',
+    subscription_blocked:'Subscription blocked',
+    subscription_enabled:'Subscription enabled',
+    subscription_disabled:'Subscription disabled',
+    reset_timer:many ? 'Config timers reset' : 'Config timer reset',
+    reset_data:many ? 'Config data reset' : 'Config data reset',
+    expired:many ? 'Configs expired' : 'Config expired',
+    blocked:many ? 'Configs blocked' : 'Config blocked',
+    enabled:many ? 'Configs enabled' : 'Config enabled',
+    disabled:many ? 'Configs disabled' : 'Config disabled'
+  };
+  return labels[event] || String(value || 'event').replace(/[_-]+/g, ' ').replace(/\b\w/g, ch=>ch.toUpperCase());
+}
+
+function subscriptionLogSourceName(loc){
+  if(!loc) return 'Attached config';
+  const label = String(loc.location_label || '').trim();
+  const iface = String(loc.iface || '').trim();
+  const node = String(loc.node_name || '').trim();
+  const scope = String(loc.scope || '').toLowerCase();
+  const address = String(loc.address || '').trim().split('/')[0];
+  if(label) return address && !label.includes(address) ? `${label} · ${address}` : label;
+  if(scope === 'node'){
+    const base=[node || 'Node', iface].filter(Boolean).join(' · ') || 'Node config';
+    return address ? `${base} · ${address}` : base;
+  }
+  if(scope === 'local'){
+    const base=['Local', iface].filter(Boolean).join(' · ') || 'Local config';
+    return address ? `${base} · ${address}` : base;
+  }
+  if(iface){
+    return address ? `${iface} · ${address}` : iface;
+  }
+  if(address) return address;
+  return String(loc.name || `Config ${loc.peer_id || ''}`).trim() || 'Attached config';
+}
+
+function subscriptionBlockReason(s){
+  if(!s) return '';
+  const reason=String(s?.access?.reason || s?.state_reason || '').toLowerCase();
+  if(reason === 'disabled') return 'subscription is disabled by an administrator';
+  if(reason === 'expired') return 'subscription timer has expired';
+  if(reason === 'data_exhausted') return 'shared data allowance is exhausted';
+  const reasons=[];
+  const limit=Number(s.limit_bytes || 0);
+  const remaining=s.remaining_bytes == null ? null : Number(s.remaining_bytes || 0);
+  const ttl=s.ttl_seconds == null ? null : Number(s.ttl_seconds || 0);
+  if(limit > 0 && remaining !== null && remaining <= 0) reasons.push('shared data allowance is exhausted');
+  if(ttl !== null && ttl <= 0 && !s.unlimited) reasons.push('subscription timer has expired');
+  if(!reasons.length) reasons.push('one or more attached configs are administratively blocked');
+  return reasons.join(' and ');
+}
+
+function subscriptionCurrentLogState(s){
+  const locations = Array.isArray(s?.locations) ? s.locations.filter(x=>x?.peer_id) : [];
+  const counts = s?.runtime_counts || {};
+  const blockedCount = Number(counts.blocked || locations.filter(x=>String(x.panel_status||x.status||'').toLowerCase()==='blocked').length || 0);
+  const state = typeof subxSubscriptionState === 'function' ? subxSubscriptionState(s) : subscriptionState(s);
+  const connection = subscriptionConnectionPresentation(s);
+  if(state.cls === 'blocked'){
+    return {
+      cls:'blocked', label:'Blocked', icon:'fa-ban',
+      detail:`${subscriptionBlockReason(s)}. ${blockedCount || locations.length || 1} of ${locations.length || blockedCount || 1} attached config${(locations.length || blockedCount || 1)===1?' is':'s are'} blocked.`
+    };
+  }
+  if(state.cls === 'disabled'){
+    return {cls:'disabled', label:'Disabled', icon:'fa-power-off', detail:'The subscription is disabled. Attached configs are not allowed to pass traffic.'};
+  }
+  if(connection.cls === 'connected'){
+    return {cls:'connected', label:'Connected', icon:'fa-signal', detail:connection.detail || 'Recent WireGuard activity detected.'};
+  }
+  if(connection.cls === 'unknown'){
+    return {cls:'unknown', label:'Status unavailable', icon:'fa-circle-question', detail:connection.detail || 'WG Panel could not read the WireGuard runtime.'};
+  }
+  return {cls:'idle', label:'Connection idle', icon:'fa-circle-pause', detail:connection.detail || 'No recent WireGuard activity.'};
+}
+
+function renderSubscriptionCurrentState(s){
+  const state=subscriptionCurrentLogState(s);
+  return `<section class="subx-log-state state-${esc(state.cls)}" aria-label="Current subscription state">
+    <span class="subx-log-state-icon"><i class="fas ${esc(state.icon)}"></i></span>
+    <span class="subx-log-state-copy"><small>Current state</small><b>${esc(state.label)}</b><span>${esc(state.detail)}</span></span>
+  </section>`;
+}
+
+function subscriptionLogTimeMs(row){
+  const d=subscriptionDateObject(row?.time || row?.ts || row?.timestamp || '');
+  return d && !Number.isNaN(d.getTime()) ? d.getTime() : 0;
+}
+
+function subscriptionLogCanGroup(row){
+  const event=String(row?.event || '').toLowerCase();
+  return event.startsWith('subscription_') || [
+    'expired','blocked','enabled','disabled','reset_timer','reset_data'
+  ].includes(event);
+}
+
+function compactSubscriptionLogs(rows){
+  const sorted=(Array.isArray(rows)?rows:[]).slice().sort((a,b)=>subscriptionLogTimeMs(b)-subscriptionLogTimeMs(a));
+  const groups=[];
+  for(const row of sorted){
+    const event=String(row?.event || row?.level || 'event').trim().toLowerCase();
+    const details=String(row?.details || row?.text || '').trim().replace(/\s+/g,' ');
+    const ms=subscriptionLogTimeMs(row);
+    let group=null;
+    if(subscriptionLogCanGroup(row)){
+      group=groups.find(g => g._groupable && g._event===event && g._details===details && Math.abs(g._timeMs-ms)<=5000);
+    }
+    if(!group){
+      group={...row,_event:event,_details:details,_timeMs:ms,_groupable:subscriptionLogCanGroup(row),_sources:new Set(),_peerIds:new Set(),duplicate_count:1};
+      groups.push(group);
+    }else{
+      group.duplicate_count += 1;
+      if(ms > group._timeMs){
+        group.time=row.time || row.ts || group.time;
+        group.ts=row.ts || row.time || group.ts;
+        group.time_display=row.time_display || group.time_display;
+        group._timeMs=ms;
+      }
+    }
+    if(row.source_name) group._sources.add(String(row.source_name));
+    if(row.peer_id != null) group._peerIds.add(String(row.peer_id));
+  }
+  return groups.map(group=>{
+    const sources=[...group._sources];
+    let source_name=group.source_name || 'Attached config';
+    if(sources.length>1) source_name=`${sources.length} configs`;
+    else if(sources.length===1) source_name=sources[0];
+    const source_title=sources.length>1 ? sources.join(' · ') : source_name;
+    const result={...group,source_name,source_title};
+    delete result._sources; delete result._peerIds; delete result._event; delete result._details; delete result._timeMs; delete result._groupable;
+    return result;
+  });
 }
 
 function subxFormatDateTimesInText(value){
@@ -1907,27 +2087,66 @@ function subxFormatDateTimesInText(value){
     : String(value??'');
 }
 
+function subscriptionLogVisual(eventValue, levelValue){
+  const event=String(eventValue || '').trim().toLowerCase();
+  const level=String(levelValue || '').trim().toLowerCase();
+  if(['subscription_expired','expired','subscription_blocked','blocked'].includes(event)) return {tone:'danger',icon:event.includes('expired')?'fa-hourglass-end':'fa-ban'};
+  if(['subscription_reset_timer','reset_timer'].includes(event)) return {tone:'timer',icon:'fa-clock-rotate-left'};
+  if(['subscription_reset_data','reset_data'].includes(event)) return {tone:'data',icon:'fa-database'};
+  if(['subscription_enabled','enabled'].includes(event)) return {tone:'success',icon:'fa-circle-play'};
+  if(['subscription_disabled','disabled'].includes(event)) return {tone:'muted',icon:'fa-circle-pause'};
+  if(level==='warning' || level==='error' || level==='danger') return {tone:'warning',icon:'fa-triangle-exclamation'};
+  if(level==='success') return {tone:'success',icon:'fa-circle-check'};
+  return {tone:'info',icon:'fa-circle-info'};
+}
+
+function subscriptionLogDayLabel(value){
+  const d=subscriptionDateObject(value || '');
+  if(!d || Number.isNaN(d.getTime())) return 'Earlier';
+  const now=new Date();
+  const day=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+  const today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+  const diff=Math.round((today-day)/86400000);
+  if(diff===0) return 'Today';
+  if(diff===1) return 'Yesterday';
+  try{return new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',year:d.getFullYear()===now.getFullYear()?undefined:'numeric'}).format(d);}catch(_){return d.toLocaleDateString();}
+}
+
 function renderSubscriptionLogRows(logs){
   const rows = Array.isArray(logs) ? logs : [];
   if(!rows.length){
-    return `<div class="subx-peer-log-empty"><i class="fas fa-clock-rotate-left"></i><b>No subscription events yet</b><span>Enable, disable, reset, edit, and inbound events from attached configs will appear here.</span></div>`;
+    return `<div class="subx-peer-log-empty"><i class="fas fa-clock-rotate-left"></i><b>No subscription activity yet</b><span>Timer resets, blocks, expiry, enable/disable actions, and other subscription events will appear here.</span></div>`;
   }
-  return `<div class="subx-peer-log-list">${rows.map(row=>{
-    const event = row.event || row.level || 'event';
-    const details = row.details || row.text || '';
-    const time = row.time || row.ts || '';
-    const source = row.source_name || 'Attached config';
-    const level = String(row.level || 'info').toLowerCase();
-    const relative = time ? subxRelativeTime(time) : '';
-    const exact = row.time_display || (time ? subxExactTime(time) : '');
-    return `<article class="subx-peer-log-row level-${esc(level)}">
-      <span class="subx-peer-log-dot"></span>
-      <div class="subx-peer-log-copy">
-        <div class="subx-log-mainline"><span class="subx-log-event"><b>${esc(subscriptionLogEventLabel(event))}</b><span class="subx-log-source">${esc(source)}</span></span>${time ? `<time title="${esc(exact)}">${esc(relative || exact)}</time>` : ''}</div>
-        <p>${esc(subxFormatDateTimesInText(details || 'No additional details.'))}</p>
-      </div>
-    </article>`;
-  }).join('')}</div>`;
+  const groups=[];
+  for(const row of rows){
+    const label=subscriptionLogDayLabel(row.time || row.ts || '');
+    let group=groups.find(x=>x.label===label);
+    if(!group){group={label,rows:[]};groups.push(group);}
+    group.rows.push(row);
+  }
+  return `<section class="subx-log-history" aria-label="Subscription activity history">
+    <div class="subx-log-history-head"><span><b>Activity history</b><small>Shared actions from attached configs are merged into one event.</small></span><em>${rows.length} event${rows.length===1?'':'s'}</em></div>
+    ${groups.map(group=>`<section class="subx-log-day"><div class="subx-log-day-label"><span>${esc(group.label)}</span></div><div class="subx-peer-log-list">${group.rows.map(row=>{
+      const event = row.event || row.level || 'event';
+      const details = row.details || row.text || '';
+      const time = row.time || row.ts || '';
+      const source = row.source_name || 'Attached config';
+      const sourceTitle = row.source_title || source;
+      const duplicateCount = Number(row.duplicate_count || 1);
+      const level = String(row.level || 'info').toLowerCase();
+      const visual=subscriptionLogVisual(event,level);
+      const relative = time ? subxRelativeTime(time) : '';
+      const exact = row.time_display || (time ? subxExactTime(time) : '');
+      return `<article class="subx-peer-log-row tone-${esc(visual.tone)}">
+        <span class="subx-log-event-icon"><i class="fas ${esc(visual.icon)}"></i></span>
+        <div class="subx-peer-log-copy">
+          <div class="subx-log-mainline"><b>${esc(subscriptionLogEventLabel(event, duplicateCount))}</b>${time ? `<time title="${esc(exact)}">${esc(relative || exact)}</time>` : ''}</div>
+          <div class="subx-log-meta"><span class="subx-log-source" title="${esc(sourceTitle)}"><i class="fas fa-network-wired"></i>${esc(source)}</span>${duplicateCount>1?`<span class="subx-log-merged" title="Merged identical events from attached configs"><i class="fas fa-layer-group"></i>${duplicateCount} configs</span>`:''}</div>
+          <p>${esc(subxFormatDateTimesInText(details || 'No additional details.'))}</p>
+        </div>
+      </article>`;
+    }).join('')}</div></section>`).join('')}
+  </section>`;
 }
 
 function ensureSubscriptionLogsDrawer(){
@@ -1972,38 +2191,20 @@ async function openSubscriptionLogs(subscription, opts={}){
   try{
     const locations = Array.isArray(subscription.locations) ? subscription.locations.filter(x=>x.peer_id) : [];
     const responses = await Promise.all(locations.map(async loc=>{
-      const r = await fetch(`/api/peer/${encodeURIComponent(loc.peer_id)}/logs`, {credentials:'same-origin', cache:'no-store'});
+      const r = await fetch(`/api/peer/${encodeURIComponent(loc.peer_id)}/logs`, {credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(15000)});
       const j = await r.json().catch(()=>({}));
       if(!r.ok) throw new Error(j.detail || j.error || `HTTP ${r.status}`);
-      const sourceName = loc.name || loc.iface || `Config ${loc.peer_id}`;
-      const rows = (j.logs || []).map(row=>({...row, source_name: sourceName}));
-      if(j.runtime){
-        const rt=j.runtime;
-        const connected=rt.connected===true || String(rt.conn_status||'').toLowerCase()==='online';
-        rows.unshift({
-          time: rt.last_activity_at || new Date().toISOString(),
-          event: connected ? 'connection_live' : 'connection_idle',
-          level: connected ? 'success' : 'muted',
-          details: connected
-            ? `Connected now${rt.conn_reason ? ` · detected by ${String(rt.conn_reason).replaceAll('_',' ')}` : ''}`
-            : (rt.last_activity_at ? `Disconnected now · last WireGuard activity ${subxRelativeTime(rt.last_activity_at)}` : 'Disconnected now · no recent WireGuard activity'),
-          source_name: sourceName
-        });
-      }
-      return rows;
+      const sourceName = subscriptionLogSourceName(loc);
+      return (j.logs || []).map(row=>({...row, source_name: sourceName, peer_id: loc.peer_id}));
     }));
-    const logs = responses.flat().sort((a,b)=>{
-      const at = subscriptionDateObject(a.time || a.ts || 0)?.getTime() || 0;
-      const bt = subscriptionDateObject(b.time || b.ts || 0)?.getTime() || 0;
-      return bt-at;
-    }).slice(0,500);
+    const logs = compactSubscriptionLogs(responses.flat()).slice(0,500);
     panel.innerHTML = `<div class="subx-peer-log-head">
-      <div><i class="fas fa-rectangle-list"></i><span><b id="subscription-logs-title">${esc(subscription.name || 'Subscription')} logs</b><small>${locations.length} attached config${locations.length===1?'':'s'} · most recent events</small></span></div>
+      <div><i class="fas fa-rectangle-list"></i><span><b id="subscription-logs-title">${esc(subscription.name || 'Subscription')} logs</b><small>${locations.length} attached config${locations.length===1?'':'s'} · shared subscription timeline</small></span></div>
       <div class="subx-peer-log-actions">
         <button class="subx-icon-btn" data-refresh-subscription-logs="${esc(subscription.id)}" title="Refresh subscription logs"><i class="fas fa-rotate"></i></button>
         <button class="subx-icon-btn" data-close-subscription-logs title="Close logs"><i class="fas fa-xmark"></i></button>
       </div>
-    </div>${renderSubscriptionLogRows(logs)}`;
+    </div>${renderSubscriptionCurrentState(subscription)}${renderSubscriptionLogRows(logs)}`;
   }catch(err){
     panel.innerHTML = `<div class="subx-peer-log-head"><div><i class="fas fa-triangle-exclamation"></i><span><b id="subscription-logs-title">Could not load subscription logs</b><small>${esc(err.message || 'Request failed')}</small></span></div><button class="subx-icon-btn" data-close-subscription-logs title="Close"><i class="fas fa-xmark"></i></button></div>`;
   }
@@ -2174,7 +2375,7 @@ $('#label-edit-input')?.addEventListener('keydown', e=>{ if(e.key === 'Enter'){ 
 
 document.addEventListener('click', async e=>{
   const mobileManage=e.target.closest('[data-sub-mobile-manage]'); if(mobileManage){
-    const row=mobileManage.closest('.subx-row');
+    const row=mobileManage.closest('.subx-row, .subscription-card');
     const id=String(mobileManage.dataset.subMobileManage || row?.dataset.sub || '');
     const open=!row?.classList.contains('subx-mobile-actions-open');
     SUBX_MOBILE_MANAGE_ID = open ? id : null;
@@ -2184,6 +2385,7 @@ document.addEventListener('click', async e=>{
     return;
   }
   const copy=e.target.closest('[data-copy]'); if(copy){ const ok = await copyText(copy.dataset.copy); ok ? toastOk('Copied.') : toastBad('Copy failed. Open HTTPS or copy manually.'); return; }
+  const diagnose=e.target.closest('[data-sub-diagnose]');if(diagnose){const s=SUBS.find(x=>String(x.id)===String(diagnose.dataset.subDiagnose));if(s)showSubscriptionDiagnosis(s);return;}
   const more=e.target.closest('[data-more]'); if(more){ const s=SUBS.find(x=>String(x.id)===String(more.dataset.more)); if(s) renderDetails(s); return; }
   const subLogs=e.target.closest('[data-subscription-logs]'); if(subLogs){ const s=SUBS.find(x=>String(x.id)===String(subLogs.dataset.subscriptionLogs)); if(s) await openSubscriptionLogs(s); return; }
   const refreshSubLogs=e.target.closest('[data-refresh-subscription-logs]'); if(refreshSubLogs){ const s=SUBS.find(x=>String(x.id)===String(refreshSubLogs.dataset.refreshSubscriptionLogs)); if(s) await openSubscriptionLogs(s,{preserveScroll:true}); return; }
@@ -2212,7 +2414,8 @@ document.addEventListener('click', async e=>{
       const r=await fetch(`/api/subscriptions/${id}/enable`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'});
       const j=await r.json().catch(()=>({}));
       if(r.ok){
-        toastOk(j.message||'Subscription enabled. Data usage and timer were reset.');
+        if(j.partial || j.ok===false)subToast(j.message||'Some attached configs could not be enabled. Review their diagnosis.','warning',7000);
+        else toastOk(j.message||'Subscription enabled. Data usage and timer were reset.');
         await loadSubs({force:true});
       }else{
         toastBad(j.detail||j.error||'Could not enable and reset subscription.');
@@ -2247,7 +2450,7 @@ document.addEventListener('click', async e=>{
       const r=await fetch(`/api/subscriptions/${id}/disable`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'});
       const j=await r.json().catch(()=>({}));
       if(r.ok){
-        toastOk(j.message||'Subscription and attached configs were disabled.');
+        if(j.partial || j.ok===false)subToast(j.message||'Some attached configs could not be disabled.','warning',7000);else toastOk(j.message||'Subscription and attached configs were disabled.');
         await loadSubs({force:true});
       }else{
         toastBad(j.detail||j.error||'Could not disable subscription.');
@@ -2264,8 +2467,8 @@ document.addEventListener('click', async e=>{
   }
   const del=e.target.closest('[data-del]');if(del){const ok = await subConfirm({title: 'Delete subscription?',body: 'This removes the subscription record. Attached peer/config deletion still depends on your backend delete behavior.',yesText: 'Delete',noText: 'Cancel',danger: true});if(!ok) return;
   const r=await fetch(`/api/subscriptions/${del.dataset.del}`,{method:'DELETE',headers:csrfHeaders(true),credentials:'same-origin'});if(r.ok){toastOk('Deleted.');loadSubs();} else {toastBad('Delete failed.');}return;}
-  const rt=e.target.closest('[data-reset-timer]'); if(rt){ const id=rt.dataset.resetTimer; rt.classList.add('is-busy'); rt.closest('.subx-row')?.classList.add('is-updating'); let r=await fetch(`/api/subscriptions/${id}/reset_timer`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'}); if(r.status===404 || r.status===405){ r=await fetch(`/api/subscriptions/${id}`,{method:'PUT',headers:csrfHeaders(true),credentials:'same-origin',body:JSON.stringify({reset_timer:true})}); } const j=await r.json().catch(()=>({})); if(r.ok){ if(j.still_blocked_reason==='data_limit') toastBad('Timer reset, but the client is still blocked because its data limit is exhausted. Reset data as well.'); else if((j.failed_peer_ids||[]).length) toastBad('Timer reset, but one or more configs could not be re-enabled.'); else toastOk(j.reactivated ? `Timer reset and ${j.reactivated} blocked config${j.reactivated===1?' was':'s were'} re-enabled.` : 'Timer reset successfully.'); await loadSubs({force:true});} else { toastBad(j.detail||j.error||'Reset failed.'); } rt.classList.remove('is-busy'); rt.closest('.subx-row')?.classList.remove('is-updating'); return; }
-  const rd=e.target.closest('[data-reset-data]'); if(rd){ const id=rd.dataset.resetData; rd.classList.add('is-busy'); rd.closest('.subx-row')?.classList.add('is-updating'); const r=await fetch(`/api/subscriptions/${id}/reset_data`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'}); const j=await r.json().catch(()=>({})); if(r.ok){ if(j.still_blocked_reason==='time_limit') toastBad('Data reset, but the client is still blocked because its timer has expired. Reset the timer as well.'); else if((j.failed_peer_ids||[]).length) toastBad('Data reset, but one or more configs could not be re-enabled.'); else toastOk(j.reactivated ? `Data reset and ${j.reactivated} blocked config${j.reactivated===1?' was':'s were'} re-enabled.` : 'Data reset successfully.'); await loadSubs({force:true});} else { toastBad(j.detail||j.error||'Reset data failed.'); } rd.classList.remove('is-busy'); rd.closest('.subx-row')?.classList.remove('is-updating'); return; }
+  const rt=e.target.closest('[data-reset-timer]'); if(rt){ const id=rt.dataset.resetTimer; rt.classList.add('is-busy'); rt.closest('.subx-row, .subscription-card')?.classList.add('is-updating'); let r=await fetch(`/api/subscriptions/${id}/reset_timer`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'}); if(r.status===404 || r.status===405){ r=await fetch(`/api/subscriptions/${id}`,{method:'PUT',headers:csrfHeaders(true),credentials:'same-origin',body:JSON.stringify({reset_timer:true})}); } const j=await r.json().catch(()=>({})); if(r.ok){ if(j.still_blocked_reason==='data_limit') toastBad('Timer reset, but the client is still blocked because its data limit is exhausted. Reset data as well.'); else if((j.failed_peer_ids||[]).length) toastBad('Timer reset, but one or more configs could not be re-enabled.'); else toastOk(j.reactivated ? `Timer reset and ${j.reactivated} blocked config${j.reactivated===1?' was':'s were'} re-enabled.` : 'Timer reset successfully.'); await loadSubs({force:true});} else { toastBad(j.detail||j.error||'Reset failed.'); } rt.classList.remove('is-busy'); rt.closest('.subx-row, .subscription-card')?.classList.remove('is-updating'); return; }
+  const rd=e.target.closest('[data-reset-data]'); if(rd){ const id=rd.dataset.resetData; rd.classList.add('is-busy'); rd.closest('.subx-row, .subscription-card')?.classList.add('is-updating'); const r=await fetch(`/api/subscriptions/${id}/reset_data`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'}); const j=await r.json().catch(()=>({})); if(r.ok){ if(j.still_blocked_reason==='time_limit') toastBad('Data reset, but the client is still blocked because its timer has expired. Reset the timer as well.'); else if((j.failed_peer_ids||[]).length) toastBad('Data reset, but one or more configs could not be re-enabled.'); else toastOk(j.reactivated ? `Data reset and ${j.reactivated} blocked config${j.reactivated===1?' was':'s were'} re-enabled.` : 'Data reset successfully.'); await loadSubs({force:true});} else { toastBad(j.detail||j.error||'Reset data failed.'); } rd.classList.remove('is-busy'); rd.closest('.subx-row, .subscription-card')?.classList.remove('is-updating'); return; }
   const rem=e.target.closest('[data-remove-inbound]');if(rem){const sid=SUBS.find(s=>(s.locations||[]).some(l=>String(l.link_id)===String(rem.dataset.removeInbound)))?.id;if(!sid) return;
   const ok = await subConfirm({title: 'Remove inbound?',body: 'This removes the inbound from this client. The underlying peer/config will not be deleted.',yesText: 'Remove inbound',noText: 'Cancel',danger: true});if(!ok) return;
   const r=await fetch(`/api/subscriptions/${sid}/inbounds/${rem.dataset.removeInbound}`,{method:'DELETE',headers:csrfHeaders(true),credentials:'same-origin'});if(r.ok){toastOk('Inbound removed.');await loadSubs({force:true});} else {const j=await r.json().catch(()=>({}));toastBad(j.detail||j.error||'Remove failed.');}return;}  
@@ -2293,8 +2496,14 @@ if(subFixedClientInfo){
 syncSubscriptionFixedClientInfo();
 
 loadSubs({force:true});
-SUBS_LIVE_TIMER = setInterval(()=>loadSubs({force:false}), SUBS_REFRESH_MS);
-document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) loadSubs({force:true}); });
+async function scheduleSubscriptionRefresh(){
+ clearTimeout(SUBS_LIVE_TIMER);
+ await loadSubs({force:false});
+ clearTimeout(SUBS_LIVE_TIMER);
+ if(!document.hidden) SUBS_LIVE_TIMER = setTimeout(scheduleSubscriptionRefresh, SUBS_REFRESH_MS * Math.pow(2, SUBS_FAILURES));
+}
+SUBS_LIVE_TIMER = setTimeout(scheduleSubscriptionRefresh, SUBS_REFRESH_MS);
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) scheduleSubscriptionRefresh(); else clearTimeout(SUBS_LIVE_TIMER); });
 
 function subxDisplayMode(){ return (SUB_SETTINGS && SUB_SETTINGS.display_mode) || localStorage.getItem('subx-display-mode') || 'hybrid'; }
 function subxClampPct(v){ v=Number(v||0); return Math.max(0, Math.min(100, Math.round(v))); }
@@ -2342,7 +2551,7 @@ function rowHtml(s){
         <button class="subx-icon-btn" title="Reset timer" data-reset-timer="${s.id}"><i class="fas fa-clock-rotate-left"></i></button>
         <button class="subx-icon-btn" title="Manage inbounds" data-inbounds="${s.id}"><i class="fas fa-network-wired"></i></button>
         <button class="subx-icon-btn" title="Customize public template for this client" data-template="${s.id}"><i class="fas fa-wand-magic-sparkles"></i></button><button class="subx-icon-btn" title="Edit client" data-edit="${s.id}"><i class="fas fa-pen"></i></button>
-        <button class="subx-icon-btn" title="More information" data-more="${s.id}"><i class="fas fa-circle-info"></i></button>
+        <button class="subx-icon-btn" title="Diagnose access" data-sub-diagnose="${s.id}"><i class="fas fa-stethoscope"></i></button><button class="subx-icon-btn" title="More information" data-more="${s.id}"><i class="fas fa-circle-info"></i></button>
         <button class="subx-icon-btn danger" title="Delete" data-del="${s.id}"><i class="fas fa-trash"></i></button>
       </div>
     </div>
@@ -2416,7 +2625,10 @@ function subxTtlText(sec){
 
 function subxSubscriptionState(s){
   const c = subscriptionPeerCounts(s);
-  if(!s.enabled) return {label:'Disabled', cls:'disabled', sub:'Subscription disabled'};
+  const reason=String(s?.access?.reason || s?.state_reason || '').toLowerCase();
+  if(reason === 'disabled' || !s.enabled) return {label:'Disabled', cls:'disabled', sub:'Disabled by administrator'};
+  if(reason === 'expired') return {label:'Blocked', cls:'blocked', sub:'Subscription expired'};
+  if(reason === 'data_exhausted') return {label:'Blocked', cls:'blocked', sub:'Data limit reached'};
   if(c.blocked > 0) return {label:'Blocked', cls:'blocked', sub:'One or more configs are blocked'};
   if(c.offline > 0) {
     const allDisabled = c.offline === c.total;
@@ -2582,7 +2794,7 @@ function subxActionButtons(s){
       <button class="subx-icon-btn" title="Reset time limit" data-reset-timer="${s.id}"><i class="fas fa-clock-rotate-left"></i></button>
       <button class="subx-icon-btn" title="Manage inbounds" data-inbounds="${s.id}"><i class="fas fa-network-wired"></i></button>
       <button class="subx-icon-btn" title="Edit client" data-edit="${s.id}"><i class="fas fa-pen"></i></button>
-      <button class="subx-icon-btn" title="View details" data-more="${s.id}"><i class="fas fa-circle-info"></i></button>
+      <button class="subx-icon-btn" title="Diagnose access" data-sub-diagnose="${s.id}"><i class="fas fa-stethoscope"></i></button><button class="subx-icon-btn" title="View details" data-more="${s.id}"><i class="fas fa-circle-info"></i></button>
       <button class="subx-icon-btn danger" title="Delete subscription" data-del="${s.id}"><i class="fas fa-trash"></i></button>
     </div>
   </div>`;
@@ -2620,6 +2832,19 @@ function rowHtml(s){
     scope === 'node' ? 'Nodes only' :
     scope === 'local' ? 'Local only' :
     'No location yet';
+
+  if(document.documentElement.dataset.design === 'modern'){
+    const network = locs.map(loc => subscriptionLogSourceName(loc));
+    const contact = [s.phone_number, s.telegram_id ? `Telegram: ${s.telegram_id}` : ''].filter(Boolean).join(' · ');
+    return `<article class="subscription-card subscription-bar state-${esc(state.cls)}" data-sub="${s.id}">
+      <header class="subscription-bar-identity"><div class="subscription-avatar" aria-hidden="true">${esc((s.name || '?').slice(0,2).toUpperCase())}</div><div><h2>${esc(s.name)}</h2><p>${esc(note)}</p><small>${esc(contact || 'Client #'+s.id)}</small></div></header>
+      <div class="subscription-bar-status"><span class="subscription-label">Access & connection</span><span class="subx-state-pill ${esc(state.cls)}"><i class="fas ${subxIconForState(state.cls)}"></i>${esc(state.label)}</span><span class="subscription-connection ${esc(connection.cls)}" title="${esc(connection.detail)}"><i class="fas fa-circle"></i>${esc(connection.label)}</span><small>${esc(state.sub)}</small></div>
+      <div class="subscription-bar-meter"><span class="subscription-label">Data remaining</span><strong>${esc(dataHeadline)}</strong><meter min="0" max="100" value="${Math.max(0,Math.min(100,dataPct))}" aria-label="Data remaining"></meter><small>${esc(dataDetail)}</small></div>
+      <div class="subscription-bar-meter"><span class="subscription-label">${esc(timeInfo.title)}</span><strong>${esc(timeHeadline)}</strong><meter min="0" max="100" value="${Math.max(0,Math.min(100,timePct))}" aria-label="Time remaining"></meter><small>${esc(timeDetail)}</small></div>
+      <div class="subscription-bar-network"><span class="subscription-label">Network</span><strong>${esc(inboundText)}</strong><span>${locCount} location${locCount===1?'':'s'} · ${esc(scopeText)}</span><div class="subscription-locations">${network.length?network.map(n=>`<small>${esc(n)}</small>`).join(''):'<small>No configuration attached</small>'}</div></div>
+      <footer class="subscription-bar-actions"><button type="button" data-edit="${s.id}" class="subscription-edit"><i class="fas fa-pen"></i><span>Edit</span></button><button type="button" data-copy="${esc(s.public_url)}" title="Copy public portal link"><i class="fas fa-link"></i><span>Portal</span></button><button type="button" data-inbounds="${s.id}" title="Manage attached configurations"><i class="fas fa-network-wired"></i><span>Configs</span></button><details class="subscription-menu"><summary aria-label="More client actions"><i class="fas fa-ellipsis"></i><span>More</span></summary>${modernSubscriptionActions(s)}</details></footer>
+    </article>`;
+  }
 
   const mobileActionsOpen = String(SUBX_MOBILE_MANAGE_ID ?? '') === String(s.id);
   return `<article class="subx-row subx-row-line state-${state.cls}${mobileActionsOpen ? ' subx-mobile-actions-open' : ''}" data-sub="${s.id}">
@@ -2738,11 +2963,11 @@ function renderSubscriptions(){
 async function loadSubs(opts={}){
   try { await (window.WG_PANEL_TIMEZONE_READY || Promise.resolve()); } catch (_) {}
   if(SUBS_LOADING) return;
-  if(!opts.force && modalIsOpen()) return;
+  if(!opts.force && (document.hidden || modalIsOpen() || window.WGSubscriptionPaused)) return;
   SUBS_LOADING = true;
-  setLiveState('Refreshing…', 'loading');
+  if(!SUBS_LAST_JSON) setLiveState('Loading…', 'loading');
   try {
-    const r = await fetch('/api/subscriptions', {credentials:'same-origin', cache:'no-store'});
+    const r = await fetch('/api/subscriptions', {credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(15000)});
     const j = await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(j.detail || j.error || 'Load failed');
 
@@ -2750,6 +2975,13 @@ async function loadSubs(opts={}){
     if(next[0]?.display_timezone && typeof window.wgPanelApplyTimezone === 'function') window.wgPanelApplyTimezone(next[0].display_timezone, false);
     const nextJson = JSON.stringify(next);
     SUBS = next;
+    const repairClient=new URLSearchParams(location.search).get('diagnosis_client');
+    if(repairClient&&!window.__diagnosisClientOpened){
+      window.__diagnosisClientOpened=true;
+      const cleanURL=new URL(location.href);cleanURL.searchParams.delete('diagnosis_client');history.replaceState(history.state,'',cleanURL);
+      if(SUBS.some(s=>String(s.id)===repairClient))setTimeout(()=>openDiagnosisClient(repairClient),0);
+      else toastBad('The requested client is unavailable. It may have been removed.');
+    }
     if(SUBX_MOBILE_MANAGE_ID != null && !SUBS.some(x => String(x.id) === String(SUBX_MOBILE_MANAGE_ID))){
       SUBX_MOBILE_MANAGE_ID = null;
     }
@@ -2765,15 +2997,28 @@ async function loadSubs(opts={}){
     if(totalEl) totalEl.textContent = SUBS.length;
     if(inboundEl) inboundEl.textContent = SUBS.reduce((a,s)=>a+(s.locations||[]).length,0);
     if(blockedEl) blockedEl.textContent = SUBS.reduce((a,s)=> a + (subxSubscriptionState(s).cls === 'blocked' ? 1 : 0), 0);
+    $('#st-enabled').textContent=SUBS.filter(s=>s.enabled && s.access?.allowed===true).length;
+    $('#st-disabled').textContent=SUBS.filter(s=>!s.enabled).length;
+    $('#st-unassigned').textContent=SUBS.filter(s=>!(s.locations||[]).length).length;
+    $('#st-used').textContent=fmtBytes(SUBS.reduce((sum,s)=>sum+Math.max(0,Number(s.used_bytes)||0),0));
+    $('#st-modern-total').textContent=SUBS.length;
+    $('#st-modern-inbounds').textContent=SUBS.reduce((sum,s)=>sum+(s.locations||[]).length,0);
+    $('#st-modern-blocked').textContent=SUBS.filter(s=>s.access?.allowed===false || !s.enabled).length;
+    $('#st-expired').textContent=SUBS.filter(s=>s.access?.reason==='expired').length;
+    $('#st-exhausted').textContent=SUBS.filter(s=>s.access?.reason==='data_exhausted').length;
 
     if(detailsIsOpen()){
       const openId = $('#details-modal')?.dataset?.sid;
       const current = SUBS.find(x=>String(x.id)===String(openId));
       if(current) renderDetails(current, {keepOpen:true});
     }
-    setLiveState(`Updated ${nowClock()}`);
+    SUBS_FAILURES = 0;
+    setLiveState('Up to date');
+    const status = document.getElementById('subx-live-state');
+    if(status) status.title = `Last successful refresh: ${nowClock()}`;
   } catch(err) {
-    setLiveState(`Live update failed: ${err.message || err}`, 'error');
+    SUBS_FAILURES = Math.min(SUBS_FAILURES + 1, 3);
+    setLiveState('Update unavailable · retrying', 'error');
   } finally {
     SUBS_LOADING = false;
   }
@@ -2933,7 +3178,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
 (() => {
   'use strict';
   const q=(s,r=document)=>r.querySelector(s), qa=(s,r=document)=>[...r.querySelectorAll(s)];
-  const defaults={layout:'ps5',background:'orbits',display_mode:'hybrid',animation:'cinematic',entrance_animation:'stagger',hover_animation:'lift',toast_style:'pill',toast_position:'bottom_center',toast_motion:'slide',toast_duration:2200,accent:'mint',primary_color:'#3addaa',secondary_color:'#63a5ff',online_color:'#22c55e',offline_color:'#94a3b8',warning_color:'#f59e0b',danger_color:'#ef4444',pill_color:'#64748b',action_color:'#3addaa',custom_primary:'#3addaa',custom_secondary:'#63a5ff',surface:'glass',radius:'rounded',shadow:'deep',density:'comfortable',page_width:'wide',config_style:'cards',config_columns:'two',section_order:'usage_first',module_order:['configs','usage','install','support'],module_enabled:{configs:true,usage:true,install:true,support:true},module_sizes:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_mobile:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_surface:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_spacing:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_radius:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_heading:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_mobile_position:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_gap:'standard',support_style:'buttons',theme_default:'auto',hero_style:'banner',button_style:'solid',font_scale:'standard',background_intensity:86,card_opacity:82,motion_speed:125,motion_intensity:150,particle_density:90,stat_size:'standard',show_quick_stats:true,show_percentage:true,show_used_detail:true,show_install:true,show_support:true,show_live_badge:true,show_status_badge:true,show_location_country:true,show_download_action:true,show_copy_action:true,show_theme_action:true,show_section_descriptions:true,show_admin_notice:false,notice_title:'Service notice',notice_text:'',notice_tone:'info',notice_style:'banner',notice_position:'after_summary',title_align:'left',logo_size:'medium',portal_label:'Secure WireGuard portal',portal_title:'',portal_subtitle:'Your account is ready. Install WireGuard, then scan QR or import a config.',portal_icon:'fas fa-bolt',usage_title:'Usage overview',configs_title:'Configs',install_title:'Install WireGuard',support_title:'Support',support:{telegram:'',whatsapp:'',phone:'',email:'',website:'',instagram:''}};
+  const defaults={font_family:'rounded',background_pattern:'none',layout:'ps5',background:'orbits',display_mode:'hybrid',animation:'cinematic',entrance_animation:'stagger',hover_animation:'lift',toast_style:'pill',toast_position:'bottom_center',toast_motion:'slide',toast_duration:2200,accent:'violet',primary_color:'#7661ed',secondary_color:'#63a5ff',online_color:'#568eff',offline_color:'#94a3b8',warning_color:'#f59e0b',danger_color:'#ef4444',pill_color:'#64748b',action_color:'#7661ed',custom_primary:'#7661ed',custom_secondary:'#63a5ff',surface:'glass',radius:'rounded',shadow:'deep',density:'comfortable',page_width:'wide',config_style:'cards',config_columns:'two',section_order:'usage_first',module_order:['configs','usage','install','support'],module_enabled:{configs:true,usage:true,install:true,support:true},module_sizes:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_mobile:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_surface:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_spacing:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_radius:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_heading:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_mobile_position:{configs:'auto',usage:'auto',install:'auto',support:'auto'},module_gap:'standard',support_style:'buttons',theme_default:'auto',hero_style:'banner',button_style:'solid',font_scale:'standard',background_intensity:86,card_opacity:82,motion_speed:125,motion_intensity:150,particle_density:90,stat_size:'standard',show_quick_stats:true,show_percentage:true,show_used_detail:true,show_install:true,show_support:true,show_live_badge:true,show_status_badge:true,show_location_country:true,show_download_action:true,show_copy_action:true,show_theme_action:true,show_section_descriptions:true,show_admin_notice:false,notice_title:'Service notice',notice_text:'',notice_tone:'info',notice_style:'banner',notice_position:'after_summary',title_align:'left',logo_size:'medium',portal_label:'Secure WireGuard portal',portal_title:'',portal_subtitle:'Your account is ready. Install WireGuard, then scan QR or import a config.',portal_icon:'fas fa-bolt',usage_title:'Usage overview',configs_title:'Configs',install_title:'Install WireGuard',support_title:'Support',support:{telegram:'',whatsapp:'',phone:'',email:'',website:'',instagram:''}};
   const labels={layout:{ps5:'PS5',mac:'macOS',app:'Desktop app',compact:'Compact',minimal:'Minimal',showcase:'Showcase',aurora:'PS5',cards:'macOS',console:'Desktop app',split:'Showcase',profile:'Showcase',executive:'macOS',flow:'Minimal'},background:{aurora:'Aurora',waves:'Waves',network:'Network',orbits:'Orbits',mesh:'Mesh',nebula:'Nebula',lines:'Lines',constellation:'Constellation',prism:'Prism',circuit:'Circuit',pulse:'Pulse',none:'None'},display_mode:{bars:'Progress bars',rings:'Circles',hybrid:'Hybrid',focus:'Large values',minimal:'Compact rows',segments:'Segments'},animation:{cinematic:'Cinematic',immersive:'Immersive',rich:'Rich',balanced:'Balanced',soft:'Soft',drift:'Drift',minimal:'Minimal',off:'Off'},accent:{mint:'Mint',blue:'Blue',violet:'Violet',coral:'Coral',amber:'Amber',mono:'Monochrome',custom:'Custom'}};
   let previewTheme='auto',previewDevice='desktop',previewFit='width',previewPaused=false,previewTimer=0,frameToken=0;
   function radio(name,fallback){return q(`input[name="${name}"]:checked`)?.value||fallback}
@@ -2944,12 +3189,13 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   function number(id,fallback){const n=Number(q('#'+id)?.value);return Number.isFinite(n)?n:fallback}
   function supportValues(){const out={};for(const key of ['telegram','whatsapp','phone','email','website','instagram'])out[key]=q('#sup-'+key)?.value||'';return out}
   function currentSettings(){
-    return {layout:radio('sub-layout',defaults.layout),background:radio('sub-background',defaults.background),display_mode:radio('sub-display-mode',defaults.display_mode),animation:radio('portal-animation-choice',q('#portal-animation')?.value||defaults.animation),entrance_animation:radio('sub-entrance-animation',defaults.entrance_animation),hover_animation:radio('sub-hover-animation',defaults.hover_animation),toast_style:radio('sub-toast-style',defaults.toast_style),toast_position:q('#portal-toast-position')?.value||defaults.toast_position,toast_motion:radio('sub-toast-motion',defaults.toast_motion),toast_duration:number('portal-toast-duration',defaults.toast_duration),accent:radio('sub-accent',defaults.accent),primary_color:q('#portal-primary-color')?.value||defaults.primary_color,secondary_color:q('#portal-secondary-color')?.value||defaults.secondary_color,online_color:q('#portal-online-color')?.value||defaults.online_color,offline_color:q('#portal-offline-color')?.value||defaults.offline_color,warning_color:q('#portal-warning-color')?.value||defaults.warning_color,danger_color:q('#portal-danger-color')?.value||defaults.danger_color,pill_color:q('#portal-pill-color')?.value||defaults.pill_color,action_color:q('#portal-action-color')?.value||defaults.action_color,custom_primary:q('#portal-primary-color')?.value||defaults.primary_color,custom_secondary:q('#portal-secondary-color')?.value||defaults.secondary_color,surface:radio('sub-surface',defaults.surface),radius:radio('sub-radius',defaults.radius),shadow:radio('sub-shadow',defaults.shadow),density:radio('sub-density',defaults.density),page_width:radio('sub-page-width',defaults.page_width),config_style:radio('sub-config-style',defaults.config_style),config_columns:radio('sub-config-columns',defaults.config_columns),section_order:radio('sub-section-order',defaults.section_order),module_order:moduleOrderFromComposer(),module_enabled:moduleEnabledFromComposer(),module_sizes:moduleSizesFromComposer(),module_mobile:moduleMobileFromComposer(),module_surface:moduleSurfaceFromComposer(),module_spacing:moduleSpacingFromComposer(),module_radius:moduleRadiusFromComposer(),module_heading:moduleHeadingFromComposer(),module_mobile_position:moduleMobilePositionFromComposer(),module_gap:q('#studio-module-gap')?.value||defaults.module_gap,support_style:radio('sub-support-style',defaults.support_style),theme_default:radio('sub-theme-default',defaults.theme_default),hero_style:radio('sub-hero-style',defaults.hero_style),button_style:radio('sub-button-style',defaults.button_style),font_scale:radio('sub-font-scale',defaults.font_scale),background_intensity:number('portal-background-intensity',defaults.background_intensity),card_opacity:number('portal-card-opacity',defaults.card_opacity),motion_speed:number('portal-motion-speed',defaults.motion_speed),motion_intensity:number('portal-motion-intensity',defaults.motion_intensity),particle_density:number('portal-particle-density',defaults.particle_density),stat_size:radio('sub-stat-size',defaults.stat_size),show_quick_stats:checked('show-quick-stats'),show_percentage:checked('show-percentage'),show_used_detail:checked('show-used-detail'),show_install:checked('show-install'),show_support:checked('show-support'),show_live_badge:checked('show-live-badge'),show_status_badge:checked('show-status-badge'),show_location_country:checked('show-location-country'),show_download_action:checked('show-download-action'),show_copy_action:checked('show-copy-action'),show_theme_action:checked('show-theme-action'),show_section_descriptions:checked('show-section-descriptions'),show_admin_notice:checked('show-admin-notice'),notice_title:q('#portal-notice-title')?.value||defaults.notice_title,notice_text:q('#portal-notice-text')?.value||'',notice_tone:q('#portal-notice-tone')?.value||defaults.notice_tone,notice_style:q('#portal-notice-style')?.value||defaults.notice_style,notice_position:q('#portal-notice-position')?.value||defaults.notice_position,title_align:radio('sub-title-align',defaults.title_align),logo_size:radio('sub-logo-size',defaults.logo_size),portal_label:q('#portal-label')?.value||'',portal_title:q('#portal-title')?.value||'',portal_subtitle:q('#portal-subtitle')?.value||'',portal_icon:q('#portal-icon')?.value||defaults.portal_icon,usage_title:q('#portal-usage-title')?.value||defaults.usage_title,configs_title:q('#portal-configs-title')?.value||defaults.configs_title,install_title:q('#portal-install-title')?.value||defaults.install_title,support_title:q('#portal-support-title')?.value||defaults.support_title,support:supportValues()};
+    return {font_family:q('#portal-font-family')?.value||'rounded',background_pattern:q('#portal-background-pattern')?.value||'none',layout:radio('sub-layout',defaults.layout),background:radio('sub-background',defaults.background),display_mode:radio('sub-display-mode',defaults.display_mode),animation:radio('portal-animation-choice',q('#portal-animation')?.value||defaults.animation),entrance_animation:radio('sub-entrance-animation',defaults.entrance_animation),hover_animation:radio('sub-hover-animation',defaults.hover_animation),toast_style:radio('sub-toast-style',defaults.toast_style),toast_position:q('#portal-toast-position')?.value||defaults.toast_position,toast_motion:radio('sub-toast-motion',defaults.toast_motion),toast_duration:number('portal-toast-duration',defaults.toast_duration),accent:radio('sub-accent',defaults.accent),primary_color:q('#portal-primary-color')?.value||defaults.primary_color,secondary_color:q('#portal-secondary-color')?.value||defaults.secondary_color,online_color:q('#portal-online-color')?.value||defaults.online_color,offline_color:q('#portal-offline-color')?.value||defaults.offline_color,warning_color:q('#portal-warning-color')?.value||defaults.warning_color,danger_color:q('#portal-danger-color')?.value||defaults.danger_color,pill_color:q('#portal-pill-color')?.value||defaults.pill_color,action_color:q('#portal-action-color')?.value||defaults.action_color,custom_primary:q('#portal-primary-color')?.value||defaults.primary_color,custom_secondary:q('#portal-secondary-color')?.value||defaults.secondary_color,surface:radio('sub-surface',defaults.surface),radius:radio('sub-radius',defaults.radius),shadow:radio('sub-shadow',defaults.shadow),density:radio('sub-density',defaults.density),page_width:radio('sub-page-width',defaults.page_width),config_style:radio('sub-config-style',defaults.config_style),config_columns:radio('sub-config-columns',defaults.config_columns),section_order:radio('sub-section-order',defaults.section_order),module_order:moduleOrderFromComposer(),module_enabled:moduleEnabledFromComposer(),module_sizes:moduleSizesFromComposer(),module_mobile:moduleMobileFromComposer(),module_surface:moduleSurfaceFromComposer(),module_spacing:moduleSpacingFromComposer(),module_radius:moduleRadiusFromComposer(),module_heading:moduleHeadingFromComposer(),module_mobile_position:moduleMobilePositionFromComposer(),module_gap:q('#studio-module-gap')?.value||defaults.module_gap,support_style:radio('sub-support-style',defaults.support_style),theme_default:radio('sub-theme-default',defaults.theme_default),hero_style:radio('sub-hero-style',defaults.hero_style),button_style:radio('sub-button-style',defaults.button_style),font_scale:radio('sub-font-scale',defaults.font_scale),background_intensity:number('portal-background-intensity',defaults.background_intensity),card_opacity:number('portal-card-opacity',defaults.card_opacity),motion_speed:number('portal-motion-speed',defaults.motion_speed),motion_intensity:number('portal-motion-intensity',defaults.motion_intensity),particle_density:number('portal-particle-density',defaults.particle_density),stat_size:radio('sub-stat-size',defaults.stat_size),show_quick_stats:checked('show-quick-stats'),show_percentage:checked('show-percentage'),show_used_detail:checked('show-used-detail'),show_install:checked('show-install'),show_support:checked('show-support'),show_live_badge:checked('show-live-badge'),show_status_badge:checked('show-status-badge'),show_location_country:checked('show-location-country'),show_download_action:checked('show-download-action'),show_copy_action:checked('show-copy-action'),show_theme_action:checked('show-theme-action'),show_section_descriptions:checked('show-section-descriptions'),show_admin_notice:checked('show-admin-notice'),notice_title:q('#portal-notice-title')?.value||defaults.notice_title,notice_text:q('#portal-notice-text')?.value||'',notice_tone:q('#portal-notice-tone')?.value||defaults.notice_tone,notice_style:q('#portal-notice-style')?.value||defaults.notice_style,notice_position:q('#portal-notice-position')?.value||defaults.notice_position,title_align:radio('sub-title-align',defaults.title_align),logo_size:radio('sub-logo-size',defaults.logo_size),portal_label:q('#portal-label')?.value||'',portal_title:q('#portal-title')?.value||'',portal_subtitle:q('#portal-subtitle')?.value||'',portal_icon:q('#portal-icon')?.value||defaults.portal_icon,usage_title:q('#portal-usage-title')?.value||defaults.usage_title,configs_title:q('#portal-configs-title')?.value||defaults.configs_title,install_title:q('#portal-install-title')?.value||defaults.install_title,support_title:q('#portal-support-title')?.value||defaults.support_title,support:supportValues()};
   }
   function applySettings(settings={}){
     const legacyLayout={aurora:'ps5',cards:'mac',console:'app',split:'showcase',profile:'showcase',executive:'mac',flow:'minimal'};
     const normalized={...settings,layout:legacyLayout[settings.layout]||settings.layout};
     const s={...defaults,...normalized,support:{...defaults.support,...(settings.support||{})}};
+    for(const key of ['font_family','background_pattern']){const el=q('#portal-'+key.replaceAll('_','-'));if(el)el.value=s[key]||defaults[key];}
     for(const [name,key] of [['sub-layout','layout'],['sub-background','background'],['sub-display-mode','display_mode'],['portal-animation-choice','animation'],['sub-entrance-animation','entrance_animation'],['sub-hover-animation','hover_animation'],['sub-toast-style','toast_style'],['sub-toast-motion','toast_motion'],['sub-accent','accent'],['sub-surface','surface'],['sub-radius','radius'],['sub-shadow','shadow'],['sub-density','density'],['sub-page-width','page_width'],['sub-config-style','config_style'],['sub-config-columns','config_columns'],['sub-section-order','section_order'],['sub-support-style','support_style'],['sub-theme-default','theme_default'],['sub-hero-style','hero_style'],['sub-button-style','button_style'],['sub-font-scale','font_scale'],['sub-stat-size','stat_size'],['sub-title-align','title_align'],['sub-logo-size','logo_size']])setRadio(name,s[key]);
     setModuleComposer(s);syncModuleEditor(s.layout);setCheck('show-admin-notice',!!s.show_admin_notice);setValue('portal-notice-title',s.notice_title||defaults.notice_title);setValue('portal-notice-text',s.notice_text||'');setValue('portal-notice-tone',s.notice_tone||defaults.notice_tone);setValue('portal-notice-style',s.notice_style||defaults.notice_style);setValue('portal-notice-position',s.notice_position||defaults.notice_position);
     setValue('portal-animation',s.animation);setValue('portal-toast-position',s.toast_position);setValue('portal-toast-duration',s.toast_duration);const primary=s.primary_color||s.custom_primary||defaults.primary_color;const secondary=s.secondary_color||s.custom_secondary||defaults.secondary_color;setValue('portal-primary-color',primary);setValue('portal-primary-text',primary);setValue('portal-secondary-color',secondary);setValue('portal-secondary-text',secondary);for(const [id,key] of [['online','online_color'],['offline','offline_color'],['warning','warning_color'],['danger','danger_color'],['pill','pill_color'],['action','action_color']]){const value=s[key]||defaults[key];setValue(`portal-${id}-color`,value);setValue(`portal-${id}-text`,value)}setValue('portal-background-intensity',s.background_intensity);setValue('portal-card-opacity',s.card_opacity);setValue('portal-motion-speed',s.motion_speed);setValue('portal-motion-intensity',s.motion_intensity);setValue('portal-particle-density',s.particle_density);updateStudioTokenPreview(s);
@@ -3150,7 +3396,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   q('#studio-reset-on-layout-change')?.addEventListener('change',e=>{try{localStorage.setItem('sub-studio-reset-on-layout-change',String(!!e.target.checked))}catch(_){}});
   qa('input[name="sub-layout"]').forEach(el=>el.addEventListener('change',()=>{if(resetOnLayoutChange())applyLayoutPreset(el.value);else{syncModuleEditor();applyPreviewSettingsToFrame(currentSettings(),{replay:true});schedulePreview(true)}}));
   q('#studio-reset-layout')?.addEventListener('click',()=>applyLayoutPreset(radio('sub-layout',defaults.layout)));
-  q('#studio-reset-all')?.addEventListener('click',async()=>{let yes=true;try{if(window.subConfirm)yes=await window.subConfirm({title:'Factory reset template?',body:'This resets the unsaved Studio design, module sizing, colors, motion, content visibility and toast settings.',yesText:'Reset everything',noText:'Cancel',danger:true});else yes=window.confirm('Factory reset all unsaved template settings?')}catch(_){}if(yes)applySettings({...defaults,...cleanModuleDefaults(),support:{...defaults.support}})});
+  q('#studio-reset-all')?.addEventListener('click',async()=>{let yes=true;try{if(window.subConfirm)yes=await window.subConfirm({title:'Factory reset template?',body:'This resets the unsaved Studio design, module sizing, colors, motion, content visibility and toast settings.',yesText:'Reset everything',noText:'Cancel',danger:true});else yes=await window.wgConfirm('Factory reset all unsaved template settings?')}catch(_){}if(yes)applySettings({...defaults,...cleanModuleDefaults(),support:{...defaults.support}})});
   q('#studio-reset-semantic')?.addEventListener('click',()=>{for(const key of ['online_color','offline_color','warning_color','danger_color','pill_color','action_color']){const short=key.replace('_color','');setValue(`portal-${short}-color`,defaults[key]);setValue(`portal-${short}-text`,defaults[key])}const s=currentSettings();updateStudioTokenPreview(s);applyPreviewSettingsToFrame(s);schedulePreview()});
 
   function updateRangeLabels(){
@@ -3219,13 +3465,13 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   function previewDoc(s){
     const theme=resolvedTheme(s),title=esc(s.portal_title||'premium-user'),label=esc(s.portal_label||defaults.portal_label),subtitle=esc(s.portal_subtitle||defaults.portal_subtitle),css=`${location.origin}/static/css/subscription_public.css?v=20260820-studio-v16`,fa=`${location.origin}/static/vendor/fa/css/all.min.css`;
     const customStyle=`:root{--custom-accent:${esc(s.primary_color||s.custom_primary)};--custom-accent2:${esc(s.secondary_color||s.custom_secondary)};--background-intensity:${s.background_intensity/100};--card-opacity:${s.card_opacity/100};--motion-speed:${100/s.motion_speed};--motion-power:${s.motion_intensity/100};--particle-density:${s.particle_density/100};--engine-speed:${s.motion_speed/100};--engine-density:${s.particle_density/100};--status-online:${esc(s.online_color)};--status-offline:${esc(s.offline_color)};--status-warning:${esc(s.warning_color)};--status-danger:${esc(s.danger_color)};--pill-color:${esc(s.pill_color)};--action-color:${esc(s.action_color)}}`;
-    return `<!doctype html><html lang="en" data-preview="true" data-preview-device="${previewDevice}" data-theme="${theme}" data-layout="${s.layout}" data-hero-style="${s.hero_style}" data-background="${s.background}" data-stat-style="${s.display_mode}" data-motion="${s.animation}" data-motion-intensity="${s.motion_intensity}" data-accent="${s.accent}" data-surface="${s.surface}" data-radius="${s.radius}" data-shadow="${s.shadow}" data-density="${s.density}" data-page-width="${s.page_width}" data-config-style="${s.config_style}" data-config-columns="${s.config_columns}" data-section-order="${s.section_order}" data-module-1="${normalizeModuleOrder(s.module_order)[0]}" data-module-2="${normalizeModuleOrder(s.module_order)[1]}" data-module-3="${normalizeModuleOrder(s.module_order)[2]}" data-module-4="${normalizeModuleOrder(s.module_order)[3]}" data-module-configs-enabled="${bool(normalizedModuleEnabled(s.module_enabled).configs)}" data-module-usage-enabled="${bool(normalizedModuleEnabled(s.module_enabled).usage)}" data-module-install-enabled="${bool(normalizedModuleEnabled(s.module_enabled).install)}" data-module-support-enabled="${bool(normalizedModuleEnabled(s.module_enabled).support)}" data-module-configs-size="${normalizedModuleSizes(s.module_sizes).configs}" data-module-usage-size="${normalizedModuleSizes(s.module_sizes).usage}" data-module-install-size="${normalizedModuleSizes(s.module_sizes).install}" data-module-support-size="${normalizedModuleSizes(s.module_sizes).support}" data-module-configs-mobile="${normalizedModuleMobile(s.module_mobile).configs}" data-module-usage-mobile="${normalizedModuleMobile(s.module_mobile).usage}" data-module-install-mobile="${normalizedModuleMobile(s.module_mobile).install}" data-module-support-mobile="${normalizedModuleMobile(s.module_mobile).support}" data-module-configs-surface="${normalizedModuleSurface(s.module_surface).configs}" data-module-usage-surface="${normalizedModuleSurface(s.module_surface).usage}" data-module-install-surface="${normalizedModuleSurface(s.module_surface).install}" data-module-support-surface="${normalizedModuleSurface(s.module_surface).support}" data-module-configs-spacing="${normalizedModuleSpacing(s.module_spacing).configs}" data-module-usage-spacing="${normalizedModuleSpacing(s.module_spacing).usage}" data-module-install-spacing="${normalizedModuleSpacing(s.module_spacing).install}" data-module-support-spacing="${normalizedModuleSpacing(s.module_spacing).support}" data-module-configs-radius="${normalizedModuleRadius(s.module_radius).configs}" data-module-usage-radius="${normalizedModuleRadius(s.module_radius).usage}" data-module-install-radius="${normalizedModuleRadius(s.module_radius).install}" data-module-support-radius="${normalizedModuleRadius(s.module_radius).support}" data-module-configs-heading="${normalizedModuleHeading(s.module_heading).configs}" data-module-usage-heading="${normalizedModuleHeading(s.module_heading).usage}" data-module-install-heading="${normalizedModuleHeading(s.module_heading).install}" data-module-support-heading="${normalizedModuleHeading(s.module_heading).support}" data-module-configs-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).configs}" data-module-usage-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).usage}" data-module-install-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).install}" data-module-support-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).support}" data-module-gap="${s.module_gap||'auto'}" data-notice-tone="${esc(s.notice_tone||'info')}" data-notice-style="${esc(s.notice_style||'banner')}" data-notice-position="${esc(s.notice_position||'after_summary')}" data-support-style="${s.support_style}" data-button-style="${s.button_style}" data-font-scale="${s.font_scale}" data-stat-size="${s.stat_size}" data-title-align="${s.title_align}" data-logo-size="${s.logo_size}" data-show-quick="${bool(s.show_quick_stats)}" data-show-install="${bool(s.show_install)}" data-show-support="${bool(s.show_support)}" data-show-live="${bool(s.show_live_badge)}" data-show-percentage="${bool(s.show_percentage)}" data-show-used-detail="${bool(s.show_used_detail)}" data-show-status="${bool(s.show_status_badge)}" data-show-country="${bool(s.show_location_country)}" data-show-download="${bool(s.show_download_action)}" data-show-copy="${bool(s.show_copy_action)}" data-show-theme-action="${bool(s.show_theme_action)}" data-show-descriptions="${bool(s.show_section_descriptions)}" data-entrance="${s.entrance_animation}" data-hover="${s.hover_animation}" data-toast-style="${s.toast_style}" data-toast-position="${s.toast_position}" data-toast-motion="${s.toast_motion}" data-toast-duration="${s.toast_duration}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="${fa}"><link rel="stylesheet" href="${css}"><style>${customStyle}</style></head><body class="preview-body"><div class="live-bg"><span class="bg-orb one"></span><span class="bg-orb two"></span><span class="bg-orb three"></span><span class="bg-wave one"></span><span class="bg-wave two"></span><span class="bg-grid"></span><span class="bg-orbits"></span><span class="bg-lines"></span></div><canvas id="particles" aria-hidden="true"></canvas><div class="page"><main class="portal-shell"><div class="layout-chrome" aria-hidden="true"><span class="chrome-dot one"></span><span class="chrome-dot two"></span><span class="chrome-dot three"></span><span class="chrome-brand"><i class="fas fa-shield-halved"></i></span><span class="chrome-rail"><i></i><i></i><i></i><i></i></span></div><section class="portal-hero surface"><div class="portal-id"><div class="portal-icon"><i class="${esc(s.portal_icon)}"></i></div><div class="portal-copy"><div class="portal-meta"><span class="portal-label">${label}</span><span class="hero-live"><i class="fas fa-circle"></i> Live</span></div><h1>${title}</h1><p>${subtitle}</p></div></div><div class="portal-actions"><a class="icon-action primary"><i class="fas fa-download"></i></a><button class="icon-action copy-action"><i class="fas fa-link"></i></button><button class="icon-action theme-action"><i class="fas fa-moon"></i></button><span class="auto-chip"><i class="fas fa-circle"></i><b>Auto</b></span></div></section><section class="quick-stats surface"><article><span>Status</span><b>Ready</b><small>2 configs</small></article><article><span>Data</span><b>8.4 GiB left</b><small>78% left</small></article><article><span>Time</span><b>12d 4h</b><small>Fixed expiry</small></article></section>${s.show_admin_notice&&String(s.notice_text||'').trim()?`<section class="portal-announcement surface" id="portal-announcement" data-tone="${esc(s.notice_tone||'info')}" data-style="${esc(s.notice_style||'banner')}"><span class="announcement-icon"><i class="fas fa-bullhorn"></i></span><div class="announcement-copy"><b>${esc(s.notice_title||'Service notice')}</b><p>${esc(s.notice_text||'')}</p></div></section>`:''}<div class="portal-content"><section class="usage-section" data-module-key="usage"><div class="section-head simple"><div><h2><i class="fas fa-chart-pie"></i>${esc(s.usage_title)}</h2><p>Live data and time remaining.</p></div></div><div class="stats-grid"><article class="stat-card surface data-stat"><div class="stat-head"><span><i class="fas fa-database"></i> Data remaining</span></div><div class="stat-body"><div class="ring" style="--p:78;--c:var(--accent)"><span>78%</span></div><div class="stat-copy"><div class="big">8.4 GiB</div><div class="subline">2.4 GiB used from 10.8 GiB</div><div class="meter"><span style="width:78%"></span></div><div class="segments"><i></i><i></i><i></i><i></i><i></i></div></div></div></article><article class="stat-card surface time-stat"><div class="stat-head"><span><i class="fas fa-clock"></i> Time remaining</span></div><div class="stat-body"><div class="ring" style="--p:42;--c:var(--accent2)"><span>42%</span></div><div class="stat-copy"><div class="big">12d 4h</div><div class="subline">Expires 18 Aug 2026</div><div class="meter"><span style="width:42%"></span></div><div class="segments"><i></i><i></i><i></i><i></i><i></i></div></div></div></article></div></section><section class="install-card surface" data-module-key="install"><div><h2><i class="fas fa-mobile-screen-button"></i>${esc(s.install_title)}</h2><p>Open the official app, then scan QR or import a config.</p></div><div class="client-links"><a title="Desktop"><i class="fas fa-desktop"></i></a><a title="iPhone / iPad"><i class="fab fa-apple"></i></a><a title="Android"><i class="fab fa-android"></i></a><a title="All platforms"><i class="fas fa-arrow-up-right-from-square"></i></a></div></section><section class="configs surface" data-module-key="configs"><div class="section-head"><div><h2><i class="fas fa-location-dot"></i>${esc(s.configs_title)}</h2><p>Choose a location, download the config, or scan QR.</p></div><span>2 configs</span></div><div class="loc-grid">${['🇳🇱|Amsterdam|Netherlands','🇩🇪|Frankfurt|Germany'].map(row=>{const [flag,name,country]=row.split('|');return `<article class="loc"><div class="loc-top"><div class="loc-main"><div class="loc-name"><span class="loc-flag">${flag}</span><span class="loc-title">${name}</span></div><span class="loc-country">${country}</span></div><span class="status online">Online</span></div><div class="loc-actions"><a class="loc-btn loc-download" title="Download config" aria-label="Download config"><i class="fas fa-download"></i></a><button class="loc-btn"><i class="fas fa-qrcode"></i></button><button class="loc-btn copy-action"><i class="fas fa-copy"></i></button></div></article>`}).join('')}</div></section>${supportMarkup(s)}</div></main></div></body></html>`;
+    return `<!doctype html><html lang="en" data-preview="true" data-preview-device="${previewDevice}" data-theme="${theme}" data-layout="${s.layout}" data-hero-style="${s.hero_style}" data-background="${s.background}" data-stat-style="${s.display_mode}" data-motion="${s.animation}" data-motion-intensity="${s.motion_intensity}" data-accent="${s.accent}" data-surface="${s.surface}" data-radius="${s.radius}" data-shadow="${s.shadow}" data-density="${s.density}" data-page-width="${s.page_width}" data-config-style="${s.config_style}" data-config-columns="${s.config_columns}" data-section-order="${s.section_order}" data-module-1="${normalizeModuleOrder(s.module_order)[0]}" data-module-2="${normalizeModuleOrder(s.module_order)[1]}" data-module-3="${normalizeModuleOrder(s.module_order)[2]}" data-module-4="${normalizeModuleOrder(s.module_order)[3]}" data-module-configs-enabled="${bool(normalizedModuleEnabled(s.module_enabled).configs)}" data-module-usage-enabled="${bool(normalizedModuleEnabled(s.module_enabled).usage)}" data-module-install-enabled="${bool(normalizedModuleEnabled(s.module_enabled).install)}" data-module-support-enabled="${bool(normalizedModuleEnabled(s.module_enabled).support)}" data-module-configs-size="${normalizedModuleSizes(s.module_sizes).configs}" data-module-usage-size="${normalizedModuleSizes(s.module_sizes).usage}" data-module-install-size="${normalizedModuleSizes(s.module_sizes).install}" data-module-support-size="${normalizedModuleSizes(s.module_sizes).support}" data-module-configs-mobile="${normalizedModuleMobile(s.module_mobile).configs}" data-module-usage-mobile="${normalizedModuleMobile(s.module_mobile).usage}" data-module-install-mobile="${normalizedModuleMobile(s.module_mobile).install}" data-module-support-mobile="${normalizedModuleMobile(s.module_mobile).support}" data-module-configs-surface="${normalizedModuleSurface(s.module_surface).configs}" data-module-usage-surface="${normalizedModuleSurface(s.module_surface).usage}" data-module-install-surface="${normalizedModuleSurface(s.module_surface).install}" data-module-support-surface="${normalizedModuleSurface(s.module_surface).support}" data-module-configs-spacing="${normalizedModuleSpacing(s.module_spacing).configs}" data-module-usage-spacing="${normalizedModuleSpacing(s.module_spacing).usage}" data-module-install-spacing="${normalizedModuleSpacing(s.module_spacing).install}" data-module-support-spacing="${normalizedModuleSpacing(s.module_spacing).support}" data-module-configs-radius="${normalizedModuleRadius(s.module_radius).configs}" data-module-usage-radius="${normalizedModuleRadius(s.module_radius).usage}" data-module-install-radius="${normalizedModuleRadius(s.module_radius).install}" data-module-support-radius="${normalizedModuleRadius(s.module_radius).support}" data-module-configs-heading="${normalizedModuleHeading(s.module_heading).configs}" data-module-usage-heading="${normalizedModuleHeading(s.module_heading).usage}" data-module-install-heading="${normalizedModuleHeading(s.module_heading).install}" data-module-support-heading="${normalizedModuleHeading(s.module_heading).support}" data-module-configs-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).configs}" data-module-usage-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).usage}" data-module-install-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).install}" data-module-support-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).support}" data-module-gap="${s.module_gap||'auto'}" data-notice-tone="${esc(s.notice_tone||'info')}" data-notice-style="${esc(s.notice_style||'banner')}" data-notice-position="${esc(s.notice_position||'after_summary')}" data-support-style="${s.support_style}" data-button-style="${s.button_style}" data-font-scale="${s.font_scale}" data-stat-size="${s.stat_size}" data-title-align="${s.title_align}" data-logo-size="${s.logo_size}" data-show-quick="${bool(s.show_quick_stats)}" data-show-install="${bool(s.show_install)}" data-show-support="${bool(s.show_support)}" data-show-live="${bool(s.show_live_badge)}" data-show-percentage="${bool(s.show_percentage)}" data-show-used-detail="${bool(s.show_used_detail)}" data-show-status="${bool(s.show_status_badge)}" data-show-country="${bool(s.show_location_country)}" data-show-download="${bool(s.show_download_action)}" data-show-copy="${bool(s.show_copy_action)}" data-show-theme-action="${bool(s.show_theme_action)}" data-show-descriptions="${bool(s.show_section_descriptions)}" data-entrance="${s.entrance_animation}" data-hover="${s.hover_animation}" data-toast-style="${s.toast_style}" data-toast-position="${s.toast_position}" data-toast-motion="${s.toast_motion}" data-toast-duration="${s.toast_duration}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="${fa}"><link rel="stylesheet" href="${css}"><style>${customStyle}</style><link rel="stylesheet" href="/static/css/public-customization.css?v=7"></head><body class="preview-body"><div class="live-bg"><span class="bg-orb one"></span><span class="bg-orb two"></span><span class="bg-orb three"></span><span class="bg-wave one"></span><span class="bg-wave two"></span><span class="bg-grid"></span><span class="bg-orbits"></span><span class="bg-lines"></span></div><canvas id="particles" aria-hidden="true"></canvas><div class="page"><main class="portal-shell"><div class="layout-chrome" aria-hidden="true"><span class="chrome-dot one"></span><span class="chrome-dot two"></span><span class="chrome-dot three"></span><span class="chrome-brand"><i class="fas fa-shield-halved"></i></span><span class="chrome-rail"><i></i><i></i><i></i><i></i></span></div><section class="portal-hero surface"><div class="portal-id"><div class="portal-icon"><i class="${esc(s.portal_icon)}"></i></div><div class="portal-copy"><div class="portal-meta"><span class="portal-label">${label}</span><span class="hero-live"><i class="fas fa-circle"></i> Live</span></div><h1>${title}</h1><p>${subtitle}</p></div></div><div class="portal-actions"><a class="icon-action primary"><i class="fas fa-download"></i></a><button class="icon-action copy-action"><i class="fas fa-link"></i></button><button class="icon-action theme-action"><i class="fas fa-moon"></i></button><span class="auto-chip"><i class="fas fa-circle"></i><b>Auto</b></span></div></section><section class="quick-stats surface"><article><span>Status</span><b>Ready</b><small>2 configs</small></article><article><span>Data</span><b>8.4 GiB left</b><small>78% left</small></article><article><span>Time</span><b>12d 4h</b><small>Fixed expiry</small></article></section>${s.show_admin_notice&&String(s.notice_text||'').trim()?`<section class="portal-announcement surface" id="portal-announcement" data-tone="${esc(s.notice_tone||'info')}" data-style="${esc(s.notice_style||'banner')}"><span class="announcement-icon"><i class="fas fa-bullhorn"></i></span><div class="announcement-copy"><b>${esc(s.notice_title||'Service notice')}</b><p>${esc(s.notice_text||'')}</p></div></section>`:''}<div class="portal-content"><section class="usage-section" data-module-key="usage"><div class="section-head simple"><div><h2><i class="fas fa-chart-pie"></i>${esc(s.usage_title)}</h2><p>Live data and time remaining.</p></div></div><div class="stats-grid"><article class="stat-card surface data-stat"><div class="stat-head"><span><i class="fas fa-database"></i> Data remaining</span></div><div class="stat-body"><div class="ring" style="--p:78;--c:var(--accent)"><span>78%</span></div><div class="stat-copy"><div class="big">8.4 GiB</div><div class="subline">2.4 GiB used from 10.8 GiB</div><div class="meter"><span style="width:78%"></span></div><div class="segments"><i></i><i></i><i></i><i></i><i></i></div></div></div></article><article class="stat-card surface time-stat"><div class="stat-head"><span><i class="fas fa-clock"></i> Time remaining</span></div><div class="stat-body"><div class="ring" style="--p:42;--c:var(--accent2)"><span>42%</span></div><div class="stat-copy"><div class="big">12d 4h</div><div class="subline">Expires 18 Aug 2026</div><div class="meter"><span style="width:42%"></span></div><div class="segments"><i></i><i></i><i></i><i></i><i></i></div></div></div></article></div></section><section class="install-card surface" data-module-key="install"><div><h2><i class="fas fa-mobile-screen-button"></i>${esc(s.install_title)}</h2><p>Open the official app, then scan QR or import a config.</p></div><div class="client-links"><a title="Desktop"><i class="fas fa-desktop"></i></a><a title="iPhone / iPad"><i class="fab fa-apple"></i></a><a title="Android"><i class="fab fa-android"></i></a><a title="All platforms"><i class="fas fa-arrow-up-right-from-square"></i></a></div></section><section class="configs surface" data-module-key="configs"><div class="section-head"><div><h2><i class="fas fa-location-dot"></i>${esc(s.configs_title)}</h2><p>Choose a location, download the config, or scan QR.</p></div><span>2 configs</span></div><div class="loc-grid">${['🇳🇱|Amsterdam|Netherlands','🇩🇪|Frankfurt|Germany'].map(row=>{const [flag,name,country]=row.split('|');return `<article class="loc"><div class="loc-top"><div class="loc-main"><div class="loc-name"><span class="loc-flag">${flag}</span><span class="loc-title">${name}</span></div><span class="loc-country">${country}</span></div><span class="status online">Online</span></div><div class="loc-actions"><a class="loc-btn loc-download" title="Download config" aria-label="Download config"><i class="fas fa-download"></i></a><button class="loc-btn"><i class="fas fa-qrcode"></i></button><button class="loc-btn copy-action"><i class="fas fa-copy"></i></button></div></article>`}).join('')}</div></section>${supportMarkup(s)}</div></main></div></body></html>`;
   }
   function updateSummaries(s){const set=(id,text)=>{const el=q('#'+id);if(el)el.textContent=text};set('studio-layout-summary',labels.layout[s.layout]||s.layout);set('studio-background-summary',labels.background[s.background]||s.background);set('studio-stats-summary',labels.display_mode[s.display_mode]||s.display_mode);set('studio-motion-summary',labels.animation[s.animation]||s.animation);set('preview-layout-name',labels.layout[s.layout]||s.layout);set('preview-accent-name',labels.accent[s.accent]||s.accent);set('preview-stats-name',labels.display_mode[s.display_mode]||s.display_mode);set('preview-motion-name',labels.animation[s.animation]||s.animation);set('studio-support-summary',`${Object.values(s.support||{}).filter(v=>String(v||'').trim()).length} active`)}
   let lastVisualSignature='';
   function applyPreviewSettingsToFrame(s=currentSettings(),{replay=false}={}){
     const frame=q('#studio-preview-frame'),doc=frame?.contentDocument,root=doc?.documentElement;if(!root)return;
-    const data={preview:'true',previewDevice,layout:s.layout,heroStyle:s.hero_style,background:s.background,statStyle:s.display_mode,motion:s.animation,motionIntensity:s.motion_intensity,accent:s.accent,surface:s.surface,radius:s.radius,shadow:s.shadow,density:s.density,pageWidth:s.page_width,configStyle:s.config_style,configColumns:s.config_columns,sectionOrder:s.section_order,moduleGap:s.module_gap||'auto',supportStyle:s.support_style,buttonStyle:s.button_style,fontScale:s.font_scale,statSize:s.stat_size,titleAlign:s.title_align,logoSize:s.logo_size,entrance:s.entrance_animation,hover:s.hover_animation,toastStyle:s.toast_style,toastPosition:s.toast_position,toastMotion:s.toast_motion,toastDuration:s.toast_duration};
+    const data={preview:'true',previewDevice,layout:s.layout,heroStyle:s.hero_style,background:s.background,statStyle:s.display_mode,motion:s.animation,motionIntensity:s.motion_intensity,accent:s.accent,surface:s.surface,radius:s.radius,shadow:s.shadow,density:s.density,pageWidth:s.page_width,configStyle:s.config_style,configColumns:s.config_columns,sectionOrder:s.section_order,moduleGap:s.module_gap||'auto',supportStyle:s.support_style,buttonStyle:s.button_style,fontFamily:s.font_family,backgroundPattern:s.background_pattern,fontScale:s.font_scale,statSize:s.stat_size,titleAlign:s.title_align,logoSize:s.logo_size,entrance:s.entrance_animation,hover:s.hover_animation,toastStyle:s.toast_style,toastPosition:s.toast_position,toastMotion:s.toast_motion,toastDuration:s.toast_duration};
     Object.entries(data).forEach(([k,v])=>{if(v!==undefined&&v!==null)root.dataset[k]=String(v)});
     const order=normalizeModuleOrder(s.module_order),enabled=normalizedModuleEnabled(s.module_enabled),sizes=normalizedModuleSizes(s.module_sizes),mobile=normalizedModuleMobile(s.module_mobile),surfaces=normalizedModuleSurface(s.module_surface),spacing=normalizedModuleSpacing(s.module_spacing),radii=normalizedModuleRadius(s.module_radius),headings=normalizedModuleHeading(s.module_heading),mobilePos=normalizedModuleMobilePosition(s.module_mobile_position);
     order.forEach((v,i)=>root.dataset[`module${i+1}`]=v);
@@ -3261,6 +3507,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
     if(!frame||!stage||!canvas||!frame.contentDocument)return;
     const baseWidth=previewDevice==='mobile'?390:1280;
     const doc=frame.contentDocument,root=doc.documentElement,body=doc.body;
+    if(!root)return;
     frame.style.transform='none';
     frame.style.width=baseWidth+'px';
     frame.style.height='auto';
@@ -3549,7 +3796,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
           noText: 'Cancel',
           danger: true,
         })
-      : window.confirm(`Delete subscription profile “${name}”?`);
+      : await window.wgConfirm(`Delete subscription profile “${name}”?`);
 
     if (!accepted) return;
 
@@ -3901,3 +4148,26 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   const observerTarget=q('#sub-detected-network-tray');
   if(observerTarget){new MutationObserver(tidyDetectedTray).observe(observerTarget,{childList:true,subtree:true});tidyDetectedTray();}
 })();
+
+window.addEventListener('wg-design-change', () => { renderSubscriptions(); });
+
+document.addEventListener('keydown', e => { if(e.key === 'Escape') document.querySelectorAll('.subscription-menu[open]').forEach(menu => {menu.open=false;menu.querySelector('summary')?.focus();}); });
+document.addEventListener('click', e => {document.querySelectorAll('.subscription-menu[open]').forEach(menu => {if(!menu.contains(e.target))menu.open=false;});});
+
+async function openDiagnosisClient(id){
+ await openEdit(id);
+ const modal=document.getElementById('sub-modal');
+ if(!modal)return;
+ const client=SUBS.find(s=>String(s.id)===String(id));
+ const field=client?.access?.reason==='expired'?'time_limit_days':'data_limit_value';
+ modal.querySelectorAll('.diagnosis-highlight').forEach(e=>e.classList.remove('diagnosis-highlight'));
+ const input=modal.querySelector('[name="'+field+'"]');
+ input?.closest('label')?.classList.add('diagnosis-highlight');
+ modal.querySelector('.diagnosis-help')?.remove();
+ const note=document.createElement('p');note.className='diagnosis-help';note.textContent='Review data and time limits here. Save changes, then use the client’s Enable or reset actions if needed. Resetting usage or time is a separate action.';
+ input?.closest('label')?.parentElement?.prepend(note);
+ input?.scrollIntoView({block:'center'});input?.focus({preventScroll:true});
+}
+
+window.wgOpenSubscriptionDiagnosisEditor=(id)=>{if(!SUBS.some(s=>String(s.id)===String(id)))return false;openDiagnosisClient(id);return true;};
+window.addEventListener('wgpanel:diagnosis-changed',()=>loadSubs({force:true}));
