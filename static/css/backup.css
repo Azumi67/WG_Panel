@@ -388,7 +388,18 @@
     grid-template-columns:repeat(2,36px)!important;
   }
 }
-\n\n/* Global panel timezone */\n.bk-field-note{margin-left:5px;color:var(--bk-muted);font-size:10px;font-weight:700}\n.bk-inherited-zone{min-height:48px;display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:9px;align-items:center;border:1px solid #cfe0d9;border-radius:12px;background:linear-gradient(180deg,#f8fcfa,#f2f8f5);padding:7px 9px}\n.bk-inherited-zone__icon{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:#dff3ea;color:#176b55}\n.bk-inherited-zone__copy{display:flex;flex-direction:column;gap:1px;min-width:0}\n.bk-inherited-zone__copy strong{font-size:12.5px;color:#193e31;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}\n.bk-inherited-zone__copy small{font-size:9.8px;color:#73877e;line-height:1.25}\n.bk-inherited-zone__state{display:inline-flex;align-items:center;gap:5px;padding:4px 7px;border:1px solid #bbd9cc;border-radius:999px;background:#edf8f3;color:#24715a;font-size:9.8px;font-weight:850;white-space:nowrap}\n.bk-auto-date{line-height:1.35}\n@media(max-width:560px){.bk-inherited-zone{grid-template-columns:32px minmax(0,1fr)}.bk-inherited-zone__state{grid-column:2;justify-self:start}}\n
+
+
+.bk-field-note{margin-left:5px;color:var(--bk-muted);font-size:10px;font-weight:700}
+.bk-inherited-zone{min-height:48px;display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:9px;align-items:center;border:1px solid #cfe0d9;border-radius:12px;background:linear-gradient(180deg,#f8fcfa,#f2f8f5);padding:7px 9px}
+.bk-inherited-zone__icon{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:#dff3ea;color:#176b55}
+.bk-inherited-zone__copy{display:flex;flex-direction:column;gap:1px;min-width:0}
+.bk-inherited-zone__copy strong{font-size:12.5px;color:#193e31;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bk-inherited-zone__copy small{font-size:9.8px;color:#73877e;line-height:1.25}
+.bk-inherited-zone__state{display:inline-flex;align-items:center;gap:5px;padding:4px 7px;border:1px solid #bbd9cc;border-radius:999px;background:#edf8f3;color:#24715a;font-size:9.8px;font-weight:850;white-space:nowrap}
+.bk-auto-date{line-height:1.35}
+@media(max-width:560px){.bk-inherited-zone{grid-template-columns:32px minmax(0,1fr)}.bk-inherited-zone__state{grid-column:2;justify-self:start}}
+
 html[data-theme="light"] .backup-shell{
   --bk-card:#fff!important;--bk-text:#0f172a!important;--bk-muted:#64748b!important;--bk-line:#e2e8f0!important;--bk-soft:#f8fafc!important;
   color-scheme:light;
