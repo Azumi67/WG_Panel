@@ -344,3 +344,32 @@ html[data-theme="light"] #sub-settings-modal #settings-cancel,
 html[data-theme="light"] #sub-settings-modal .studio8-foot .btn.secondary{
   background:#fff!important;color:#334155!important;border-color:#cbd5e1!important;box-shadow:none!important;
 }
+
+@media (max-width: 720px){
+  .subx-logs-drawer{width:100%!important;max-width:none!important;border-left:0!important;}
+  .subx-logs-drawer-content .subx-peer-log-head{padding:14px 14px 11px!important;align-items:center!important;gap:10px!important;}
+  .subx-peer-log-head>div:first-child{gap:9px!important;min-width:0!important;}
+  .subx-peer-log-head>div:first-child>i{width:34px!important;height:34px!important;border-radius:10px!important;flex:0 0 34px!important;}
+  .subx-peer-log-head b{font-size:15px!important;line-height:1.15!important;}
+  .subx-peer-log-head small{font-size:10.5px!important;line-height:1.25!important;white-space:normal!important;}
+  .subx-peer-log-actions{flex:0 0 auto!important;gap:6px!important;}
+  .subx-peer-log-actions .subx-icon-btn{width:36px!important;height:36px!important;min-width:36px!important;}
+  .subx-log-state{margin:10px 12px 2px!important;padding:11px 12px!important;grid-template-columns:34px minmax(0,1fr)!important;gap:9px!important;border-radius:12px!important;}
+  .subx-log-state-icon{width:34px!important;height:34px!important;border-radius:10px!important;}
+  .subx-log-state-copy small{font-size:9px!important;}.subx-log-state-copy b{font-size:14px!important;}.subx-log-state-copy span{font-size:11px!important;line-height:1.35!important;}
+  .subx-logs-drawer-content .subx-peer-log-list{padding:5px 12px 20px!important;}
+  .subx-peer-log-row{grid-template-columns:12px minmax(0,1fr)!important;gap:8px!important;padding:11px 0!important;}
+  .subx-peer-log-dot{width:8px!important;height:8px!important;margin-top:5px!important;}
+  .subx-peer-log-copy .subx-log-mainline{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;align-items:start!important;gap:6px 8px!important;}
+  .subx-peer-log-copy .subx-log-event{gap:5px!important;align-items:center!important;min-width:0!important;}
+  .subx-peer-log-copy .subx-log-event>b{font-size:12.5px!important;line-height:1.25!important;}
+  .subx-peer-log-copy .subx-log-source{max-width:145px!important;font-size:9.5px!important;padding:2px 6px!important;}
+  .subx-log-merged{height:18px!important;min-width:23px!important;padding:0 5px!important;font-size:9px!important;}
+  .subx-peer-log-copy time{font-size:10px!important;line-height:1.25!important;}
+  .subx-peer-log-copy p{margin-top:4px!important;font-size:11px!important;line-height:1.38!important;}
+}
+@media (max-width: 420px){
+  .subx-peer-log-copy .subx-log-mainline{grid-template-columns:1fr!important;}
+  .subx-peer-log-copy time{grid-row:2!important;justify-self:start!important;}
+  .subx-peer-log-copy .subx-log-source{max-width:125px!important;}
+}
