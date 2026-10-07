@@ -1,10 +1,13 @@
 {% extends 'base.html' %}
 {% block head_extras %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-diagnose.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/subscriptions.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/subscription-dark.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/subscription-mobile.css') }}">
 {% endblock %}
 {% block content %}
+<script>window.WG_PANEL_IS_ADMIN={{ (current_user.is_authenticated and (current_user.is_admin|default(false) or current_user.is_superuser|default(false)))|tojson }};</script>
+<script defer src="{{ url_for('static', filename='js/peer-diagnose.js', v='fefbc174e4') }}"></script>
 <script defer src="{{ url_for('static', filename='js/csrf.js') }}"></script>
 <script defer src="{{ url_for('static', filename='js/toast.js') }}"></script>
 
@@ -171,37 +174,54 @@
   <div class="subx-page subx-redesign">
   <section class="subx-hero-panel">
     <div class="subx-hero-left">
-      <div class="subx-orb"><i class="fas fa-layer-group"></i></div>
+      <div class="subx-orb"><i class="fas fa-users-gear"></i></div>
       <div class="subx-title-wrap">
         <div class="subx-title-line">
-          <h1>Subscriptions</h1>
-          <div class="subx-livebar" aria-live="polite">
+          <span class="subx-kicker">Client access</span><h1>Subscriptions</h1>
+          <div class="subx-livebar">
             <span class="live-dot" aria-hidden="true"></span>
             <b>Live</b>
             <span id="subx-live-state">Waiting for first refresh…</span>
           </div>
         </div>
-        <p>Manage multi-location clients in one place. Shared data, time limits, first-use rules, inbounds, QR codes, and config actions all stay together in a clean workspace.</p>
+        <p>Manage each client as one access policy across local and remote WireGuard configs.</p>
       </div>
     </div>
     <div class="subx-top-actions">
-      <button id="open-sub-settings" class="btn secondary subx-action-btn" type="button" title="Public template settings"><i class="fas fa-sliders"></i><span>Templates</span></button>
+      <button id="open-sub-settings" class="btn secondary subx-action-btn" type="button" title="Public portal settings"><i class="fas fa-wand-magic-sparkles"></i><span>Portal design</span></button>
       <button id="open-sub-modal" class="btn subx-action-btn" type="button"><i class="fas fa-plus"></i><span>New client</span></button>
     </div>
   </section>
 
-  <section class="subx-mini-stats" aria-label="Subscription summary">
-    <article><i class="fas fa-users"></i><span>Clients</span><b id="st-total">0</b></article>
-    <article><i class="fas fa-network-wired"></i><span>Inbounds</span><b id="st-inbounds">0</b></article>
-    <article><i class="fas fa-ban"></i><span>Blocked</span><b id="st-blocked">0</b></article>
+  <section class="subx-mini-stats legacy-only" aria-label="Subscription summary">
+    <article><span class="subx-stat-icon"><i class="fas fa-users"></i></span><div><span>Clients</span><b id="st-total">0</b><small>Access policies</small></div></article>
+    <article><span class="subx-stat-icon is-blue"><i class="fas fa-network-wired"></i></span><div><span>Attached configs</span><b id="st-inbounds">0</b><small>Local and node configs</small></div></article>
+    <article><span class="subx-stat-icon is-red"><i class="fas fa-shield-halved"></i></span><div><span>Blocked</span><b id="st-blocked">0</b><small>Needs review</small></div></article>
+  </section>
+
+  <section class="subscription-overview modern-only" aria-label="Subscription summary">
+    <header><div><i class="fas fa-chart-simple" aria-hidden="true"></i><strong>Access overview</strong></div><span>Policy status · not client connectivity</span></header>
+    <div class="subscription-overview-metrics">
+      <div><span><i class="fas fa-users"></i> Clients</span><strong id="st-modern-total">—</strong><small>Managed access policies</small></div>
+      <div><span><i class="fas fa-circle-check"></i> Access enabled</span><strong id="st-enabled">—</strong><small>Currently allowed by policy</small></div>
+      <div><span><i class="fas fa-shield-halved"></i> Access blocked</span><strong id="st-modern-blocked">—</strong><small>Paused or limited by policy</small></div>
+      <div><span><i class="fas fa-chart-line"></i> Data used</span><strong id="st-used">—</strong><small>Combined accounted usage</small></div>
+    </div>
+    <dl class="subscription-overview-detail">
+      <div><dt>Attached configs</dt><dd id="st-modern-inbounds">—</dd></div>
+      <div><dt>Admin paused</dt><dd id="st-disabled">—</dd></div>
+      <div><dt>No configs</dt><dd id="st-unassigned">—</dd></div>
+      <div><dt>Expired</dt><dd id="st-expired">—</dd></div>
+      <div><dt>Data exhausted</dt><dd id="st-exhausted">—</dd></div>
+    </dl>
   </section>
 
   <div id="subs-list" class="subx-list"></div>
 
   <div id="subs-empty" class="subx-empty" hidden>
     <i class="fas fa-inbox"></i>
-    <b>No subscriptions yet</b>
-    <span>Create a client, then add local or node inbounds, or attach configs you already have.</span>
+    <b>No clients configured</b>
+    <span>Create a client policy, then attach one or more local or remote WireGuard configs.</span>
   </div>
 </div>
 
@@ -216,6 +236,11 @@
           <p>Create a client in one simple form. Just choose a name, set the limits, and decide where this client should work.</p>
         </div>
         <button class="subx-close" id="sub-close" type="button" aria-label="Close"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="subx-form-roadmap" aria-label="Subscription setup flow">
+        <span><i>1</i><b>Client</b><small>Identity and contact</small></span>
+        <span><i>2</i><b>Access</b><small>Choose configs</small></span>
+        <span><i>3</i><b>Policy</b><small>Limits and routing</small></span>
       </div>
 
       <section class="profile8-bar" id="subscription-profile-bar">
@@ -445,9 +470,9 @@
     <header class="studio8-head">
       <div class="studio8-title">
         <span class="studio8-title-icon"><i class="fas fa-wand-magic-sparkles"></i></span>
-        <span><h2 id="sub-settings-title">Subscription template studio</h2><p>Customize the real public portal and inspect the complete desktop or mobile result.</p></span>
+        <span><h2 id="sub-settings-title">Portal design studio</h2><p>Customize the real public portal and inspect the complete desktop or mobile result.</p></span>
       </div>
-      <div class="studio8-head-actions"><button class="subx-close" id="settings-close" type="button" aria-label="Close"><i class="fas fa-times"></i></button></div>
+      <div class="studio8-head-actions"><button type="button" class="btn secondary" id="studio-calm-preset">Calm appearance</button><button class="subx-close" id="settings-close" type="button" aria-label="Close"><i class="fas fa-times"></i></button></div>
     </header>
 
     <section class="profile8-bar studio-profile8-bar" id="studio-profile-bar" aria-label="Template profiles">
@@ -664,7 +689,7 @@
               <fieldset><legend>Corner style</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-radius" value="rounded"><span>Rounded</span></label><label><input type="radio" name="sub-radius" value="medium"><span>Medium</span></label><label><input type="radio" name="sub-radius" value="square"><span>Square</span></label></div></fieldset>
               <fieldset><legend>Shadow</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-shadow" value="none"><span>None</span></label><label><input type="radio" name="sub-shadow" value="soft"><span>Soft</span></label><label><input type="radio" name="sub-shadow" value="deep"><span>Deep</span></label></div></fieldset>
               <fieldset><legend>Button style</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-button-style" value="solid"><span>Solid</span></label><label><input type="radio" name="sub-button-style" value="outline"><span>Outline</span></label><label><input type="radio" name="sub-button-style" value="soft"><span>Soft</span></label></div></fieldset>
-              <fieldset><legend>Font scale</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-font-scale" value="small"><span>Small</span></label><label><input type="radio" name="sub-font-scale" value="standard"><span>Standard</span></label><label><input type="radio" name="sub-font-scale" value="large"><span>Large</span></label></div></fieldset>
+              <fieldset><legend>Typography</legend><select id="portal-font-family"><option value="rounded">Rounded</option><option value="system">System</option><option value="humanist">Humanist</option></select></fieldset><fieldset><legend>Background texture</legend><select id="portal-background-pattern"><option value="none">Plain</option><option value="grid">Architectural grid</option><option value="dots">Soft dots</option></select></fieldset><fieldset><legend>Font scale</legend><div class="studio8-segmented three"><label><input type="radio" name="sub-font-scale" value="small"><span>Small</span></label><label><input type="radio" name="sub-font-scale" value="standard"><span>Standard</span></label><label><input type="radio" name="sub-font-scale" value="large"><span>Large</span></label></div></fieldset>
               <label class="studio8-range"><span>Background intensity <em id="background-intensity-value">86%</em></span><input type="range" id="portal-background-intensity" min="0" max="100" value="86"></label>
               <label class="studio8-range"><span>Card opacity <em id="card-opacity-value">82%</em></span><input type="range" id="portal-card-opacity" min="50" max="100" value="82"></label>
             </div>
@@ -917,5 +942,5 @@
 
 
 
-<script defer src="{{ url_for('static', filename='js/subscriptions.js', v='20260903-time-v7') }}"></script>
+<script defer src="{{ url_for('static', filename='js/subscriptions.js', v='a729b8b86c') }}"></script>
 {% endblock %}
