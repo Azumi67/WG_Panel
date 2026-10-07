@@ -24,7 +24,6 @@ def require_api_key_or_login(fn):
         if not want:
             return jsonify({"error": "Unauthorized"}), 401
 
-        # Accept API key ONLY via headers (prevents leakage in logs/referrers/history)
         auth = (request.headers.get("Authorization") or "").strip()
         bearer = ""
         if auth.lower().startswith("bearer "):
