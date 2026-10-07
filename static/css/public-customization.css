@@ -1,0 +1,38 @@
+html[data-peer-font-family=system] body,html[data-font-family=system] body{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif!important}
+html[data-peer-font-family=humanist] body,html[data-font-family=humanist] body{font-family:'Trebuchet MS',Verdana,sans-serif!important}
+html[data-peer-text-size=small] body{font-size:13px}html[data-peer-text-size=large] body{font-size:17px}
+html[data-peer-text-size=large] :is(p,small,.guide-step){font-size:1em!important;line-height:1.65!important}
+html[data-peer-page-width=narrow] main{max-width:840px!important;margin-inline:auto!important}html[data-peer-page-width=full] main{max-width:1600px!important;margin-inline:auto!important}
+html[data-peer-corners=square] :is(.glass-card,.metric-card,.config-card,.apps-card,.support-card,.hero-card,.minimal-profile){border-radius:4px!important}
+html[data-peer-corners=pill] :is(.glass-card,.metric-card,.config-card,.apps-card,.support-card,.hero-card,.minimal-profile){border-radius:28px!important}
+html[data-peer-density=compact] :is(.glass-card,.metric-card,.config-card,.apps-card,.support-card,.hero-card,.minimal-profile){padding:16px!important}
+html[data-peer-density=airy] :is(.glass-card,.metric-card,.config-card,.apps-card,.support-card,.hero-card,.minimal-profile){padding:30px!important}
+html[data-peer-button-style=outline] :is(.primary-action,.action-button,.btn-primary){background:transparent!important;color:var(--accent)!important;border:1px solid var(--accent)!important}
+html[data-peer-button-style=soft] :is(.primary-action,.action-button,.btn-primary){background:var(--accent-glow)!important;color:var(--accent)!important;border:1px solid transparent!important}
+html[data-peer-background-pattern=grid] body,html[data-background-pattern=grid] body{background-image:linear-gradient(#8a80b00d 1px,transparent 1px),linear-gradient(90deg,#8a80b00d 1px,transparent 1px)!important;background-size:32px 32px!important}
+html[data-peer-background-pattern=dots] body,html[data-background-pattern=dots] body{background-image:radial-gradient(#8a80b026 1px,transparent 1px)!important;background-size:18px 18px!important}
+html[data-peer-show-qr=false] #config-qr{display:none!important}html[data-peer-show-qr=false] .config-layout{grid-template-columns:1fr!important}
+@media(prefers-reduced-motion:reduce){.live-background,.ambient{display:none!important}}
+html[data-peer-surface=outline] :is(.glass-card,.minimal-profile){background:transparent!important;backdrop-filter:none!important;border:1px solid var(--accent)!important}
+html[data-peer-surface=solid] :is(.glass-card,.minimal-profile){background:var(--card-bg,var(--card,#fff))!important;backdrop-filter:none!important}
+html[data-peer-surface=solid][data-theme=dark] :is(.glass-card,.minimal-profile){background:#1a1f2d!important}
+html[data-peer-shadow=none] :is(.glass-card,.minimal-profile){box-shadow:none!important}
+html[data-peer-shadow=deep] :is(.glass-card,.minimal-profile){box-shadow:0 20px 50px #060b2130!important}
+html[data-peer-hero-align=center] :is(.hero-topline,.profile-title,.compact-hero){text-align:center;justify-content:center;flex-direction:column;align-items:center}
+html[data-peer-hero-align=center] .brand-lockup{justify-content:center}
+html[data-peer-usage-style=compact] .metric-card{padding:14px!important}
+html[data-peer-usage-style=compact] :is(.metric-icon,.metric-foot){display:none!important}
+html[data-peer-show-status=false] #peer-status,html[data-peer-show-usage=false] .metric-grid,html[data-peer-show-download=false] #download-config,html[data-peer-show-copy=false] :is(#copy-config,.mini-copy),html[data-peer-show-theme-toggle=false] #theme-toggle{display:none!important}
+html[data-peer-show-activation=false] :is(.identity-item:has(#active-since),.minimal-facts>div:has(#active-since),.compact-meta>span:has(#active-since)){display:none!important}
+html[data-peer-section-order=config_first] main{display:flex!important;flex-direction:column!important}
+html[data-peer-section-order=config_first] main>.metric-grid{order:3}
+html[data-peer-section-order=config_first] main>.utility-grid{order:2}
+html[data-peer-section-order=config_first] main>.page-footer{order:4}
+.peer-custom-message{padding:16px 20px;border:1px solid var(--accent);border-radius:14px;background:var(--accent-glow);line-height:1.65;overflow-wrap:anywhere;margin-block:12px}
+.peer-custom-message[hidden]{display:none!important}
+.peer-custom-message[data-tone=warning]{border-color:#c78e24;background:#c78e2418}
+html[data-peer-animated=false] :is(.live-background,.ambient){display:none!important}
+html[data-peer-custom-colors=true] :is(.meter-fill,.action-button.primary){background:linear-gradient(110deg,var(--accent),var(--accent-2))!important}
+html[data-peer-font-family] .meter-fill{background:linear-gradient(110deg,var(--accent),var(--accent-2))!important}
+html[data-peer-font-family] :is(.metric-icon.data,.status-pill.online){color:var(--accent)!important;background:var(--accent-glow)!important;border-color:var(--accent)!important}
+html[data-peer-font-family] .status-pill.online .status-dot{background:var(--accent)!important;box-shadow:0 0 0 4px var(--accent-glow)!important}
