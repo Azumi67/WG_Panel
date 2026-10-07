@@ -1876,12 +1876,19 @@
           </div>
         </div>
         ${(() => {
-          const usedPct = p.unlimited ? 0 : Math.max(0, Math.min(100, 100 - dataRemainPct));
-          const usageTone = p.unlimited ? 'usage-unlimited' : usedPct >= 90 ? 'usage-danger' : usedPct >= 75 ? 'usage-warning' : usedPct <= 0 ? 'usage-empty' : 'usage-normal';
-          return `<div class="peer-usage-meter ${usageTone}" title="${p.unlimited ? 'Unlimited data' : `${usedPct.toFixed(0)}% used · ${dataRemainPct.toFixed(0)}% remaining`}" data-usage-pct="${usedPct.toFixed(1)}">
-            <span class="peer-usage-meter-label">Used</span>
-            <span class="peer-usage-meter-track" role="progressbar" aria-label="Data used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${usedPct.toFixed(0)}"><i style="width:${usedPct.toFixed(1)}%"></i></span>
-            <em>${p.unlimited ? 'No cap' : `${usedPct.toFixed(0)}%`}</em>
+          const remainingPct = p.unlimited ? 100 : Math.max(0, Math.min(100, dataRemainPct));
+          const usedPct = p.unlimited ? 0 : Math.max(0, Math.min(100, 100 - remainingPct));
+          const usageTone = p.unlimited
+            ? 'usage-unlimited'
+            : remainingPct <= 10
+              ? 'usage-danger'
+              : remainingPct <= 25
+                ? 'usage-warning'
+                : 'usage-normal';
+          return `<div class="peer-usage-meter ${usageTone}" title="${p.unlimited ? 'Unlimited data remaining' : `${remainingPct.toFixed(0)}% remaining · ${usedPct.toFixed(0)}% used`}" data-remaining-pct="${remainingPct.toFixed(1)}">
+            <span class="peer-usage-meter-label">Remaining</span>
+            <span class="peer-usage-meter-track" role="progressbar" aria-label="Data remaining" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${remainingPct.toFixed(0)}"><i style="width:${remainingPct.toFixed(1)}%"></i></span>
+            <em>${p.unlimited ? 'Unlimited' : `${remainingPct.toFixed(0)}%`}</em>
           </div>`;
         })()}
       </div>
