@@ -1,12 +1,10 @@
 from __future__ import annotations
-
 import asyncio
 import io
 import math
 import re
 from urllib.parse import quote
 from typing import Any
-
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.constants import ParseMode
 
@@ -89,13 +87,7 @@ def _clear_client_input_state(context):
 
 
 def _subscription_profiles(g):
-    """Load the same subscription profiles used by the web panel.
-
-    The current panel stores subscription profiles behind /api/subscription_profiles
-    with separate client/advanced/interfaces/template sections.  Telegram only
-    needs the client and advanced values for its create wizard, so those sections
-    are flattened while leaving interface/template data untouched in the panel.
-    """
+    """Load the same subscription profiles used by the web panel"""
     try:
         listing = _api(g, "GET", "/api/subscription_profiles", timeout=15)
         if not isinstance(listing, dict) or listing.get("ok") is False:
