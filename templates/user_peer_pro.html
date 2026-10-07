@@ -12,8 +12,8 @@
 <link as="font" crossorigin="" href="{{ url_for('static', filename='fonts/Poppins-Bold.woff2') }}" rel="preload" type="font/woff2"/>
 <link href="/static/css/userlink_pro.css" rel="stylesheet"/>
 <script defer="" src="/static/js/qrcode.min.js"></script>
-<script defer="" src="/static/js/userlink_pro.js"></script>
-</head>
+<script defer="" src="/static/js/userlink.js"></script>
+<script>window.PEER_APPEARANCE = {{ peer_appearance|default({}, true)|tojson }};</script><script defer src="{{ url_for('static', filename='js/peer-appearance.js', v='d7da5b85da') }}"></script><link rel="stylesheet" href="/static/css/public-customization.css?v=8"></head>
 <body class="template-pro"><canvas aria-hidden="true" class="live-background" id="live-background"></canvas>
 <div aria-hidden="true" class="pro-grid-bg"></div>
 <main class="pro-shell">
