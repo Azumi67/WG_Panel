@@ -101,7 +101,7 @@
               : "fa-times-circle";
 
   function panelStatus(p) {
-    return String(p.panel_status || p.status || "offline").toLowerCase();
+    return String(p.status || p.panel_status || "offline").toLowerCase();
   }
 
   function connStatus(p) {
@@ -162,8 +162,9 @@
       </span>
     `);
     } else if (pStatus === "blocked") {
+      const blockedReason = String(p.status_reason_label || p.status_reason || "Blocked").replace(/_/g, " ");
       tags.push(`
-      <span class="peer-tag blocked" title="Panel state: blocked">
+      <span class="peer-tag blocked" title="${peerEsc(blockedReason)}">
         <i class="fas ${statusIcon("blocked")}"></i> Blocked
       </span>
     `);
@@ -444,7 +445,7 @@
     if (typeof inputText === "function") {
       return await inputText(title, def);
     }
-    const v = window.prompt(title, def);
+    const v = await window.wgPrompt(title, def);
     return v == null ? null : v.trim();
   }
 
@@ -1730,6 +1731,14 @@
     </div>`;
   }
 
+  function peerAvatarMeta(p) {
+    const raw = String(p?.name || p?.id || p?.public_key || '?').trim();
+    const letter = (raw.match(/[A-Za-z0-9]/)?.[0] || '?').toUpperCase();
+    let hash = 0;
+    for (const ch of String(peerKey(p) ?? raw)) hash = ((hash << 5) - hash + ch.charCodeAt(0)) | 0;
+    return { letter, tone: `tone-${Math.abs(hash) % 5 + 1}` };
+  }
+
   function cardHTML(p, i) {
     const limitStr = fmtLimit(p);
     const usedStr = fmtAmountMiB(usedBytes(p) / 1048576, "Mi");
@@ -1738,6 +1747,7 @@
       : fmtAmountMiB(remainingMiB(p), p.limit_unit);
     const timerStr = timeBadge(p);
     const epStr = endpointDisplay(p);
+    const avatar = peerAvatarMeta(p);
 
     const first =
       p.first_used_at_display ||
@@ -1777,6 +1787,28 @@
 
     const started =
       !p.start_on_first_use || p.first_used_at_ts != null || !!p.first_used_at;
+
+    const dataCapMiB = toMiB(p.data_limit, p.limit_unit);
+    const dataRemainMiB = remainingMiB(p);
+    const dataRemainPct = p.unlimited
+      ? 100
+      : Number.isFinite(dataCapMiB) && dataCapMiB > 0
+        ? Math.max(0, Math.min(100, (dataRemainMiB / dataCapMiB) * 100))
+        : 0;
+    const timeCapSeconds = timeLimitCapSeconds(p);
+    const timeRemainPct = p.unlimited
+      ? 100
+      : started && Number.isFinite(ttl) && timeCapSeconds > 0
+        ? Math.max(0, Math.min(100, (ttl / timeCapSeconds) * 100))
+        : 0;
+    const createdSortTs = Number(
+      p.created_at_ts != null
+        ? p.created_at_ts
+        : p.created_at
+          ? tsFrom(p.created_at)
+          : 0,
+    ) || 0;
+
     const capLabel = "Time limit";
     const capTail =
       !started && p.start_on_first_use ? " (starts on first use)" : "";
@@ -1799,40 +1831,63 @@
        data-name="${(p.name || "").toLowerCase()}"
        data-phone="${(p.phone_number || "").toLowerCase()}"
        data-tg="${(p.telegram_id || "").toLowerCase()}"
-       data-iface="${p.iface || ""}">
+       data-address="${peerEsc((p.address || "").toLowerCase())}"
+       data-endpoint="${peerEsc((epStr || "").toLowerCase())}"
+       data-iface="${p.iface || ""}"
+       data-order="${i}"
+       data-created="${createdSortTs}"
+       data-expiry="${Number(expTs || 0)}"
+       data-used="${Number(totalBytes || 0)}">
 
     <div class="peer-main peer-main-nowrap">
       <span class="peer-index">${i + 1})</span>
 
-      <div class="peer-identity-block">
-        <span class="peer-name" title="${peerEsc(p.name || "")}">${p.name || ""}</span>
-        <span class="peer-iface-line"><i class="fas fa-network-wired"></i>${p.iface || "—"}</span>
+      <div class="peer-identity-block peer-row-identity">
+        <span class="peer-avatar ${avatar.tone}" aria-hidden="true">${peerEsc(avatar.letter)}</span>
+        <div class="peer-identity-copy">
+          <span class="peer-name" title="${peerEsc(p.name || "")}">${p.name || ""}</span>
+          <span class="peer-iface-line"><i class="fas fa-network-wired"></i>${p.iface || "—"}</span>
+        </div>
+        <div class="peer-row-status">${peerTagsHTML(p)}</div>
       </div>
 
-      <div class="peer-live-block">
-        <div class="peer-tags">${peerTagsHTML(p)}</div>
+      <div class="peer-live-block peer-row-traffic">
+        <span class="peer-row-label">Traffic</span>
         <div class="peer-traffic">
-          <span><i class="fas fa-download"></i><b class="rx">${String(p.rx || "0")}</b> MB</span>
-          <span><i class="fas fa-upload"></i><b class="tx">${String(p.tx || "0")}</b> MB</span>
+          <span><i class="fas fa-download"></i><b class="rx">${String(p.rx || "0")}</b><small>MB down</small></span>
+          <span><i class="fas fa-upload"></i><b class="tx">${String(p.tx || "0")}</b><small>MB up</small></span>
         </div>
       </div>
 
-      <div class="peer-usage-block">
-        <div class="peer-data" title="${p.unlimited ? `${usedStr} used · No data cap` : `${remainStr} remaining · ${limitStr} limit`}">
-          <i class="fas fa-database"></i>
-          <span class="data-summary">${p.unlimited ? `${usedStr} used · No data cap` : `${remainStr} left · ${limitStr} limit`}</span>
+      <div class="peer-usage-block peer-row-usage">
+        <span class="peer-row-label">Usage &amp; expiry</span>
+        <div class="peer-limit-head">
+          <div class="peer-data" title="${p.unlimited ? `${usedStr} used · No data cap` : `${remainStr} remaining · ${limitStr} limit`}">
+            <i class="fas fa-database"></i>
+            <span class="data-summary">${p.unlimited ? `${usedStr} used · No cap` : `${remainStr} left · ${limitStr} limit`}</span>
+          </div>
+          <div class="peer-timer" title="${
+            p.unlimited && activeSince !== "–"
+              ? `Active since ${activeSince}`
+              : timerStr
+          }">
+            <i class="fas fa-clock"></i>
+            <span class="timer-text">${timerStr}</span>
+          </div>
         </div>
-        <div class="peer-timer" title="${
-          p.unlimited && activeSince !== "–"
-            ? `Active since ${activeSince}`
-            : timerStr
-        }">
-          <i class="fas fa-clock"></i>
-          <span class="timer-text">${timerStr}</span>
-        </div>
+        ${(() => {
+          const usedPct = p.unlimited ? 0 : Math.max(0, Math.min(100, 100 - dataRemainPct));
+          const usageTone = p.unlimited ? 'usage-unlimited' : usedPct >= 90 ? 'usage-danger' : usedPct >= 75 ? 'usage-warning' : usedPct <= 0 ? 'usage-empty' : 'usage-normal';
+          return `<div class="peer-usage-meter ${usageTone}" title="${p.unlimited ? 'Unlimited data' : `${usedPct.toFixed(0)}% used · ${dataRemainPct.toFixed(0)}% remaining`}" data-usage-pct="${usedPct.toFixed(1)}">
+            <span class="peer-usage-meter-label">Used</span>
+            <span class="peer-usage-meter-track" role="progressbar" aria-label="Data used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${usedPct.toFixed(0)}"><i style="width:${usedPct.toFixed(1)}%"></i></span>
+            <em>${p.unlimited ? 'No cap' : `${usedPct.toFixed(0)}%`}</em>
+          </div>`;
+        })()}
       </div>
 
-      <div class="peer-network-block">
+      <div class="peer-network-block peer-row-network">
+        <span class="peer-row-label">Network</span>
         <div class="peer-address-line" title="${peerEsc(p.address || "")}">
           <i class="fas fa-network-wired"></i><span class="address">${p.address || "—"}</span>
         </div>
@@ -1846,12 +1901,12 @@
           type="button"
           class="more-toggle icon-only"
           data-id="${pKey}"
-          title="More information"
-          aria-label="More information"
+          title="Peer details and actions"
+          aria-label="Peer details and actions"
           aria-expanded="${isOpen ? "true" : "false"}"
         >
-          <i class="fas fa-info-circle" aria-hidden="true"></i>
-          <span class="sr-only">More information</span>
+          <i class="fas fa-ellipsis" aria-hidden="true"></i>
+          <span class="sr-only">Peer details and actions</span>
         </button>
       </div>
     </div>
@@ -1884,6 +1939,7 @@
       <div class="peer-actions peer-action-dock" role="group" aria-label="Peer actions">
         <button type="button" class="peer-action-button" data-peer-action="edit" title="Edit peer" aria-label="Edit peer" data-id="${pKey}"><i class="fas fa-edit" aria-hidden="true"></i><span class="peer-action-label">Edit</span></button>
         <button type="button" class="peer-action-button" data-peer-action="logs" title="Peer logs" aria-label="Peer logs" data-id="${pKey}"><i class="fas fa-list" aria-hidden="true"></i><span class="peer-action-label">Logs</span></button>
+        ${window.WG_PANEL_IS_ADMIN ? `<button type="button" class="peer-action-button peer-diagnose-action" data-peer-action="diagnose" title="Diagnose connection" aria-label="Diagnose connection" data-id="${pKey}"><i class="fas fa-stethoscope" aria-hidden="true"></i><span class="peer-action-label">Diagnose</span></button>` : ""}
         <button type="button" class="peer-action-button" data-peer-action="download" title="Download config" aria-label="Download config" data-id="${pKey}"><i class="fas fa-download" aria-hidden="true"></i><span class="peer-action-label">Download</span></button>
         <button type="button" class="peer-action-button" data-peer-action="qr" title="Show QR and download" aria-label="Show QR and download" data-id="${pKey}"><i class="fas fa-qrcode" aria-hidden="true"></i><span class="peer-action-label">QR code</span></button>
         <button type="button" class="peer-action-button" data-peer-action="link" title="Copy user link" aria-label="Copy user link" data-id="${pKey}"><i class="fas fa-link" aria-hidden="true"></i><span class="peer-action-label">User link</span></button>
@@ -1998,6 +2054,7 @@
     const defs = [
       ["edit", "fa-pen-to-square", "Edit", "Change peer settings"],
       ["logs", "fa-list", "Logs", "View peer activity"],
+      ...(window.WG_PANEL_IS_ADMIN ? [["diagnose", "fa-stethoscope", "Diagnose", "Check this peer connection path"]] : []),
       ["download", "fa-download", "Download", "Download WireGuard config"],
       ["qr", "fa-qrcode", "QR code", "Show QR and config tools"],
       ["link", "fa-link", "User link", "Copy the public user link"],
@@ -2359,6 +2416,12 @@
 
     set(".peer-index", `${i + 1})`);
     set(".peer-name", p.name || "");
+    const avatar = peerAvatarMeta(p);
+    const avatarEl = card.querySelector(".peer-avatar");
+    if (avatarEl) {
+      avatarEl.textContent = avatar.letter;
+      avatarEl.className = `peer-avatar ${avatar.tone}`;
+    }
 
     const tagsEl = card.querySelector(".peer-tags");
     if (tagsEl) tagsEl.innerHTML = peerTagsHTML(p);
@@ -2385,6 +2448,25 @@
       : `${fmtAmountMiB(remMiB, p.limit_unit)} left · ${fmtLimit(p)} limit`;
     set(".peer-data .data-summary", currentDataText);
     set(".peer-timer .timer-text", timeBadge(p));
+    const currentCapMiB = toMiB(p.data_limit, p.limit_unit);
+    const currentRemainPct = p.unlimited
+      ? 100
+      : Number.isFinite(currentCapMiB) && currentCapMiB > 0
+        ? Math.max(0, Math.min(100, (remMiB / currentCapMiB) * 100))
+        : 0;
+    const currentUsedPct = p.unlimited ? 0 : Math.max(0, Math.min(100, 100 - currentRemainPct));
+    const usageMeter = card.querySelector('.peer-usage-meter');
+    const usageTrack = card.querySelector('.peer-usage-meter-track');
+    const usageFill = card.querySelector('.peer-usage-meter-track i');
+    const usageText = card.querySelector('.peer-usage-meter em');
+    if (usageMeter) {
+      usageMeter.classList.remove('usage-unlimited', 'usage-danger', 'usage-warning', 'usage-empty', 'usage-normal');
+      usageMeter.classList.add(p.unlimited ? 'usage-unlimited' : currentUsedPct >= 90 ? 'usage-danger' : currentUsedPct >= 75 ? 'usage-warning' : currentUsedPct <= 0 ? 'usage-empty' : 'usage-normal');
+      usageMeter.dataset.usagePct = currentUsedPct.toFixed(1);
+    }
+    if (usageTrack) usageTrack.setAttribute('aria-valuenow', currentUsedPct.toFixed(0));
+    if (usageFill) usageFill.style.width = `${currentUsedPct.toFixed(1)}%`;
+    if (usageText) usageText.textContent = p.unlimited ? 'No cap' : `${currentUsedPct.toFixed(0)}%`;
 
     const en = card.querySelector('[data-peer-action="enable"]');
     const di = card.querySelector('[data-peer-action="disable"]');
@@ -2532,60 +2614,44 @@
     let box = document.getElementById("peer-tag-summary");
     if (box) return box;
 
-    box = document.createElement("div");
+    box = document.createElement("section");
     box.id = "peer-tag-summary";
-    box.className = "peer-summary-card peer-summary-v16";
+    box.className = "peer-summary-card peer-summary-fluent";
+    box.setAttribute("aria-label", "Peer overview");
     box.innerHTML = `
-    <div class="peer-summary-head">
-      <div class="peer-summary-title">
-        <span class="peer-summary-icon"><i class="fas fa-chart-simple" aria-hidden="true"></i></span>
-        <div>
-          <strong>Peer summary</strong>
-          <small><b id="sum-total-head">0</b> peers</small>
+      <div class="peer-overview-head">
+        <div class="peer-overview-heading">
+          <span class="peer-overview-heading-icon"><i class="fas fa-chart-simple" aria-hidden="true"></i></span>
+          <span><strong>Peer overview</strong><small>Quick summary of peers on this interface.</small></span>
+        </div>
+        <div class="peer-overview-filters" role="group" aria-label="Quick peer filters">
+          <button type="button" class="summary-chip total" data-summary-filter="all" title="Show all peers"><i class="fas fa-users" aria-hidden="true"></i><span>All</span><b id="sum-total">0</b></button>
+          <button type="button" class="summary-chip online" data-summary-filter="online" title="Recent WireGuard handshake"><i class="fas fa-circle" aria-hidden="true"></i><span>Online</span><b id="sum-online">0</b></button>
+          <button type="button" class="summary-chip offline" data-summary-filter="offline" title="No recent WireGuard handshake"><i class="fas fa-circle" aria-hidden="true"></i><span>Offline</span><b id="sum-offline">0</b></button>
+          <button type="button" class="summary-chip enabled" data-summary-filter="enabled" title="Enabled in the panel"><i class="fas fa-circle-check" aria-hidden="true"></i><span>Enabled</span><b id="sum-enabled">0</b></button>
+          <button type="button" class="summary-chip disabled" data-summary-filter="disabled" title="Disabled in the panel"><i class="fas fa-circle-minus" aria-hidden="true"></i><span>Disabled</span><b id="sum-disabled">0</b></button>
+          <button type="button" class="summary-chip depleting" data-summary-filter="depleting" title="Near data or time limit"><i class="fas fa-triangle-exclamation" aria-hidden="true"></i><span>Near limit</span><b id="sum-depleting">0</b></button>
+          <button type="button" class="summary-chip blocked" data-summary-filter="blocked" title="Blocked, expired, or out of data"><i class="fas fa-circle-xmark" aria-hidden="true"></i><span>Blocked</span><b id="sum-blocked">0</b></button>
         </div>
       </div>
-      <button type="button" class="peer-summary-reset" data-summary-filter="all" title="Show all peers" aria-label="Show all peers">
-        <i class="fas fa-rotate-left" aria-hidden="true"></i><span>All</span>
-      </button>
-    </div>
-
-    <div class="peer-summary-groups">
-      <section class="peer-summary-group" aria-label="Connection status">
-        <div class="peer-summary-group-title"><i class="fas fa-wifi" aria-hidden="true"></i><span>Connection</span></div>
-        <div class="peer-summary-group-metrics">
-          <button type="button" class="summary-stat online" data-summary-filter="online" title="Recent WireGuard handshake">
-            <span class="stat-dot" aria-hidden="true"></span><b id="sum-online">0</b><span>Online</span>
-          </button>
-          <button type="button" class="summary-stat offline" data-summary-filter="offline" title="No recent WireGuard handshake">
-            <span class="stat-dot" aria-hidden="true"></span><b id="sum-offline">0</b><span>Offline</span>
-          </button>
+      <div class="peer-overview-insights">
+        <div class="peer-overview-tile inventory">
+          <span class="overview-tile-icon"><i class="fas fa-layer-group" aria-hidden="true"></i></span>
+          <div class="overview-tile-copy"><strong>Inventory</strong><div class="inventory-line"><b id="ov-total">0</b><span>Total peers<small id="ov-interface">On selected interface</small></span></div></div>
         </div>
-      </section>
-
-      <section class="peer-summary-group" aria-label="Panel state">
-        <div class="peer-summary-group-title"><i class="fas fa-power-off" aria-hidden="true"></i><span>Panel state</span></div>
-        <div class="peer-summary-group-metrics">
-          <button type="button" class="summary-stat enabled" data-summary-filter="enabled" title="Enabled in the panel">
-            <i class="fas fa-circle-check" aria-hidden="true"></i><b id="sum-enabled">0</b><span>Enabled</span>
-          </button>
-          <button type="button" class="summary-stat disabled" data-summary-filter="disabled" title="Disabled in the panel">
-            <i class="fas fa-circle-pause" aria-hidden="true"></i><b id="sum-disabled">0</b><span>Disabled</span>
-          </button>
+        <div class="peer-overview-tile connection">
+          <span class="overview-tile-icon"><i class="fas fa-wifi" aria-hidden="true"></i></span>
+          <div class="overview-tile-copy"><strong>Connection health</strong><div class="connection-body"><div class="connection-donut" id="ov-donut"><span><b id="ov-donut-total">0</b><small>peers</small></span></div><div class="overview-legend"><span class="online"><i></i>Online <b id="ov-online">0</b><em id="ov-online-pct">0%</em></span><span class="offline"><i></i>Offline <b id="ov-offline">0</b><em id="ov-offline-pct">0%</em></span></div></div></div>
         </div>
-      </section>
-
-      <section class="peer-summary-group" aria-label="Limits and blocks">
-        <div class="peer-summary-group-title"><i class="fas fa-gauge-high" aria-hidden="true"></i><span>Limits</span></div>
-        <div class="peer-summary-group-metrics">
-          <button type="button" class="summary-stat depleting" data-summary-filter="depleting" title="Near data or time limit">
-            <i class="fas fa-triangle-exclamation" aria-hidden="true"></i><b id="sum-depleting">0</b><span>Near limit</span>
-          </button>
-          <button type="button" class="summary-stat blocked" data-summary-filter="blocked" title="Blocked, expired, or out of data">
-            <i class="fas fa-ban" aria-hidden="true"></i><b id="sum-blocked">0</b><span>Blocked</span>
-          </button>
+        <div class="peer-overview-tile access">
+          <span class="overview-tile-icon"><i class="fas fa-shield-halved" aria-hidden="true"></i></span>
+          <div class="overview-tile-copy"><strong>Access state</strong><div class="access-bar" id="ov-access-bar"><span class="enabled"></span><span class="disabled"></span></div><div class="overview-legend compact"><span class="enabled"><i></i>Enabled <b id="ov-enabled">0</b><em id="ov-enabled-pct">0%</em></span><span class="disabled"><i></i>Disabled <b id="ov-disabled">0</b><em id="ov-disabled-pct">0%</em></span></div></div>
         </div>
-      </section>
-    </div>`;
+        <div class="peer-overview-tile risk">
+          <span class="overview-tile-icon"><i class="fas fa-triangle-exclamation" aria-hidden="true"></i></span>
+          <div class="overview-tile-copy"><strong>Risk &amp; attention</strong><div class="risk-metrics"><button type="button" data-summary-filter="depleting" class="risk-mini near"><i class="fas fa-triangle-exclamation"></i><span><b id="ov-near">0</b><small>Near limit</small><em id="ov-near-pct">0% of peers</em></span></button><button type="button" data-summary-filter="blocked" class="risk-mini blocked"><i class="fas fa-circle-xmark"></i><span><b id="ov-blocked">0</b><small>Blocked</small><em id="ov-blocked-pct">0% of peers</em></span></button></div></div>
+        </div>
+      </div>`;
 
     const filtersBox = document.querySelector(".peer-filters");
     const list = document.querySelector(".peers-container");
@@ -2597,16 +2663,29 @@
       if (!pill) return;
       let val = pill.getAttribute("data-summary-filter") || "";
       if (val === "all") val = "";
+      if (val && filters.status === val) val = "";
       filters.status = val;
       const statusSel = document.getElementById("peer-filter-status");
       if (statusSel) statusSel.value = val;
-      box
-        .querySelectorAll("[data-summary-filter]")
-        .forEach((x) => x.classList.remove("is-active"));
-      pill.classList.add("is-active");
-      applyFilters?.();
+      saveFilters();
+      pagination.page = 1;
+      savePagination();
+      applyPagi();
     });
     return box;
+  }
+
+  function syncPeerSummaryFilterState() {
+    const box = document.getElementById("peer-tag-summary");
+    if (!box) return;
+    const active = String(filters.status || "");
+    box.querySelectorAll("[data-summary-filter]").forEach((el) => {
+      const raw = el.getAttribute("data-summary-filter") || "";
+      const value = raw === "all" ? "" : raw;
+      const selected = value === active;
+      el.classList.toggle("is-active", selected);
+      el.setAttribute("aria-pressed", selected ? "true" : "false");
+    });
   }
 
   function renderPeerSummary(peers) {
@@ -2614,30 +2693,57 @@
     if (!box) return;
 
     const c = peerTagCounts(peers || []);
-
+    const pct = (value, total) => total > 0 ? Math.round((value / total) * 100) : 0;
     const set = (id, val) => {
       const el = document.getElementById(id);
       if (el) el.textContent = String(val ?? 0);
     };
 
     set("sum-total", c.total);
-    set("sum-total-head", c.total);
     set("sum-online", c.online);
     set("sum-offline", c.offline);
     set("sum-enabled", c.enabled);
     set("sum-disabled", c.disabled);
     set("sum-depleting", c.depleting);
     set("sum-blocked", c.blocked);
+    set("ov-total", c.total);
+    set("ov-donut-total", c.total);
+    set("ov-online", c.online);
+    set("ov-offline", c.offline);
+    set("ov-enabled", c.enabled);
+    set("ov-disabled", c.disabled);
+    set("ov-near", c.depleting);
+    set("ov-blocked", c.blocked);
 
-    const active = String(filters.status || "");
-    box.querySelectorAll("[data-summary-filter]").forEach((el) => {
-      el.classList.toggle(
-        "is-active",
-        (el.getAttribute("data-summary-filter") || "") === active,
-      );
-    });
+    const onlinePct = pct(c.online, c.total);
+    const offlinePct = pct(c.offline, c.total);
+    const enabledPct = pct(c.enabled, c.total);
+    const disabledPct = pct(c.disabled, c.total);
+    const nearPct = pct(c.depleting, c.total);
+    const blockedPct = pct(c.blocked, c.total);
+    set("ov-online-pct", `${onlinePct}%`);
+    set("ov-offline-pct", `${offlinePct}%`);
+    set("ov-enabled-pct", `${enabledPct}%`);
+    set("ov-disabled-pct", `${disabledPct}%`);
+    set("ov-near-pct", `${nearPct}% of peers`);
+    set("ov-blocked-pct", `${blockedPct}% of peers`);
+
+    const donut = document.getElementById("ov-donut");
+    if (donut) {
+      donut.style.setProperty("--online-angle", `${Math.round((onlinePct / 100) * 360)}deg`);
+      donut.style.setProperty("--offline-angle", `${Math.round(((onlinePct + offlinePct) / 100) * 360)}deg`);
+    }
+    const accessBar = document.getElementById("ov-access-bar");
+    if (accessBar) {
+      accessBar.style.setProperty("--enabled-pct", `${enabledPct}%`);
+      accessBar.style.setProperty("--disabled-pct", `${disabledPct}%`);
+    }
+    const iface = document.getElementById("ov-interface");
+    if (iface) iface.textContent = SELECTED_IFACE_NAME ? `On interface ${SELECTED_IFACE_NAME}` : "On selected interface";
+
+    syncPeerSummaryFilterState();
   }
-  const filters = { q: "", status: "" };
+  const filters = { q: "", status: "", sort: "default" };
   const pagination = { page: 1, pageSize: 8 };
 
   function loadFilters() {
@@ -2645,6 +2751,7 @@
       const s = JSON.parse(localStorage.getItem("peer_filters") || "{}");
       if (typeof s.q === "string") filters.q = s.q;
       if (typeof s.status === "string") filters.status = s.status;
+      if (typeof s.sort === "string") filters.sort = s.sort;
     } catch {}
   }
 
@@ -2666,50 +2773,61 @@
     localStorage.setItem("peer_pagination", JSON.stringify(pagination));
   }
 
+  function ensurePeerListHeader() {
+    document.getElementById("peer-list-header")?.remove();
+    return null;
+  }
+
   function buildFilters() {
     let host = $(".peer-filters");
     if (!host) {
       host = document.createElement("div");
       host.className = "peer-filters";
       host.innerHTML = `
-      <div style="display:flex; gap:8px; align-items:center; margin:10px 0; flex-wrap:wrap;">
-        <input id="peer-filter-q" class="input" placeholder="Search name, phone, @telegram" style="flex:1 1 420px; min-width:260px;">
-
-        <select id="peer-filter-status" class="input" style="width:190px;">
-        <option value="">All tags</option>
-        <option value="online">Online</option>
-        <option value="offline">Offline</option>
-        <option value="enabled">Enabled</option>
-        <option value="disabled">Disabled</option>
-        <option value="depleting">Depleting</option>
-        <option value="blocked">Blocked</option>
-        </select>
-
-        <label style="display:flex; align-items:center; gap:6px;">
-          <span>Page size</span>
-          <select id="peer-page-size" class="input" style="width:90px;">
-            <option value="10">10</option>
-            <option value="25">25</option>
-            <option value="50">50</option>
-            <option value="100">100</option>
-          </select>
+      <div class="peer-filter-row">
+        <label class="peer-search-field" for="peer-filter-q">
+          <i class="fas fa-magnifying-glass" aria-hidden="true"></i>
+          <input id="peer-filter-q" class="input" placeholder="Search peers by name, IP, or endpoint…">
         </label>
 
-        <button id="peer-filter-clear" class="btn secondary">Clear</button>
+        <select id="peer-filter-status" class="input" aria-label="Filter peers by status">
+          <option value="">All statuses</option>
+          <option value="online">Online</option>
+          <option value="offline">Offline</option>
+          <option value="enabled">Enabled</option>
+          <option value="disabled">Disabled</option>
+          <option value="depleting">Near limit</option>
+          <option value="blocked">Blocked</option>
+        </select>
+
+        <select id="peer-filter-sort" class="input" aria-label="Sort peers">
+          <option value="default">Default order</option>
+          <option value="name">Name A → Z</option>
+          <option value="attention">Needs attention</option>
+
+          <option value="created">Recently created</option>
+          <option value="expiry">Expiring soon</option>
+          <option value="usage">Highest usage</option>
+        </select>
+
+        <button id="peer-filter-clear" class="btn secondary" type="button"><i class="fas fa-rotate-left" aria-hidden="true"></i><span>Clear</span></button>
       </div>`;
 
       const list = $(".peers-container");
       if (list) list.before(host);
     }
 
+    const listHeader = ensurePeerListHeader();
+    if (listHeader && host.nextElementSibling !== listHeader) host.after(listHeader);
+
     const q = $("#peer-filter-q", host);
     const s = $("#peer-filter-status", host);
+    const sort = $("#peer-filter-sort", host);
     const c = $("#peer-filter-clear", host);
-    const ps = $("#peer-page-size", host);
 
     q.value = filters.q || "";
     s.value = filters.status || "";
-    ps.value = String(pagination.pageSize);
+    sort.value = filters.sort || "default";
 
     q.addEventListener(
       "input",
@@ -2730,23 +2848,27 @@
       applyPagi();
     });
 
-    c.addEventListener("click", () => {
-      filters.q = "";
-      filters.status = "";
-      q.value = "";
-      s.value = "";
+    sort.addEventListener("change", () => {
+      filters.sort = sort.value || "default";
       saveFilters();
       pagination.page = 1;
       savePagination();
       applyPagi();
     });
 
-    ps.addEventListener("change", () => {
-      pagination.pageSize = parseInt(ps.value, 10) || 10;
+    c.addEventListener("click", () => {
+      filters.q = "";
+      filters.status = "";
+      filters.sort = "default";
+      q.value = "";
+      s.value = "";
+      sort.value = "default";
+      saveFilters();
       pagination.page = 1;
       savePagination();
       applyPagi();
     });
+
   }
 
   function matchPeer(card) {
@@ -2779,14 +2901,49 @@
     const name = card.dataset.name || "";
     const phone = card.dataset.phone || "";
     const tg = card.dataset.tg || "";
+    const address = card.dataset.address || "";
+    const endpoint = card.dataset.endpoint || "";
+    const iface = String(card.dataset.iface || "").toLowerCase();
 
-    return name.includes(q) || phone.includes(q) || tg.includes(q);
+    return name.includes(q) || phone.includes(q) || tg.includes(q)
+      || address.includes(q) || endpoint.includes(q) || iface.includes(q);
+  }
+
+  function sortPeerCards(cards) {
+    const mode = filters.sort || "default";
+    const number = (card, key, fallback = 0) => {
+      const value = Number(card.dataset[key]);
+      return Number.isFinite(value) ? value : fallback;
+    };
+    const attentionRank = card => {
+      if (card.dataset.blocked === "1") return 0;
+      if (card.dataset.depleting === "1") return 1;
+      if (card.dataset.status === "offline") return 2;
+      return 3;
+    };
+    cards.sort((a, b) => {
+      if (mode === "name") return (a.dataset.name || "").localeCompare(b.dataset.name || "");
+      if (mode === "created") return number(b, "created") - number(a, "created");
+      if (mode === "usage") return number(b, "used") - number(a, "used");
+      if (mode === "expiry") {
+        const av = number(a, "expiry") || Number.POSITIVE_INFINITY;
+        const bv = number(b, "expiry") || Number.POSITIVE_INFINITY;
+        return av - bv;
+      }
+      if (mode === "attention") {
+        const rank = attentionRank(a) - attentionRank(b);
+        return rank || number(a, "order") - number(b, "order");
+      }
+      return number(a, "order") - number(b, "order");
+    });
+    return cards;
   }
 
   function applyPagi() {
     const cont = $(".peers-container");
     if (!cont) return;
-    const cards = $$(".peer-card", cont);
+    const cards = sortPeerCards($$(".peer-card", cont));
+    for (const card of cards) cont.appendChild(card);
     for (const c of cards) c.dataset._match = matchPeer(c) ? "1" : "0";
     const filtered = cards.filter((c) => c.dataset._match === "1");
     const total = Math.max(1, Math.ceil(filtered.length / pagination.pageSize));
@@ -2803,6 +2960,7 @@
       if (c.dataset._match === "0") c.style.display = "none";
     });
     renderPager(total);
+    syncPeerSummaryFilterState();
   }
 
   function renderPager(total) {
@@ -2988,10 +3146,39 @@
     }
   }
 
+  function capturePeerScrollAnchor(container) {
+    if (!container || window.scrollY < 1) return null;
+    const cards = Array.from(container.querySelectorAll('.peer-card')).filter(card => card.style.display !== 'none');
+    const topBoundary = 0;
+    let anchor = null;
+    for (const card of cards) {
+      const rect = card.getBoundingClientRect();
+      if (rect.bottom > topBoundary) { anchor = card; break; }
+    }
+    if (!anchor) return null;
+    const rect = anchor.getBoundingClientRect();
+    return { id: String(anchor.dataset.id || ''), top: rect.top };
+  }
+
+  function restorePeerScrollAnchor(container, anchor) {
+    if (!container || !anchor?.id) return;
+    const restore = () => {
+      const card = Array.from(container.querySelectorAll('.peer-card')).find(el => String(el.dataset.id || '') === anchor.id);
+      if (!card) return;
+      const delta = card.getBoundingClientRect().top - anchor.top;
+      if (Math.abs(delta) > 0.35 && Math.abs(delta) < 500) window.scrollBy({ top: delta, left: 0, behavior: 'instant' });
+    };
+    requestAnimationFrame(() => {
+      restore();
+      requestAnimationFrame(restore);
+    });
+  }
+
   async function refreshPeers(opts = {}) {
     try {
       await (window.WG_PANEL_TIMEZONE_READY || Promise.resolve());
     } catch (_) {}
+    if (opts.quiet && (document.hidden || document.querySelector('.peerx-form-modal[aria-hidden="false"], #iface-create-modal[aria-hidden="false"], dialog[open]'))) { nextSchedule(refreshDelay); return; }
     const ifaceId = opts.ifaceId ?? SELECTED_IFACE_ID;
     const abortPrev = !!opts.abortPrev;
     const quiet = !!opts.quiet;
@@ -3008,6 +3195,10 @@
 
     const scopeId = getScopeId();
     const container = $(".peers-container");
+    const scrollAnchor = quiet ? capturePeerScrollAnchor(container) : null;
+    if (container && quiet) {
+      container.style.setProperty('--peer-list-min-height', `${Math.ceil(container.getBoundingClientRect().height)}px`);
+    }
     const title = scopeId ? "Loading peers from node…" : "Loading peers…";
     const sub = scopeId
       ? "Contacting node and syncing runtime."
@@ -3078,6 +3269,16 @@
         window.wgPanelApplyTimezone(peers[0].display_timezone, false);
       }
       window._peers = peers;
+      const repairParams=new URLSearchParams(location.search);
+      if(repairParams.has('diagnosis_peer')&&!window.__diagnosisEditorOpened && String(scopeId||'')===String(repairParams.get('node')||'') && (!repairParams.get('interface') || SELECTED_IFACE_NAME===repairParams.get('interface'))){
+        window.__diagnosisEditorOpened=true;
+        const cleanURL=new URL(location.href);['diagnosis_peer','interface','node','field','key'].forEach(k=>cleanURL.searchParams.delete(k));history.replaceState(history.state,'',cleanURL);
+        const key=repairParams.get('key');
+        const target=peers.find(p=>scopeId ? !!key && p.public_key===key : String(p.id)===repairParams.get('diagnosis_peer'));
+        if(target){
+          openPeerDiagnosisEditor(target,repairParams.get('field'));
+        }else window.toast?.('The requested peer is not in this interface. Select its node and interface, then run diagnosis again.','warning',{duration:8000});
+      }
       renderPeerSummary(peers);
 
       if (!container) return;
@@ -3102,7 +3303,6 @@
 
         peers.forEach((p, i) => {
           const idStr = peerDomKey(p);
-
           let card = existing.get(idStr);
 
           if (!card) {
@@ -3110,12 +3310,14 @@
             wrap.innerHTML = cardHTML(p, i);
             card = wrap.firstElementChild;
             container.appendChild(card);
-          } else {
+          } else if (!quiet) {
             const expected = container.children[i];
-            if (expected !== card)
-              container.insertBefore(card, expected || null);
+            if (expected !== card) container.insertBefore(card, expected || null);
           }
 
+          if (!quiet || card.dataset.order == null || card.dataset.order === '') {
+            card.dataset.order = String(i);
+          }
           updateCard(card, p, i);
           existing.delete(idStr);
         });
@@ -3123,7 +3325,25 @@
         for (const [, leftover] of existing) leftover.remove();
       }
 
-      applyPagi?.();
+      if (quiet) {
+        const cards = Array.from(container.querySelectorAll('.peer-card'));
+        for (const card of cards) card.dataset._match = matchPeer(card) ? '1' : '0';
+        const filtered = cards.filter(card => card.dataset._match === '1');
+        const total = Math.max(1, Math.ceil(filtered.length / pagination.pageSize));
+        if (pagination.page > total) pagination.page = total;
+        const start = (pagination.page - 1) * pagination.pageSize;
+        const end = start + pagination.pageSize;
+        filtered.forEach((card, idx) => { card.style.display = idx >= start && idx < end ? '' : 'none'; });
+        cards.forEach(card => { if (card.dataset._match === '0') card.style.display = 'none'; });
+        renderPager(total);
+        restorePeerScrollAnchor(container, scrollAnchor);
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          container.style.removeProperty('--peer-list-min-height');
+          restorePeerScrollAnchor(container, scrollAnchor);
+        }));
+      } else {
+        applyPagi?.();
+      }
       refreshDelay = 5000;
     } catch (err) {
       const msg = String(err?.message || err || "");
@@ -3185,7 +3405,10 @@
 
       if (showTimer) clearTimeout(showTimer);
       peersLoading(false);
-      if (container) clearPeers(container);
+      if (container) {
+        clearPeers(container);
+        if (quiet) setTimeout(() => container.style.removeProperty('--peer-list-min-height'), 120);
+      }
 
       firstLoad = true;
       isRefreshing = false;
@@ -3199,6 +3422,22 @@
     }
   }
 
+  function openPeerDiagnosisEditor(target,stage){
+          openEdit(peerKey(target));
+          const field={allowed_ips:'allowed_ips',endpoint:'endpoint',access:'data_limit_value'}[stage]||'name';
+          const input=document.querySelector('#edit-peer-form [name="'+field+'"]');
+          document.querySelectorAll('#edit-peer-form .diagnosis-highlight').forEach(e=>e.classList.remove('diagnosis-highlight'));
+          document.querySelector('#edit-peer-form .diagnosis-help')?.remove();
+          const card=input?.closest('.peerx-form-card');card?.classList.add('diagnosis-highlight');
+          const note=document.createElement('p');note.className='diagnosis-help';note.textContent='Opened from diagnosis. Review the highlighted settings, save changes, then run diagnosis again.';document.querySelector('#edit-peer-form')?.prepend(note);
+          requestAnimationFrame(()=>{input?.scrollIntoView({block:'center'});input?.focus({preventScroll:true});});
+  }
+  window.wgOpenPeerDiagnosisEditor=(peer,stage)=>{
+    if(String(getScopeId()||'')!==String(peer.node_id||''))return false;
+    const target=(window._peers||[]).find(p=>peer.remote ? !!peer.public_key && p.public_key===peer.public_key : String(p.id)===String(peer.id));
+    if(!target)return false;openPeerDiagnosisEditor(target,stage);return true;
+  };
+  window.addEventListener('wgpanel:diagnosis-changed',()=>refreshPeers({abortPrev:true}));
   async function postEdit(path, okMsg, failMsg) {
     const pathId = (String(path).match(/\/peer\/([^/]+)/) || [])[1];
 
@@ -4097,8 +4336,11 @@
   function openModal(m) {
     document
       .querySelectorAll(".modal.open")
-      .forEach((el) => el.classList.remove("open"));
+      .forEach((el) => { el.classList.remove("open"); el.setAttribute("aria-hidden", "true"); });
     if (m) {
+      m.__peerReturnFocus = document.activeElement;
+      m.setAttribute("aria-hidden", "false");
+      m.setAttribute("aria-modal", "true");
       ensureModalBackdrop(m);
       m.classList.add("open");
       document.body.classList.add("modal-open");
@@ -4126,7 +4368,11 @@
   function closeModal(m) {
     modalOpenEpoch += 1;
 
-    if (m) m.classList.remove("open");
+    if (m) {
+      m.classList.remove("open");
+      m.setAttribute("aria-hidden", "true");
+      if (m.__peerReturnFocus?.isConnected) m.__peerReturnFocus.focus({preventScroll:true});
+    }
     if (!document.querySelector(".modal.open")) {
       document.body.classList.remove("modal-open");
     }
@@ -4651,10 +4897,16 @@
       return;
     }
 
+    let diagnosisSelectedNow=false;
+    const diagnosisParams = new URLSearchParams(location.search);
+    if(diagnosisParams.has('diagnosis_peer') && !window.__diagnosisInterfaceSelected){
+      const match=interfaces.find(i=>i.name===diagnosisParams.get('interface'));
+      if(match){SELECTED_IFACE_ID=match.id;window._lastScopeId=scopeId;window.__diagnosisInterfaceSelected=true;diagnosisSelectedNow=true;}
+    }
     IFACES = interfaces;
     window.IFACES = interfaces;
 
-    const scopeChanged = scopeId !== prevScope;
+    const scopeChanged = scopeId !== prevScope && !diagnosisSelectedNow;
     const keepId = !scopeChanged && keepSelection ? SELECTED_IFACE_ID : null;
     const stillThere =
       keepId && IFACES.some((i) => String(i.id) === String(keepId));
@@ -5698,6 +5950,10 @@
     if (action === "link") return userLink(e, id);
     if (action === "edit") return openEdit(id);
     if (action === "logs") return openLogs(id);
+    if (action === "diagnose") {
+      window.dispatchEvent(new CustomEvent("wgpanel:peer-diagnose", { detail: { peerId: Number(id) } }));
+      return;
+    }
 
     if (action === "download") {
       const a = document.createElement("a");
@@ -5791,7 +6047,28 @@
           );
         }
 
-        toastSafe("Timer reset", "success");
+        if (payload.subscription_managed) {
+          if (payload.still_blocked_reason === "data_limit") {
+            toastSafe(
+              payload.message ||
+                "Shared subscription timer reset, but the shared data limit is exhausted.",
+              "warning",
+            );
+          } else if (payload.partial) {
+            toastSafe(
+              payload.message ||
+                "Shared subscription timer reset, but one or more configs need attention.",
+              "warning",
+            );
+          } else {
+            toastSafe(
+              payload.message || "Shared subscription timer reset",
+              "success",
+            );
+          }
+        } else {
+          toastSafe(payload.message || "Timer reset", "success");
+        }
 
         await refreshPeers?.({
           abortPrev: true,
@@ -5939,6 +6216,7 @@
       "pointerdown",
       (event) => {
         if (event.target.closest?.(closeSelectors)) modalClosedAt = Date.now();
+        else if (event.target.closest?.(openSelectors)) modalClosedAt = 0;
       },
       true,
     );
@@ -5946,7 +6224,7 @@
     document.addEventListener(
       "click",
       (event) => {
-        if (Date.now() - modalClosedAt > 450) return;
+        if (event.detail === 0 || Date.now() - modalClosedAt > 450) return;
         if (!event.target.closest?.(openSelectors)) return;
         event.preventDefault();
         event.stopImmediatePropagation();
