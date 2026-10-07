@@ -520,7 +520,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   bySel('#log-refresh')?.addEventListener('click', refreshLogs);
   bySel('#log-clear')?.addEventListener('click', async () => {
-    if (!confirm('Clear application logs?')) return;
+    if (!await window.wgConfirm({title:'Clear application logs?',body:'This permanently removes the application log history.',okText:'Clear logs'})) return;
     const r = await fetch('/api/app_logs', { method: 'DELETE' });
     if (r.ok) {
       await refreshLogs();
