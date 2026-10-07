@@ -1,0 +1,417 @@
+{% extends 'base.html' %} {% block head_extras %}
+<link
+  rel="stylesheet"
+  href="{{ url_for('static', filename='css/panel-tools.css') }}"
+/>
+<link
+  rel="stylesheet"
+  href="{{ url_for('static', filename='css/operations.css') }}"
+/>
+{% endblock %} {% block content %}
+<script>
+  document.body.classList.add("operations-page");
+</script>
+
+<section class="ops2-shell" id="operations-workspace">
+  <header class="ops2-hero">
+    <div class="ops2-hero-title">
+      <span class="ops2-hero-icon"
+        ><i class="fas fa-screwdriver-wrench" aria-hidden="true"></i
+      ></span>
+      <div>
+        <h1>
+          <span class="legacy-only">Panel Center</span
+          ><span class="modern-only">Panel Center</span>
+        </h1>
+        <p>
+          Diagnose problems, review guidance, repair safe issues, and verify the
+          result.
+        </p>
+      </div>
+    </div>
+    <div class="ops2-hero-actions">
+      <button class="btn" id="ops-scan" type="button">
+        <i class="fas fa-play" aria-hidden="true"></i>
+        <span>Run diagnostic</span>
+      </button>
+      <button class="btn secondary" id="ops-repair-safe" type="button" disabled>
+        <i class="fas fa-screwdriver-wrench" aria-hidden="true"></i>
+        <span>Fix safe issues</span>
+      </button>
+      <button
+        class="btn secondary ops2-export-hero"
+        id="ops-export"
+        type="button"
+        disabled
+        title="Export diagnostic report"
+      >
+        <i class="fas fa-file-arrow-down" aria-hidden="true"></i>
+        <span>Export report</span>
+      </button>
+    </div>
+  </header>
+
+  <section class="ops2-journey" id="ops-journey" aria-label="Recovery workflow">
+    <div class="ops2-journey-step is-current" data-journey="diagnose">
+      <span>1</span>
+      <div><strong>Diagnose</strong><small>Scan system for issues</small></div>
+    </div>
+    <i class="ops2-journey-line" aria-hidden="true"></i>
+    <div class="ops2-journey-step" data-journey="review">
+      <span>2</span>
+      <div><strong>Review</strong><small>Check findings</small></div>
+    </div>
+    <i class="ops2-journey-line" aria-hidden="true"></i>
+    <div class="ops2-journey-step" data-journey="repair">
+      <span>3</span>
+      <div>
+        <strong>Repair</strong
+        ><small>Apply a safe fix or follow guidance</small>
+      </div>
+    </div>
+    <i class="ops2-journey-line" aria-hidden="true"></i>
+    <div class="ops2-journey-step" data-journey="verify">
+      <span>4</span>
+      <div>
+        <strong>Verify</strong><small>Confirm everything is healthy</small>
+      </div>
+    </div>
+  </section>
+
+  <section class="ops2-host" aria-label="Diagnostic target">
+    <div class="ops2-host-main ops2-host-card">
+      <span class="ops2-host-icon"
+        ><i class="fas fa-server" aria-hidden="true"></i
+      ></span>
+      <div class="ops2-host-copy">
+        <small>Current host</small>
+        <strong id="ops-host-name">Detecting host…</strong>
+        <span id="ops-host-os">Detecting operating system…</span>
+        <span id="ops-host-meta">—</span>
+      </div>
+      <label class="ops2-host-select-wrap" title="Choose diagnostic target">
+        <span class="sr-only">Diagnostic target</span>
+        <select id="ops-scope">
+          <option value="">Local panel server (this server)</option>
+        </select>
+      </label>
+    </div>
+    <div class="ops2-host-facts">
+      <span class="ops2-host-card"
+        ><i class="fas fa-box-open" aria-hidden="true"></i
+        ><small>Package manager</small><b id="ops-host-pm">—</b
+        ><em id="ops-host-pm-state">Detected automatically</em></span
+      >
+      <span class="ops2-host-card"
+        ><i class="fas fa-link" aria-hidden="true"></i><small>WireGuard</small
+        ><b id="ops-host-wg">—</b><em>Required tooling</em></span
+      >
+      <span class="ops2-host-card"
+        ><i class="fas fa-shield-halved" aria-hidden="true"></i
+        ><small>nftables</small><b id="ops-host-nft">—</b
+        ><em>Firewall tooling</em></span
+      >
+      <span class="ops2-host-card ops2-last-fact"
+        ><i class="fas fa-clock" aria-hidden="true"></i
+        ><small>Last diagnostic</small><b id="ops-host-last">Never</b
+        ><em id="ops-host-last-date">No scan yet</em></span
+      >
+    </div>
+  </section>
+
+  <div id="ops-status" class="ops2-status" role="status" aria-live="polite">
+    <span class="ops2-status-dot"></span>
+    <span
+      >Run a diagnostic. WG Panel will prioritize only the items that need
+      attention.</span
+    >
+  </div>
+
+  <section
+    id="ops-summary"
+    class="ops2-summary"
+    aria-label="Diagnostic summary"
+  >
+    <button type="button" data-summary-status="problems" disabled>
+      <span class="ops2-summary-icon problem"
+        ><i class="fas fa-circle-exclamation"></i
+      ></span>
+      <span class="ops2-summary-copy"
+        ><b>—</b><strong>Problems found</strong
+        ><small>Need attention</small></span
+      >
+    </button>
+    <button type="button" data-summary-status="fixable" disabled>
+      <span class="ops2-summary-icon fix"
+        ><i class="fas fa-screwdriver-wrench"></i
+      ></span>
+      <span class="ops2-summary-copy"
+        ><b>—</b><strong>Auto-fix available</strong
+        ><small>Can be fixed safely</small></span
+      >
+    </button>
+    <button type="button" data-summary-status="advisories" disabled>
+      <span class="ops2-summary-icon advisory"
+        ><i class="fas fa-triangle-exclamation"></i
+      ></span>
+      <span class="ops2-summary-copy"
+        ><b>—</b><strong>Needs your decision</strong
+        ><small>Requires manual review</small></span
+      >
+    </button>
+    <button type="button" data-summary-status="healthy" disabled>
+      <span class="ops2-summary-icon healthy"
+        ><i class="fas fa-circle-check"></i
+      ></span>
+      <span class="ops2-summary-copy"
+        ><b>—</b><strong>Healthy</strong><small>No action needed</small></span
+      >
+    </button>
+  </section>
+
+  <div class="ops2-workspace">
+    <section class="ops2-findings" aria-labelledby="ops-findings-title">
+      <div class="ops2-section-head">
+        <div class="ops2-section-head-copy">
+          <span class="ops2-section-icon"
+            ><i class="fas fa-list-check"></i
+          ></span>
+          <div>
+            <h2 id="ops-findings-title">Findings</h2>
+            <p id="ops-findings-sub">
+              Issues and recommendations from the diagnostic scan.
+            </p>
+          </div>
+        </div>
+        <div class="ops2-finding-count" id="ops-finding-count">
+          No diagnostic loaded
+        </div>
+      </div>
+      <div class="ops2-findings-toolbar" aria-label="Findings filters">
+        <div class="ops2-status-tabs" role="group" aria-label="Finding status">
+          <button
+            type="button"
+            class="ops2-status-tab is-active"
+            data-ops-filter="all"
+          >
+            <i class="fas fa-list"></i><span>All</span><b id="ops-tab-all">0</b>
+          </button>
+          <button
+            type="button"
+            class="ops2-status-tab"
+            data-ops-filter="problems"
+          >
+            <i class="fas fa-circle" style="color: var(--of-red)"></i
+            ><span>Problems</span><b id="ops-tab-problems">0</b>
+          </button>
+          <button
+            type="button"
+            class="ops2-status-tab"
+            data-ops-filter="fixable"
+          >
+            <i
+              class="fas fa-screwdriver-wrench"
+              style="color: var(--of-amber)"
+            ></i
+            ><span>Auto-fix</span><b id="ops-tab-fixable">0</b>
+          </button>
+          <button
+            type="button"
+            class="ops2-status-tab"
+            data-ops-filter="advisories"
+          >
+            <i class="fas fa-circle-info" style="color: var(--of-blue)"></i
+            ><span>Needs decision</span><b id="ops-tab-advisories">0</b>
+          </button>
+          <button
+            type="button"
+            class="ops2-status-tab"
+            data-ops-filter="healthy"
+          >
+            <i class="fas fa-circle-check" style="color: var(--of-green)"></i
+            ><span>Healthy</span><b id="ops-tab-healthy">0</b>
+          </button>
+        </div>
+        <label class="ops2-find-search-wrap"
+          ><i class="fas fa-magnifying-glass"></i
+          ><span class="sr-only">Search findings</span
+          ><input
+            id="ops-search"
+            class="ops2-find-search"
+            type="search"
+            placeholder="Search findings…"
+            autocomplete="off"
+        /></label>
+        <label
+          ><span class="sr-only">Category</span
+          ><select id="ops-category" aria-label="Finding category">
+            <option value="all">All categories</option>
+            <option value="security">Security</option>
+            <option value="network">Network</option>
+            <option value="wireguard">WireGuard</option>
+            <option value="packages">Packages</option>
+            <option value="service">Service</option>
+            <option value="database">Database</option>
+            <option value="storage">Storage</option>
+            <option value="nodes">Nodes</option>
+            <option value="system">System</option>
+            <option value="firewall">Firewall</option>
+            <option value="routing">Routing</option>
+            <option value="ports">Ports</option>
+            <option value="dns">DNS</option>
+            <option value="tls">TLS</option>
+            <option value="panel">Panel</option>
+            <option value="backups">Backups</option>
+          </select></label
+        >
+        <label
+          ><span class="sr-only">Sort findings</span
+          ><select id="ops-sort" aria-label="Sort findings">
+            <option value="severity">Sort by severity</option>
+            <option value="category">Sort by category</option>
+            <option value="name">Sort by name</option>
+          </select></label
+        >
+        <select id="ops-filter" hidden aria-hidden="true">
+          <option value="all">All findings</option>
+          <option value="problems">Problems</option>
+          <option value="fixable">Auto-fix available</option>
+          <option value="advisories">Needs your decision</option>
+          <option value="healthy">Healthy</option>
+        </select>
+      </div>
+      <div id="ops-results" class="ops2-results">
+        <div class="ops2-empty ops2-empty-start">
+          <span><i class="fas fa-stethoscope"></i></span>
+          <strong>Start with a diagnostic</strong>
+          <p>
+            WG Panel checks panel runtime, WireGuard, routing, firewall,
+            packages, backups, database, and storage without changing the
+            server.
+          </p>
+          <button type="button" class="btn" data-run-diagnostic>
+            <i class="fas fa-play"></i> Run diagnostic
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <aside
+      class="ops2-resolution"
+      id="ops-fix-pane"
+      aria-labelledby="ops-fix-title"
+    >
+      <div class="ops2-resolution-head">
+        <div>
+          <small>Resolution</small>
+          <h2 id="ops-fix-title">Select a problem</h2>
+        </div>
+        <span
+          class="ops2-resolution-counter"
+          id="ops-resolution-counter"
+          hidden
+        ></span>
+        <button
+          type="button"
+          class="ops2-resolution-close"
+          id="ops-resolution-close"
+          aria-label="Close resolution"
+          title="Close"
+        >
+          <i class="fas fa-xmark"></i>
+        </button>
+      </div>
+      <div id="ops-fix-body" class="ops2-resolution-body">
+        <div class="ops2-resolution-empty">
+          <span class="ops2-resolution-empty-icon"
+            ><i class="fas fa-route"></i
+          ></span>
+          <strong>Your recovery plan appears here</strong>
+          <p>
+            Select a finding to get one recommended path: automatic repair when
+            safe, the exact related panel setting, or a short host-level
+            procedure.
+          </p>
+          <div class="ops2-resolution-empty-points">
+            <span
+              ><i class="fas fa-screwdriver-wrench"></i> Automatic repair when
+              safe</span
+            ><span
+              ><i class="fas fa-arrow-up-right-from-square"></i> Open the exact
+              related setting</span
+            ><span
+              ><i class="fas fa-circle-check"></i> Verify again after the
+              change</span
+            >
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <details class="ops2-history" id="ops-history-wrap">
+    <summary>
+      <span
+        ><i class="fas fa-clock-rotate-left"></i
+        ><b>Recent diagnostics and repairs</b></span
+      ><small>Last 40 events</small>
+    </summary>
+    <div id="ops-history" class="ops2-history-list">Loading history…</div>
+  </details>
+</section>
+
+<div class="ops-confirm" id="ops-confirm" hidden aria-hidden="true">
+  <button
+    type="button"
+    class="ops-confirm__backdrop"
+    data-ops-confirm-cancel
+    aria-label="Cancel"
+  ></button>
+  <section
+    class="ops-confirm__sheet"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="ops-confirm-title"
+    aria-describedby="ops-confirm-intro"
+  >
+    <header class="ops-confirm__head">
+      <span class="ops-confirm__icon" id="ops-confirm-icon"
+        ><i class="fas fa-shield-halved" aria-hidden="true"></i
+      ></span>
+      <div class="ops-confirm__heading">
+        <small id="ops-confirm-eyebrow">Operations</small>
+        <h2 id="ops-confirm-title">Confirm repair</h2>
+        <p id="ops-confirm-intro"></p>
+      </div>
+      <button
+        type="button"
+        class="ops-confirm__close"
+        data-ops-confirm-cancel
+        aria-label="Close confirmation"
+      >
+        <i class="fas fa-xmark"></i>
+      </button>
+    </header>
+    <div class="ops-confirm__body" id="ops-confirm-body"></div>
+    <footer class="ops-confirm__foot">
+      <div class="ops-confirm__notice" id="ops-confirm-notice">
+        <i class="fas fa-circle-info"></i
+        ><span>Nothing changes until you confirm.</span>
+      </div>
+      <div class="ops-confirm__actions">
+        <button type="button" class="btn secondary" data-ops-confirm-cancel>
+          Cancel
+        </button>
+        <button type="button" class="btn" id="ops-confirm-ok">
+          <i class="fas fa-check"></i><span>Continue</span>
+        </button>
+      </div>
+    </footer>
+  </section>
+</div>
+
+<script
+  defer
+  src="{{ url_for('static', filename='js/operations.js') }}"
+></script>
+{% endblock %}
