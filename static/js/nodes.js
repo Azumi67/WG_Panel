@@ -1,407 +1,574 @@
 (() => {
-  const $ = (sel, root = document) => root.querySelector(sel);
-  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-  const on = (el, ev, fn, opts) => el && el.addEventListener(ev, fn, opts);
+  'use strict';
 
-  const TBody = $('#nodes-body');
-  const Empty = $('#nodes-empty');
-  if (!TBody) return;
+  const $ = (selector, root = document) => root.querySelector(selector);
+  const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
-  const Modal = $('#node-mini-modal');
-  const OpenBtn = $('#open-node-modal');
-  const EmptyAddBtn = $('#empty-add-node');
-  const RefreshBtn = $('#nodes-refresh');
-  const CloseBtn = $('#node-mini-close');
-  const CancelBtn = $('#node-mini-cancel');
-  const Form = $('#node-form');
-  const InName = $('#n-name');
-  const InURL = $('#n-url');
-  const InKey = $('#n-key');
+  const grid = $('#nodes-grid');
+  const empty = $('#nodes-empty');
+  const emptyCopy = $('#nodes-empty-copy');
+  const search = $('#nodes-search');
+  const refreshButton = $('#nodes-refresh');
+  const openButton = $('#open-node-modal');
+  const emptyAddButton = $('#empty-add-node');
+  const modal = $('#node-mini-modal');
+  const closeButton = $('#node-mini-close');
+  const cancelButton = $('#node-mini-cancel');
+  const form = $('#node-form');
+  const nameInput = $('#n-name');
+  const urlInput = $('#n-url');
+  const keyInput = $('#n-key');
+  const keyToggle = $('#node-key-toggle');
+  const keyHelp = $('#node-key-help');
+  const modalTitle = $('#node-mini-title');
 
   const stats = {
     total: $('#nodes-total'),
+    reachable: $('#nodes-reachable'),
     online: $('#nodes-online'),
-    enabled: $('#nodes-enabled'),
+    offline: $('#nodes-offline'),
+    disabled: $('#nodes-disabled'),
     peers: $('#nodes-peers'),
-    syncDot: $('#nodes-sync-dot'),
+    interfaces: $('#nodes-interfaces'),
+    attention: $('#nodes-attention'),
+    healthLabel: $('#nodes-health-label'),
+    healthFill: $('#nodes-health-fill'),
+    peerNote: $('#nodes-peer-note'),
+    ifaceNote: $('#nodes-iface-note'),
+    attentionNote: $('#nodes-attention-note'),
     syncText: $('#nodes-sync-text'),
+    syncDot: $('#nodes-sync-dot'),
+    filterAll: $('#nodes-filter-all'),
+    filterOnline: $('#nodes-filter-online'),
+    filterOffline: $('#nodes-filter-offline'),
+    filterDisabled: $('#nodes-filter-disabled'),
+    filterPeers: $('#nodes-filter-peers'),
   };
 
+  let nodes = [];
+  let activeFilter = 'all';
+  let searchText = '';
   let editingId = null;
-  let lastNodes = [];
   let loading = false;
 
-  const toast = (m, t = 'info', sticky = false) => {
-    let msg = m;
-    if (m && typeof m === 'object') {
-      const title = m.title || '';
-      const body = m.body || '';
-      msg = title && body ? `${title}: ${body}` : (title || body || JSON.stringify(m));
+  const escapeHtml = (value) => String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+
+  function csrfHeaders(json = false) {
+    const headers = typeof window.csrfHeaders === 'function'
+      ? window.csrfHeaders(json)
+      : {};
+    if (json) headers['Content-Type'] = 'application/json';
+    return headers;
+  }
+
+  function notify(message, type = 'info') {
+    if (typeof window.toastSafe === 'function') {
+      window.toastSafe(message, type);
+      return;
     }
-    if (window.toastSafe) return window.toastSafe(msg, t, sticky);
-    if (window.toast) return window.toast(msg, t);
-    console.log('[toast]', t, msg);
-  };
-
-  const confirmBox = (opts) =>
-    (window.uiConfirm ? window.uiConfirm(opts) : Promise.resolve(confirm(opts?.body || 'Are you sure?')));
-
-  function esc(v) {
-    return String(v ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
+    const fn = type === 'success' ? window.toastSuccess
+      : type === 'error' ? window.toastError
+      : type === 'warn' ? window.toastWarn
+      : window.toastInfo;
+    if (typeof fn === 'function') fn(message);
   }
 
-  function readCookie(name) {
-    return document.cookie.split('; ').map(x => x.split('=')).find(([k]) => k === name)?.[1] || '';
-  }
-
-  function csrfHeaders(extra = {}) {
-    return {
-      'X-CSRFToken': readCookie('csrf_token') || ($('meta[name="csrf-token"]')?.content || ''),
-      ...extra,
-    };
-  }
-
-  async function api(path, opts = {}) {
-    const res = await fetch(path, { credentials: 'same-origin', ...opts });
-    const text = await res.text();
-    let body = null;
-    try { body = text ? JSON.parse(text) : null; } catch {}
-    if (!res.ok) {
-      const msg = (body && (body.error || body.message || body.detail)) || text || `HTTP ${res.status}`;
-      throw new Error(msg);
+  async function api(url, options = {}) {
+    const response = await fetch(url, {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      ...options,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.message || payload.error || `Request failed (${response.status})`);
     }
-    return body;
+    return payload;
   }
 
   function setSync(state, text) {
-    if (stats.syncDot) stats.syncDot.className = `np-status-dot ${state}`;
     if (stats.syncText) stats.syncText.textContent = text;
-    const icon = RefreshBtn?.querySelector('i');
-    if (icon) icon.classList.toggle('syncing', state === 'loading');
-  }
-
-  function setText(el, value) { if (el) el.textContent = String(value); }
-
-  function timeAgoISO(iso) {
-    if (!iso) return 'Never';
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return 'Never';
-    const sec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
-    if (sec < 45) return 'just now';
-    const min = Math.floor(sec / 60);
-    if (min < 60) return `${min}m ago`;
-    const hrs = Math.floor(min / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    const days = Math.floor(hrs / 24);
-    return `${days}d ago`;
-  }
-
-  function refreshTime() {
-    $$('.time-ago').forEach(el => { el.textContent = timeAgoISO(el.getAttribute('data-iso')); });
-  }
-
-  function pill(type, icon, label, value = null, title = '') {
-    const val = value === null || value === undefined ? '' : ` <b>${esc(value)}</b>`;
-    return `<span class="np-pill ${type}" title="${esc(title)}"><i class="fas ${icon}"></i> ${esc(label)}${val}</span>`;
-  }
-
-  function healthPills(n) {
-    if (!n.enabled) {
-      return `<div class="np-badges">${pill('disabled', 'fa-pause', 'Disabled', null, 'This node is disabled in the panel')}</div>`;
+    if (stats.syncDot) {
+      stats.syncDot.className = `nodes-sync-dot ${state === 'loading' ? 'is-loading' : state === 'ok' ? 'is-ok' : state === 'bad' ? 'is-bad' : 'is-idle'}`;
     }
-    if (n.online) {
-      return `<div class="np-badges">${pill('online', 'fa-signal', 'Online')}${pill('enabled', 'fa-toggle-on', 'Enabled')}</div>`;
+    refreshButton?.classList.toggle('is-loading', state === 'loading');
+  }
+
+  function parseISO(value) {
+    if (!value) return null;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  function timeAgo(value) {
+    const date = parseISO(value);
+    if (!date) return 'Never';
+    const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+    if (seconds < 45) return 'Just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    if (seconds < 86400 * 30) return `${Math.floor(seconds / 86400)}d ago`;
+    return date.toLocaleDateString();
+  }
+
+  function nodeStatus(node) {
+    if (!node.enabled) return { key: 'disabled', label: 'Disabled' };
+    if (node.online) return { key: 'online', label: 'Online' };
+    return { key: 'offline', label: 'Offline' };
+  }
+
+  function peerCounts(node) {
+    const peers = node.summary?.peers || {};
+    return {
+      total: Number(peers.total || 0),
+      online: Number(peers.online || 0),
+      blocked: Number(peers.blocked || 0),
+    };
+  }
+
+  function interfaceCounts(node) {
+    const interfaces = node.summary?.interfaces || {};
+    return {
+      total: Number(interfaces.count || 0),
+      up: Number(interfaces.up || 0),
+    };
+  }
+
+  function visibleNodes() {
+    const query = searchText.trim().toLowerCase();
+    return nodes.filter((node) => {
+      const peers = peerCounts(node);
+      const info = node.summary?.info || {};
+      const haystack = [
+        node.id,
+        node.name,
+        node.base_url,
+        info.host,
+        info.public_ipv4,
+        nodeStatus(node).label,
+      ].join(' ').toLowerCase();
+
+      if (query && !haystack.includes(query)) return false;
+      if (activeFilter === 'online' && !(node.enabled && node.online)) return false;
+      if (activeFilter === 'offline' && !(node.enabled && !node.online)) return false;
+      if (activeFilter === 'disabled' && node.enabled) return false;
+      if (activeFilter === 'with-peers' && peers.total <= 0) return false;
+      return true;
+    });
+  }
+
+  function endpointHost(url) {
+    try {
+      return new URL(url).hostname || '';
+    } catch (_) {
+      return '';
     }
-    return `<div class="np-badges">${pill('offline', 'fa-circle-xmark', 'Offline')}${pill('enabled', 'fa-toggle-on', 'Enabled')}</div>`;
   }
 
-  function peerSummaryHTML(pc = {}) {
-    const total = Number(pc.total || 0);
-    const online = Number(pc.online || 0);
-    const blocked = Number(pc.blocked || 0);
-    const depleting = Number(pc.depleting || 0);
-    return `<div class="node-peer-tags">
-      ${pill('offline', 'fa-users', 'All', total)}
-      ${pill('online', 'fa-signal', 'On', online)}
-      ${blocked ? pill('blocked', 'fa-ban', 'Blocked', blocked) : ''}
-      ${depleting ? pill('depleting', 'fa-hourglass-half', 'Low', depleting) : ''}
-    </div>`;
-  }
+  function cardHtml(node) {
+    const status = nodeStatus(node);
+    const peers = peerCounts(node);
+    const interfaces = interfaceCounts(node);
+    const info = node.summary?.info || {};
+    const lastSeen = node.summary?.last_seen || node.last_seen || '';
+    const host = info.host || endpointHost(node.base_url || '');
+    const publicIpv4 = info.public_ipv4 || '';
+    const publicIpv6 = info.public_ipv6 || '';
+    const publicIp = publicIpv4 || publicIpv6;
+    const peerHealth = peers.total ? Math.round((peers.online / peers.total) * 100) : 0;
+    const ifaceHealth = interfaces.total ? Math.round((interfaces.up / interfaces.total) * 100) : 0;
+    const seenNote = status.key === 'online'
+      ? 'Agent responded successfully'
+      : status.key === 'disabled'
+        ? 'Health checks are paused'
+        : 'Agent could not be reached';
 
-  function ifaceSummaryHTML(ic = {}) {
-    const total = Number(ic.count ?? ic.total ?? 0);
-    const up = Number(ic.up || 0);
-    const down = Number(ic.down ?? Math.max(0, total - up));
-    return `<div class="node-peer-tags">
-      ${pill('online', 'fa-network-wired', 'Up', up)}
-      ${down ? pill('offline', 'fa-circle-xmark', 'Down', down) : ''}
-      ${pill('disabled', 'fa-layer-group', 'Total', total)}
-    </div>`;
-  }
-
-  function renderRows(nodes) {
-    lastNodes = nodes || [];
-    if (!lastNodes.length) {
-      TBody.innerHTML = '';
-      if (Empty) Empty.style.display = 'block';
-      updateTopStats();
-      return;
-    }
-
-    if (Empty) Empty.style.display = 'none';
-    TBody.innerHTML = lastNodes.map(n => `
-      <tr data-id="${esc(n.id)}">
-        <td data-label="Node">
-          <div class="node-title">
-            <div class="node-avatar"><i class="fas fa-server"></i></div>
-            <div>
-              <div class="node-name">${esc(n.name || `Node ${n.id}`)}</div>
-              <div class="node-id">ID ${esc(n.id)}</div>
+    return `
+      <article class="node-card is-${status.key}" data-node-id="${escapeHtml(node.id)}">
+        <div class="node-card__head">
+          <div class="node-card__identity">
+            <span class="node-card__avatar" aria-hidden="true"><i class="fas fa-server"></i></span>
+            <div class="node-card__title">
+              <span class="node-card__name" title="${escapeHtml(node.name || '')}">${escapeHtml(node.name || `Node ${node.id}`)}</span>
+              <span class="node-card__id">Node #${escapeHtml(node.id)}${host ? ` · ${escapeHtml(host)}` : ''}</span>
             </div>
           </div>
-        </td>
-        <td data-label="Endpoint"><div class="node-url" title="${esc(n.base_url || '')}">${esc(n.base_url || '—')}</div></td>
-        <td data-label="Health" class="status" data-id="${esc(n.id)}">${healthPills(n)}</td>
-        <td data-label="Peers" class="node-peers" data-id="${esc(n.id)}">${peerSummaryHTML(n.summary?.peers || {})}</td>
-        <td data-label="Interfaces" class="node-ifaces" data-id="${esc(n.id)}">${ifaceSummaryHTML(n.summary?.interfaces || {})}</td>
-        <td data-label="Last seen"><span class="node-last time-ago" data-iso="${esc(n.last_seen || '')}">${timeAgoISO(n.last_seen)}</span></td>
-        <td data-label="Actions" class="nodes-actions-cell">
-          <label class="toggle-switch" title="Enable or disable node">
-            <input type="checkbox" class="n-enabled" data-id="${esc(n.id)}" ${n.enabled ? 'checked' : ''}>
-            <span class="toggle-switch-track"></span><span class="toggle-switch-thumb"></span>
+          <span class="node-status is-${status.key}"><i class="fas fa-circle"></i>${status.label}</span>
+        </div>
+
+        <div class="node-card__endpoint">
+          <div class="node-endpoint-main">
+            <i class="fas fa-link" aria-hidden="true"></i>
+            <code title="${escapeHtml(node.base_url || '')}">${escapeHtml(node.base_url || 'No endpoint')}</code>
+            <button class="nodes-icon-btn node-copy-endpoint" type="button" title="Copy endpoint" aria-label="Copy endpoint"><i class="fas fa-copy"></i></button>
+          </div>
+          <div class="node-endpoint-meta">
+            ${publicIp ? `<span><i class="fas fa-globe"></i><b title="${escapeHtml(publicIp)}">${escapeHtml(publicIp)}</b></span>` : '<span><i class="fas fa-globe"></i><b>Public IP unavailable</b></span>'}
+            ${publicIpv4 && publicIpv6 ? `<span><i class="fas fa-code-branch"></i><b title="${escapeHtml(publicIpv6)}">IPv4 + IPv6</b></span>` : ''}
+            <span><i class="fas ${node.enabled ? 'fa-shield-halved' : 'fa-pause'}"></i><b>${node.enabled ? 'Monitoring enabled' : 'Monitoring paused'}</b></span>
+          </div>
+        </div>
+
+        <div class="node-card__metrics">
+          <div class="node-card__metric">
+            <small>Peers</small>
+            <strong>${peers.total}</strong>
+            <span>${peers.total ? `${peers.online} online${peers.blocked ? ` · ${peers.blocked} blocked` : ''}` : 'No peers reported'}</span>
+            <div class="node-mini-track"><i style="width:${peerHealth}%"></i></div>
+          </div>
+          <div class="node-card__metric">
+            <small>Interfaces</small>
+            <strong>${interfaces.total}</strong>
+            <span>${interfaces.total ? `${interfaces.up} up` : 'No interfaces reported'}</span>
+            <div class="node-mini-track is-blue"><i style="width:${ifaceHealth}%"></i></div>
+          </div>
+          <div class="node-card__metric">
+            <small>Last seen</small>
+            <strong class="node-last-seen" data-iso="${escapeHtml(lastSeen)}">${escapeHtml(timeAgo(lastSeen))}</strong>
+            <span>${escapeHtml(seenNote)}</span>
+          </div>
+        </div>
+
+        <div class="node-card__footer">
+          <label class="node-enable" title="Enable or disable this node">
+            <input class="node-enable-input" type="checkbox" ${node.enabled ? 'checked' : ''}>
+            <span class="node-enable__track" aria-hidden="true"></span>
+            <span>${node.enabled ? 'Enabled' : 'Paused'}</span>
           </label>
-          <button class="icon-btn ghost n-open-peers" type="button" title="Open node peers"><i class="fas fa-users"></i></button>
-          <button class="icon-btn ghost n-edit" type="button" title="Edit node"><i class="fas fa-pen"></i></button>
-          <button class="icon-btn danger n-del" type="button" title="Delete node"><i class="fas fa-trash"></i></button>
-        </td>
-      </tr>
-    `).join('');
-    updateTopStats();
+          <button class="nodes-btn nodes-btn--primary node-open-peers" type="button"><i class="fas fa-users"></i> Peers</button>
+          <button class="nodes-btn nodes-btn--quiet node-edit" type="button"><i class="fas fa-pen"></i> Edit</button>
+          <button class="nodes-icon-btn is-danger node-delete" type="button" title="Delete node" aria-label="Delete node"><i class="fas fa-trash"></i></button>
+        </div>
+      </article>`;
   }
 
-  function updateTopStats(extraPeerTotal = null) {
-    const total = lastNodes.length;
-    const online = lastNodes.filter(n => n.online && n.enabled).length;
-    const enabled = lastNodes.filter(n => n.enabled).length;
-    const peers = extraPeerTotal ?? lastNodes.reduce((sum, n) => sum + Number(n.summary?.peers?.total || 0), 0);
-    setText(stats.total, total);
-    setText(stats.online, online);
-    setText(stats.enabled, enabled);
-    setText(stats.peers, peers);
+  function render() {
+    if (!grid || !empty) return;
+    const list = visibleNodes();
+    grid.innerHTML = list.map(cardHtml).join('');
+    empty.hidden = list.length > 0;
+    grid.hidden = list.length === 0;
+
+    if (!nodes.length) {
+      const title = empty.querySelector('h3');
+      if (title) title.textContent = 'No remote nodes configured';
+      if (emptyCopy) emptyCopy.textContent = 'Install the node agent on another server, then add its URL and API key here.';
+      if (emptyAddButton) emptyAddButton.hidden = false;
+    } else if (!list.length) {
+      const title = empty.querySelector('h3');
+      if (title) title.textContent = 'No matching nodes';
+      if (emptyCopy) emptyCopy.textContent = 'Change the search text or choose a different status filter.';
+      if (emptyAddButton) emptyAddButton.hidden = true;
+    }
+    updateStats();
   }
 
-  async function updateHealth() {
-    const rows = $$('tr[data-id]', TBody);
-    await Promise.all(rows.map(async tr => {
-      const id = tr.dataset.id;
-      const enabled = !!tr.querySelector('.n-enabled')?.checked;
-      const n = lastNodes.find(x => String(x.id) === String(id)) || { id, enabled };
-      n.enabled = enabled;
-      if (!enabled) {
-        n.online = false;
-      } else {
-        try {
-          const j = await api(`/api/nodes/${id}/health`);
-          n.online = !!j?.online;
-          if (n.online && j?.last_seen) n.last_seen = j.last_seen;
-        } catch {
-          n.online = false;
-        }
-      }
-      const cell = $(`.status[data-id="${CSS.escape(String(id))}"]`, TBody);
-      if (cell) cell.innerHTML = healthPills(n);
-    }));
-    updateTopStats();
+  function updateStats() {
+    const total = nodes.length;
+    const online = nodes.filter((node) => node.enabled && node.online).length;
+    const offline = nodes.filter((node) => node.enabled && !node.online).length;
+    const disabled = nodes.filter((node) => !node.enabled).length;
+    const peerTotal = nodes.reduce((sum, node) => sum + peerCounts(node).total, 0);
+    const peerOnline = nodes.reduce((sum, node) => sum + peerCounts(node).online, 0);
+    const peerBlocked = nodes.reduce((sum, node) => sum + peerCounts(node).blocked, 0);
+    const interfaceTotal = nodes.reduce((sum, node) => sum + interfaceCounts(node).total, 0);
+    const interfaceUp = nodes.reduce((sum, node) => sum + interfaceCounts(node).up, 0);
+    const nodesWithPeers = nodes.filter((node) => peerCounts(node).total > 0).length;
+    const interfaceDown = Math.max(0, interfaceTotal - interfaceUp);
+    const attention = offline + peerBlocked + interfaceDown;
+    const monitored = Math.max(0, total - disabled);
+    const availability = monitored ? Math.round((online / monitored) * 100) : 0;
+
+    if (stats.total) stats.total.textContent = String(total);
+    if (stats.reachable) stats.reachable.textContent = String(online);
+    if (stats.online) stats.online.textContent = String(online);
+    if (stats.offline) stats.offline.textContent = String(offline);
+    if (stats.disabled) stats.disabled.textContent = String(disabled);
+    if (stats.peers) stats.peers.textContent = String(peerTotal);
+    if (stats.interfaces) stats.interfaces.textContent = String(interfaceTotal);
+    if (stats.attention) stats.attention.textContent = String(attention);
+    if (stats.healthFill) stats.healthFill.style.width = `${availability}%`;
+    if (stats.filterAll) stats.filterAll.textContent = String(total);
+    if (stats.filterOnline) stats.filterOnline.textContent = String(online);
+    if (stats.filterOffline) stats.filterOffline.textContent = String(offline);
+    if (stats.filterDisabled) stats.filterDisabled.textContent = String(disabled);
+    if (stats.filterPeers) stats.filterPeers.textContent = String(nodesWithPeers);
+
+    if (stats.healthLabel) {
+      stats.healthLabel.textContent = total === 0
+        ? 'No nodes configured'
+        : monitored === 0
+          ? `${disabled} paused · no active monitoring`
+          : `${online} online · ${offline} offline${disabled ? ` · ${disabled} paused` : ''}`;
+    }
+    if (stats.peerNote) stats.peerNote.textContent = peerTotal ? `${peerOnline} online${peerBlocked ? ` · ${peerBlocked} blocked` : ''}` : 'No remote peers';
+    if (stats.ifaceNote) stats.ifaceNote.textContent = interfaceTotal ? `${interfaceUp} up${interfaceDown ? ` · ${interfaceDown} down` : ''}` : 'No interfaces';
+    if (stats.attentionNote) {
+      stats.attentionNote.textContent = attention === 0
+        ? 'Nothing needs attention'
+        : [offline ? `${offline} unreachable` : '', interfaceDown ? `${interfaceDown} interface down` : '', peerBlocked ? `${peerBlocked} blocked peer${peerBlocked === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+    }
   }
 
-  async function updateSummaries() {
-    const rows = $$('tr[data-id]', TBody);
-    let peerTotal = 0;
-    await Promise.all(rows.map(async tr => {
-      const id = tr.dataset.id;
-      const n = lastNodes.find(x => String(x.id) === String(id));
-      const peerCell = $(`.node-peers[data-id="${CSS.escape(String(id))}"]`, TBody);
-      const ifaceCell = $(`.node-ifaces[data-id="${CSS.escape(String(id))}"]`, TBody);
-      try {
-        const j = await api(`/api/nodes/${id}/summary`);
-        const summary = { peers: j?.peers || {}, interfaces: j?.interfaces || {} };
-        if (n) n.summary = summary;
-        peerTotal += Number(summary.peers.total || 0);
-        if (peerCell) peerCell.innerHTML = peerSummaryHTML(summary.peers);
-        if (ifaceCell) ifaceCell.innerHTML = ifaceSummaryHTML(summary.interfaces);
-      } catch {
-        if (peerCell) peerCell.innerHTML = peerSummaryHTML(n?.summary?.peers || {});
-        if (ifaceCell) ifaceCell.innerHTML = ifaceSummaryHTML(n?.summary?.interfaces || {});
-      }
-    }));
-    updateTopStats(peerTotal || null);
+  async function enrichNode(node) {
+    if (!node.enabled) {
+      node.online = false;
+      return node;
+    }
+    try {
+      const summary = await api(`/api/nodes/${node.id}/summary`);
+      node.summary = summary || {};
+      node.online = Boolean(summary?.online);
+      if (summary?.last_seen) node.last_seen = summary.last_seen;
+    } catch (_) {
+      node.online = false;
+    }
+    return node;
   }
 
   async function load() {
     if (loading) return;
     loading = true;
-    setSync('loading', 'Syncing…');
+    setSync('loading', 'Refreshing');
     try {
-      const j = await api('/api/nodes');
-      const rows = Array.isArray(j) ? j : (j?.nodes || j?.data || []);
-      renderRows(rows);
-      await Promise.all([updateHealth(), updateSummaries()]);
-      refreshTime();
-      setSync('ok', rows.length ? 'Updated now' : 'Ready');
-    } catch (err) {
-      console.error('Failed to load nodes:', err);
-      TBody.innerHTML = '';
-      if (Empty) Empty.style.display = 'block';
-      setSync('bad', 'Failed');
-      toast({ title: 'Failed to load nodes', body: err?.message || String(err) }, 'error');
+      const payload = await api('/api/nodes');
+      nodes = (Array.isArray(payload) ? payload : payload.nodes || []).map((node) => ({ ...node, summary: node.summary || null }));
+      render();
+      await Promise.all(nodes.map(enrichNode));
+      render();
+      setSync('ok', nodes.length ? 'Up to date' : 'Ready');
+    } catch (error) {
+      console.error('Node load failed:', error);
+      nodes = [];
+      render();
+      setSync('bad', 'Unavailable');
+      notify(error.message || 'Could not load nodes.', 'error');
     } finally {
       loading = false;
     }
   }
 
-  function modalClassMode() {
-    if (Modal && Modal.hasAttribute('hidden')) Modal.removeAttribute('hidden');
+  function setKeyVisibility(visible) {
+    if (!keyInput || !keyToggle) return;
+    keyInput.type = visible ? 'text' : 'password';
+    keyToggle.setAttribute('aria-pressed', String(visible));
+    keyToggle.setAttribute('aria-label', visible ? 'Hide API key' : 'Show API key');
+    const icon = keyToggle.querySelector('i');
+    if (icon) icon.className = visible ? 'fas fa-eye-slash' : 'fas fa-eye';
   }
 
-  function openModal() {
-    if (!Modal) return;
-    modalClassMode();
-    Modal.classList.add('open');
+  function openModal(mode = 'add', node = null) {
+    if (!modal || !form) return;
+    editingId = mode === 'edit' && node ? node.id : null;
+    form.reset();
+    setKeyVisibility(false);
+
+    if (editingId && node) {
+      if (modalTitle) modalTitle.textContent = 'Edit node';
+      if (nameInput) nameInput.value = node.name || '';
+      if (urlInput) urlInput.value = node.base_url || '';
+      if (keyInput) {
+        keyInput.value = '';
+        keyInput.required = false;
+      }
+      if (keyHelp) keyHelp.textContent = 'Leave this blank to keep the existing API key.';
+    } else {
+      if (modalTitle) modalTitle.textContent = 'Add node';
+      if (keyInput) keyInput.required = true;
+      if (keyHelp) keyHelp.textContent = 'Required when adding a node. The key is stored by the panel and is not displayed again.';
+    }
+
+    modal.hidden = false;
+    modal.classList.add('open');
+    modal.setAttribute('aria-hidden', 'false');
     document.body.classList.add('modal-open');
-    setTimeout(() => InName?.focus(), 30);
+    setTimeout(() => nameInput?.focus(), 30);
   }
 
   function closeModal() {
-    if (!Modal) return;
-    Modal.classList.remove('open');
+    if (!modal) return;
+    modal.classList.remove('open');
+    modal.setAttribute('aria-hidden', 'true');
+    modal.hidden = true;
     document.body.classList.remove('modal-open');
-  }
-
-  function onCreate() {
     editingId = null;
-    Form?.reset();
-    if (InKey) {
-      InKey.value = '';
-      InKey.required = true;
-    }
-    const title = $('#node-mini-title');
-    if (title) title.innerHTML = '<i class="fas fa-circle-plus"></i> Add node';
-    openModal();
+    setKeyVisibility(false);
   }
 
-  on(OpenBtn, 'click', onCreate);
-  on(EmptyAddBtn, 'click', onCreate);
-  on(RefreshBtn, 'click', load);
-  on(CloseBtn, 'click', closeModal);
-  on(CancelBtn, 'click', closeModal);
-  on(Modal, 'click', (e) => { if (e.target?.dataset?.close) closeModal(); });
-  on(document, 'keydown', (e) => {
-    if (Modal?.classList.contains('open') && e.key === 'Escape') closeModal();
-  });
-  window.addEventListener('hashchange', closeModal);
+  async function copyText(value) {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      notify('Endpoint copied.', 'success');
+    } catch (_) {
+      notify('Could not copy endpoint.', 'error');
+    }
+  }
 
-  on(Form, 'submit', async (e) => {
-    e.preventDefault();
-    const name = (InName?.value || '').trim();
-    const base_url = (InURL?.value || '').trim();
-    const api_key = (InKey?.value || '').trim();
-    if (!name || !base_url || (!editingId && !api_key)) {
-      toast({ title: 'Missing fields', body: 'Please fill in the node name, base URL, and API key.' }, 'warn');
+  openButton?.addEventListener('click', () => openModal('add'));
+  emptyAddButton?.addEventListener('click', () => openModal('add'));
+  refreshButton?.addEventListener('click', load);
+  closeButton?.addEventListener('click', closeModal);
+  cancelButton?.addEventListener('click', closeModal);
+  keyToggle?.addEventListener('click', () => setKeyVisibility(keyInput?.type === 'password'));
+  modal?.addEventListener('click', (event) => {
+    if (event.target?.dataset?.close) closeModal();
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && modal?.classList.contains('open')) {
+      closeModal();
       return;
     }
-    const payload = { name, base_url };
-    if (!editingId || api_key) payload.api_key = api_key;
-    const url = editingId ? `/api/nodes/${editingId}` : '/api/nodes';
-    const method = editingId ? 'PATCH' : 'POST';
-    try {
-      await api(url, {
-        method,
-        headers: csrfHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify(payload),
-      });
-      closeModal();
-      await load();
-      toast({ title: editingId ? 'Node updated' : 'Node added', body: `"${name}" is ready.` }, 'success');
-    } catch (err) {
-      toast({ title: editingId ? 'Failed to update node' : 'Failed to add node', body: err?.message || String(err) }, 'error');
+    if (event.key === '/' && !modal?.classList.contains('open')) {
+      const active = document.activeElement;
+      const typing = active && ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);
+      if (!typing) {
+        event.preventDefault();
+        search?.focus();
+      }
     }
   });
 
-  on(TBody, 'click', async (e) => {
-    const btnOpen = e.target.closest('.n-open-peers');
-    const btnDel = e.target.closest('.n-del');
-    const btnEdit = e.target.closest('.n-edit');
-    if (!btnOpen && !btnDel && !btnEdit) return;
+  search?.addEventListener('input', () => {
+    searchText = search.value || '';
+    render();
+  });
 
-    const tr = e.target.closest('tr');
-    const id = tr?.dataset?.id;
-    if (!id) return;
-    const node = lastNodes.find(n => String(n.id) === String(id));
-    const nodeName = node?.name || tr.querySelector('.node-name')?.textContent?.trim() || `Node #${id}`;
+  $$('.nodes-filters [data-node-filter]').forEach((button) => {
+    button.addEventListener('click', () => {
+      activeFilter = button.dataset.nodeFilter || 'all';
+      $$('.nodes-filters [data-node-filter]').forEach((item) => item.classList.toggle('is-active', item === button));
+      render();
+    });
+  });
 
-    if (btnOpen) {
-      try { localStorage.setItem('peer_scope', String(id)); } catch {}
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const name = String(nameInput?.value || '').trim();
+    const baseUrl = String(urlInput?.value || '').trim();
+    const apiKey = String(keyInput?.value || '').trim();
+
+    if (!name || !baseUrl || (!editingId && !apiKey)) {
+      notify('Complete the node name, base URL, and API key.', 'warn');
+      return;
+    }
+
+    try {
+      const parsed = new URL(baseUrl);
+      if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('bad protocol');
+    } catch (_) {
+      notify('Base URL must start with http:// or https://.', 'warn');
+      urlInput?.focus();
+      return;
+    }
+
+    const payload = { name, base_url: baseUrl.replace(/\/+$/, '') };
+    if (apiKey) payload.api_key = apiKey;
+
+    const submit = form.querySelector('button[type="submit"]');
+    if (submit) submit.disabled = true;
+    try {
+      await api(editingId ? `/api/nodes/${editingId}` : '/api/nodes', {
+        method: editingId ? 'PATCH' : 'POST',
+        headers: csrfHeaders(true),
+        body: JSON.stringify(payload),
+      });
+      const wasEditing = Boolean(editingId);
+      closeModal();
+      await load();
+      notify(wasEditing ? 'Node updated.' : 'Node added.', 'success');
+    } catch (error) {
+      notify(error.message || 'Could not save node.', 'error');
+    } finally {
+      if (submit) submit.disabled = false;
+    }
+  });
+
+  grid?.addEventListener('click', async (event) => {
+    const row = event.target.closest('.node-card');
+    if (!row) return;
+    const id = Number(row.dataset.nodeId);
+    const node = nodes.find((item) => Number(item.id) === id);
+    if (!node) return;
+
+    if (event.target.closest('.node-copy-endpoint')) {
+      await copyText(node.base_url || '');
+      return;
+    }
+    if (event.target.closest('.node-open-peers')) {
+      try { localStorage.setItem('peer_scope', String(id)); } catch (_) {}
       window.location.href = '/users';
       return;
     }
-
-    if (btnEdit) {
-      editingId = id;
-      if (InName) InName.value = node?.name || tr.querySelector('.node-name')?.textContent?.trim() || '';
-      if (InURL) InURL.value = node?.base_url || tr.querySelector('.node-url')?.textContent?.trim() || '';
-      if (InKey) {
-        InKey.value = '';
-        InKey.required = false;
-      }
-      const title = $('#node-mini-title');
-      if (title) title.innerHTML = '<i class="fas fa-pen"></i> Edit node';
-      openModal();
+    if (event.target.closest('.node-edit')) {
+      openModal('edit', node);
       return;
     }
-
-    if (btnDel) {
-      const ok = await confirmBox({
-        title: 'Delete node',
-        body: `Delete node "${nodeName}"? This removes it from the panel.`,
-        okText: 'Delete',
-        cancelText: 'Cancel',
-      });
-      if (!ok) return;
+    if (event.target.closest('.node-delete')) {
+      const confirmed = typeof window.uiConfirm === 'function'
+        ? await window.uiConfirm({
+            title: 'Delete node',
+            body: `Delete “${node.name || `Node ${id}`}” from this panel? This removes the saved node record; it does not uninstall the agent on the remote server.`,
+            okText: 'Delete',
+            cancelText: 'Cancel',
+          })
+        : await window.wgConfirm(`Delete ${node.name || `Node ${id}`}?`);
+      if (!confirmed) return;
       try {
         await api(`/api/nodes/${id}`, { method: 'DELETE', headers: csrfHeaders() });
-        await load();
-        toast({ title: 'Node deleted', body: `"${nodeName}" was removed.` }, 'success');
-      } catch (err) {
-        toast({ title: 'Failed to delete node', body: err?.message || String(err) }, 'error');
+        nodes = nodes.filter((item) => Number(item.id) !== id);
+        render();
+        notify('Node deleted.', 'success');
+      } catch (error) {
+        notify(error.message || 'Could not delete node.', 'error');
       }
     }
   });
 
-  on(TBody, 'change', async (e) => {
-    const chk = e.target.closest('.n-enabled');
-    if (!chk) return;
-    const tr = chk.closest('tr');
-    const id = tr?.dataset?.id;
-    if (!id) return;
-    const enabled = chk.checked;
-    const node = lastNodes.find(n => String(n.id) === String(id));
-    const nodeName = node?.name || `Node #${id}`;
+  grid?.addEventListener('change', async (event) => {
+    const input = event.target.closest('.node-enable-input');
+    if (!input) return;
+    const row = input.closest('.node-card');
+    const id = Number(row?.dataset?.nodeId);
+    const node = nodes.find((item) => Number(item.id) === id);
+    if (!node) return;
+
+    const enabled = input.checked;
+    input.disabled = true;
     try {
       await api(`/api/nodes/${id}`, {
         method: 'PATCH',
-        headers: csrfHeaders({ 'Content-Type': 'application/json' }),
+        headers: csrfHeaders(true),
         body: JSON.stringify({ enabled }),
       });
-      if (node) node.enabled = enabled;
-      await updateHealth();
-      toast({ title: enabled ? 'Node enabled' : 'Node disabled', body: `"${nodeName}" was updated.` }, 'success');
-    } catch (err) {
-      chk.checked = !enabled;
-      toast({ title: 'Failed to update node', body: err?.message || String(err) }, 'error');
+      node.enabled = enabled;
+      node.online = false;
+      render();
+      if (enabled) {
+        await enrichNode(node);
+        render();
+      }
+      notify(enabled ? 'Node enabled.' : 'Node disabled.', 'success');
+    } catch (error) {
+      input.checked = !enabled;
+      notify(error.message || 'Could not update node.', 'error');
+    } finally {
+      input.disabled = false;
     }
   });
 
+  function refreshRelativeTimes() {
+    $$('.node-last-seen[data-iso]', grid).forEach((element) => {
+      element.textContent = timeAgo(element.dataset.iso || '');
+    });
+  }
+
   load();
-  setInterval(refreshTime, 30000);
-  setInterval(updateHealth, 60000);
+  setInterval(refreshRelativeTimes, 30000);
 })();
