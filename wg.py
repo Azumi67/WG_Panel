@@ -2043,6 +2043,48 @@ WantedBy=multi-user.target
     ok(f"Wrote: {_paths(str(path))}")
     return True
 
+def _ensure_local_panel_hostname(host: str) -> bool:
+    """Resolve the panel's own TLS hostname to loopback on this server.
+
+    The Telegram bot must reach the local panel directly, not hairpin through a
+    public IP/CDN. Keeping the real hostname preserves TLS SNI and certificate
+    verification while /etc/hosts makes the transport local.
+    """
+    host = str(host or "").strip().rstrip(".")
+    if not host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return False
+    except ValueError:
+        pass
+
+    hosts_path = Path("/etc/hosts")
+    try:
+        text = hosts_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        warn(f"Could not read /etc/hosts: {exc}")
+        return False
+
+    marker = "# WG_PANEL_LOCAL"
+    kept = []
+    for line in text.splitlines():
+        parts = line.split("#", 1)[0].split()
+        if marker in line and host in parts[1:]:
+            continue
+        kept.append(line)
+    kept.append(f"127.0.0.1\t{host}\t{marker}")
+    new_text = "\n".join(kept).rstrip() + "\n"
+
+    try:
+        hosts_path.write_text(new_text, encoding="utf-8")
+        ok(f"Local bot route: {host} -> 127.0.0.1 (TLS hostname preserved)")
+        return True
+    except Exception as exc:
+        warn(f"Could not add the local panel hostname to /etc/hosts: {exc}")
+        return False
+
+
 def _bot_service(root: Path) -> bool:
     tg_path = root / "instance" / "telegram_settings.json"
     if not tg_path.exists():
@@ -2095,16 +2137,37 @@ WantedBy=multi-user.target
 
     panel_base_url = ask("Panel base URL (bot -> panel)", default=default_url, show_default=True).strip() or default_url
 
+    if tls_enabled and host and host not in {"127.0.0.1", "localhost", "::1"}:
+        try:
+            from urllib.parse import urlsplit
+            selected_host = (urlsplit(panel_base_url).hostname or "").rstrip(".")
+        except Exception:
+            selected_host = ""
+        if selected_host == host.rstrip("."):
+            _ensure_local_panel_hostname(host)
+
     env = parse_env((root / ".env").read_text(encoding="utf-8") if (root / ".env").exists() else "")
     default_api_key = (env.get("API_KEY") or "").strip()
     panel_api_key = ask("Panel API key (bot heartbeat)", default=default_api_key, show_default=True).strip() or default_api_key
 
     override_dir = Path("/etc/systemd/system/wg-panel-bot.service.d")
     override_path = override_dir / "override.conf"
+    no_proxy_hosts = ["127.0.0.1", "localhost", "::1"]
+    try:
+        from urllib.parse import urlsplit
+        selected_host = (urlsplit(panel_base_url).hostname or "").strip()
+        if selected_host and selected_host not in no_proxy_hosts:
+            no_proxy_hosts.append(selected_host)
+    except Exception:
+        pass
+    no_proxy = ",".join(no_proxy_hosts)
+
     override = (
         "[Service]\n"
         f'Environment="PANEL_BASE_URL={panel_base_url}"\n'
         f'Environment="PANEL_API_KEY={panel_api_key}"\n'
+        f'Environment="NO_PROXY={no_proxy}"\n'
+        f'Environment="no_proxy={no_proxy}"\n'
     )
     _write(override_path, override)
     try:
