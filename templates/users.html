@@ -5,19 +5,26 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/peer-dark.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/peer-workspace.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/peer-interface-inline.css') }}">
-
-
-
+<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-mobile.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/panel-tools.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-diagnose.css') }}">
+{% endblock %}
+{% block final_styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-layout.css') }}">
 {% endblock %}
 {% block responsive_extras %}
 {% endblock %}
 {% block content %}
+{% include 'peer_template_editor.html' %}
+<script defer src="{{ url_for('static', filename='js/peer-template-editor.js') }}"></script>
+<script>document.body.classList.add('peers-page');</script>
+<script>window.WG_PANEL_IS_ADMIN = {{ (current_user.is_authenticated and (current_user.is_admin|default(false) or current_user.is_superuser|default(false)))|tojson }};</script>
 
 <section class="peer-page-hero" aria-label="Peers workspace">
     <div class="peer-hero-icon"><i class="fas fa-users" aria-hidden="true"></i></div>
     <div class="peer-hero-copy">
-        <h1 class="page-title">Peers</h1>
-        <p>Manage peers, configs, limits, timers, and QR in one place.</p>
+        <span class="ws-eyebrow">ACCESS / CLIENT DIRECTORY</span><h1 class="page-title">Peer workspace</h1>
+        <p>Manage WireGuard peers, view usage, and control access to your network.</p>
     </div>
     <div class="peer-hero-live"><span></span><b>Live</b><small id="peer-hero-updated">Auto refresh</small></div>
 </section>
@@ -96,7 +103,7 @@
     </div>
 </section>
 
-<script src="{{ url_for('static', filename='js/users-scope.js', v='20260903-time-v6') }}"></script>
+<script src="{{ url_for('static', filename='js/users-scope.js') }}"></script>
 
 <section class="peer-manage-section" aria-label="Manage peers">
     <div class="peer-manage-mobile-head">
@@ -107,6 +114,7 @@
         </div>
     </div>
     <div class="peer-page-actions">
+
         <button id="create-peer-btn" class="btn" type="button">
             <i class="fas fa-plus"></i> Create Peer
         </button>
@@ -116,12 +124,13 @@
         <button id="create-iface-btn" class="btn secondary" type="button">
             <i class="fas fa-diagram-project"></i> New interface
         </button>
+        <button id="peer-template-open" class="btn secondary" type="button" title="Peer page template"><i class="fas fa-palette" aria-hidden="true"></i> Template</button>
     </div>
 </section>
 
 <div id="iface-create-modal" class="modal" aria-hidden="true" aria-labelledby="iface-create-title" role="dialog">
     <div class="modal-backdrop" tabindex="-1"></div>
-    <div class="modal-content iface-create-card" role="document">
+    <div class="modal-content iface-create-card interface-studio" role="document">
         <button id="iface-create-close" class="modal-close" aria-label="Close" type="button">&times;</button>
         <h2 id="iface-create-title"><i class="fas fa-diagram-project"></i> New interface</h2>
         <p class="muted" style="margin-top:-4px;margin-bottom:14px">
@@ -278,11 +287,11 @@
                     </div>
                 </div>
             </section>
+            </div>
             <footer class="modal-footer peerx-form-actions">
                 <button type="button" class="btn secondary" id="create-cancel">Cancel</button>
                 <button type="submit" class="btn"><i class="fas fa-save"></i> Save peer</button>
             </footer>
-            </div>
         </form>
     </div>
 </div>
@@ -368,11 +377,11 @@
                     </div>
                 </div>
             </section>
+            </div>
             <footer class="modal-footer peerx-form-actions">
                 <button type="button" class="btn secondary" id="edit-cancel">Cancel</button>
                 <button type="submit" class="btn"><i class="fas fa-save"></i> Save changes</button>
             </footer>
-            </div>
         </form>
     </div>
 </div>
@@ -451,17 +460,17 @@
                     <div class="peerx-inline-wireguard wide"><label class="form-group"><span>Keepalive (s)</span><input id="bulk-keepalive" name="persistent_keepalive" type="number" class="input" placeholder="e.g. 25"></label><label class="form-group"><span>MTU</span><input id="bulk-mtu" name="mtu" type="number" class="input" placeholder="Interface/profile default"></label></div>
                 </div>
             </section>
+            </div>
             <footer class="modal-footer peerx-form-actions">
                 <button type="button" id="bulk-close-btn" class="btn secondary">Cancel</button>
                 <button type="submit" class="btn"><i class="fas fa-layer-group"></i> Create batch</button>
             </footer>
-            </div>
         </form>
     </div>
 </div>
 
-<script src="{{ url_for('static', filename='js/users.js', v='20260903-time-v6') }}"></script>
-<script src="{{ url_for('static', filename='js/users-more-info.js', v='20260903-time-v6') }}"></script>
+<script src="{{ url_for('static', filename='js/users.js') }}"></script>
+<script src="{{ url_for('static', filename='js/users-more-info.js') }}"></script>
 <script src="{{ url_for('static', filename='js/peer-ui-stability.js') }}"></script>
 <script>
 (() => {
@@ -771,7 +780,6 @@
   scheduleRender();
 })();
 </script>
-<link rel="stylesheet" href="{{ url_for('static', filename='css/peer-mobile.css') }}">
 <script>
 
 (() => {
@@ -807,4 +815,5 @@
   else mq.addListener(syncPeerModalPortal);
 })();
 </script>
+<script defer src="{{ url_for('static', filename='js/peer-diagnose.js') }}"></script>
 {% endblock %}
