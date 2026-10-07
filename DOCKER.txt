@@ -1,0 +1,60 @@
+cp docker.env.example .env           
+docker compose build panel
+docker compose up -d panel
+docker compose logs -f panel
+#change the default values including ports etc
+#To see the generated values
+docker compose exec panel sh -lc 'cat /app/instance/docker-secrets.env'
+
+## Telegram bot
+
+The bot is an optional Compose profile and shares the panel instance volume:
+
+docker compose --profile telegram up -d telegram-bot
+
+Configure the bot token from the panel or set `TG_BOT_TOKEN`. If the panel is
+not listening on the default local URL, set `PANEL_BASE_URL` in `.env`.
+
+## Remote node agent in Docker
+
+On a node server, build the same image and start only the node profile:
+
+cp docker.env.example .env            
+docker compose build node-agent
+docker compose --profile node up -d node-agent
+docker compose logs -f node-agent
+
+The default agent URL is `http://NODE_IP:9898`.
+
+If `NODE_API_KEY` was left blank, retrieve the generated key with:
+
+docker compose exec node-agent \
+  sh -lc 'grep "^API_KEY=" /app/instance/docker-agent-secrets.env'
+
+
+## TLS
+
+A reverse proxy on the host is the simplest Docker setup. If HTTPS terminates
+outside the container, set `SECURE_COOKIES=1` only when browser access is
+actually HTTPS.
+
+Native TLS can also be used, but certificate/key paths configured in the panel
+must exist inside the container. Add a read-only certificate mount to the
+`panel` service, for example:
+
+volumes:
+  - /etc/letsencrypt:/etc/letsencrypt:ro
+
+
+installer/self-updater:
+
+git pull
+docker compose build --pull panel
+docker compose up -d --force-recreate panel
+
+
+For the node agent:
+
+git pull
+docker compose build --pull node-agent
+docker compose --profile node up -d --force-recreate node-agent
