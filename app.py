@@ -1,4 +1,6 @@
-import os, glob, subprocess, time, shlex, logging, ipaddress, psutil, requests, json, tempfile, sys, zipfile, datetime as dt, ipaddress, platform, re, qrcode, multiprocessing, threading, shutil
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import os, glob, subprocess, time, shlex, logging, ipaddress, psutil, requests, json, tempfile, sys, zipfile, datetime as dt, ipaddress, platform, re, qrcode, multiprocessing, threading, shutil, signal
 from io import BytesIO
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta, timezone
@@ -39,12 +41,16 @@ from models import (
 )
 from forms import PeerForm
 from auth import require_api_key, admin_required, require_api_key_or_login
+from panel_core.security import hash_recovery, verify_recovery, generate_recovery_codes as _gen_recovery
+from panel_core.profiles import register_profile_routes, panel_default_dns as _panel_default_dns
+from panel_core.subscription_policy import compute_subscription_access, effective_peer_state
+from panel_core import node_client as _node_client
+from panel_core.health_center import build_health_center
+from panel_operations.peer_diagnostics import diagnose_peer
 from sqlalchemy import or_, and_, text, inspect, func, event
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 from urllib.parse import urlparse, urljoin
 import secrets
-import hashlib
-import string
 import pyotp
 import bcrypt
 from werkzeug.exceptions import HTTPException
@@ -97,27 +103,6 @@ _PANEL_UPDATE_CACHE = {
     "ts": 0,
     "data": None,
 }
-
-def hash_recovery(code: str) -> str:
-    return "sha256$" + hashlib.sha256(code.encode("utf-8")).hexdigest()
-
-def verify_recovery(code: str, stored: str) -> bool:
-    if not stored:
-        return False
-    if stored.startswith("sha256$"):
-        return stored == hash_recovery(code)
-    try:
-        import bcrypt as pybcrypt
-        if stored.startswith("$2") or stored.startswith("$bcrypt$"):
-            return pybcrypt.checkpw(code.encode("utf-8"), stored.encode("utf-8"))
-    except Exception:
-        pass
-    return False
-
-def _gen_recovery(n=10, length=10):
-    alphabet = string.ascii_uppercase + string.digits
-    return [''.join(secrets.choice(alphabet) for _ in range(length)) for _ in range(n)]
-
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
@@ -285,9 +270,6 @@ def _peer_schema():
     if insp.has_table('subscription_peer'):
         link_cols = {c['name'] for c in insp.get_columns('subscription_peer')}
         if 'owned' not in link_cols:
-            # Legacy links get owned=0 on purpose: i cannot tell whether the
-            # subscription created the peer, and deleting someone else's peer
-            # is not recoverable.
             statements.append(
                 'ALTER TABLE subscription_peer '
                 'ADD COLUMN owned BOOLEAN NOT NULL DEFAULT 0'
@@ -394,892 +376,8 @@ app.config.from_object(Config)
 os.makedirs(app.instance_path, exist_ok=True)
 db.init_app(app)
 
-PEER_PROFILE_FILE  = os.path.join(app.instance_path, 'peer_profile.json')
-PEER_PROFILES_FILE = os.path.join(app.instance_path, 'peer_profiles.json')
+register_profile_routes(app)
 
-_DEF_PROFILE = {
-    'dns': '1.1.1.1, 1.0.0.1',
-    'allowed_ips': '0.0.0.0/0, ::/0',
-    'persistent_keepalive': None,
-    'mtu': None,
-    'endpoint': '',
-    'peer_endpoint': '',
-    'data_limit_value': 0,
-    'data_limit_unit': 'Gi',
-    'start_on_first_use': False,
-    'unlimited': False,
-    'time_limit_days': 0,
-    'time_limit_hours': 0,
-    'time_limit_minutes': 0,
-}
-
-def _migrate_single_profile():
-    os.makedirs(app.instance_path, exist_ok=True)
-    if not os.path.exists(PEER_PROFILES_FILE) and os.path.exists(PEER_PROFILE_FILE):
-        try:
-            with open(PEER_PROFILE_FILE, 'r') as f:
-                single = json.load(f)
-        except Exception:
-            single = {}
-        base = dict(_DEF_PROFILE); base.update({k: single.get(k, base[k]) for k in base.keys()})
-        data = {"active": "Default", "profiles": {"Default": base}}
-        with open(PEER_PROFILES_FILE, 'w') as f:
-            json.dump(data, f, indent=2)
-
-def _load_profiles():
-    os.makedirs(app.instance_path, exist_ok=True)
-    _migrate_single_profile()
-    try:
-        with open(PEER_PROFILES_FILE, 'r') as f:
-            d = json.load(f)
-    except Exception:
-        d = {}
-    if 'profiles' not in d or not isinstance(d['profiles'], dict):
-        d['profiles'] = {}
-    d.setdefault('active', 'Default')
-    if 'Default' not in d['profiles']:
-        d['profiles']['Default'] = dict(_DEF_PROFILE)
-    return d
-
-def _save_profiles(d):
-    os.makedirs(app.instance_path, exist_ok=True)
-    with open(PEER_PROFILES_FILE, 'w') as f:
-        json.dump(d, f, indent=2)
-
-def _get_profile(name: str | None):
-    d = _load_profiles()
-    name = (name or d.get('active') or 'Default')
-    prof = dict(_DEF_PROFILE)
-    prof.update(d['profiles'].get(name, {}))
-    return prof
-
-def _set_profile(name: str, data: dict):
-    d = _load_profiles()
-    base = dict(_DEF_PROFILE)
-    for k in base.keys():
-        if k in data:
-            base[k] = data[k]
-    d['profiles'][name] = base
-    _save_profiles(d)
-
-def _set_active_profile(name: str):
-    d = _load_profiles()
-    if name in d['profiles']:
-        d['active'] = name
-        _save_profiles(d)
-
-def _panel_default_dns():
-    return (_get_profile(None).get('dns') or '1.1.1.1, 1.0.0.1').strip()
-
-# ___ API (multi)___
-@app.route('/api/peer_profile', methods=['DELETE'])
-@login_required
-def delete_apipeer_profile():
-    name = (request.args.get('name') or '').strip()
-    if not name:
-        return jsonify(error="name_required"), 400
-    d = _load_profiles()
-    if name == 'Default':
-        return jsonify(error="cannot_delete_default"), 400
-    if name not in d['profiles']:
-        return jsonify(error="not_found"), 404
-    if d.get('active') == name:
-        d['active'] = 'Default'
-    d['profiles'].pop(name, None)
-    _save_profiles(d)
-    return jsonify(ok=True, profiles=sorted(d['profiles'].keys()), active=d['active'])
-
-@app.get('/api/peer_profiles')
-@login_required
-def list_apipeer_profiles():
-    d = _load_profiles()
-    names = sorted((d.get('profiles') or {}).keys())
-    return jsonify(profiles=names, active=d.get('active') or 'Default')
-
-@app.route('/api/peer_profile/rename', methods=['POST'])
-@login_required
-def rename_apipeer_profile():
-    data = request.get_json(force=True, silent=True) or {}
-
-    raw_old = data.get('old')
-    raw_new = data.get('new')
-
-    if not isinstance(raw_old, str) or not isinstance(raw_new, str):
-        return jsonify(
-            ok=False,
-            error='invalid_name',
-            message='The old and new profile names must be text.',
-        ), 400
-
-    old = raw_old.strip()
-    new = raw_new.strip()
-
-    if not old or not new:
-        return jsonify(
-            ok=False,
-            error='old_and_new_required',
-            message='Both the current name and new name are required.',
-        ), 400
-
-    if len(new) > 80:
-        return jsonify(
-            ok=False,
-            error='name_too_long',
-            message='Profile names cannot exceed 80 characters.',
-        ), 400
-
-    data_store = _load_profiles()
-    profiles = data_store.get('profiles') or {}
-
-    if old not in profiles:
-        return jsonify(
-            ok=False,
-            error='not_found',
-            message='The selected profile was not found.',
-        ), 404
-
-    if new != old and new in profiles:
-        return jsonify(
-            ok=False,
-            error='exists',
-            message='A profile with that name already exists.',
-        ), 409
-
-    if new != old:
-        profiles[new] = profiles.pop(old)
-
-    if data_store.get('active') == old:
-        data_store['active'] = new
-
-    _save_profiles(data_store)
-
-    return jsonify(
-        ok=True,
-        old_name=old,
-        name=new,
-        active=data_store.get('active') or 'Default',
-        profiles=sorted(profiles.keys()),
-    )
-
-@app.route('/api/peer_profile', methods=['GET'])
-@login_required
-def get_apipeer_profile():
-    name = (request.args.get('name') or '').strip() or None
-    return jsonify(_get_profile(name))
-
-@app.route('/api/peer_profile', methods=['POST'])
-@login_required
-def save_apipeer_profile():
-    data = request.get_json(force=True, silent=True) or {}
-
-    raw_name = data.get('name')
-
-    if raw_name is None:
-        raw_name = 'Default'
-
-    if not isinstance(raw_name, str):
-        return jsonify(
-            ok=False,
-            error='invalid_name',
-            message='Profile name must be text.',
-        ), 400
-
-    name = raw_name.strip() or 'Default'
-
-    if len(name) > 80:
-        return jsonify(
-            ok=False,
-            error='name_too_long',
-            message='Profile names cannot exceed 80 characters.',
-        ), 400
-
-    payload = {
-        key: value
-        for key, value in data.items()
-        if key != 'name'
-    }
-
-    _set_profile(name, payload)
-
-    return jsonify(
-        ok=True,
-        name=name,
-        saved_name=name,
-        saved=_get_profile(name),
-    )
-
-@app.route('/api/peer_profile/activate', methods=['POST'])
-@login_required
-def activate_apipeer_profile():
-    data = request.get_json(force=True, silent=True) or {}
-
-    raw_name = data.get('name')
-
-    if raw_name is None:
-        raw_name = 'Default'
-
-    if not isinstance(raw_name, str):
-        return jsonify(
-            ok=False,
-            error='invalid_name',
-            message='Profile name must be text.',
-        ), 400
-
-    name = raw_name.strip() or 'Default'
-
-    profiles_data = _load_profiles()
-
-    if name not in (profiles_data.get('profiles') or {}):
-        return jsonify(
-            ok=False,
-            error='not_found',
-            message='The selected profile was not found.',
-        ), 404
-
-    _set_active_profile(name)
-
-    return jsonify(
-        ok=True,
-        active=name,
-    )
-
-# Subscription profiles
-
-SUBSCRIPTION_PROFILES_FILE = os.path.join(
-    app.instance_path,
-    'subscription_profiles.json',
-)
-
-
-def _load_subscription_profiles():
-
-    os.makedirs(
-        app.instance_path,
-        exist_ok=True,
-    )
-
-    try:
-        with open(
-            SUBSCRIPTION_PROFILES_FILE,
-            'r',
-            encoding='utf-8',
-        ) as profile_file:
-            data = json.load(
-                profile_file
-            )
-
-    except FileNotFoundError:
-        data = {}
-
-    except Exception:
-        current_app.logger.warning(
-            'Could not read subscription profiles.',
-            exc_info=True,
-        )
-        data = {}
-
-    if not isinstance(
-        data,
-        dict,
-    ):
-        data = {}
-
-    profiles = data.get(
-        'profiles'
-    )
-
-    if not isinstance(
-        profiles,
-        dict,
-    ):
-        profiles = {}
-
-    cleaned_profiles = {}
-
-    for profile_name, profile_data in profiles.items():
-        clean_name = str(
-            profile_name or ''
-        ).strip()
-
-        if not clean_name:
-            continue
-
-        cleaned_profiles[
-            clean_name
-        ] = (
-            profile_data
-            if isinstance(
-                profile_data,
-                dict,
-            )
-            else {}
-        )
-
-    active_name = str(
-        data.get('active')
-        or ''
-    ).strip()
-
-    if (
-        active_name
-        and active_name
-        not in cleaned_profiles
-    ):
-        active_name = ''
-
-    if (
-        not active_name
-        and cleaned_profiles
-    ):
-        active_name = next(
-            iter(
-                sorted(
-                    cleaned_profiles.keys(),
-                    key=str.lower,
-                )
-            )
-        )
-
-    return {
-        'active': active_name,
-        'profiles': cleaned_profiles,
-    }
-
-
-def _save_subscription_profiles(data):
-    """
-    Save subscription profiles atomically.
-    """
-    os.makedirs(
-        app.instance_path,
-        exist_ok=True,
-    )
-
-    profiles = (
-        data.get('profiles')
-        if isinstance(data, dict)
-        else {}
-    )
-
-    if not isinstance(
-        profiles,
-        dict,
-    ):
-        profiles = {}
-
-    active_name = str(
-        (
-            data.get('active')
-            if isinstance(data, dict)
-            else ''
-        )
-        or ''
-    ).strip()
-
-    payload = {
-        'active': active_name,
-        'profiles': profiles,
-    }
-
-    temporary_path = (
-        SUBSCRIPTION_PROFILES_FILE
-        + '.tmp'
-    )
-
-    with open(
-        temporary_path,
-        'w',
-        encoding='utf-8',
-    ) as profile_file:
-        json.dump(
-            payload,
-            profile_file,
-            indent=2,
-            ensure_ascii=False,
-        )
-
-    os.replace(
-        temporary_path,
-        SUBSCRIPTION_PROFILES_FILE,
-    )
-
-    try:
-        os.chmod(
-            SUBSCRIPTION_PROFILES_FILE,
-            0o600,
-        )
-    except Exception:
-        pass
-
-
-def _subscription_profile_rows(data=None):
-    """
-    Return profile metadata for the profile dropdown.
-    """
-    data = (
-        data
-        or _load_subscription_profiles()
-    )
-
-    active_name = str(
-        data.get('active')
-        or ''
-    ).strip()
-
-    profiles = (
-        data.get('profiles')
-        or {}
-    )
-
-    return [
-        {
-            'name': profile_name,
-            'default': (
-                profile_name
-                == active_name
-            ),
-            'active': (
-                profile_name
-                == active_name
-            ),
-        }
-        for profile_name in sorted(
-            profiles.keys(),
-            key=str.lower,
-        )
-    ]
-
-
-def _sanitize_subscription_profile(profile):
-
-    if not isinstance(
-        profile,
-        dict,
-    ):
-        profile = {}
-
-    include = profile.get(
-        'include'
-    )
-
-    if not isinstance(
-        include,
-        dict,
-    ):
-        include = {}
-
-    cleaned = {
-        'include': {
-            'client': bool(
-                include.get('client')
-            ),
-            'advanced': bool(
-                include.get('advanced')
-            ),
-            'interfaces': bool(
-                include.get('interfaces')
-            ),
-            'template': bool(
-                include.get('template')
-            ),
-        }
-    }
-
-    for section_name in (
-    'client',
-    'advanced',
-    'template',
-    ):
-        section = profile.get(section_name)
-
-        if isinstance(section, dict):
-            cleaned[section_name] = section
-
-
-    interfaces = profile.get('interfaces')
-
-    if isinstance(interfaces, list):
-        cleaned['interfaces'] = [
-            item
-            for item in interfaces[:200]
-            if isinstance(item, dict)
-        ]
-
-    return cleaned
-
-
-@app.get('/api/subscription_profiles')
-@login_required
-def subscription_profiles_list():
-    store = (
-        _load_subscription_profiles()
-    )
-
-    return jsonify(
-        ok=True,
-        active=(
-            store.get('active')
-            or ''
-        ),
-        profiles=(
-            _subscription_profile_rows(
-                store
-            )
-        ),
-    )
-
-
-@app.post('/api/subscription_profiles')
-@login_required
-def subscription_profile_save():
-    payload = (
-        request.get_json(
-            silent=True,
-        )
-        or {}
-    )
-
-    profile_name = str(
-        payload.get('name')
-        or ''
-    ).strip()
-
-    if not profile_name:
-        return jsonify(
-            ok=False,
-            error='name_required',
-            message='Enter a profile name.',
-        ), 400
-
-    if len(profile_name) > 80:
-        return jsonify(
-            ok=False,
-            error='name_too_long',
-            message=(
-                'Profile names cannot exceed '
-                '80 characters.'
-            ),
-        ), 400
-
-    profile_payload = (
-        payload.get('profile')
-    )
-
-    if not isinstance(
-        profile_payload,
-        dict,
-    ):
-
-        profile_payload = {
-            key: value
-            for key, value in payload.items()
-            if key not in {
-                'name',
-                'activate',
-                'set_active',
-            }
-        }
-
-    cleaned_profile = (
-        _sanitize_subscription_profile(
-            profile_payload
-        )
-    )
-
-    store = (
-        _load_subscription_profiles()
-    )
-
-    profiles = store.setdefault(
-        'profiles',
-        {},
-    )
-
-    profiles[
-        profile_name
-    ] = cleaned_profile
-
-    should_activate = bool(
-        payload.get('activate')
-        or payload.get('set_active')
-        or not store.get('active')
-    )
-
-    if should_activate:
-        store[
-            'active'
-        ] = profile_name
-
-    _save_subscription_profiles(
-        store
-    )
-
-    return jsonify(
-        ok=True,
-        name=profile_name,
-        saved_name=profile_name,
-        active=(
-            store.get('active')
-            or ''
-        ),
-        profiles=(
-            _subscription_profile_rows(
-                store
-            )
-        ),
-    )
-
-
-@app.get('/api/subscription_profiles/<path:profile_name>')
-@login_required
-def subscription_profile_get(profile_name):
-    clean_name = str(
-        profile_name or ''
-    ).strip()
-
-    store = (
-        _load_subscription_profiles()
-    )
-
-    profile = (
-        store.get('profiles')
-        or {}
-    ).get(
-        clean_name
-    )
-
-    if not isinstance(
-        profile,
-        dict,
-    ):
-        return jsonify(
-            ok=False,
-            error='not_found',
-            message='Subscription profile was not found.',
-        ), 404
-
-    return jsonify(
-        ok=True,
-        name=clean_name,
-        active=(
-            store.get('active')
-            == clean_name
-        ),
-        profile=profile,
-    )
-
-
-@app.post(
-    '/api/subscription_profiles/<path:profile_name>/activate'
-)
-@login_required
-def subscription_profile_activate(profile_name):
-    clean_name = str(
-        profile_name or ''
-    ).strip()
-
-    store = (
-        _load_subscription_profiles()
-    )
-
-    profiles = (
-        store.get('profiles')
-        or {}
-    )
-
-    if clean_name not in profiles:
-        return jsonify(
-            ok=False,
-            error='not_found',
-            message='Subscription profile was not found.',
-        ), 404
-
-    store[
-        'active'
-    ] = clean_name
-
-    _save_subscription_profiles(
-        store
-    )
-
-    return jsonify(
-        ok=True,
-        active=clean_name,
-        profiles=(
-            _subscription_profile_rows(
-                store
-            )
-        ),
-    )
-
-
-@app.post(
-    '/api/subscription_profiles/<path:profile_name>/rename'
-)
-@login_required
-def subscription_profile_rename(profile_name):
-    old_name = str(
-        profile_name or ''
-    ).strip()
-
-    payload = (
-        request.get_json(
-            silent=True,
-        )
-        or {}
-    )
-
-    new_name = str(
-        payload.get('name')
-        or payload.get('new')
-        or ''
-    ).strip()
-
-    if not new_name:
-        return jsonify(
-            ok=False,
-            error='name_required',
-            message='Enter the new profile name.',
-        ), 400
-
-    if len(new_name) > 80:
-        return jsonify(
-            ok=False,
-            error='name_too_long',
-            message=(
-                'Profile names cannot exceed '
-                '80 characters.'
-            ),
-        ), 400
-
-    store = (
-        _load_subscription_profiles()
-    )
-
-    profiles = (
-        store.get('profiles')
-        or {}
-    )
-
-    if old_name not in profiles:
-        return jsonify(
-            ok=False,
-            error='not_found',
-            message='Subscription profile was not found.',
-        ), 404
-
-    if (
-        new_name != old_name
-        and new_name in profiles
-    ):
-        return jsonify(
-            ok=False,
-            error='exists',
-            message=(
-                'A subscription profile with that '
-                'name already exists.'
-            ),
-        ), 409
-
-    if new_name != old_name:
-        profiles[
-            new_name
-        ] = profiles.pop(
-            old_name
-        )
-
-    if (
-        store.get('active')
-        == old_name
-    ):
-        store[
-            'active'
-        ] = new_name
-
-    _save_subscription_profiles(
-        store
-    )
-
-    return jsonify(
-        ok=True,
-        old_name=old_name,
-        name=new_name,
-        active=(
-            store.get('active')
-            or ''
-        ),
-        profiles=(
-            _subscription_profile_rows(
-                store
-            )
-        ),
-    )
-
-
-@app.delete(
-    '/api/subscription_profiles/<path:profile_name>'
-)
-@login_required
-def subscription_profile_delete(profile_name):
-    clean_name = str(
-        profile_name or ''
-    ).strip()
-
-    store = (
-        _load_subscription_profiles()
-    )
-
-    profiles = (
-        store.get('profiles')
-        or {}
-    )
-
-    if clean_name not in profiles:
-        return jsonify(
-            ok=False,
-            error='not_found',
-            message='Subscription profile was not found.',
-        ), 404
-
-    profiles.pop(
-        clean_name,
-        None,
-    )
-
-    if (
-        store.get('active')
-        == clean_name
-    ):
-        remaining_names = sorted(
-            profiles.keys(),
-            key=str.lower,
-        )
-
-        store[
-            'active'
-        ] = (
-            remaining_names[0]
-            if remaining_names
-            else ''
-        )
-
-    _save_subscription_profiles(
-        store
-    )
-
-    return jsonify(
-        ok=True,
-        deleted=clean_name,
-        active=(
-            store.get('active')
-            or ''
-        ),
-        profiles=(
-            _subscription_profile_rows(
-                store
-            )
-        ),
-    )
 def _effective_dns(peer):
     return (peer.dns or getattr(peer.iface, 'dns', None) or _panel_default_dns())
 
@@ -1401,8 +499,6 @@ def cache_headers(resp):
         resp.headers['Expires'] = '0'
         resp.headers['Vary'] = 'Cookie, Authorization'
     elif resp.mimetype == 'text/html':
-        # The base template contains the selected panel timezone.  Never let a
-        # browser, reverse proxy or CDN reuse HTML rendered for an older zone.
         resp.headers['Cache-Control'] = 'private, no-store, no-cache, must-revalidate, max-age=0'
         resp.headers['Pragma'] = 'no-cache'
         resp.headers['Expires'] = '0'
@@ -1753,9 +849,6 @@ def _app_log_timestamp_utc(value: str) -> str:
             parsed = datetime.fromisoformat(raw)
 
         if not has_explicit_zone:
-            # Python logging.Formatter used host-local time in older releases.
-            # Attach that host timezone before converting; never label the
-            # legacy wall clock as UTC directly.
             parsed = parsed.astimezone()
         elif parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=timezone.utc)
@@ -2917,7 +2010,6 @@ def _tg_parse_datetime(value):
         except Exception:
             return None
 
-    # Database/API datetimes without an offset are treated as UTC.
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
 
@@ -3353,8 +2445,6 @@ def _send_telegram_event(
         message_lines
     )
 
-    # Keep a real Flask app reference
-    # because sending happens in a thread.
     flask_app = (
         current_app
         ._get_current_object()
@@ -3505,9 +2595,6 @@ def _http_security_normalize_networks(value):
 
 
 def _load_http_security_settings():
-    # A before_request hook calls this for every request, static assets
-    # included, so re-reading and re-coercing the file each time is pure
-    # overhead. The mtime tells us when a save actually changed it.
     try:
         stamp = os.stat(_HTTP_SECURITY_SETTINGS_FILE).st_mtime_ns
     except OSError:
@@ -4154,7 +3241,6 @@ def _http_security_enforce_temporary_block():
     if client_ip == "unknown":
         return None
 
-    # A permanent deny is deliberately stronger than all allow/temporary rules.
     if _http_security_is_denied(client_ip, settings):
         g.http_security_blocked = True
         return make_response(jsonify(
@@ -5331,7 +4417,7 @@ def _check_node_notifications(
                         if isinstance(health_interfaces,list,):
                             interfaces = (health_interfaces)
 
-                    # fallback for older node agents
+                    # fallback 
                     if not interfaces:
                         try:
                             interface_response = (node_get(node,"/api/interfaces?fast=1",timeout=10,)or {})
@@ -6437,16 +5523,24 @@ def tg_test():
                     json={"chat_id": chat_id,
                           "text": "✅ <b>Test</b>: panel → Telegram notifications are working.",
                           "parse_mode": "HTML"},
-                    timeout=6
+                    timeout=(6, 15)
                 )
                 if r.status_code != 200:
                     failures.append({"chat_id": chat_id, "status": r.status_code, "body": r.text[:200]})
+            except requests.exceptions.ConnectTimeout:
+                failures.append({"chat_id": chat_id, "error": "Connection to Telegram timed out. Check outbound HTTPS, DNS and proxy settings."})
+            except requests.exceptions.ReadTimeout:
+                failures.append({"chat_id": chat_id, "error": "Telegram response timed out. Delivery is uncertain; the message was not automatically resent."})
+            except requests.exceptions.SSLError:
+                failures.append({"chat_id": chat_id, "error": "TLS verification failed while connecting to Telegram."})
+            except requests.exceptions.ConnectionError:
+                failures.append({"chat_id": chat_id, "error": "Could not connect to Telegram. Check outbound network access and DNS."})
             except Exception as e:
-                failures.append({"chat_id": chat_id, "error": str(e)})
+                failures.append({"chat_id": chat_id, "error": type(e).__name__})
 
         if failures and len(failures) == len(recips):
             current_app.logger.warning("Telegram test failed: %s", failures)
-            return jsonify(error="Telegram API rejected all recipients. Have you DMed /start to the bot?",
+            return jsonify(error="Telegram delivery failed. Check the connection and recipient details below.",
                            detail=failures[:3]), 502
 
         if failures:
@@ -10702,6 +9796,28 @@ def api_panel_restart():
             next_base,
         )
 
+        docker_mode = str(os.getenv("DOCKER_MODE") or "").strip().lower() in {
+            "1", "true", "yes", "on"
+        } or Path("/.dockerenv").exists()
+
+        if docker_mode:
+            # Docker/Compose
+            def _restart_container_process():
+                time.sleep(0.8)
+                os.kill(os.getpid(), signal.SIGTERM)
+
+            threading.Thread(
+                target=_restart_container_process,
+                name="panel-container-restart",
+                daemon=True,
+            ).start()
+            return jsonify(
+                ok=True,
+                restarting=True,
+                service="docker-container",
+                next_url=next_base,
+            )
+
         subprocess.Popen(["systemctl", "restart", svc])
 
         return jsonify(ok=True, restarting=True, service=svc, next_url=next_base)
@@ -10946,11 +10062,6 @@ def tg_heartbeat():
         server_ts=rec['ts'],
     )
 
-# -------------------------------------------------
-# Database DateTime values are stored as naive UTC.
-# Unix timestamps are always absolute UTC instants.
-# Regional timezone is ONLY used when displaying time.
-# -------------------------------------------------
 
 def now_ts() -> int:
     return int(time.time())
@@ -10979,7 +10090,6 @@ def from_ts(ts):
     if ts is None:
         return None
 
-    # Database columns are DateTime without timezone=True,
     return (
         datetime
         .fromtimestamp(int(ts), tz=timezone.utc)
@@ -11127,8 +10237,6 @@ def _derive_wg_public_key(priv) -> str:
     if not priv or priv == '(remote)':
         return ''
 
-    # Deriving a public key is deterministic, so memoize per request to avoid
-    # spawning `wg pubkey` once per peer when building bulk configs (zips).
     cache = None
     try:
         cache = g._wg_pubkey_cache
@@ -11714,7 +10822,6 @@ def _check_iface_up(iface: InterfaceConfig):
         rc
     )
 
-    # Clean possible half-created interface from failed wg-quick/manual attempts.
     rc0, out0 = _run_capture(['ip', 'link', 'del', 'dev', dev], timeout=6.0)
     _iface_log(iid, f"$ ip link del dev {dev}\n{out0}".rstrip())
 
@@ -11724,7 +10831,6 @@ def _check_iface_up(iface: InterfaceConfig):
     if rc1 != 0:
         raise RuntimeError(f"Could not create interface {dev}: {out1.strip() or 'ip link add failed'}")
 
-    # Apply private key and listen port without using wg setconf on a wg-quick config.
     private_key = (getattr(iface, 'private_key', None) or '').strip()
 
     if not private_key and iface.path and os.path.isfile(iface.path):
@@ -11765,7 +10871,6 @@ def _check_iface_up(iface: InterfaceConfig):
             except Exception:
                 pass
 
-    # Add interface address.
     address = (getattr(iface, 'address', None) or '').strip()
 
     if not address and iface.path and os.path.isfile(iface.path):
@@ -12233,7 +11338,6 @@ def api_timezone():
 
     return jsonify(
         ok=True,
-        build="20260904-v9",
         timezone=tz_name,
         server_epoch=now_ts(),
         utc_now=now_utc.isoformat(
@@ -12258,27 +11362,18 @@ def template_settings_get():
 @app.post('/api/template_settings')
 @login_required
 def template_settings_post():
-    data = request.get_json(silent=True) or {}
-    cur = _load_template_settings()
-
-    if 'selected' in data:
-        sel = (data.get('selected') or '').strip().lower()
-        if sel not in ('default','compact','minimal','pro'):
-            return jsonify(error='invalid template'), 400
-        cur['selected'] = sel
-
-    if 'socials' in data:
-        s = data.get('socials') or {}
-        cur['socials'] = {
-            'telegram':  (s.get('telegram') or '').strip(),
-            'whatsapp':  (s.get('whatsapp') or '').strip(),
-            'instagram': (s.get('instagram') or '').strip(),
-            'phone':     (s.get('phone') or '').strip(),
-            'website':   (s.get('website') or '').strip(),
-            'email':     (s.get('email') or '').strip(),
-        }
-
-    _save_template_settings(cur)
+    from panel_operations.templates import validate
+    import fcntl
+    lock_path = TEMPLATE_SETTINGS_FILE + '.lock'
+    os.makedirs(app.instance_path, exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            cur = validate(request.get_json(silent=True), _load_template_settings())
+        except (ValueError, TypeError) as exc:
+            return jsonify(error=str(exc)), 400
+        _save_template_settings(cur)
     return jsonify(ok=True, settings=cur)
 
 # _______Telegram Logs_________
@@ -12427,6 +11522,7 @@ def user_peer_page(token):
     return render_template(
         tpl,
         token=token,
+        peer_appearance=ts.get('appearance', {}),
         support_telegram = (s.get('telegram')  or ''),
         support_whatsapp = (s.get('whatsapp')  or ''),
         support_instagram= (s.get('instagram') or ''),
@@ -12463,6 +11559,7 @@ def preview_template(name):
         tpl,
         token="PREVIEW_TOKEN",
         preview=True,
+        peer_appearance=_load_template_settings().get('appearance', {}),
         support_telegram=socials['telegram'],
         support_whatsapp=socials['whatsapp'],
         support_instagram=socials['instagram'],
@@ -12470,6 +11567,9 @@ def preview_template(name):
         support_website=socials['website'],
         support_email=socials['email'],
     )
+
+    from panel_operations.templates import prepare_preview
+    html = prepare_preview(html, app.root_path)
 
     #____ Live Preview ____
     stub = f"""
@@ -13076,7 +12176,6 @@ def node_install_peer(node, iface_name, mirror, *, public_key, requested_address
 
     host_cidr = None
     if requested_address:
-        # Raises AddressInvalid / AddressConflict, which the caller maps to 400/409.
         host_cidr = allocate_peer_address(mirror, requested=requested_address)
 
     last_error = None
@@ -14568,7 +13667,6 @@ def _persist_iface_public_key(iface, pk: str) -> str:
                 {'pk': pk, 'iface_id': iface_id},
             )
     except Exception:
-        # The in-memory value is already set above; the DB write is best-effort.
         current_app.logger.warning(
             'Could not persist public_key for interface %s',
             getattr(iface, 'name', '?'),
@@ -14674,16 +13772,9 @@ def _fetch_node_iface_public_key(iface) -> str:
 
 
 def _server_publickey(iface, *, persist=False):
-    # Resolve the server-side public key for an interface. Persistence is
-    # opt-in so read/GET config paths never trigger a DB write (avoids SQLite
-    # write-lock contention and unrelated ORM session flushes). Write/sync
-    # paths persist the key directly, so read paths can stay side-effect free.
     if iface is None:
         return ''
 
-    # Memoize per request keyed by interface id, so bulk config builds (zips)
-    # resolve each interface's key once instead of per peer (a node fetch or
-    # `wg pubkey` spawn per peer).
     iface_id = getattr(iface, 'id', None)
     cache = None
     if iface_id is not None:
@@ -14928,7 +14019,6 @@ def node_peer_delete(nid, pub):
     )
 
     if p is None:
-        # No panel row: still ask the node to clean up, then report idempotently.
         try:
             node_delete(n, f'/api/peer/{pub}')
         except Exception as e:
@@ -15145,8 +14235,10 @@ def _load_template_settings():
     try:
         with open(TEMPLATE_SETTINGS_FILE, 'r') as f:
             j = json.load(f)
-    except Exception:
+    except FileNotFoundError:
         j = {}
+    if not isinstance(j, dict):
+        raise ValueError('Template settings must be a JSON object')
     j.setdefault('selected', 'default')
     j.setdefault('socials', {
         'telegram': '',
@@ -15159,9 +14251,9 @@ def _load_template_settings():
     return j
 
 def _save_template_settings(j: dict):
-    os.makedirs(app.instance_path, exist_ok=True)
-    with open(TEMPLATE_SETTINGS_FILE, 'w') as f:
-        json.dump(j, f, indent=2)
+    from panel_operations.templates import atomic_save
+    atomic_save(TEMPLATE_SETTINGS_FILE, j)
+
 
 def _disable_peer(peer, reason: str, status: str = 'offline'):
     try:
@@ -15191,9 +14283,23 @@ def _expire():
 
     # Queue Telegram messages commit succeeds
     pending_notifications = []
+    subscription_by_peer = {}
+    subscriptions_by_id = {}
+    try:
+        for link in SubscriptionPeer.query.all():
+            sub = getattr(link, 'subscription', None)
+            if sub is None:
+                sub = db.session.get(Subscription, link.subscription_id)
+            if sub is None:
+                continue
+            subscription_by_peer[int(link.peer_id)] = sub
+            subscriptions_by_id[int(sub.id)] = sub
+    except Exception:
+        current_app.logger.exception('Could not build subscription lifecycle map')
 
     for peer in Peer.query.all():
 
+        linked_subscription = subscription_by_peer.get(int(peer.id))
         should_track_first_use = True
 
         if (
@@ -15209,36 +14315,39 @@ def _expire():
             )
 
             if hs and hs > 0:
-                peer.first_used_at = from_ts(
-                    hs
-                )
-                peer.timer_started_at = from_ts(hs)
+                peer.first_used_at = from_ts(hs)
 
-                if (
-                    getattr(
-                        peer,
-                        'start_on_first_use',
-                        False,
-                    )
-                    and getattr(
-                        peer,
-                        'time_limit_days',
-                        None,
-                    )
-                    and not getattr(
-                        peer,
-                        'unlimited',
-                        False,
-                    )
-                ):
-                    first_use_expiry_ts = add_days_ts(
-                        hs,
-                        float(
-                            peer.time_limit_days
-                        ),
-                    )
+                if linked_subscription is not None:
+                    existing_sub_first = to_ts(getattr(linked_subscription, 'first_used_at', None))
+                    if not existing_sub_first or hs < existing_sub_first:
+                        linked_subscription.first_used_at = from_ts(hs)
+                    _apply_subscription_timer(linked_subscription)
+                    _sync_all_subscription_peers(linked_subscription, rename=False)
+                else:
+                    peer.timer_started_at = from_ts(hs)
 
-                    peer.expires_at = from_ts(first_use_expiry_ts)
+                    if (
+                        getattr(
+                            peer,
+                            'start_on_first_use',
+                            False,
+                        )
+                        and getattr(
+                            peer,
+                            'time_limit_days',
+                            None,
+                        )
+                        and not getattr(
+                            peer,
+                            'unlimited',
+                            False,
+                        )
+                    ):
+                        first_use_expiry_ts = add_days_ts(
+                            hs,
+                            float(peer.time_limit_days),
+                        )
+                        peer.expires_at = from_ts(first_use_expiry_ts)
 
                 log_event(
                     peer,
@@ -15252,7 +14361,8 @@ def _expire():
                 changed = True
 
         if (
-            not getattr(
+            linked_subscription is None
+            and not getattr(
                 peer,
                 'start_on_first_use',
                 False,
@@ -15326,11 +14436,12 @@ def _expire():
                 or 0
             )
 
+        if linked_subscription is not None:
+            continue
+
         # -----------
         # Time-limit 
         # -----------
-
-        # Enforce the same derived value returned to every UI/API consumer.
         expiry_ts = _effective_expiry_ts(peer)
         if to_ts(getattr(peer, 'expires_at', None)) != expiry_ts:
             peer.expires_at = from_ts(expiry_ts)
@@ -15521,6 +14632,56 @@ def _expire():
                 'dedupe_seconds': 0,})
             changed = True
 
+    for sub in subscriptions_by_id.values():
+        try:
+            before = (
+                to_ts(getattr(sub, 'first_used_at', None)),
+                to_ts(getattr(sub, 'timer_started_at', None)),
+                to_ts(getattr(sub, 'expires_at', None)),
+                tuple(
+                    (
+                        int(getattr(link.peer, 'id', 0) or 0),
+                        to_ts(getattr(link.peer, 'first_used_at', None)),
+                        to_ts(getattr(link.peer, 'timer_started_at', None)),
+                        to_ts(getattr(link.peer, 'expires_at', None)),
+                    )
+                    for link in (getattr(sub, 'links', []) or [])
+                    if getattr(link, 'peer', None) is not None
+                ),
+            )
+            _apply_subscription_timer(sub)
+            _sync_all_subscription_peers(sub, rename=False)
+            after = (
+                to_ts(getattr(sub, 'first_used_at', None)),
+                to_ts(getattr(sub, 'timer_started_at', None)),
+                to_ts(getattr(sub, 'expires_at', None)),
+                tuple(
+                    (
+                        int(getattr(link.peer, 'id', 0) or 0),
+                        to_ts(getattr(link.peer, 'first_used_at', None)),
+                        to_ts(getattr(link.peer, 'timer_started_at', None)),
+                        to_ts(getattr(link.peer, 'expires_at', None)),
+                    )
+                    for link in (getattr(sub, 'links', []) or [])
+                    if getattr(link, 'peer', None) is not None
+                ),
+            )
+            if before != after:
+                changed = True
+            used = int(_sub_used_bytes(sub) or 0)
+            access = subscription_access(sub, used_bytes=used)
+            if not access.get('allowed'):
+                if _block_subscription_runtime(
+                    sub,
+                    'subscription_' + str(access.get('reason') or 'blocked'),
+                ):
+                    changed = True
+        except Exception:
+            current_app.logger.exception(
+                'Subscription lifecycle enforcement failed for subscription %s',
+                getattr(sub, 'id', '?'),
+            )
+
     if not changed:
         return
 
@@ -15537,7 +14698,6 @@ def _expire():
 
         return
 
-    # Send only after the database state is safely committed.
     for notification in pending_notifications:
         try:
             _send_telegram_event(
@@ -15811,7 +14971,6 @@ def _repair_legacy_timer_rows():
     repaired_peers = 0
     repaired_subscriptions = 0
 
-    # Preserve the original database before the first automatic repair.
     try:
         if (
             os.path.isfile(DB_PATH)
@@ -16046,55 +15205,15 @@ def bootstrap():
 # ------------
 # Node proxy
 # ____________
-def _node_payload(r):
-    ctype = (r.headers.get('content-type') or '').split(';', 1)[0].strip().lower()
-    if ctype == 'application/json' or ctype.endswith('+json'):
-        try:
-            return r.json()
-        except ValueError:
-            return r.text
-    text = r.text
-    stripped = (text or '').lstrip()
-    if stripped[:1] in '{[':
-        try:
-            return json.loads(text)
-        except ValueError:
-            pass
-    return text
-
-
 def node_get(n: Node, path: str, timeout=6):
-    r = requests.get(f"{n.base_url}{path}",
-                     headers={'Authorization': f'Bearer {_read_api_key(n)}'},
-                     timeout=timeout)
-    r.raise_for_status()
-    return _node_payload(r)
+    return _node_client.get(n.base_url, path, _read_api_key(n), timeout=timeout)
 
 def node_post(n: Node, path: str, payload=None, timeout=8):
-    r = requests.post(f"{n.base_url}{path}",
-                      headers={'Authorization': f'Bearer {_read_api_key(n)}',
-                               'Content-Type':'application/json'},
-                      json=payload or {}, timeout=timeout)
-    r.raise_for_status()
-    return _node_payload(r)
+    return _node_client.post(n.base_url, path, _read_api_key(n), payload, timeout=timeout)
 
 def node_delete(n: Node, path: str, payload=None, timeout=8):
-    headers = {
-        'Authorization': f'Bearer {_read_api_key(n)}'
-    }
+    return _node_client.delete(n.base_url, path, _read_api_key(n), payload, timeout=timeout)
 
-    kwargs = {
-        'headers': headers,
-        'timeout': timeout,
-    }
-
-    if payload is not None:
-        headers['Content-Type'] = 'application/json'
-        kwargs['json'] = payload
-
-    r = requests.delete(f"{n.base_url}{path}", **kwargs)
-    r.raise_for_status()
-    return _node_payload(r)
 
 @app.route('/api/nodes/<int:nid>/health')
 @admin_required
@@ -16127,34 +15246,39 @@ def node_summary(nid):
     n = Node.query.get_or_404(nid)
 
     info = {}
-    try:
-        h = node_get(n, '/api/health', timeout=6) or {}
-        n.last_seen = datetime.utcnow()
-        db.session.commit()
-        info = {
-            'host':       h.get('host') or '',
-            'public_ipv4': h.get('public_ipv4') or '',
-            'version':    h.get('version') or '',
-        }
-    except Exception:
-        pass
+    online = False
+
+    if n.enabled:
+        try:
+            h = node_get(n, '/api/health', timeout=6) or {}
+            online = True
+            n.last_seen = datetime.utcnow()
+            db.session.commit()
+            info = {
+                'host': h.get('host') or '',
+                'public_ipv4': h.get('public_ipv4') or '',
+                'public_ipv6': h.get('public_ipv6') or '',
+            }
+        except Exception:
+            online = False
 
     iface_summary = {'count': 0, 'up': 0, 'names': []}
-    try:
-        data = node_get(n, '/api/interfaces?fast=1', timeout=10) or {}
-        interfaces = data.get('interfaces') if isinstance(data, dict) else data
-        names = []
-        up_count = 0
-        for it in interfaces or []:
-            name = (it or {}).get('name')
-            if not name:
-                continue
-            names.append(name)
-            if it.get('is_up'):
-                up_count += 1
-        iface_summary = {'count': len(names), 'up': up_count, 'names': names}
-    except Exception:
-        pass
+    if n.enabled and online:
+        try:
+            data = node_get(n, '/api/interfaces?fast=1', timeout=10) or {}
+            interfaces = data.get('interfaces') if isinstance(data, dict) else data
+            names = []
+            up_count = 0
+            for it in interfaces or []:
+                name = (it or {}).get('name')
+                if not name:
+                    continue
+                names.append(name)
+                if it.get('is_up'):
+                    up_count += 1
+            iface_summary = {'count': len(names), 'up': up_count, 'names': names}
+        except Exception:
+            pass
 
     peers_q = (db.session.query(Peer)
                .join(InterfaceConfig, Peer.iface_id == InterfaceConfig.id)
@@ -16174,6 +15298,7 @@ def node_summary(nid):
         'id': n.id,
         'name': n.name,
         'enabled': n.enabled,
+        'online': bool(n.enabled and online),
         'last_seen': last_seen.isoformat() + 'Z' if last_seen else None,
         'info': info,
         'interfaces': iface_summary,
@@ -17000,10 +16125,6 @@ def node_ifaces(nid):
             host = (getattr(mirror, 'endpoint_host', None) or '').strip() or None
             port = getattr(mirror, 'endpoint_port', None)
 
-            # This listing skips auto-detection (it would add a probe per
-            # interface), so it can only report an override. 'none' keeps the
-            # UI honest; the per-interface endpoint-default route fills in the
-            # auto-detected value.
             item.update({
                 'endpoint_host': host,
                 'endpoint_port': int(port) if port else None,
@@ -18975,14 +18096,160 @@ def node_reset_peer_data_only(nid, pub):
     return jsonify(ok=True, success=True, status=p.status)
 
 
+def _linked_subscription_for_peer(peer):
+    """Return the subscription that owns the peer timer, if any.
+
+    A peer can belong to at most one subscription in current subscription
+    creation/attach flows.  Subscription timers are shared state; changing
+    only the peer row creates two competing expiry clocks and the subscription
+    enforcer will eventually win.
+    """
+    if not peer or not getattr(peer, 'id', None):
+        return None
+
+    link = (
+        SubscriptionPeer.query
+        .filter_by(peer_id=peer.id)
+        .first()
+    )
+    if not link:
+        return None
+
+    sub = getattr(link, 'subscription', None)
+    if sub is None:
+        sub = db.session.get(Subscription, link.subscription_id)
+    return sub
+
+
+def _reset_peer_timer_via_subscription(peer):
+    """Reset the canonical shared subscription timer for a linked peer.
+
+    Returns ``None`` for ordinary peers.  For subscription-managed peers it
+    resets the Subscription row and synchronizes every linked Peer row through
+    the existing subscription timer helper.  This prevents an individual peer
+    reset from showing a fresh countdown while the older subscription expiry
+    later blocks the client.
+    """
+    sub = _linked_subscription_for_peer(peer)
+    if sub is None:
+        return None
+
+    result = _reset_subscription_timer(sub)
+    data_exhausted = _subscription_data_exhausted(sub)
+
+    return {
+        'subscription': sub,
+        'result': result,
+        'data_exhausted': bool(data_exhausted),
+    }
+
+
+def _linked_subscription_timer_response(peer, action_name):
+    """Return a Flask response when a peer timer belongs to a subscription.
+
+    The subscription is the canonical owner of the timer.  Resetting it here
+    also synchronizes every attached config, so the subscription expiry cannot
+    later overwrite the freshly-reset peer countdown.
+    """
+    shared = _reset_peer_timer_via_subscription(peer)
+    if shared is None:
+        return None
+
+    sub = shared['subscription']
+    result = shared['result']
+    data_exhausted = shared['data_exhausted']
+
+    db.session.commit()
+
+    still_blocked_for_data = bool(
+        data_exhausted
+        and int(result.get('still_blocked', 0) or 0) > 0
+    )
+    partial = bool(
+        result.get('errors')
+        or int(result.get('enable_failed', 0) or 0) > 0
+    )
+
+    if still_blocked_for_data:
+        message = (
+            'Shared subscription timer was reset, but the client remains '
+            'blocked because its shared data allowance is exhausted.'
+        )
+    elif partial:
+        message = (
+            'Shared subscription timer was reset, but one or more attached '
+            'configs could not be re-enabled.'
+        )
+    else:
+        message = (
+            'Shared subscription timer reset. All attached configs now use '
+            'the same timer cycle.'
+        )
+
+    try:
+        logpanel_action(
+            action_name,
+            (
+                f'pid={peer.id}; subscription_id={sub.id}; '
+                f'reset_peers={int(result.get("reset_peers", 0) or 0)}; '
+                f'reactivated={int(result.get("reactivated", 0) or 0)}; '
+                f'still_blocked={int(result.get("still_blocked", 0) or 0)}; '
+                'shared_timer=1'
+            ),
+        )
+    except Exception:
+        pass
+
+    response = jsonify(
+        ok=not partial,
+        success=True,
+        partial=partial,
+        status=getattr(peer, 'status', None),
+        timer_reset=True,
+        subscription_managed=True,
+        subscription_id=sub.id,
+        subscription_name=getattr(sub, 'name', '') or '',
+        reset_peers=int(result.get('reset_peers', 0) or 0),
+        reactivated=int(result.get('reactivated', 0) or 0),
+        message=message,
+        still_blocked_reason=(
+            'data_limit' if still_blocked_for_data else None
+        ),
+        result=result,
+    )
+    return response, (207 if partial else 200)
+
+
 @app.route('/api/nodes/<int:nid>/peer/<path:pub>/reset_timer', methods=['POST'])
 @login_required
 def node_reset_peer_timer_only(nid, pub):
     """
-    Reset node peer timer and re-enable
+    Reset node peer timer and re-enable.
+
+    When the peer is attached to a subscription, the subscription owns the
+    timer. Reset that shared timer instead of creating an independent peer
+    countdown that the subscription enforcer would later override.
     """
     n = Node.query.get_or_404(nid)
     p = _node_peer_by_publickey(nid,pub,)
+
+    try:
+        shared_response = _linked_subscription_timer_response(
+            p,
+            'node_peer_reset_timer_subscription',
+        )
+        if shared_response is not None:
+            return shared_response
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception(
+            'Shared subscription timer reset failed for node peer %s',
+            getattr(p, 'id', '?'),
+        )
+        return jsonify(
+            error='subscription_timer_reset_failed',
+            detail=str(exc),
+        ), 500
 
     tl_days = getattr(p, 'time_limit_days', None)
     try:
@@ -19582,6 +18849,109 @@ def logout():
 @login_required
 def index():
     return render_template('index.html')
+
+
+@app.get('/api/health-center')
+@admin_required
+def health_center_api():
+    """Read-only administrative health summary for the Dashboard."""
+    try:
+        return jsonify(build_health_center(globals()))
+    except Exception:
+        current_app.logger.exception('Health Center aggregation failed')
+        return jsonify(ok=False, error='health_center_failed'), 500
+
+
+def _node_peer_diagnostic_runtime(node, peer):
+    """Return sanitized node runtime/path evidence with v16 fallback."""
+    iface = iface_devname(peer.iface)
+    payload = {'interface': iface, 'public_key': peer.public_key}
+    try:
+        result = node_post(node, '/api/operations/peer-diagnostic', payload, timeout=12)
+        if isinstance(result, dict) and result.get('ok') is not False:
+            return {
+                'runtime': result.get('runtime') if isinstance(result.get('runtime'), dict) else {},
+                'path_stages': result.get('path_stages') if isinstance(result.get('path_stages'), list) else [],
+                'source': 'peer_diagnostic',
+            }
+    except Exception:
+        current_app.logger.debug(
+            'Node does not expose the current peer diagnostic endpoint; using authenticated compatibility fallback',
+            exc_info=True,
+        )
+
+    runtime = {
+        'interface_state': 'unknown',
+        'peer_present': None,
+        'online': False,
+        'latest_handshake_age': None,
+        'reason': 'legacy_fallback',
+    }
+    try:
+        data = node_get(node, '/api/peers?iface=' + iface, timeout=10) or {}
+        rows = data.get('peers') if isinstance(data, dict) else []
+        for row in rows or []:
+            if str((row or {}).get('public_key') or '') != str(peer.public_key or ''):
+                continue
+            runtime.update({
+                'interface_state': 'up',
+                'peer_present': True,
+                'online': str((row or {}).get('connection_status') or (row or {}).get('conn_status') or '').lower() == 'online',
+                'latest_handshake_age': (row or {}).get('latest_handshake_age'),
+                'reason': str((row or {}).get('conn_reason') or 'legacy_peer_list'),
+            })
+            break
+    except Exception:
+        current_app.logger.debug('Legacy node peer runtime lookup failed', exc_info=True)
+
+    path_stages = []
+    try:
+        report = node_get(node, '/api/operations/diagnostic', timeout=12) or {}
+        for finding in report.get('checks', []) if isinstance(report, dict) else []:
+            if isinstance(finding, dict) and finding.get('id') == 'network_path':
+                raw = finding.get('path_stages')
+                if isinstance(raw, list):
+                    path_stages = [item for item in raw if isinstance(item, dict)]
+                break
+    except Exception:
+        current_app.logger.debug('Legacy node Operations path lookup failed', exc_info=True)
+
+    return {'runtime': runtime, 'path_stages': path_stages, 'source': 'legacy_fallback'}
+
+
+@app.post('/api/operations/peer-diagnose')
+@admin_required
+def peer_diagnose_api():
+    """Diagnose one database peer without changing peer/host state."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or type(data.get('peer_id')) is not int or data['peer_id'] < 1:
+        return jsonify(ok=False, error='invalid_peer_id'), 400
+
+    peer = db.session.get(Peer, data['peer_id'])
+    if peer is None:
+        return jsonify(ok=False, error='peer_not_found'), 404
+
+    iface = getattr(peer, 'iface', None)
+    node_id = _node_id_from_iface(iface) if iface is not None else None
+    try:
+        if node_id is not None:
+            node = db.session.get(Node, int(node_id))
+            if node is None or not node.enabled:
+                return jsonify(ok=False, error='node_unavailable'), 409
+            remote = _node_peer_diagnostic_runtime(node, peer)
+            report = diagnose_peer(
+                globals(),
+                peer,
+                remote_runtime=remote.get('runtime'),
+                remote_path=remote.get('path_stages'),
+            )
+            report['node_source'] = remote.get('source')
+        else:
+            report = diagnose_peer(globals(), peer)
+        return jsonify(report)
+    except Exception:
+        current_app.logger.exception('Peer diagnosis failed for peer %s', getattr(peer, 'id', '?'))
+        return jsonify(ok=False, error='peer_diagnosis_failed'), 500
 
 # -------------------
 # Peers
@@ -20841,6 +20211,46 @@ def panel_peers():
             error='peer_query_failed',
         ), 200
 
+    subscription_context_by_peer = {}
+    try:
+        peer_ids = [int(peer.id) for peer in peers if getattr(peer, 'id', None)]
+        if peer_ids:
+            links = (
+                SubscriptionPeer.query
+                .filter(SubscriptionPeer.peer_id.in_(peer_ids))
+                .all()
+            )
+            subscription_cache = {}
+            for link in links:
+                sub = getattr(link, 'subscription', None)
+                if sub is None:
+                    sub = db.session.get(Subscription, link.subscription_id)
+                if sub is None:
+                    continue
+                sid = int(sub.id)
+                if sid not in subscription_cache:
+                    try:
+                        shared_used = int(_sub_used_bytes(sub) or 0)
+                    except Exception:
+                        current_app.logger.exception(
+                            "Failed to aggregate subscription usage for peer list: subscription=%s",
+                            sid,
+                        )
+                        shared_used = 0
+                    subscription_cache[sid] = {
+                        'subscription': sub,
+                        'used_bytes': shared_used,
+                        'access': subscription_access(sub, used_bytes=shared_used),
+                        'expires_at_ts': _effective_expiry_ts(sub),
+                        'limit_bytes': _sub_limit_bytes(sub),
+                    }
+                subscription_context_by_peer[int(link.peer_id)] = subscription_cache[sid]
+    except Exception:
+        current_app.logger.exception(
+            "Failed to resolve subscription context while listing peers"
+        )
+        subscription_context_by_peer = {}
+
     transfer_map, handshake_map = _wg_runtime_snapshot(
         [
             getattr(
@@ -20870,6 +20280,14 @@ def panel_peers():
             runtime_key = (
                 database_interface_name,
                 peer.public_key,
+            )
+
+            subscription_context = subscription_context_by_peer.get(int(peer.id))
+            subscription = (subscription_context or {}).get('subscription')
+            subscription_access_state = (subscription_context or {}).get('access')
+            lifecycle_state = effective_peer_state(
+                getattr(peer, 'status', None),
+                subscription_access_state,
             )
 
             rx_bytes, tx_bytes = transfer_map.get(
@@ -20925,13 +20343,17 @@ def panel_peers():
                 )
             )
 
-            expires_timestamp = _effective_expiry_ts(peer)
+            expires_timestamp = (
+                (subscription_context or {}).get('expires_at_ts')
+                if subscription_context
+                else _effective_expiry_ts(peer)
+            )
             expires_at = from_ts(expires_timestamp)
 
             ttl_seconds = (
                 max(
                     0,
-                    expires_timestamp - current_timestamp,
+                    int(expires_timestamp) - current_timestamp,
                 )
                 if expires_timestamp
                 else None
@@ -20990,8 +20412,14 @@ def panel_peers():
                 'mtu': peer.mtu,
                 'dns': peer.dns,
 
-                'status': peer.status,
+                'status': lifecycle_state['status'],
                 'panel_status': peer.status,
+                'status_reason': lifecycle_state['reason'],
+                'status_reason_label': lifecycle_state['label'],
+                'subscription_managed': bool(subscription),
+                'subscription_id': getattr(subscription, 'id', None),
+                'subscription_name': getattr(subscription, 'name', '') or '',
+                'subscription_access': subscription_access_state or None,
 
                 'conn_status':
                     connection['conn_status'],
@@ -21014,35 +20442,35 @@ def panel_peers():
                         False,
                     ),
 
-                'data_limit': getattr(
-                    peer,
-                    'data_limit_value',
-                    None,
+                'data_limit': (
+                    getattr(subscription, 'data_limit_value', None)
+                    if subscription is not None
+                    else getattr(peer, 'data_limit_value', None)
                 ),
 
-                'limit_unit': getattr(
-                    peer,
-                    'data_limit_unit',
-                    None,
+                'limit_unit': (
+                    getattr(subscription, 'data_limit_unit', None)
+                    if subscription is not None
+                    else getattr(peer, 'data_limit_unit', None)
                 ),
 
                 'unlimited': bool(
                     getattr(
-                        peer,
+                        subscription if subscription is not None else peer,
                         'unlimited',
                         False,
                     )
                 ),
 
                 'time_limit_days': getattr(
-                    peer,
+                    subscription if subscription is not None else peer,
                     'time_limit_days',
                     None,
                 ),
 
                 'start_on_first_use': bool(
                     getattr(
-                        peer,
+                        subscription if subscription is not None else peer,
                         'start_on_first_use',
                         False,
                     )
@@ -21104,8 +20532,11 @@ def panel_peers():
                 'ttl_seconds':
                     ttl_seconds,
 
-                'used_bytes':
-                    used_bytes,
+                'used_bytes': (
+                    int((subscription_context or {}).get('used_bytes') or 0)
+                    if subscription_context
+                    else used_bytes
+                ),
 
                 'used_bytes_db':
                     used_bytes,
@@ -23398,9 +22829,30 @@ def api_reset_timer(pid):
     Reset the peer timer only.
 
     The peer is re-enabled when necessary, but traffic usage is preserved.
+    If the peer belongs to a subscription, reset the subscription's shared
+    timer so peer and subscription enforcement remain on the same expiry.
 
     """
     p = db.session.get(Peer, pid) or abort(404)
+
+    try:
+        shared_response = _linked_subscription_timer_response(
+            p,
+            'peer_reset_timer_subscription',
+        )
+        if shared_response is not None:
+            return shared_response
+    except Exception as exc:
+        db.session.rollback()
+        current_app.logger.exception(
+            'Shared subscription timer reset failed for peer %s',
+            pid,
+        )
+        return jsonify(
+            success=False,
+            error='subscription_timer_reset_failed',
+            detail=str(exc),
+        ), 500
 
     iface = getattr(p, 'iface', None)
     if not iface:
@@ -24589,17 +24041,17 @@ def _subscription_settings_default():
         'module_gap': 'standard',
 
         'background': 'orbits',
-        'accent': 'mint',
+        'accent': 'violet',
 
-        'primary_color': '#3addaa',
+        'primary_color': '#7661ed',
         'secondary_color': '#63a5ff',
 
-        'online_color': '#22c55e',
+        'online_color': '#568eff',
         'offline_color': '#94a3b8',
         'warning_color': '#f59e0b',
         'danger_color': '#ef4444',
         'pill_color': '#64748b',
-        'action_color': '#3addaa',
+        'action_color': '#7661ed',
 
         'theme_default': 'auto',
 
@@ -24608,6 +24060,8 @@ def _subscription_settings_default():
         'shadow': 'deep',
         'button_style': 'solid',
         'font_scale': 'standard',
+        'font_family': 'rounded',
+        'background_pattern': 'none',
 
         'background_intensity': 86,
         'card_opacity': 82,
@@ -25371,7 +24825,7 @@ def _normalize_subscription_settings(
             'mono',
             'custom',
         },
-        'mint',
+        'violet',
     )
 
     d['theme_default'] = _subscription_choice(
@@ -25452,15 +24906,18 @@ def _normalize_subscription_settings(
         'standard',
     )
 
+    d['font_family'] = _subscription_choice(incoming.get('font_family', d.get('font_family', 'rounded')), {'rounded', 'system', 'humanist'}, 'rounded')
+    d['background_pattern'] = _subscription_choice(incoming.get('background_pattern', d.get('background_pattern', 'none')), {'none', 'grid', 'dots'}, 'none')
+
     color_fields = (
-        ('primary_color', 'custom_primary', '#3addaa'),
+        ('primary_color', 'custom_primary', '#7661ed'),
         ('secondary_color', 'custom_secondary', '#63a5ff'),
-        ('online_color', None, '#22c55e'),
+        ('online_color', None, '#568eff'),
         ('offline_color', None, '#94a3b8'),
         ('warning_color', None, '#f59e0b'),
         ('danger_color', None, '#ef4444'),
         ('pill_color', None, '#64748b'),
-        ('action_color', None, '#3addaa'),
+        ('action_color', None, '#7661ed'),
     )
 
     for key, legacy_key, fallback in color_fields:
@@ -27043,27 +26500,12 @@ def _subscription_row(sub):
         )
     )
 
-    expired = (
-        False
-        if unlimited
-        else _subscription_time_expired(
-            sub
-        )
-    )
+    access = subscription_access(sub, used_bytes=used)
 
-    if (
-        limit
-        and used >= int(limit)
-    ):
+    if not access.get('allowed'):
         _block_subscription_runtime(
             sub,
-            'subscription_limit_reached',
-        )
-
-    elif expired:
-        _block_subscription_runtime(
-            sub,
-            'subscription_expired',
+            'subscription_' + str(access.get('reason') or 'blocked'),
         )
 
     locs = []
@@ -27166,6 +26608,7 @@ def _subscription_row(sub):
             )
             or 'offline'
         ).lower()
+        lifecycle_state = effective_peer_state(peer_status, access)
 
         runtime_counts['total'] += 1
 
@@ -27307,6 +26750,9 @@ def _subscription_row(sub):
             'panel_status': (
                 peer_status
             ),
+            'effective_status': lifecycle_state['status'],
+            'status_reason': lifecycle_state['reason'],
+            'status_reason_label': lifecycle_state['label'],
 
             'connected': bool(
                 live.get(
@@ -27737,6 +27183,9 @@ def _subscription_row(sub):
                 True,
             )
         ),
+        'access': access,
+        'state_reason': access.get('reason') or '',
+        'state_label': access.get('label') or 'Ready',
 
                 'runtime_counts': runtime_counts,
 
@@ -30026,44 +29475,24 @@ def _peer_used_for_subscription(peer) -> int:
         return int(getattr(peer, 'used_bytes_total', 0) or 0)
 
 def subscription_access(sub, used_bytes=None) -> dict:
-    """Whether this subscription may still hand out working configs.
+    """Return the canonical lifecycle/access decision for a subscription.
 
-    The public page always renders and explains the state; the config, ZIP and
-    QR endpoints refuse when access is revoked, so a saved link cannot keep
-    working after the subscription is disabled, expires or runs out of data.
+    The policy itself lives in :mod:`panel_core.subscription_policy` so the
+    Peers UI, subscription UI, public portal and background enforcer all use
+    the same precedence and reason codes.
     """
-    if not bool(getattr(sub, 'enabled', True)):
-        return {
-            'allowed': False,
-            'reason': 'disabled',
-            'message': 'This subscription has been disabled. Please contact support.',
-        }
-
-    if bool(getattr(sub, 'unlimited', False)):
-        return {'allowed': True, 'reason': '', 'message': ''}
-
-    expires_ts = _effective_expiry_ts(sub)
-    if expires_ts and expires_ts <= now_ts():
-        return {
-            'allowed': False,
-            'reason': 'expired',
-            'message': 'This subscription has expired. Please renew it to continue.',
-        }
-
-    limit = sub.limit_bytes() if hasattr(sub, 'limit_bytes') else None
-    if limit:
-        try:
-            used = int(_sub_used_bytes(sub) if used_bytes is None else used_bytes)
-        except Exception:
-            used = 0
-        if used >= int(limit):
-            return {
-                'allowed': False,
-                'reason': 'data_exhausted',
-                'message': 'This subscription has used all of its data allowance.',
-            }
-
-    return {'allowed': True, 'reason': '', 'message': ''}
+    try:
+        used = int(_sub_used_bytes(sub) if used_bytes is None else used_bytes)
+    except Exception:
+        used = 0
+    return compute_subscription_access(
+        enabled=bool(getattr(sub, 'enabled', True)),
+        unlimited=bool(getattr(sub, 'unlimited', False)),
+        expires_at_ts=_effective_expiry_ts(sub),
+        now_ts=now_ts(),
+        limit_bytes=_sub_limit_bytes(sub),
+        used_bytes=used,
+    )
 
 
 def _subscription_inbound_state(sub):
@@ -32432,6 +31861,12 @@ def traffic_control_test_destination():
         return jsonify(ok=False, error='traffic_destination_test_failed', detail=str(exc)), 500
 
 
+from panel_operations import register_operations
+register_operations(app, globals())
+
+from panel_operations.profile import profile_bp
+app.register_blueprint(profile_bp)
+
 if __name__ == "__main__":
 
     import multiprocessing, ssl
@@ -32483,8 +31918,11 @@ if __name__ == "__main__":
         port_from_rt = 0
 
     host = (os.getenv("BIND_HOST") or "0.0.0.0").strip()
+    bind_from_env = (os.getenv("BIND") or "").strip()
 
-    if tls_enabled:
+    if bind_from_env:
+        bind = bind_from_env
+    elif tls_enabled:
         bind = f"{host}:{https_port}"
     else:
         if bind_from_rt:
@@ -32583,12 +32021,16 @@ if __name__ == "__main__":
 
     APP_START_TS = int(time.time())
     app.logger.info("Panel started (TLS=%s, bind=%s)", "on" if tls_enabled else "off", bind)
+    from importlib.metadata import version as _package_version
+    app.logger.info(
+        "Gunicorn runtime: version=%s worker=sync workers=%s timeout=%ss",
+        _package_version("gunicorn"), workers, timeout,
+    )
 
     options = {
         "bind": bind,
         "workers": workers,
-        "worker_class": "gthread",
-        "threads": threads,
+        "worker_class": "sync",
         "timeout": timeout,
         "graceful_timeout": graceful_timeout,
         "accesslog": "-",
