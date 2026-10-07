@@ -1,0 +1,289 @@
+{% extends 'base.html' %} {% block title %}Network overview · WG Panel{%
+endblock %} {% block head_extras %}<link
+  rel="stylesheet"
+  href="{{ url_for('static', filename='css/dashboard-modern.css') }}"
+/>{% endblock %} {% block content %}
+<div
+  class="nx-dashboard"
+  id="nx-dashboard"
+  data-admin="{{ '1' if current_user.is_admin|default(false) or current_user.is_superuser|default(false) else '0' }}"
+  data-nodes="{{ '1' if HAS_NODES else '0' }}"
+>
+  <header class="nx-page-head">
+    <div>
+      <span class="ws-eyebrow">WORKSPACE / LIVE OVERVIEW</span>
+      <h1>Network overview</h1>
+      <p>A clear view of your network and connected clients.</p>
+    </div>
+    <div class="nx-page-actions">
+      <a class="nx-button primary" href="{{ url_for('users') }}?create=1"
+        ><i class="fas fa-plus"></i>Create peer</a
+      ><button class="nx-button" type="button" id="nx-refresh">
+        <i class="fas fa-rotate"></i>Refresh
+      </button>
+    </div>
+  </header>
+  <div class="nx-health-strip" id="nx-health-strip">
+    <span class="nx-health-state"
+      ><i class="nx-status-dot"></i
+      ><b id="nx-health-headline">Checking system health…</b></span
+    ><a
+      href="{{ url_for('nodes') if HAS_NODES else url_for('operations.page') }}"
+      class="nx-node-summary"
+      ><i class="fas fa-server"></i
+      ><span id="nx-node-count">Checking nodes…</span></a
+    ><a class="nx-health-link" href="{{ url_for('operations.page') }}"
+      >View health <i class="fas fa-arrow-right"></i
+    ></a>
+  </div>
+  <nav class="ws-shortcuts" aria-label="Workspace tools">
+    <a href="/users"
+      ><i class="fas fa-users"></i> Peer workspace
+      <i class="fas fa-arrow-right"></i></a
+    ><a href="/nodes"
+      ><i class="fas fa-server"></i> Infrastructure
+      <i class="fas fa-arrow-right"></i></a
+    ><a href="/settings?tab=telegram"
+      ><i class="fa-brands fa-telegram"></i> Telegram hub
+      <i class="fas fa-arrow-right"></i></a
+    ><button type="button" data-open-updates>
+      <i class="fas fa-cloud-arrow-down"></i> Update center
+      <i class="fas fa-arrow-right"></i>
+    </button>
+  </nav>
+  <div class="nx-metrics">
+    <article class="nx-metric">
+      <span class="nx-metric-icon"><i class="fas fa-users"></i></span>
+      <div>
+        <span>Connected peers</span><strong id="nx-connected">—</strong
+        ><small id="nx-peer-caption">Waiting for peer data</small>
+      </div>
+      <canvas
+        id="nx-peer-spark"
+        aria-label="Connected peers during this session"
+        role="img"
+      ></canvas>
+    </article>
+    <article class="nx-metric">
+      <span class="nx-metric-icon"><i class="far fa-credit-card"></i></span>
+      <div>
+        <span>Active subscriptions</span><strong id="nx-subscriptions">—</strong
+        ><small id="nx-sub-caption">Waiting for policies</small>
+      </div>
+      <canvas
+        id="nx-sub-spark"
+        aria-label="Active subscriptions during this session"
+        role="img"
+      ></canvas>
+    </article>
+    <article class="nx-metric">
+      <span class="nx-metric-icon"
+        ><i class="fas fa-arrow-right-arrow-left"></i
+      ></span>
+      <div>
+        <span>Total transfer</span><strong id="nx-transfer">—</strong
+        ><small>Server totals since boot</small>
+      </div>
+      <canvas
+        id="nx-transfer-spark"
+        aria-label="Server traffic during this session"
+        role="img"
+      ></canvas>
+    </article>
+    <article class="nx-metric">
+      <span class="nx-metric-icon"><i class="far fa-clock"></i></span>
+      <div>
+        <span>Panel response</span><strong id="nx-response">—</strong
+        ><small>Browser → panel API</small>
+      </div>
+      <canvas
+        id="nx-response-spark"
+        aria-label="API response times during this session"
+        role="img"
+      ></canvas>
+    </article>
+  </div>
+  <div class="nx-dashboard-grid">
+    <section class="nx-surface nx-traffic">
+      <header class="nx-card-head">
+        <div>
+          <h2>Traffic overview</h2>
+          <p>Incoming and outgoing server bandwidth</p>
+        </div>
+        <div class="nx-traffic-controls">
+          <div class="nx-rates">
+            <span class="nx-rx">↓ <b id="nx-rx">—</b></span
+            ><span class="nx-tx">↑ <b id="nx-tx">—</b></span>
+          </div>
+          <div
+            class="nx-segmented"
+            role="group"
+            aria-label="Live traffic window"
+          >
+            <button type="button" data-nx-window="60" aria-pressed="false">
+              1m</button
+            ><button type="button" data-nx-window="300" aria-pressed="true">
+              5m</button
+            ><button type="button" data-nx-window="900" aria-pressed="false">
+              15m
+            </button>
+          </div>
+        </div>
+      </header>
+      <div class="nx-chart-wrap">
+        <canvas
+          id="nx-traffic-chart"
+          role="img"
+          aria-label="Live download and upload bandwidth in megabits per second"
+        ></canvas>
+        <p class="nx-chart-empty" id="nx-chart-empty">
+          Collecting live traffic samples…
+        </p>
+      </div>
+      <footer class="nx-chart-foot">
+        <span
+          ><i class="nx-legend-dot violet"></i>Download
+          <i class="nx-legend-dot mint"></i>Upload</span
+        ><small id="nx-chart-note"
+          >Live samples · collected while this page is open</small
+        >
+      </footer>
+    </section>
+    <aside class="nx-status-column">
+      <section class="nx-surface nx-panel-center">
+        <header class="nx-card-head">
+          <div>
+            <h2>Panel Center</h2>
+            <p>Overall system health</p>
+          </div>
+          <a
+            href="{{ url_for('operations.page') }}"
+            class="nx-card-link"
+            aria-label="Open Panel Center"
+            ><i class="fas fa-arrow-up-right-from-square"></i
+          ></a>
+        </header>
+        <div class="nx-health-ring" id="nx-health-ring">
+          <div>
+            <strong id="nx-health-percent">—</strong
+            ><span id="nx-health-label">Checking</span>
+          </div>
+        </div>
+        <p class="nx-ring-note" id="nx-health-detail">
+          Healthy checks / all checks
+        </p>
+        <div class="nx-resources">
+          {% for key,label,icon in
+          [('cpu','CPU','fa-microchip'),('mem','Memory','fa-memory'),('disk','Disk','fa-hard-drive')]
+          %}
+          <div class="nx-resource">
+            <span><i class="fas {{ icon }}"></i>{{ label }}</span
+            ><progress
+              id="nx-{{ key }}-bar"
+              max="100"
+              value="0"
+              aria-label="{{ label }} usage"
+            ></progress
+            ><b id="nx-{{ key }}">—</b>
+          </div>
+          {% endfor %}
+        </div>
+        <button
+          type="button"
+          class="nx-text-button"
+          id="nx-system-toggle"
+          aria-expanded="false"
+          aria-controls="nx-system-details"
+        >
+          System details <i class="fas fa-chevron-down"></i>
+        </button>
+        <dl id="nx-system-details" class="nx-system-details" hidden>
+          <dt>Host</dt>
+          <dd id="nx-host">—</dd>
+          <dt>Uptime</dt>
+          <dd id="nx-uptime">—</dd>
+          <dt>IPv4</dt>
+          <dd id="nx-ipv4">—</dd>
+          <dt>IPv6</dt>
+          <dd id="nx-ipv6">—</dd>
+          <dt>Platform</dt>
+          <dd id="nx-platform">—</dd>
+        </dl>
+      </section>
+      <section class="nx-surface nx-telegram">
+        <div class="nx-integration-head">
+          <span class="nx-telegram-icon"
+            ><i class="fa-brands fa-telegram"></i
+          ></span>
+          <div>
+            <h2>Telegram</h2>
+            <span class="nx-status-pill" id="nx-tg-state">Checking</span>
+          </div>
+        </div>
+        <p id="nx-tg-note">Checking bot status…</p>
+        <div class="nx-link-row">
+          <a href="{{ url_for('logs_page') }}?source=tg_app"
+            >Bot logs <i class="fas fa-arrow-right"></i></a
+          ><a href="{{ url_for('logs_page') }}?source=tg_admin"
+            >Admin activity <i class="fas fa-arrow-right"></i
+          ></a>
+        </div>
+      </section>
+      <section class="nx-surface nx-attention" id="nx-attention">
+        <header>
+          <i class="fas fa-triangle-exclamation"></i>
+          <h2>Needs attention</h2>
+          <span id="nx-attention-count">—</span>
+        </header>
+        <strong id="nx-attention-title">Checking subscriptions…</strong>
+        <p id="nx-attention-copy">Expiry and access-policy summary.</p>
+        <a href="/subscriptions"
+          >Review subscriptions <i class="fas fa-arrow-right"></i
+        ></a>
+      </section>
+    </aside>
+    <section class="nx-surface nx-connections">
+      <header class="nx-card-head">
+        <div>
+          <h2>Recent connections</h2>
+          <p>Peers ordered by latest WireGuard handshake</p>
+        </div>
+        <a href="{{ url_for('users') }}"
+          >View all <i class="fas fa-arrow-right"></i
+        ></a>
+      </header>
+      <div class="nx-table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Peer</th>
+              <th>Node / interface</th>
+              <th>Traffic</th>
+              <th>Status</th>
+              <th>Last handshake</th>
+            </tr>
+          </thead>
+          <tbody id="nx-recent-peers">
+            <tr>
+              <td colspan="5" class="nx-empty">Loading peers…</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <footer class="nx-peers-foot">
+        <span id="nx-peer-summary">Waiting for live data</span
+        ><a href="{{ url_for('users') }}">Manage peers</a>
+      </footer>
+    </section>
+  </div>
+  <footer class="nx-dashboard-footer">
+    <span><i class="fas fa-shield-halved"></i> WireGuard workspace</span
+    ><span id="nx-updated" role="status">Waiting for first refresh</span>
+  </footer>
+</div>
+{% endblock %} {% block body_extras %}
+<script
+  defer
+  src="{{ url_for('static', filename='js/dashboard-modern.js') }}"
+></script>
+{% endblock %}
