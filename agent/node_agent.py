@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-import os, json, subprocess, time, socket, ssl, sys, shutil
+import os, json, subprocess, time, socket, ssl, sys, shutil, stat
 from pathlib import Path
 from flask import Flask, request, jsonify, abort, send_file
 from io import BytesIO
 import zipfile
 from datetime import datetime
 from functools import wraps
+from contextlib import contextmanager
+import fcntl
 import re
 import ipaddress as ipa
 import subprocess, os
@@ -44,7 +46,18 @@ def require_api_key(f):
 
 def _public_ipv4():
     try:
-        return requests.get('https://api.ipify.org', timeout=2).text.strip()
+        value = requests.get('https://api.ipify.org', timeout=2).text.strip()
+        parsed = ipa.ip_address(value)
+        return str(parsed) if parsed.version == 4 else None
+    except Exception:
+        return None
+
+
+def _public_ipv6():
+    try:
+        value = requests.get('https://api6.ipify.org', timeout=2).text.strip()
+        parsed = ipa.ip_address(value)
+        return str(parsed) if parsed.version == 6 else None
     except Exception:
         return None
 
@@ -499,11 +512,661 @@ def health():
         host=socket.gethostname(),
         now=int(time.time()),
         public_ipv4=_public_ipv4(),
+        public_ipv6=_public_ipv6(),
         uptime_seconds=uptime_seconds,
         version=NODE_AGENT_VERSION,
         interfaces=interface_states,
     )
 
+
+# -----------
+# Operations
+# -----------
+_NODE_OPS_PACKAGE_CANDIDATES = (
+    ('apt', 'apt-get'), ('dnf', 'dnf'), ('yum', 'yum'),
+    ('zypper', 'zypper'), ('pacman', 'pacman'), ('apk', 'apk'),
+)
+_NODE_OPS_PACKAGE_NAMES = {
+    'wireguard_tools': {'apt':'wireguard-tools','dnf':'wireguard-tools','yum':'wireguard-tools','zypper':'wireguard-tools','pacman':'wireguard-tools','apk':'wireguard-tools'},
+    'nftables': {'apt':'nftables','dnf':'nftables','yum':'nftables','zypper':'nftables','pacman':'nftables','apk':'nftables'},
+    'iproute': {'apt':'iproute2','dnf':'iproute','yum':'iproute','zypper':'iproute2','pacman':'iproute2','apk':'iproute2'},
+}
+_NODE_OPS_ACTIONS = {
+    'install_wireguard_tools': 'wireguard_tools',
+    'install_nftables': 'nftables',
+    'install_iproute': 'iproute',
+    'enable_ipv4_forwarding': None,
+    'start_interface': None,
+    'restrict_env': None,
+}
+
+
+def _node_ops_read_os_release():
+    values = {}
+    try:
+        for raw in Path('/etc/os-release').read_text(encoding='utf-8', errors='replace').splitlines():
+            line = raw.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, value = line.split('=', 1)
+            if key in {'ID','ID_LIKE','NAME','PRETTY_NAME','VERSION_ID','VERSION_CODENAME'}:
+                values[key] = value.strip().strip('"').strip("'")[:160]
+    except Exception:
+        pass
+    return values
+
+
+def _node_ops_profile():
+    release = _node_ops_read_os_release()
+    manager = ''
+    manager_path = ''
+    for key, binary in _NODE_OPS_PACKAGE_CANDIDATES:
+        found = shutil.which(binary)
+        if found:
+            manager, manager_path = key, found
+            break
+    return {
+        'hostname': (socket.gethostname() or os.getenv('HOSTNAME') or 'node')[:120],
+        'os': release.get('PRETTY_NAME') or release.get('NAME') or sys.platform,
+        'id': (release.get('ID') or 'linux').lower(),
+        'id_like': (release.get('ID_LIKE') or '').lower(),
+        'version': release.get('VERSION_ID') or '',
+        'codename': release.get('VERSION_CODENAME') or '',
+        'kernel': os.uname().release[:120] if hasattr(os, 'uname') else '',
+        'architecture': os.uname().machine[:80] if hasattr(os, 'uname') else '',
+        'package_manager': manager,
+        'package_manager_path': manager_path,
+        'systemd': bool(shutil.which('systemctl')),
+        'sysctl': bool(shutil.which('sysctl')),
+        'nftables': bool(shutil.which('nft')),
+        'wireguard': bool(shutil.which('wg')),
+        'wg_quick': bool(shutil.which('wg-quick')),
+        'iproute': bool(shutil.which('ip')),
+        'panel_service': 'wg-node-agent.service',
+        'remote_agent': True,
+        'node_agent_version': NODE_AGENT_VERSION,
+    }
+
+
+def _node_ops_finding(key, title, status, evidence, guide, *, category='system', repair=None, commands=None, impact='', path_stages=None):
+    return {
+        'id': str(key)[:96], 'title': str(title)[:180], 'status': status,
+        'evidence': str(evidence)[:500], 'guide': str(guide)[:700],
+        'category': str(category)[:64], 'repair': repair,
+        'commands': [str(c)[:500] for c in (commands or [])[:12]],
+        'impact': str(impact)[:500], 'path_stages': list(path_stages or [])[:12],
+    }
+
+
+def _node_ops_run(argv, timeout=4):
+    completed = subprocess.run(
+        [str(x) for x in argv], capture_output=True, text=True,
+        timeout=timeout, check=False,
+    )
+    return completed.returncode, (completed.stdout or '').strip(), (completed.stderr or '').strip()
+
+
+def _node_ops_package_steps(package_key, profile=None):
+    profile = profile or _node_ops_profile()
+    manager = profile.get('package_manager') or ''
+    binary = profile.get('package_manager_path') or ''
+    package = _NODE_OPS_PACKAGE_NAMES.get(package_key, {}).get(manager)
+    if not (manager and binary and package):
+        return None
+    if manager == 'apt':
+        return [[binary, 'update'], [binary, 'install', '-y', package]]
+    if manager in {'dnf','yum'}:
+        return [[binary, 'install', '-y', package]]
+    if manager == 'zypper':
+        return [[binary, '--non-interactive', 'install', package]]
+    if manager == 'pacman':
+        return [[binary, '-Syu', '--noconfirm', '--needed', package]]
+    if manager == 'apk':
+        return [[binary, 'add', package]]
+    return None
+
+
+def _node_ops_configured_interfaces():
+    rows = []
+    directory = _wg_conf_dir()
+    try:
+        names = sorted(
+            Path(directory).glob('*.conf')
+        ) if os.path.isdir(directory) else []
+        for path in names:
+            name = path.stem
+            try:
+                name = _safe_iface_name(name)
+            except Exception:
+                continue
+            meta = _read_iface(str(path)) or {}
+            rows.append({
+                'name': name,
+                'address': str(meta.get('address') or '')[:160],
+                'listen_port': meta.get('listen_port'),
+                'is_up': bool(_iface_up(name)),
+                'gateway_expected': any(
+                    token in str(meta.get(field) or '').upper()
+                    for field in ('post_up','post_down')
+                    for token in ('MASQUERADE','FORWARD')
+                ),
+            })
+    except Exception:
+        pass
+    return rows
+
+
+def _node_ops_diagnostic():
+    profile = _node_ops_profile()
+    findings = []
+    add = findings.append
+
+    add(_node_ops_finding(
+        'node_health', 'Node agent', 'pass',
+        f"Authenticated node agent {NODE_AGENT_VERSION} responded on {profile['hostname']}.",
+        'No action is required.', category='nodes',
+    ))
+
+    binary_specs = (
+        ('wg', 'WireGuard control utility', 'install_wireguard_tools'),
+        ('wg-quick', 'WireGuard interface helper', 'install_wireguard_tools'),
+        ('ip', 'iproute networking utility', 'install_iproute'),
+        ('nft', 'nftables utility', 'install_nftables'),
+    )
+    for binary, title, action in binary_specs:
+        present = bool(shutil.which(binary))
+        add(_node_ops_finding(
+            'binary_' + binary, title,
+            'pass' if present else 'warning',
+            f"{binary} is {'available' if present else 'not available'} in the node agent PATH.",
+            'Install the missing package with the node package manager, then verify the executable is visible to the agent.',
+            category='packages',
+            repair=None if present else {'action':action,'label':'Install required tooling','risk':'low'},
+            commands=[f'command -v {binary}', f'{binary} --version 2>/dev/null || true'],
+            impact='Missing host networking tools prevent normal WireGuard/firewall diagnostics and management.',
+        ))
+
+    interfaces = _node_ops_configured_interfaces()
+    gateway_expected = any(row.get('gateway_expected') for row in interfaces)
+    for row in interfaces:
+        name = row['name']
+        up = bool(row['is_up'])
+        add(_node_ops_finding(
+            'iface_' + name, f'Node interface: {name}',
+            'pass' if up else 'warning',
+            f"Configuration file: present; runtime: {'up' if up else 'down'}.",
+            'A deliberately stopped interface is valid. Otherwise review its Address, ListenPort and hooks before starting it.',
+            category='wireguard',
+            repair=None if up else {'action':'start_interface','label':f'Start {name}','risk':'medium','target':name,'note':'Starts the existing WireGuard configuration on this node.'},
+            commands=[f'wg show {name}', f'wg-quick up {name}'],
+            impact='A stopped interface prevents attached peers on this node from passing WireGuard traffic.',
+        ))
+    if not interfaces:
+        add(_node_ops_finding('interfaces','Node interfaces','pass','No WireGuard configuration files were found on this node.','Create or synchronize an interface only if this node should host WireGuard.',category='wireguard'))
+
+    forwarding_value = None
+    try:
+        forwarding_value = int(Path('/proc/sys/net/ipv4/ip_forward').read_text().strip())
+    except Exception:
+        pass
+    if forwarding_value is None:
+        forwarding_status = 'unknown'
+    elif forwarding_value == 1:
+        forwarding_status = 'pass'
+    else:
+        forwarding_status = 'warning' if gateway_expected else 'review'
+    add(_node_ops_finding(
+        'forwarding','IPv4 forwarding',forwarding_status,
+        'Kernel IPv4 forwarding is ' + ('enabled.' if forwarding_value == 1 else 'disabled.' if forwarding_value == 0 else 'unavailable.'),
+        'Enable forwarding only when this node is intended to route peer traffic.',
+        category='routing',
+        repair={'action':'enable_ipv4_forwarding','label':'Enable IPv4 forwarding','risk':'medium'} if forwarding_status == 'warning' else None,
+        commands=['sysctl net.ipv4.ip_forward'],
+        impact='A WireGuard gateway cannot route IPv4 peer traffic when forwarding is disabled.',
+    ))
+
+    default_route = False
+    if shutil.which('ip'):
+        try:
+            rc, out, _ = _node_ops_run(['ip','route','show','default'])
+            default_route = rc == 0 and bool(out.strip())
+        except Exception:
+            pass
+    add(_node_ops_finding(
+        'default_route','Default IPv4 route',
+        'pass' if default_route else ('warning' if gateway_expected else 'review'),
+        'A default IPv4 route is present.' if default_route else 'No default IPv4 route was detected.',
+        'Review the node uplink and routing table. Operations does not create a default route automatically.',
+        category='routing', commands=['ip route show default','ip route'],
+        impact='A gateway node normally needs an upstream route to reach routed destinations.',
+    ))
+
+    ufw_state = 'not installed'
+    if shutil.which('ufw'):
+        try:
+            rc, out, _ = _node_ops_run(['ufw','status'])
+            ufw_state = 'active' if rc == 0 and out.lower().startswith('status: active') else 'inactive'
+        except Exception:
+            ufw_state = 'unknown'
+    add(_node_ops_finding(
+        'ufw_state','UFW firewall state',
+        'review' if ufw_state == 'active' else ('unknown' if ufw_state == 'unknown' else 'pass'),
+        f'UFW is {ufw_state}.',
+        'An active firewall is valid. Confirm it allows the intended WireGuard listener and forwarding policy; do not disable it simply to clear this advisory.',
+        category='firewall', commands=['ufw status verbose 2>/dev/null || true','ss -lntup'],
+    ))
+
+    try:
+        total, used, free = shutil.disk_usage('/')
+        free_pct = free / total * 100 if total else 0
+        disk_warning = free_pct < 10 or free < 512 * 1024**2
+        add(_node_ops_finding(
+            'disk','Available disk space','warning' if disk_warning else 'pass',
+            f'{free/1024**3:.2f} GiB free ({free_pct:.1f}%).',
+            'Review disk usage before deleting anything. Preserve WireGuard configuration and node-agent files.',
+            category='storage', commands=['df -hT','df -ih'],
+            impact='Low disk space can prevent updates, logs, and configuration writes.',
+        ))
+    except Exception:
+        add(_node_ops_finding('disk','Available disk space','unknown','Disk usage could not be read.','Inspect filesystem availability on the node.',category='storage'))
+
+    resolv_ok = False
+    try:
+        text = Path('/etc/resolv.conf').read_text(encoding='utf-8', errors='replace')
+        resolv_ok = any(line.strip().startswith('nameserver ') for line in text.splitlines())
+    except Exception:
+        pass
+    add(_node_ops_finding(
+        'dns','Resolver configuration','pass' if resolv_ok else 'warning',
+        'At least one resolver is configured.' if resolv_ok else 'No nameserver entry could be confirmed.',
+        'Review the host resolver configuration separately from WireGuard client DNS settings.',
+        category='dns', commands=['cat /etc/resolv.conf','resolvectl status 2>/dev/null || true'],
+    ))
+
+    sync_state = 'unknown'
+    if shutil.which('timedatectl'):
+        try:
+            rc, out, _ = _node_ops_run(['timedatectl','show','-p','NTPSynchronized','--value'])
+            if rc == 0:
+                sync_state = 'yes' if out.strip().lower() == 'yes' else 'no'
+        except Exception:
+            pass
+    add(_node_ops_finding(
+        'time_sync','System time synchronization',
+        'pass' if sync_state == 'yes' else 'review',
+        'System clock reports synchronized.' if sync_state == 'yes' else 'Systemd time synchronization is not confirmed.',
+        'Accurate time matters for expiry timers, TLS, logs and troubleshooting. Alternate chrony/ntpd setups can be valid.',
+        category='system', commands=['timedatectl status','date --iso-8601=seconds'],
+    ))
+
+    pending_reboot = Path('/var/run/reboot-required').exists()
+    add(_node_ops_finding(
+        'pending_reboot','Pending reboot','review' if pending_reboot else 'pass',
+        'The operating system reports a reboot is required.' if pending_reboot else 'No reboot-required marker is present.',
+        'Schedule a maintenance window only after confirming remote access and WireGuard recovery.',
+        category='system', commands=['cat /var/run/reboot-required.pkgs 2>/dev/null || true','uname -r'],
+    ))
+
+    env_candidate = _node_env_path()
+    env_path = Path(env_candidate).absolute() if env_candidate else None
+    if env_path is not None and env_path.exists() and env_path.is_file() and not env_path.is_symlink():
+        try:
+            mode = stat.S_IMODE(env_path.stat().st_mode)
+            unsafe = bool(mode & 0o077)
+            add(_node_ops_finding(
+                'env_mode','Node environment file permissions','warning' if unsafe else 'pass',
+                f'Permission mode {mode:03o}; contents were not read.',
+                'Restrict group/other access without displaying the API key or other secret values.',
+                category='security',
+                repair={'action':'restrict_env','label':'Restrict node .env permissions','risk':'low'} if unsafe else None,
+                commands=["stat -c '%a %U:%G %n' " + str(env_path)],
+                impact='An overly permissive node .env can expose the node API credential to other local users.',
+            ))
+        except Exception:
+            add(_node_ops_finding('env_mode','Node environment file permissions','unknown','Permission mode could not be read; contents were not read.','Inspect the node agent .env permissions without printing its contents.',category='security'))
+
+    stages = [
+        {'id':'wireguard','label':'WireGuard','state':'ready' if profile['wireguard'] and any(x['is_up'] for x in interfaces) else 'attention','detail':'At least one interface active' if any(x['is_up'] for x in interfaces) else 'No active interface'},
+        {'id':'forwarding','label':'Forwarding','state':'ready' if forwarding_value == 1 else ('attention' if gateway_expected else 'not_required'),'detail':'Enabled' if forwarding_value == 1 else ('Required but disabled' if gateway_expected else 'Not required by detected hooks')},
+        {'id':'route','label':'Default route','state':'ready' if default_route else ('attention' if gateway_expected else 'review'),'detail':'Present' if default_route else 'Not detected'},
+        {'id':'firewall','label':'Firewall','state':'ready' if profile['nftables'] or ufw_state in {'active','inactive'} else 'review','detail':'Firewall tooling detected' if profile['nftables'] or ufw_state != 'not installed' else 'No firewall tool detected'},
+        {'id':'dns','label':'DNS','state':'ready' if resolv_ok else 'attention','detail':'Resolver configured' if resolv_ok else 'Resolver not confirmed'},
+    ]
+    path_problem = any(stage['state'] == 'attention' for stage in stages)
+    add(_node_ops_finding(
+        'network_path','Network path readiness','warning' if path_problem else 'pass',
+        'Remote node path readiness was built from local node runtime checks.',
+        'Start with the first stage that needs attention; do not modify stages that are already ready.',
+        category='network', path_stages=stages,
+        impact='A failed required stage can prevent peers on this node from reaching routed networks.',
+    ))
+
+    return {'ok': True, 'system': profile, 'checks': findings, 'ts': int(time.time())}
+
+
+def _node_ops_snapshot_root():
+    path = Path(os.environ.get('WG_NODE_OPS_STATE_DIR','/var/lib/wg-panel-node/operations')).resolve()
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        path.chmod(0o700)
+    except Exception:
+        pass
+    return path
+
+
+@contextmanager
+def _node_ops_locked():
+    """Serialize mutating Operations calls across gunicorn workers.
+
+    The node agent can run multiple gunicorn workers/threads, so a process-local
+    threading lock is not sufficient.  Use a restricted flock file in the
+    Operations state directory and fail fast rather than overlapping repairs.
+    """
+    root = _node_ops_snapshot_root()
+    lock_path = root / '.repair.lock'
+    flags = os.O_CREAT | os.O_RDWR
+    if hasattr(os, 'O_NOFOLLOW'):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(str(lock_path), flags, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except Exception:
+        pass
+    with os.fdopen(fd, 'a+', encoding='utf-8') as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _node_ops_write_snapshot(payload):
+    import uuid
+    token = uuid.uuid4().hex
+    payload = dict(payload)
+    payload.update({'token':token,'created_at':int(time.time()),'expires_at':int(time.time())+86400})
+    path = _node_ops_snapshot_root() / (token + '.json')
+    fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+        json.dump(payload, handle, separators=(',', ':'))
+    return {'token':token,'expires_at':payload['expires_at']}
+
+
+def _node_ops_read_snapshot(token):
+    token = str(token or '').strip()
+    if not re.fullmatch(r'[0-9a-f]{32}', token):
+        raise ValueError('Invalid rollback token.')
+    path = _node_ops_snapshot_root() / (token + '.json')
+    if not path.is_file() or path.is_symlink():
+        raise ValueError('Rollback snapshot was not found.')
+    data = json.loads(path.read_text(encoding='utf-8'))
+    if int(data.get('expires_at') or 0) < int(time.time()):
+        try: path.unlink()
+        except Exception: pass
+        raise ValueError('Rollback snapshot has expired.')
+    return path, data
+
+
+def _node_ops_require_root():
+    if hasattr(os, 'geteuid') and os.geteuid() != 0:
+        raise PermissionError('The node agent must run as root for this repair.')
+
+
+def _node_ops_repair(action, target=None):
+    _node_ops_require_root()
+    profile = _node_ops_profile()
+    if action in {'install_wireguard_tools','install_nftables','install_iproute'}:
+        package_key = _NODE_OPS_ACTIONS[action]
+        steps = _node_ops_package_steps(package_key, profile)
+        if not steps:
+            raise RuntimeError('No supported package manager was detected on this node.')
+        for argv in steps:
+            completed = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=180, check=False)
+            if completed.returncode != 0:
+                raise RuntimeError('Package installation did not complete successfully.')
+        expected = {'install_wireguard_tools':('wg','wg-quick'),'install_nftables':('nft',),'install_iproute':('ip',)}[action]
+        if not all(shutil.which(binary) for binary in expected):
+            raise RuntimeError('The installed tool could not be verified in the node agent PATH.')
+        return {'action':action,'verified':True,'message':'Required node tooling was installed and verified.'}
+
+    if action == 'restrict_env':
+        env_candidate = _node_env_path()
+        path = Path(env_candidate).absolute() if env_candidate else None
+        if path is None or not path.is_file() or path.is_symlink():
+            raise RuntimeError('The node agent .env is missing or is not a regular file.')
+        before = stat.S_IMODE(path.stat().st_mode)
+        rollback = _node_ops_write_snapshot({'action':'restrict_env','before_mode':before,'expected_mode':before & ~0o077})
+        after = before & ~0o077
+        path.chmod(after)
+        verified = stat.S_IMODE(path.stat().st_mode) == after and not (after & 0o077)
+        if not verified:
+            raise RuntimeError('The new .env permissions could not be verified.')
+        return {'action':action,'before':f'{before:03o}','after':f'{after:03o}','verified':True,'rollback':rollback,'message':'Node environment permissions were restricted and verified.'}
+
+    if action == 'enable_ipv4_forwarding':
+        runtime_path = Path('/proc/sys/net/ipv4/ip_forward')
+        before_runtime = runtime_path.read_text().strip() if runtime_path.is_file() else ''
+        sysctl_path = Path('/etc/sysctl.d/99-wg-panel-forwarding.conf')
+        if sysctl_path.is_symlink():
+            raise RuntimeError('Refusing to replace a symbolic-link sysctl file.')
+        before_exists = sysctl_path.exists()
+        before_text = sysctl_path.read_text(encoding='utf-8', errors='replace') if before_exists and sysctl_path.is_file() else None
+        rollback = _node_ops_write_snapshot({'action':'enable_ipv4_forwarding','before_runtime':before_runtime,'before_exists':before_exists,'before_text':before_text,'expected_runtime':'1','expected_text':'net.ipv4.ip_forward = 1\n'})
+        tmp = sysctl_path.with_name('.99-wg-panel-forwarding.conf.tmp')
+        tmp.write_text('net.ipv4.ip_forward = 1\n', encoding='utf-8')
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, sysctl_path)
+        if shutil.which('sysctl'):
+            subprocess.run(['sysctl','-w','net.ipv4.ip_forward=1'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False)
+        else:
+            runtime_path.write_text('1\n')
+        if runtime_path.read_text().strip() != '1':
+            raise RuntimeError('IPv4 forwarding did not verify as enabled.')
+        return {'action':action,'verified':True,'rollback':rollback,'message':'IPv4 forwarding was enabled and verified on the node.'}
+
+    if action == 'start_interface':
+        name = _safe_iface_name(target)
+        conf = Path(_iface_conf_path(name))
+        if not conf.is_file() or conf.is_symlink():
+            raise RuntimeError('The selected interface configuration is missing or unsafe.')
+        was_up = _iface_up(name)
+        if was_up:
+            return {'action':action,'target':name,'verified':True,'message':f'{name} is already active.'}
+        subprocess.check_call(['wg-quick','up',name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+        if not _iface_up(name):
+            raise RuntimeError('The interface did not verify as active.')
+        return {'action':action,'target':name,'verified':True,'message':f'{name} is active and verified on the node.'}
+
+    raise ValueError('Unsupported repair.')
+
+
+@app.get('/api/operations/diagnostic')
+@require_api_key
+def node_operations_diagnostic():
+    try:
+        return jsonify(_node_ops_diagnostic())
+    except Exception:
+        app.logger.exception('Node Operations diagnostic failed')
+        return jsonify(ok=False, error='diagnostic_failed'), 500
+
+
+@app.post('/api/operations/peer-diagnostic')
+@require_api_key
+def node_operations_peer_diagnostic():
+    """Return read-only runtime evidence for exactly one WireGuard peer.
+
+    Inputs are deliberately limited to a validated interface name and public
+    key.  The response never includes private or preshared key material.
+    """
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify(ok=False, error='invalid_request'), 400
+    try:
+        iface = _safe_iface_name(data.get('interface'))
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    public_key = _valid_wg_key(data.get('public_key'))
+    if not public_key:
+        return jsonify(ok=False, error='invalid_public_key'), 400
+
+    runtime = {
+        'interface_state': 'unknown',
+        'peer_present': None,
+        'online': False,
+        'latest_handshake_age': None,
+        'reason': 'peer_not_found',
+    }
+
+    try:
+        lines = subprocess.check_output(
+            ['wg', 'show', iface, 'dump'],
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        ).decode('utf-8', 'replace').splitlines()
+        if not lines or len(lines[0].split('\t')) < 4 or any(len(line.split('\t')) < 8 for line in lines[1:]):
+            raise ValueError('Incomplete WireGuard runtime response')
+        runtime.update(interface_state='up', peer_present=False)
+        now = int(time.time())
+        window = max(5, int(os.environ.get('WG_ONLINE_HANDSHAKE_WINDOW', '180') or 180))
+        for line in lines[1:]:
+            cols = line.split('\t')
+            if len(cols) < 8 or cols[0].strip() != public_key:
+                continue
+            allowed_ips = cols[3].strip()
+            try:
+                handshake = max(0, int(cols[4] or 0))
+            except Exception:
+                handshake = 0
+            age = max(0, now - handshake) if handshake else None
+            handshake_fresh = bool(age is not None and age <= window)
+            probe_ok = False
+            try:
+                probe_ok = bool(_node_ping_peer(iface, allowed_ips))
+            except Exception:
+                probe_ok = False
+            online = bool(probe_ok or handshake_fresh)
+            runtime = {
+                'interface_state': 'up' if _iface_up(iface) else 'down',
+                'peer_present': True,
+                'online': online,
+                'latest_handshake_age': age,
+                'reason': 'probe' if probe_ok else ('handshake' if handshake_fresh else 'no_recent_activity'),
+                'allowed_ips_present': bool(allowed_ips),
+            }
+            break
+    except subprocess.CalledProcessError:
+        runtime['reason'] = 'wg_show_failed'
+    except Exception:
+        app.logger.exception('Peer-specific WireGuard diagnostic failed for %s', iface)
+        runtime['reason'] = 'runtime_unavailable'
+
+    path_stages = []
+    try:
+        host = _node_ops_diagnostic()
+        for finding in host.get('checks', []) if isinstance(host, dict) else []:
+            if isinstance(finding, dict) and finding.get('id') == 'network_path':
+                raw = finding.get('path_stages')
+                if isinstance(raw, list):
+                    path_stages = [
+                        {
+                            'id': str(item.get('id') or ''),
+                            'label': str(item.get('label') or ''),
+                            'state': str(item.get('state') or 'review'),
+                            'detail': str(item.get('detail') or ''),
+                        }
+                        for item in raw if isinstance(item, dict)
+                    ]
+                break
+    except Exception:
+        app.logger.debug('Could not append node Network Path stages', exc_info=True)
+
+    return jsonify(ok=True, runtime=runtime, path_stages=path_stages, read_only=True)
+
+
+@app.post('/api/operations/repair')
+@require_api_key
+def node_operations_repair():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or data.get('confirm') is not True:
+        return jsonify(ok=False, error='confirmation_required'), 400
+    action = str(data.get('action') or '').strip()
+    if action not in _NODE_OPS_ACTIONS:
+        return jsonify(ok=False, error='unsupported_repair'), 400
+    try:
+        with _node_ops_locked():
+            result = _node_ops_repair(action, data.get('target'))
+        return jsonify(ok=True, **result)
+    except BlockingIOError:
+        return jsonify(ok=False, error='operation_in_progress'), 409
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    except PermissionError as exc:
+        return jsonify(ok=False, error=str(exc)), 409
+    except Exception:
+        app.logger.exception('Node Operations repair failed: %s', action)
+        return jsonify(ok=False, error='repair_failed'), 500
+
+
+@app.post('/api/operations/rollback')
+@require_api_key
+def node_operations_rollback():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or data.get('confirm') is not True:
+        return jsonify(ok=False, error='confirmation_required'), 400
+    try:
+        with _node_ops_locked():
+            _node_ops_require_root()
+            path, snap = _node_ops_read_snapshot(data.get('token'))
+            action = str(snap.get('action') or '')
+            if action == 'restrict_env':
+                env_candidate = _node_env_path()
+                env_path = Path(env_candidate).absolute() if env_candidate else None
+                if env_path is None or not env_path.is_file() or env_path.is_symlink():
+                    raise RuntimeError('The node agent .env is missing or is not a regular file.')
+                expected = int(snap.get('expected_mode'))
+                if stat.S_IMODE(env_path.stat().st_mode) != expected:
+                    raise RuntimeError('The .env permissions changed after the repair; refusing to overwrite the newer state.')
+                env_path.chmod(int(snap.get('before_mode')))
+                if stat.S_IMODE(env_path.stat().st_mode) != int(snap.get('before_mode')):
+                    raise RuntimeError('Rollback verification failed.')
+            elif action == 'enable_ipv4_forwarding':
+                runtime_path = Path('/proc/sys/net/ipv4/ip_forward')
+                sysctl_path = Path('/etc/sysctl.d/99-wg-panel-forwarding.conf')
+                if runtime_path.read_text().strip() != str(snap.get('expected_runtime')):
+                    raise RuntimeError('IPv4 forwarding changed after the repair; refusing to overwrite the newer state.')
+                if sysctl_path.is_symlink():
+                    raise RuntimeError('Refusing to modify a symbolic-link sysctl file.')
+                current_text = sysctl_path.read_text(encoding='utf-8', errors='replace') if sysctl_path.exists() else None
+                if current_text != snap.get('expected_text'):
+                    raise RuntimeError('The forwarding configuration changed after the repair; refusing to overwrite the newer state.')
+                if snap.get('before_exists'):
+                    sysctl_path.write_text(str(snap.get('before_text') or ''), encoding='utf-8')
+                    os.chmod(sysctl_path, 0o644)
+                elif sysctl_path.exists():
+                    sysctl_path.unlink()
+                before_runtime = str(snap.get('before_runtime') or '0')
+                if shutil.which('sysctl'):
+                    subprocess.run(['sysctl','-w',f'net.ipv4.ip_forward={before_runtime}'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False)
+                else:
+                    runtime_path.write_text(before_runtime + '\n')
+                if runtime_path.read_text().strip() != before_runtime:
+                    raise RuntimeError('Rollback verification failed.')
+            else:
+                raise ValueError('This repair does not support rollback.')
+            path.unlink()
+        return jsonify(ok=True, action=action, verified=True, message='Previous node state was restored and verified.')
+    except BlockingIOError:
+        return jsonify(ok=False, error='operation_in_progress'), 409
+    except ValueError as exc:
+        return jsonify(ok=False, error=str(exc)), 400
+    except PermissionError as exc:
+        return jsonify(ok=False, error=str(exc)), 409
+    except Exception:
+        app.logger.exception('Node Operations rollback failed')
+        return jsonify(ok=False, error='rollback_failed'), 500
 
 def _safe_iface_name(
     name: str,
@@ -2227,16 +2890,42 @@ def _wg_transport_path(
 @app.route('/api/peers')
 @require_api_key
 def peers():
+    """Return WireGuard peer runtime state for the node API.
+
+    ``endpoint`` is the remote endpoint currently observed by WireGuard
+    (for example ``203.0.113.10:51820`` or ``[2001:db8::10]:51820``).
+    It is not necessarily the subscriber's original/public ISP address;
+    NAT, CGNAT, VPNs and other relays can change what the server observes.
+    """
     want_iface = (request.args.get('iface') or '').strip()
     peers = []
     now = int(time.time())
-    HANDSHAKE_WINDOW = int(os.environ.get('WG_ONLINE_HANDSHAKE_WINDOW', '180') or 180)
 
     try:
-        dump = subprocess.check_output(['wg', 'show', 'all', 'dump']).decode().splitlines()
+        HANDSHAKE_WINDOW = int(
+            os.environ.get('WG_ONLINE_HANDSHAKE_WINDOW', '180') or 180
+        )
+    except (TypeError, ValueError):
+        HANDSHAKE_WINDOW = 180
+
+    probe_first = str(
+        os.environ.get('WG_ONLINE_PROBE_FIRST', '1')
+    ).lower() not in ('0', 'false', 'no', 'off')
+
+    handshake_fallback = str(
+        os.environ.get('WG_ONLINE_HANDSHAKE_FALLBACK', '0')
+    ).lower() in ('1', 'true', 'yes', 'on')
+
+    try:
+        dump = subprocess.check_output(
+            ['wg', 'show', 'all', 'dump'],
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        ).decode('utf-8', 'replace').splitlines()
 
         for line in dump:
             parts = line.split('\t')
+
             if len(parts) != 9:
                 continue
 
@@ -2245,18 +2934,35 @@ def peers():
                 continue
 
             peer_pub = parts[1]
+            endpoint = (parts[3] or '').strip()
+            if endpoint == '(none)':
+                endpoint = ''
+            endpoint_host = _wg_runtime_endpoint_host(endpoint)
+
             allowed_ips = parts[4] or ''
-            hs = int(parts[5] or 0)
-            rx_bytes = int(parts[6] or 0)
-            tx_bytes = int(parts[7] or 0)
+
+            try:
+                hs = int(parts[5] or 0)
+            except (TypeError, ValueError):
+                hs = 0
+
+            try:
+                rx_bytes = int(parts[6] or 0)
+            except (TypeError, ValueError):
+                rx_bytes = 0
+
+            try:
+                tx_bytes = int(parts[7] or 0)
+            except (TypeError, ValueError):
+                tx_bytes = 0
 
             hs_age = (now - hs) if hs > 0 else None
-            hs_fresh = bool(hs > 0 and hs_age is not None and hs_age <= HANDSHAKE_WINDOW)
+            hs_fresh = bool(
+                hs > 0
+                and hs_age is not None
+                and hs_age <= HANDSHAKE_WINDOW
+            )
 
-            probe_first = str(os.environ.get('WG_ONLINE_PROBE_FIRST', '1')).lower() not in ('0', 'false', 'no', 'off')
-            handshake_fallback = str(os.environ.get('WG_ONLINE_HANDSHAKE_FALLBACK', '0')).lower() in ('1', 'true', 'yes', 'on')
-            
-            ping_ok = False
             probed = False
 
             if probe_first:
@@ -2269,31 +2975,40 @@ def peers():
                 else:
                     online = bool(handshake_fallback and hs_fresh)
                     reason = 'handshake' if online else 'probe_failed'
-            
             else:
                 online = bool(hs_fresh)
                 reason = 'handshake' if hs_fresh else 'none'
 
-
+            status = 'online' if online else 'offline'
 
             peers.append({
                 'id': peer_pub,
                 'iface': iface,
                 'public_key': peer_pub,
                 'allowed_ips': allowed_ips,
+
+                'endpoint': endpoint,
+                'endpoint_host': endpoint_host,
+
                 'rx_mib': round(rx_bytes / 1048576.0, 2),
                 'tx_mib': round(tx_bytes / 1048576.0, 2),
                 'latest_handshake': hs,
                 'latest_handshake_age': hs_age,
-                'conn_status': 'online' if online else 'offline',
-                'connection_status': 'online' if online else 'offline',
+                'conn_status': status,
+                'connection_status': status,
                 'conn_reason': reason,
                 'conn_probe': bool(probed),
-                'status': 'online' if online else 'offline'
+                'status': status,
             })
 
+    except subprocess.TimeoutExpired:
+        app.logger.warning('Timed out while reading WireGuard peer state')
+    except subprocess.CalledProcessError as exc:
+        app.logger.warning('wg show all dump failed with rc=%s', exc.returncode)
+    except FileNotFoundError:
+        app.logger.warning('WireGuard command "wg" was not found')
     except Exception:
-        pass
+        app.logger.exception('Could not collect WireGuard peer state')
 
     return jsonify(peers=peers)
 
