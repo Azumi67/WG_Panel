@@ -328,9 +328,40 @@ node
 </div>
 
 -----------------------
+![images](https://github.com/user-attachments/assets/f50ecb83-2194-4b91-9594-00d310dc506a)
+اسکرین شات modern:
+
+
+<details>
+  <summary align="right">داشبورد پنل</summary>
+
+  <p align="right">
+    <img src="https://github.com/user-attachments/assets/e3c6f410-48e1-4287-a3da-269ccc0de78a" alt="menu screen" />
+  </p>
+</details>
+
+<details>
+  <summary align="right">peers</summary>
+   <p align="right">
+    <img src="https://github.com/user-attachments/assets/357cff7e-d64b-4db0-98ad-8f1ce9410e6a" alt="menu screen" />
+  </p>
+</details>
+
+<details>
+  <summary align="right">Subscription</summary>
+
+  <p align="right">
+    <img src="https://github.com/user-attachments/assets/edb4936c-4e13-4795-907a-98680d551695" alt="menu screen" />
+  </p>
+</details>
+
+
+---------------------------------------------------------------
+   </details>
+</div>
 
 ![images](https://github.com/user-attachments/assets/f50ecb83-2194-4b91-9594-00d310dc506a)
-اسکرین شات:
+اسکرین شات legacy:
 
 <details>
   <summary align="right">داشبورد پنل</summary>
