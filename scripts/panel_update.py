@@ -49,12 +49,7 @@ def run(cmd, cwd=None, timeout=1200, check=True):
     return p
 
 def github_main_metadata(repo: str) -> dict:
-    """Resolve main revision without depending on GitHub REST API quota.
 
-    `git ls-remote` is the primary source. The REST API is only a best-effort
-    fallback and a 403/rate-limit response must never abort an otherwise valid
-    archive update.
-    """
     revision = ""
     commit_date = ""
     url = f"https://github.com/{repo}/commits/main"
