@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import time, threading
+import time, threading, queue
 from datetime import datetime, time as dtime, timezone
 import os, io, json, logging, math, re, asyncio, ipaddress
 from functools import wraps
@@ -316,6 +316,7 @@ def load_bot_token() -> str:
         return ""
 
 api = requests.Session()
+api.trust_env = False
 if API_KEY:
     api.headers.update({
         "Authorization": f"Bearer {API_KEY}",
@@ -329,6 +330,7 @@ PANEL_ADMIN_USER = os.getenv("PANEL_ADMIN_USER", "").strip()
 PANEL_ADMIN_PASS = os.getenv("PANEL_ADMIN_PASS", "").strip()
 
 sess = requests.Session()
+sess.trust_env = False
 
 def _login_session() -> None:
     if not (PANEL_ADMIN_USER and PANEL_ADMIN_PASS):
@@ -449,20 +451,59 @@ def log_tg(uid: str, uname: str, action: str, details: str = ""):
     except Exception:
         pass
 
+def _redact_log_secrets(value):
+    value = re.sub(r"(?i)(https?://api\.telegram\.org/(?:file/)?bot)[^/\s]+", r"\1[REDACTED]", str(value))
+    return re.sub(r"\b[0-9]{6,}:[A-Za-z0-9_-]{20,}\b", "[REDACTED]", value)
+
+
+class SafeBotFormatter(logging.Formatter):
+    def format(self, record):
+        return _redact_log_secrets(super().format(record))
+
+
 class PanelLogHandler(logging.Handler):
-    _local = threading.local()
+    """Best-effort forwarding must never block polling or health reporting."""
     def __init__(self, admin_id="bot", admin_username="bot", level=logging.INFO):
-        super().__init__(level); self.admin_id=str(admin_id); self.admin_username=str(admin_username)
-    def emit(self, record: logging.LogRecord) -> None:
-        if getattr(self._local, "active", False): return
-        if record.name.startswith(("urllib3","requests","httpcore","httpx","telegram")): return
+        super().__init__(level)
+        self.admin_id = str(admin_id)
+        self.admin_username = str(admin_username)
+        self.pending = queue.Queue(maxsize=100)
+        self.stopping = threading.Event()
+        self.worker = threading.Thread(target=self._forward, name="panel-log-forwarder", daemon=True)
+        self.worker.start()
+
+    def emit(self, record):
+        if record.name.startswith(("urllib3", "requests", "httpcore", "httpx", "telegram")):
+            return
         try:
-            self._local.active=True
-            log_tg(self.admin_id, self.admin_username, "log", f"{(record.levelname or 'INFO').upper()}: {self.format(record)}")
+            self.pending.put_nowait(_redact_log_secrets(f"{record.levelname}: {self.format(record)}"))
         except Exception:
             pass
-        finally:
-            self._local.active=False
+
+    def _forward(self):
+        with requests.Session() as transport:
+            transport.trust_env = False
+            transport.headers.update({"Authorization": f"Bearer {API_KEY}", "X-API-KEY": API_KEY})
+            while not self.stopping.is_set():
+                try:
+                    message = self.pending.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                try:
+                    if API_KEY:
+                        with transport.post(f"{PANEL}/api/telegram/admin_log", json={
+                            "admin_id": self.admin_id, "admin_username": self.admin_username,
+                            "action": "log", "details": message,
+                        }, timeout=(3, 3), allow_redirects=False) as response:
+                            response.raise_for_status()
+                except Exception:
+                    self.stopping.wait(20)
+                finally:
+                    self.pending.task_done()
+
+    def close(self):
+        self.stopping.set()
+        super().close()
 
 
 def csrf_headers(extra: dict | None = None) -> dict:
@@ -509,7 +550,7 @@ def _post_soft(url: str, session="auto", **kw):
             if sc not in (401, 403):
                 return e.response  
         except RequestException:
-            pass
+            raise
 
     return sess.post(url, timeout=timeout, **kw)
 
@@ -519,12 +560,7 @@ def _put_soft(url, **kw):
         return _put(url, **kw)
     except HTTPError as e:
         return e.response
-    except Exception:
-        timeout = kw.pop("timeout", 20)
-        try:
-            return sess.put(url, timeout=timeout, **kw)
-        except Exception as ee:
-            raise ee
+
 
 def get_shortlink(pid: int, peer: Optional[Dict[str, Any]] = None) -> str:
     peer = peer or {}
@@ -1207,7 +1243,7 @@ def _get(url: str, session="auto", **kw):
             if sc not in (401, 403):
                 raise
         except RequestException:
-            pass
+            raise
 
     r = sess.get(url, timeout=timeout, **kw)
     r.raise_for_status()
@@ -1239,7 +1275,7 @@ def _post(url: str, session="auto", **kw):
             if sc not in (401, 403):
                 raise
         except RequestException:
-            pass
+            raise
 
     h = kw.pop("headers", {})
     h = {**csrf_headers(), **h}
@@ -1272,7 +1308,7 @@ def _put(url: str, session="auto", **kw):
             if sc not in (401, 403):
                 raise
         except RequestException:
-            pass
+            raise
 
     h = kw.pop("headers", {})
     h = {**csrf_headers(), **h}
@@ -1341,7 +1377,7 @@ def _delete(url: str, session="auto", **kw):
             if sc not in (401, 403):
                 raise
         except RequestException:
-            pass
+            raise
 
     h = kw.pop("headers", {})
     h = {**csrf_headers(), **h}
@@ -5725,19 +5761,33 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         q.data = f"peer:toggle:{pid}"
         return await on_cb(update, context)
 
-    if data.startswith("peer:delete:"):
-        pid = int(data.split(":")[-1])
+    if re.fullmatch(r"peer:delete:confirm:[1-9][0-9]*", data):
+        pid = int(data.rsplit(":", 1)[-1])
+        try:
+            await asyncio.to_thread(delete_peer, pid)
+        except Exception as exc:
+            response = getattr(exc, "response", None)
+            if getattr(response, "status_code", None) == 404:
+                await edit_send(update, "Peer no longer exists. Refresh the peer list.", KB.peers_index())
+            else:
+                await edit_send(
+                    update,
+                    f"⊘ Could not delete this peer.\n<code>{html(str(exc)[:500])}</code>\nRefresh the peer before trying again.",
+                    KB.back(f"peer:open:{pid}"),
+                )
+            return
+        _log_admin("peer_delete", f"pid={pid}; scope=local")
+        await edit_send(update, "⌫ Peer deleted.", KB.peers_index())
+        return
+
+    if re.fullmatch(r"peer:delete:[1-9][0-9]*", data):
+        pid = int(data.rsplit(":", 1)[-1])
         k = InlineKeyboardMarkup([
             [InlineKeyboardButton("● Yes, delete", callback_data=f"peer:delete:confirm:{pid}")],
-            [InlineKeyboardButton("← Back", callback_data=f"peer:open:{pid}")]
+            [InlineKeyboardButton("← Cancel", callback_data=f"peer:open:{pid}")]
         ])
-        await edit_send(update, "⌫ Confirm delete this peer?", k); return
-
-    if data.startswith("peer:delete:confirm:"):
-        pid = int(data.split(":")[-1])
-        delete_peer(pid)
-        _log_admin("peer_delete", f"pid={pid}; scope=local")
-        await edit_send(update, "⌫ Deleted.", KB.peers_index()); return
+        await edit_send(update, "⌫ Confirm delete this peer?", k)
+        return
 
     if data.startswith("peer:edit:"):
         pid = int(data.split(":")[-1])
@@ -6967,7 +7017,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
 
 
-    # Security control text input
+    # Security control
     sec_state = context.user_data.get(TG_SECURITY_STATE)
     if sec_state:
         if text == "-":
@@ -7448,6 +7498,68 @@ def _admin_unmuted() -> list[str]:
             out.append(tg_id)
     return out
 
+_panel_health_http = None
+_panel_health_lock = threading.Lock()
+
+
+def _new_panel_health_session():
+    session = requests.Session()
+    session.trust_env = False
+    session.headers.update({
+        "Authorization": f"Bearer {API_KEY}",
+        "X-API-KEY": API_KEY,
+        "User-Agent": f"WG-Panel-Watchdog/{BOT_VERSION}",
+    })
+    return session
+
+
+def _discard_panel_health_session():
+    global _panel_health_http
+    old = _panel_health_http
+    _panel_health_http = None
+    if old is not None:
+        try:
+            old.close()
+        except Exception:
+            pass
+
+
+def _probe_panel_health():
+    global _panel_health_http
+    with _panel_health_lock:
+        if _panel_health_http is None:
+            _panel_health_http = _new_panel_health_session()
+        try:
+            response = _panel_health_http.get(
+                f"{PANEL}/api/healthz",
+                timeout=(4, 8),
+                allow_redirects=False,
+            )
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"Health endpoint returned HTTP {response.status_code}; "
+                    "check PANEL_BASE_URL/PANEL_API_KEY."
+                )
+            _raise_if_login_html(response, f"{PANEL}/api/healthz")
+            return response
+        except Exception:
+            _discard_panel_health_session()
+            raise
+
+def _panel_connection_error(exc):
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return "Connection to the panel timed out. Check the configured panel host, port, firewall and proxy/CDN path. This does not confirm that the panel process stopped."
+    if isinstance(exc, requests.exceptions.ReadTimeout):
+        return "No complete HTTPS response arrived before the deadline. This can include a stalled TLS handshake; compare local and public HTTPS checks, then review panel/proxy logs."
+    if isinstance(exc, requests.exceptions.SSLError):
+        if "CERTIFICATE_VERIFY_FAILED" in str(exc) or "certificate verify failed" in str(exc).lower():
+            return "TLS certificate verification failed. Check the panel certificate, hostname and certificate chain."
+        return "The TLS connection failed. Check the HTTPS listener and proxy path; this is not necessarily a certificate verification error."
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "Could not establish a panel connection. Check DNS, the listening address and network route."
+    return str(exc)[:500]
+
+
 async def _panel_watchdog(
     stop_event: asyncio.Event,
     bot,
@@ -7573,16 +7685,7 @@ async def _panel_watchdog(
         status_code = None
 
         try:
-            response = await asyncio.to_thread(
-                _get,
-                f"{PANEL}/api/healthz",
-                session=(
-                    "api"
-                    if API_KEY
-                    else "auto"
-                ),
-                timeout=6,
-            )
+            response = await asyncio.to_thread(_probe_panel_health)
 
             status_code = int(
                 response.status_code
@@ -7598,9 +7701,7 @@ async def _panel_watchdog(
                 )
 
         except Exception as exc:
-            error_text = (
-                f"{type(exc).__name__}: {exc}"
-            )
+            error_text = _panel_connection_error(exc)
 
             ok = False
 
@@ -7860,7 +7961,6 @@ TG_BACKUP_TICK_SEC = 30
 TG_BACKUP_SCHEDULER_ENABLED = os.getenv("TG_BACKUP_SCHEDULER_ENABLED", "0") == "1"  
 
 def _bot_tz_schedule(sched: dict):
-    # Regional time is authoritative for schedules as well as display.
     return _tg_system_timezone()
 
 
@@ -8265,6 +8365,11 @@ def main():
         format="%(levelname)s %(message)s",
     )
 
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(SafeBotFormatter("%(levelname)s %(message)s"))
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
     token = load_bot_token()
 
     if not token:
@@ -8474,7 +8579,7 @@ def main():
         )
 
         panel_handler.setFormatter(
-            logging.Formatter(
+            SafeBotFormatter(
                 "%(name)s - %(message)s"
             )
         )
