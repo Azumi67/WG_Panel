@@ -1,5 +1,5 @@
-document.addEventListener('alpine:init', () => {
-  Alpine.data('apiDocsPage', () => ({
+document.addEventListener('DOMContentLoaded', () => {
+  const page = ({
     query: '',
     allOpen: false,
     noResults: false,
@@ -29,6 +29,7 @@ document.addEventListener('alpine:init', () => {
 
     filter() {
       const term = this.normalizedQuery();
+      this.$root.classList.toggle('is-searching', Boolean(term));
       const rows = Array.from(this.$root.querySelectorAll('.route-row'));
       const indexRows = Array.from(this.$root.querySelectorAll('.route-index tbody tr'));
       const sections = Array.from(this.$root.querySelectorAll('.doc-section'));
@@ -165,6 +166,7 @@ document.addEventListener('alpine:init', () => {
     },
 
     showCopyToast(message, icon = 'fa-check') {
+      if(document.documentElement.dataset.design==='modern' && window.toast) return window.toast(message,icon==='fa-check'?'success':'error');
       this.ensureCopyToast();
       const toast = document.querySelector('.api-copy-toast');
       if (!toast) return;
@@ -221,5 +223,14 @@ document.addEventListener('alpine:init', () => {
 
       sections.forEach(section => this.sideObserver.observe(section));
     }
-  }));
+  });
+  page.$root = document.querySelector('.api-docs');
+  if(!page.$root) return;
+  page.$nextTick = callback => callback();
+  page.$root.addEventListener('click', event => page.handleClick(event));
+  document.getElementById('apiSearch').addEventListener('input', event => {page.query = event.target.value; page.filter(); document.getElementById('noResults').hidden = !page.noResults;});
+  document.getElementById('expandExamples').addEventListener('click', () => {page.toggleExamples(); document.querySelector('#expandExamples span').textContent = page.allOpen ? 'Close examples' : 'Open examples';});
+  document.getElementById('copyBase').addEventListener('click', () => page.copyBase());
+  document.getElementById('noResults').hidden = true;
+  page.init();
 });
