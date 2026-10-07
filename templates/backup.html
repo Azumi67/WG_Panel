@@ -185,12 +185,13 @@
               <label>Timezone</label>
               <input id="tz" type="hidden" value="UTC">
               <div class="bk-inherited-zone" aria-live="polite">
+                <input id="timezone" type="hidden" value="{{ PANEL_TIMEZONE|default('UTC', true) }}">
                 <span class="bk-inherited-zone__icon"><i class="fas fa-globe"></i></span>
                 <span class="bk-inherited-zone__copy">
-                  <strong id="tz-display">Loading…</strong>
+                  <strong id="tz-display">{{ PANEL_TIMEZONE|default('UTC', true) }}</strong>
                   <small>Inherited from Settings → Panel → Regional</small>
                 </span>
-                <span class="bk-inherited-zone__state"><i class="fas fa-link"></i> Global</span>
+                <span class="bk-inherited-zone__state"><i class="fas fa-link"></i> Panel regional</span>
               </div>
             </div>
             <div class="bk-field"><label>Keep last</label><input id="keep" type="number" min="1" value="7"></div>
