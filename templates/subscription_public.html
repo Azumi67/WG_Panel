@@ -14,12 +14,12 @@
     data-theme="{{ 'dark' if ps.get('theme_default','auto') == 'auto' else ps.get('theme_default','dark') }}"
     data-layout="{{ sub_layout|default('ps5') }}" data-hero-style="{{ ps.get('hero_style','banner') }}"
     data-background="{{ sub_background|default('orbits') }}" data-stat-style="{{ sub_display_mode|default('hybrid') }}"
-    data-motion="{{ sub_animation|default('cinematic') }}" data-accent="{{ ps.get('accent','mint') }}"
+    data-motion="{{ sub_animation|default('cinematic') }}" data-accent="{{ ps.get('accent','violet') }}"
     data-surface="{{ ps.get('surface','glass') }}" data-radius="{{ ps.get('radius','rounded') }}"
     data-density="{{ ps.get('density','comfortable') }}" data-config-style="{{ ps.get('config_style','cards') }}"
     data-config-columns="{{ ps.get('config_columns','auto') }}"
     data-support-style="{{ ps.get('support_style','buttons') }}"
-    data-button-style="{{ ps.get('button_style','solid') }}" data-font-scale="{{ ps.get('font_scale','standard') }}"
+    data-font-family="{{ ps.get('font_family','rounded') }}" data-background-pattern="{{ ps.get('background_pattern','none') }}" data-button-style="{{ ps.get('button_style','solid') }}" data-font-scale="{{ ps.get('font_scale','standard') }}"
     data-default-theme="{{ ps.get('theme_default','auto') }}"
     data-show-quick="{{ 'true' if ps.get('show_quick_stats',True) else 'false' }}"
     data-show-install="{{ 'true' if ps.get('show_install',True) else 'false' }}"
@@ -97,7 +97,7 @@
       :root {
         --custom-accent: {
             {
-            ps.get('primary_color', ps.get('custom_primary', '#3addaa'))
+            ps.get('primary_color', ps.get('custom_primary', '#7661ed'))
           }
         }
 
@@ -169,7 +169,7 @@
 
         --status-online: {
             {
-            ps.get('online_color', '#22c55e')
+            ps.get('online_color', '#568eff')
           }
         }
 
@@ -209,14 +209,14 @@
 
         --action-color: {
             {
-            ps.get('action_color', ps.get('primary_color', '#3addaa'))
+            ps.get('action_color', ps.get('primary_color', '#7661ed'))
           }
         }
 
         ;
       }
     </style>
-  </head>
+  <link rel="stylesheet" href="/static/css/public-customization.css?v=8"></head>
 
   <body>
     <div class="live-bg" aria-hidden="true"><span class="bg-orb one"></span><span class="bg-orb two"></span><span
@@ -364,7 +364,7 @@
     </div>
     <div class="toast" id="toast">Copied</div>
     <script>let DATA = {{ data| tojson }}; const PREVIEW_MODE = {{ 'true' if preview_mode|default (false) else 'false' }}; const TOKEN = {{ sub.token| tojson }}; const CONFIG_URL = {{ url_for('subscription_public_config', token = sub.token, _external = True) | tojson }}; const API_URL = {{ url_for('subscription_public_api', token = sub.token, _external = True) | tojson }}; const PUBLIC_SETTINGS = {{ ps| tojson }};</script>
-    <script defer src="{{ url_for('static', filename='js/subscription_public.js', v='20260903-time-v7') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/subscription_public.js') }}"></script>
   </body>
 
   </html>
