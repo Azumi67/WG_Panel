@@ -15,15 +15,9 @@ class InterfaceConfig(db.Model):
     path        = db.Column(db.String(256), nullable=False)
     address     = db.Column(db.String(64), nullable=False)
     listen_port = db.Column(db.Integer, nullable=False)
-    # Client-facing server endpoint override for peers on this interface.
-    # Both NULL means "no override": auto-detection is used unchanged. They are
-    # only ever written and cleared as a pair. IPv6 is stored bare, without
-    # brackets; `_norm_hostport` adds them at render time.
     endpoint_host = db.Column(db.String(255))
     endpoint_port = db.Column(db.Integer)
     private_key = db.Column(db.String(256), nullable=False)
-    # Server interface public key. Local ifaces can derive it from private_key;
-    # node mirrors store '(remote)' as private_key, so this must be persisted.
     public_key  = db.Column(db.String(128))
     mtu         = db.Column(db.Integer)
     dns         = db.Column(db.String(128))
@@ -44,15 +38,9 @@ class Peer(db.Model):
     public_key           = db.Column(db.String(128), nullable=False)
     private_key          = db.Column(db.String(128), nullable=False)
     address              = db.Column(db.String(64), nullable=False)
-    # Canonical host part of `address` (no prefix), so one host cannot be
-    # handed to two peers on the same interface.
     address_host         = db.Column(db.String(64), index=True)
     allowed_ips          = db.Column(db.String(256))
-    # Server endpoint exported in the CLIENT's [Peer] block.
     endpoint             = db.Column(db.String(128))
-    # Optional fixed endpoint for a non-roaming remote client, written into
-    # the SERVER's [Peer] block. Normally empty: WireGuard learns the real
-    # endpoint from the first authenticated packet.
     peer_endpoint        = db.Column(db.String(128))
     persistent_keepalive = db.Column(db.Integer)
     mtu                  = db.Column(db.Integer)
@@ -66,9 +54,6 @@ class Peer(db.Model):
     time_limit_days      = db.Column(db.Float,default=0,)   
     start_on_first_use   = db.Column(db.Boolean, default=False)
     first_used_at        = db.Column(db.DateTime)    
-    # Canonical UTC instant at which the current timer cycle began.  Keeping
-    # this separate from created_at/first_used_at means reset and edit actions
-    # cannot make the countdown and displayed expiry disagree.
     timer_started_at     = db.Column(db.DateTime)
     expires_at           = db.Column(db.DateTime)    
 
@@ -164,9 +149,6 @@ class SubscriptionPeer(db.Model):
     id              = db.Column(db.Integer, primary_key=True)
     subscription_id = db.Column(db.Integer, db.ForeignKey('subscription.id'), nullable=False, index=True)
     peer_id         = db.Column(db.Integer, db.ForeignKey('peer.id'), nullable=False, index=True)
-    # True when the subscription created this peer and therefore owns its
-    # lifetime. False (the conservative default, and what legacy rows get)
-    # means an existing peer was merely attached and must only be detached.
     owned           = db.Column(db.Boolean, default=False, nullable=False, server_default='0')
     location_label  = db.Column(db.String(128))
     country_code    = db.Column(db.String(2))
