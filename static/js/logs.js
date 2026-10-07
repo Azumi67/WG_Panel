@@ -54,6 +54,20 @@ function humanIso(iso) {
     if (typeof saved.auto === 'boolean')   state.auto = saved.auto;
   } catch {}
 
+  const deepLink = (() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      return {
+        source: (q.get('source') || '').trim(),
+        level: (q.get('level') || '').trim().toLowerCase(),
+        query: (q.get('q') || '').trim(),
+      };
+    } catch (_) { return { source:'', level:'', query:'' }; }
+  })();
+  if (deepLink.source && Object.prototype.hasOwnProperty.call(SOURCES, deepLink.source)) {
+    state.source = deepLink.source;
+  }
+
 
   function persistState(){
   sessionStorage.setItem('logs-ui', JSON.stringify({
@@ -549,15 +563,25 @@ function humanSummary(x, src, rawMsg){
   return {main: humanRow(x, src) || raw || 'Event', sub:''};
 }
 
+function levelIcon(level){
+  const key = String(level || 'info').toLowerCase();
+  if (['error','fatal','critical'].includes(key)) return 'fa-circle-xmark';
+  if (['warning','warn'].includes(key)) return 'fa-triangle-exclamation';
+  if (key === 'heartbeat') return 'fa-heart-pulse';
+  if (key === 'debug') return 'fa-code';
+  if (key === 'action') return 'fa-bolt';
+  return 'fa-circle-info';
+}
+
 function renderizeRows(rows){
   const body = $('#logs-body'); if (!body) return;
   const arr = Array.isArray(rows) ? rows : [];
   const srcCfg = SOURCES[state.source] || SOURCES.app;
 
   const html = arr.map(x => {
-    const tsRaw  = x.ts || x.time || x.timestamp || x.when || '';
+    const tsRaw = x.ts || x.time || x.timestamp || x.when || '';
     const tsShow = x.time_display || fmtTsDisplay(tsRaw);
-    const tsHuman = state.friendly ? relativeTime(tsRaw) : '';
+    const tsHuman = relativeTime(tsRaw);
 
     const rawMsg = String(
       x.msg || x.message || x.text ||
@@ -566,21 +590,48 @@ function renderizeRows(rows){
     ).trim();
 
     const lvl = x.kind || x.level || parseLevel(rawMsg) || (x.action ? 'action' : 'info');
+    const levelKey = String(lvl || 'info').toLowerCase();
     const summary = state.friendly ? humanSummary(x, state.source, rawMsg) : {main: rawMsg || '—', sub:''};
     const main = panelTimeText(summary.main || '—');
     const sub = panelTimeText(summary.sub || '');
     const rawTitle = escapeHtml(redactSecrets(rawMsg).replace(/\s+/g,' ').trim());
 
-    return `<tr>
-      <td class="mono"><div class="log-time-main">${escapeHtml(tsShow)}</div>${tsHuman ? `<div class="log-time-sub">${escapeHtml(tsHuman)}</div>` : ''}</td>
-      <td>${levelBadge(lvl)}</td>
-      <td>${escapeHtml(srcCfg.label)}</td>
-      <td><div class="log-msg" title="${rawTitle}"><div class="log-msg__main">${escapeHtml(main)}</div>${sub ? `<div class="log-msg__sub">${escapeHtml(sub)}</div>` : ''}</div></td>
-    </tr>`;
+    return `<article class="log-event" data-level="${escapeHtml(levelKey)}" title="${rawTitle}">
+      <div class="log-event__severity"><span><i class="fas ${levelIcon(levelKey)}"></i></span></div>
+      <div class="log-event__content">
+        <div class="log-event__title">${escapeHtml(main)}</div>
+        ${sub ? `<div class="log-event__sub">${escapeHtml(sub)}</div>` : ''}
+      </div>
+      <div class="log-event__source"><span>${escapeHtml(srcCfg.label)}</span>${levelBadge(lvl)}</div>
+      <div class="log-event__time"><time>${escapeHtml(tsShow)}</time>${tsHuman ? `<small>${escapeHtml(tsHuman)}</small>` : ''}</div>
+    </article>`;
   }).join('');
 
-  body.innerHTML = html || `<tr><td colspan="4" class="muted">No entries</td></tr>`;
+  body.innerHTML = html || `<div class="logs-empty-state"><span><i class="fas fa-inbox"></i></span><strong>No events match this query</strong><small>Try a different stream, level, date range, or search term.</small></div>`;
   const badge = $('#count-badge'); if (badge) badge.textContent = String(arr.length || 0);
+
+  const levels = arr.reduce((acc, item) => {
+    const raw = String(item.msg || item.message || item.text || item.raw || '');
+    const key = String(item.kind || item.level || parseLevel(raw) || (item.action ? 'action' : 'info')).toLowerCase();
+    if (key === 'error' || key === 'fatal' || key === 'critical') acc.errors += 1;
+    if (key === 'warning' || key === 'warn') acc.warnings += 1;
+    if (key === 'heartbeat' || item.heartbeat || item.kind === 'heartbeat') acc.heartbeats += 1;
+    return acc;
+  }, {errors:0, warnings:0, heartbeats:0});
+
+  const setStat = (selector, value) => { const el = $(selector); if (el) el.textContent = String(value); };
+  setStat('#log-stat-total', arr.length || 0);
+  setStat('#log-stat-errors', levels.errors);
+  setStat('#log-stat-warnings', levels.warnings);
+  setStat('#log-stat-heartbeats', levels.heartbeats);
+  setStat('#log-stat-source', srcCfg.label);
+  const note = $('#log-stat-source-note');
+  if (note) {
+    note.textContent = state.source === 'app' ? 'Panel and API activity'
+      : state.source === 'tg_app' ? 'Telegram bot runtime'
+      : state.source === 'tg_admin' ? 'Administrator bot actions'
+      : 'WireGuard interface events';
+  }
 }
 
   async function getLogs(){
@@ -598,7 +649,7 @@ function renderizeRows(rows){
   window.uiConfirm = function({ title = "Are you sure?", body = "", okText = "OK", cancelText = "Cancel", tone = "danger" } = {}) {
     return new Promise((resolve) => {
       const root = document.getElementById('ui-confirm');
-      if (!root) return resolve(confirm(title)); 
+      if (!root) return window.wgConfirm({title,body,okText,cancelText}).then(resolve); 
       const ttl = root.querySelector('.ui-confirm__title');
       const bdy = root.querySelector('.ui-confirm__body');
       const ok = root.querySelector('[data-act="ok"]');
@@ -649,7 +700,7 @@ function renderizeRows(rows){
             tone: 'danger'
           })
         : Promise.resolve(
-            confirm('Clear logs?\n\nThis will permanently delete the logs for the current view.')
+            window.wgConfirm('Clear logs?\n\nThis will permanently delete the logs for the current view.')
           )
     );
 
@@ -810,6 +861,8 @@ function renderizeRows(rows){
 
     const chip = $('#source-chip');
     if (chip) chip.textContent = cfg.label;
+    const sourceStat = $('#log-stat-source');
+    if (sourceStat) sourceStat.textContent = cfg.label;
 
     getLogs();
     persistState();
@@ -1108,11 +1161,10 @@ nodeSel?.addEventListener('change', async () => {
       if (state.auto) startAuto();        
     }
 
-    const thTime = $('#logs-table thead th:first-child');
     const applyTimeHdr = () => {
       const timezone=panelTimezone();
-      if(thTime)thTime.textContent=`Time (${timezone})`;
       const label=$('#logs-panel-timezone');if(label)label.textContent=timezone;
+      const streamLabel=$('#logs-timezone-label');if(streamLabel)streamLabel.textContent=timezone;
     };
     applyTimeHdr();
 
@@ -1182,6 +1234,9 @@ window.addEventListener('wgpanel:timezone-change',async()=>{state.localTime=true
     }
 
     bindFilters();
+
+    if (deepLink.level && $('#level')) $('#level').value = deepLink.level;
+    if (deepLink.query && $('#q')) $('#q').value = deepLink.query;
 
     setPane('view');
     sourceTab(state.source || 'app');
