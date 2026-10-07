@@ -140,7 +140,8 @@
   function initTheme() {
     const saved = store.get('wg-user-theme');
     const preferred = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    setTheme(saved || preferred);
+    const configured = window.PEER_APPEARANCE?.theme;
+    setTheme(saved || (['light','dark'].includes(configured) ? configured : preferred));
     $('theme-toggle')?.addEventListener('click', () => {
       setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
     });
@@ -160,6 +161,7 @@
     return map[kind];
   }
 
+  window.addEventListener('peer-support-updated', () => renderSupport());
   function renderSupport() {
     const host = $('support-links');
     if (!host) return;
