@@ -1,8 +1,6 @@
 (function () {
   "use strict";
 
-  // All backend timestamps represent UTC instants
-  // APIs silently use the browser/device timezone.
   function wgPanelTimezone() {
     const value = String(window.WG_PANEL_TIMEZONE || "UTC").trim();
     return value || "UTC";
