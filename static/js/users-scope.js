@@ -73,7 +73,8 @@
         } catch (_) {}
 
         try {
-            const saved = localStorage.getItem('peer_scope') || '';
+            const params=new URLSearchParams(location.search);
+            const saved = params.has('diagnosis_peer') ? (params.get('node')||'') : (localStorage.getItem('peer_scope') || '');
             if ([...sel.options].some(o => o.value === saved)) sel.value = saved;
         } catch (_) {}
 
