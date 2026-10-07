@@ -1,1 +1,11 @@
 /*migrated to subscription.css*/
+
+html[data-theme="dark"] .subx-redesign .subx-orb,html.dark .subx-redesign .subx-orb,body.dark .subx-redesign .subx-orb{background:#15372f!important;color:#50c8ad!important}
+html[data-theme="dark"] .subx-kicker,html.dark .subx-kicker,body.dark .subx-kicker{color:#50c8ad!important}
+html[data-theme="dark"] .subx-redesign .subx-mini-stats article,html.dark .subx-redesign .subx-mini-stats article,body.dark .subx-redesign .subx-mini-stats article{background:#0f1a23!important;border-color:#293d49!important;box-shadow:0 8px 20px rgba(0,0,0,.16)!important}
+html[data-theme="dark"] .subx-redesign .subx-mini-stats article b,html.dark .subx-redesign .subx-mini-stats article b,body.dark .subx-redesign .subx-mini-stats article b{color:#edf4f6!important}
+html[data-theme="dark"] .subx-form-roadmap,html.dark .subx-form-roadmap,body.dark .subx-form-roadmap{background:#0d171f!important;border-color:#293d49!important}
+html[data-theme="dark"] .subx-form-roadmap>span,html.dark .subx-form-roadmap>span,body.dark .subx-form-roadmap>span{background:#101d26!important;border-color:#293d49!important}
+html[data-theme="dark"] .subx-form-roadmap i,html.dark .subx-form-roadmap i,body.dark .subx-form-roadmap i{background:#15372f!important;color:#50c8ad!important}
+html[data-theme="dark"] .subx-form-roadmap b,html.dark .subx-form-roadmap b,body.dark .subx-form-roadmap b{color:#edf4f6!important}
+html[data-theme="dark"] .subx-form-roadmap small,html.dark .subx-form-roadmap small,body.dark .subx-form-roadmap small{color:#96a8b3!important}
