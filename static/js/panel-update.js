@@ -834,11 +834,8 @@
         await refreshCenter().catch(() => {});
 
         const localButton = $('pu-update-local');
-        if (
-          localButton
-          && state.localVersion?.update_available
-        ) {
-          localButton.disabled = false;
+        if (localButton) {
+          localButton.disabled = isBusy(state.lastStatus) || state.reconnecting;
         }
 
         return;
@@ -934,29 +931,56 @@
     setText('pu-local-latest', latest);
 
     const available = !!version?.update_available;
+    const comparisonComplete = version?.comparison_complete !== false
+      && version?.update_reason !== 'check_incomplete';
     const stateEl = $('pu-local-state');
 
     if (stateEl) {
-      stateEl.textContent = available
-        ? 'Update available'
-        : 'Current';
-      stateEl.classList.toggle('is-current', !available);
+      stateEl.classList.remove('ready', 'update', 'error', 'is-current');
+      if (available) {
+        stateEl.textContent = 'Update available';
+        stateEl.classList.add('update');
+      } else if (!comparisonComplete) {
+        stateEl.textContent = 'Check unavailable';
+        stateEl.classList.add('error');
+      } else {
+        stateEl.textContent = 'Current';
+        stateEl.classList.add('ready', 'is-current');
+      }
     }
 
     setText(
       'pu-local-summary',
-      available ? 'Update available' : 'Up to date',
+      available
+        ? 'Update available'
+        : comparisonComplete
+          ? 'Up to date'
+          : 'Status unknown',
     );
 
     const button = $('pu-update-local');
 
     if (button) {
-      button.disabled = !available || isBusy(state.lastStatus);
+      // Updating is also useful when the panel is already current: it can
+      // re-apply the tracked main revision, repair local files/dependencies,
+      // and run the normal validation/rollback path. Only an active update
+      // should lock this control.
+      button.disabled = isBusy(state.lastStatus) || state.reconnecting;
       button.dataset.target = String(
         version?.target
         || version?.latest
         || 'main',
       );
+      button.dataset.reapply = available ? '0' : '1';
+
+      const label = button.querySelector('span');
+      if (label) {
+        label.textContent = available ? 'Update local' : 'Reapply local';
+      }
+
+      button.title = available
+        ? 'Install the newest tracked main revision.'
+        : 'Reapply the current main revision and run validation/repair again.';
     }
   }
 
@@ -1017,6 +1041,12 @@
         online
         && !!version.update_available
       );
+      const nodeBusy = isBusy(node.update || {});
+      const canUpdate = online && !nodeBusy;
+      const actionLabel = available ? 'Update' : 'Reapply';
+      const actionTitle = available
+        ? 'Install the newest tracked main revision on this node.'
+        : 'Reapply the current main revision on this node.';
       const detail = String(
         node.error
         || node.detail
@@ -1046,9 +1076,11 @@
             <button class="pu-update-btn pu-node-update"
                     type="button"
                     data-node-id="${escapeHtml(node.id)}"
-                    data-target="${escapeHtml(version.target || version.latest || 'latest')}"
-                    ${available ? '' : 'disabled'}>
-              <i class="fas fa-download"></i><span>Update</span>
+                    data-target="${escapeHtml(version.target || version.latest || 'main')}"
+                    data-reapply="${available ? '0' : '1'}"
+                    title="${escapeHtml(actionTitle)}"
+                    ${canUpdate ? '' : 'disabled'}>
+              <i class="fas fa-download"></i><span>${actionLabel}</span>
             </button>
           </div>
           <div class="pu-progress" hidden>
@@ -1093,12 +1125,13 @@
     const button = $('pu-update-local');
     if (!button || button.disabled) return;
 
+    const reapply = button.dataset.reapply === '1';
     const accepted = await askConfirmation({
-      title: 'Update local panel?',
-      message:
-        'A rollback backup will be created, the new code will be validated, '
-        + 'and the panel service will restart automatically.',
-      acceptLabel: 'Start update',
+      title: reapply ? 'Reapply local panel?' : 'Update local panel?',
+      message: reapply
+        ? 'No newer revision is currently detected. The panel will re-apply the tracked main revision, create a rollback backup, validate the code and dependencies, then restart safely.'
+        : 'A rollback backup will be created, the new code will be validated, and the panel service will restart automatically.',
+      acceptLabel: reapply ? 'Reapply local' : 'Start update',
     });
 
     if (!accepted) return;
@@ -1151,11 +1184,13 @@
     const nodeId = button.dataset.nodeId;
     const target = button.dataset.target || 'main';
 
+    const reapply = button.dataset.reapply === '1';
     const accepted = await askConfirmation({
-      title: 'Update remote node?',
-      message:
-        'The selected node will create a rollback backup and restart its own agent.',
-      acceptLabel: 'Update node',
+      title: reapply ? 'Reapply remote node?' : 'Update remote node?',
+      message: reapply
+        ? 'No newer revision is currently detected for this node. It will re-apply the tracked main revision, create a rollback backup, validate the update and restart its own agent.'
+        : 'The selected node will create a rollback backup and restart its own agent.',
+      acceptLabel: reapply ? 'Reapply node' : 'Update node',
     });
 
     if (!accepted) return;
