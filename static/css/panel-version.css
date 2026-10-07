@@ -1,25 +1,28 @@
 .sb2-update-card {
   position: relative !important;
   display: grid !important;
-  grid-template-columns: 38px minmax(0, 1fr) auto 10px !important;
+  grid-template-columns: 29px minmax(0, 1fr) auto 8px !important;
   grid-template-rows: auto auto !important;
   align-items: center !important;
-  column-gap: 8px !important;
-  row-gap: 2px !important;
+  column-gap: 7px !important;
+  row-gap: 1px !important;
   min-width: 0 !important;
+  min-height: 48px !important;
   box-sizing: border-box !important;
-  padding: 10px 11px !important;
+  padding: 7px 8px !important;
+  border-radius: 12px !important;
 }
 
 .sb2-update-card .sb2-update-icon {
   grid-column: 1 !important;
   grid-row: 1 / 3 !important;
-  width: 36px !important;
-  height: 36px !important;
-  min-width: 36px !important;
-  min-height: 36px !important;
-  border-radius: 11px !important;
+  width: 28px !important;
+  height: 28px !important;
+  min-width: 28px !important;
+  min-height: 28px !important;
+  border-radius: 9px !important;
   align-self: center !important;
+  font-size: 11px !important;
 }
 
 .sb2-update-card .sb2-update-copy { display: contents !important; }
@@ -31,19 +34,20 @@
   overflow: hidden !important;
   white-space: nowrap !important;
   text-overflow: ellipsis !important;
-  font-size: 10px !important;
-  line-height: 1.1 !important;
-  letter-spacing: .11em !important;
+  font-size: 8.5px !important;
+  line-height: 1.05 !important;
+  letter-spacing: .10em !important;
 }
 
 .sb2-update-card .sb2-update-versions {
-  grid-column: 2 / 4 !important;
+  grid-column: 2 !important;
   grid-row: 2 !important;
   display: flex !important;
   align-items: center !important;
   min-width: 0 !important;
   margin: 0 !important;
   overflow: hidden !important;
+  padding-right: 2px !important;
 }
 
 .sb2-update-card #sb2-version-current {
@@ -53,8 +57,8 @@
   overflow: hidden !important;
   white-space: nowrap !important;
   text-overflow: ellipsis !important;
-  font-size: 12px !important;
-  line-height: 1.15 !important;
+  font-size: 10.5px !important;
+  line-height: 1.05 !important;
   font-weight: 700 !important;
 }
 
@@ -64,7 +68,7 @@
 
 .sb2-update-card .sb2-update-badges {
   grid-column: 3 !important;
-  grid-row: 1 !important;
+  grid-row: 1 / 3 !important;
   position: static !important;
   display: flex !important;
   align-items: center !important;
@@ -74,21 +78,28 @@
   transform: none !important;
 }
 
+.sb2-update-card .sb2-node-update-count {
+  min-width: 18px !important;
+  height: 18px !important;
+  padding: 0 5px !important;
+  font-size: 8px !important;
+}
+
 .sb2-update-card .sb2-update-state {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
   flex: 0 0 auto !important;
-  min-width: 58px !important;
-  max-width: 64px !important;
-  min-height: 25px !important;
-  padding: 4px 7px !important;
+  min-width: 48px !important;
+  max-width: 54px !important;
+  min-height: 20px !important;
+  padding: 3px 5px !important;
   border-radius: 999px !important;
   box-sizing: border-box !important;
   overflow: hidden !important;
   white-space: nowrap !important;
   text-overflow: ellipsis !important;
-  font-size: 9px !important;
+  font-size: 7.5px !important;
   line-height: 1 !important;
 }
 
@@ -99,36 +110,42 @@
   align-self: center !important;
   margin: 0 !important;
   transform: none !important;
+  font-size: 9px !important;
+  opacity: .7 !important;
 }
 
 @media (max-width: 1180px) {
   .sb2-update-card {
-    grid-template-columns: 35px minmax(0, 1fr) auto 8px !important;
+    grid-template-columns: 27px minmax(0, 1fr) auto 7px !important;
     column-gap: 6px !important;
-    padding-inline: 8px !important;
+    min-height: 46px !important;
+    padding: 6px 7px !important;
   }
 
   .sb2-update-card .sb2-update-icon {
-    width: 33px !important;
-    height: 33px !important;
-    min-width: 33px !important;
-    min-height: 33px !important;
+    width: 26px !important;
+    height: 26px !important;
+    min-width: 26px !important;
+    min-height: 26px !important;
   }
 
   .sb2-update-card .sb2-update-state {
-    min-width: 53px !important;
-    max-width: 58px !important;
-    padding-inline: 5px !important;
-    font-size: 8px !important;
+    min-width: 45px !important;
+    max-width: 50px !important;
+    min-height: 19px !important;
+    padding-inline: 4px !important;
+    font-size: 7px !important;
   }
 
-  .sb2-update-card #sb2-version-current { font-size: 11px !important; }
+  .sb2-update-card #sb2-version-current { font-size: 10px !important; }
 }
 
 .sidebar.is-collapsed .sb2-update-card,
 .sidebar.collapsed .sb2-update-card {
   grid-template-columns: 1fr !important;
   grid-template-rows: 1fr !important;
+  min-height: 42px !important;
+  padding: 6px !important;
 }
 
 .sidebar.is-collapsed .sb2-update-k,
