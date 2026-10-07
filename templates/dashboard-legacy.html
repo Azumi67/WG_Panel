@@ -1,0 +1,621 @@
+{% extends 'base.html' %} {% block head_extras %}
+<link
+  rel="stylesheet"
+  href="{{ url_for('static', filename='css/index.css') }}"
+/>
+<link
+  rel="stylesheet"
+  href="{{ url_for('static', filename='css/health-center.css') }}"
+/>
+{% endblock %} {% block responsive_extras %} {% endblock %} {% block content %}
+
+<div class="dashboard-topbar">
+  <h1 class="page-title"><i class="fa-solid fa-chart-simple"></i> Dashboard</h1>
+
+  <div
+    class="panel-version-chip"
+    id="panel-version-card"
+    data-current-version="{{ PANEL_VERSION }}"
+    title="Panel update status"
+  >
+    <span class="chip-icon" aria-hidden="true">
+      <i class="fas fa-code-branch"></i>
+    </span>
+
+    <span class="pv-copy">
+      <span class="pv-primary">
+        <span class="pv-label">Panel</span>
+        <strong class="panel-version-number" id="panel-version-current"
+          >v{{ PANEL_VERSION }}</strong
+        >
+      </span>
+      <span class="panel-version-note" id="panel-version-note"
+        >Checking GitHub main…</span
+      >
+    </span>
+
+    <span class="panel-version-status" id="panel-version-status">Checking</span>
+
+    <span class="pv-actions">
+      <button
+        class="pv-mini-btn"
+        type="button"
+        id="panel-version-refresh"
+        aria-label="Check panel version"
+        title="Check GitHub main"
+      >
+        <i class="fas fa-rotate"></i>
+      </button>
+
+      <a
+        class="pv-mini-btn"
+        id="panel-version-release"
+        href="{{ PANEL_REPO_URL }}"
+        target="_blank"
+        rel="noopener"
+        aria-label="Open GitHub repository"
+        title="Open GitHub repository"
+      >
+        <i class="fa-brands fa-github"></i>
+      </a>
+    </span>
+
+    <span id="panel-version-latest" hidden></span>
+  </div>
+</div>
+<div class="nav-sep"></div>
+
+{% set dashboard_is_admin = current_user.is_authenticated and
+(current_user.is_admin|default(false) or
+current_user.is_superuser|default(false)) %} {% if dashboard_is_admin %}
+<section class="hc-strip" id="health-center-strip" aria-label="Health Center">
+  <button
+    class="hc-strip-main"
+    id="health-center-open"
+    type="button"
+    aria-haspopup="dialog"
+    aria-controls="health-center-drawer"
+    aria-expanded="false"
+  >
+    <span class="hc-strip-icon" id="health-center-icon"
+      ><i class="fas fa-heart-pulse" aria-hidden="true"></i
+    ></span>
+    <span class="hc-strip-copy">
+      <small>Health Center</small>
+      <strong id="health-center-headline">Checking panel health…</strong>
+    </span>
+    <span class="hc-strip-counts" aria-label="Health summary">
+      <span class="hc-count healthy"
+        ><b id="hc-count-healthy">—</b><small>Healthy</small></span
+      >
+      <span class="hc-count review"
+        ><b id="hc-count-review">—</b><small>Review</small></span
+      >
+      <span class="hc-count attention"
+        ><b id="hc-count-attention">—</b><small>Attention</small></span
+      >
+    </span>
+    <span class="hc-strip-arrow"
+      ><span>Open</span><i class="fas fa-chevron-right" aria-hidden="true"></i
+    ></span>
+  </button>
+</section>
+
+<div class="hc-drawer" id="health-center-drawer" hidden aria-hidden="true">
+  <button
+    class="hc-backdrop"
+    type="button"
+    data-hc-close
+    tabindex="-1"
+    aria-label="Close Health Center"
+  ></button>
+  <section
+    class="hc-panel"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="hc-title"
+  >
+    <div class="hc-mobile-handle" aria-hidden="true"></div>
+    <header class="hc-panel-head">
+      <div class="hc-panel-title">
+        <span class="hc-title-icon"
+          ><i class="fas fa-heart-pulse" aria-hidden="true"></i
+        ></span>
+        <div>
+          <small>System overview</small>
+          <h2 id="hc-title">Health Center</h2>
+        </div>
+      </div>
+      <div class="hc-panel-actions">
+        <button
+          type="button"
+          class="hc-icon-btn"
+          id="health-center-refresh"
+          title="Refresh health"
+          aria-label="Refresh health"
+        >
+          <i class="fas fa-rotate" aria-hidden="true"></i>
+        </button>
+        <button
+          type="button"
+          class="hc-icon-btn"
+          data-hc-close
+          title="Close"
+          aria-label="Close Health Center"
+        >
+          <i class="fas fa-xmark" aria-hidden="true"></i>
+        </button>
+      </div>
+    </header>
+    <div class="hc-overall" id="hc-overall">
+      <span class="hc-overall-dot" aria-hidden="true"></span>
+      <div>
+        <small>Overall</small><strong id="hc-overall-title">Checking…</strong>
+        <p id="hc-overall-meta">Read-only summary of core panel services.</p>
+      </div>
+    </div>
+    <div class="hc-list" id="hc-list" aria-live="polite"></div>
+    <footer class="hc-panel-foot">
+      <span
+        ><i class="fas fa-shield-halved" aria-hidden="true"></i> Read-only.
+        Health Center never repairs or changes configuration.</span
+      >
+      <a href="/operations"
+        >Open Operations <i class="fas fa-arrow-right" aria-hidden="true"></i
+      ></a>
+    </footer>
+  </section>
+</div>
+{% endif %}
+
+<div class="grid-charts">
+  <section class="card metric-pro cpu">
+    <div class="head">
+      <div class="icon"><i class="fas fa-microchip"></i></div>
+      <h4>CPU Usage</h4>
+      <div id="cpu-val" class="value">--%</div>
+    </div>
+
+    <div class="sub">
+      <span class="pill"
+        ><span class="small">Cores</span> <b id="cores">—</b></span
+      >
+      <span class="pill"
+        ><span class="small">Threads</span> <b id="threads">—</b></span
+      >
+      <span class="pill" title="1m / 5m / 15m">
+        <span class="small">Load</span>
+        <b id="cpu-load">—%</b>
+        <small class="muted"
+          >(<span id="load1-top">—</span>/<span id="load5-top">—</span>/<span
+            id="load15-top"
+            >—</span
+          >)</small
+        >
+      </span>
+    </div>
+
+    <canvas id="cpuChart"></canvas>
+  </section>
+
+  <section class="card metric-pro mem">
+    <div class="head">
+      <div class="icon"><i class="fas fa-memory"></i></div>
+      <h4>Memory Usage</h4>
+      <div id="mem-val" class="value">--%</div>
+    </div>
+
+    <div class="sub">
+      <span class="pill"
+        ><span class="dot" style="background: #8b5cf6"></span
+        ><span class="small">Used</span> <b id="mem-used">—</b></span
+      >
+      <span class="pill"
+        ><span class="dot" style="background: #e5e7eb"></span
+        ><span class="small">Free</span> <b id="mem-free">—</b></span
+      >
+      <span class="pill"
+        ><span class="small">Total</span> <b id="mem-total">—</b></span
+      >
+      <span class="pill" title="Swap used / total">
+        <span class="small">Swap</span> <b id="swap-used">—</b
+        ><small class="muted"> / </small><b id="swap-total">—</b>
+      </span>
+    </div>
+
+    <div class="util" data-util-from="#mem-val"><i></i></div>
+    <canvas id="memChart"></canvas>
+  </section>
+
+  <section class="card metric-pro disk">
+    <div class="head">
+      <div class="icon"><i class="fas fa-hdd"></i></div>
+      <h4>Disk Usage</h4>
+      <div id="disk-val" class="value">--%</div>
+    </div>
+
+    <div class="sub">
+      <span class="pill"
+        ><span class="dot" style="background: #f59e0b"></span
+        ><span class="small">Used</span> <b id="disk-used">—</b></span
+      >
+      <span class="pill"
+        ><span class="dot" style="background: #e5e7eb"></span
+        ><span class="small">Free</span> <b id="disk-free">—</b></span
+      >
+      <span class="pill"
+        ><span class="small">Total</span> <b id="disk-total">—</b></span
+      >
+    </div>
+
+    <div class="util" data-util-from="#disk-val"><i></i></div>
+    <canvas id="diskChart"></canvas>
+  </section>
+
+  <section class="card metric-pro net wide">
+    <div class="head">
+      <div class="icon"><i class="fas fa-network-wired"></i></div>
+      <h4>Network I/O</h4>
+      <div id="net-val" class="value">--/-- MB/s</div>
+    </div>
+
+    <div class="sub">
+      <span class="pill"
+        ><span class="dot" style="background: #3b82f6"></span
+        ><span class="small">RX</span> <b id="rx-last">—</b></span
+      >
+      <span class="pill"
+        ><span class="dot" style="background: #f472b6"></span
+        ><span class="small">TX</span> <b id="tx-last">—</b></span
+      >
+      <span class="pill"
+        ><span class="small">RX total</span> <b id="rx-total">—</b></span
+      >
+      <span class="pill"
+        ><span class="small">TX total</span> <b id="tx-total">—</b></span
+      >
+      <span class="pill"
+        ><span class="small">Conn</span> <b id="conn-total">0</b></span
+      >
+      <span class="pill"
+        ><span class="small">Unique</span> <b id="conn-uniq">0</b></span
+      >
+      <span class="pill">
+        <span class="small">Unique public IPs</span>
+        <b id="uniq-pub-count">0</b>
+      </span>
+    </div>
+
+    <canvas id="netChart"></canvas>
+  </section>
+</div>
+
+<div class="grid-info dash-bottom">
+  <section class="card info-pro overview-card">
+    <div class="overview-head">
+      <span class="chip-icon"><i class="fas fa-layer-group"></i></span>
+      <span>System Overview</span>
+      <span class="ov-sub"
+        >IPs, peers, app and Telegram in one compact rail</span
+      >
+    </div>
+
+    <div class="overview-rail">
+      <div class="ov-block ip-overview">
+        <div class="ov-title">
+          <i class="fas fa-route"></i><span>Endpoint & Public IP</span>
+        </div>
+        <div class="ov-lines">
+          <div class="ov-line">
+            <span class="ov-k">Public v4</span>
+            <span class="ov-v"
+              ><span class="copyable" data-copy-target="#ipv4"
+                ><span id="ipv4" class="mono">—</span
+                ><i class="fas fa-copy copy-ico"></i></span
+            ></span>
+          </div>
+          <div class="ov-line">
+            <span class="ov-k">Public v6</span>
+            <span class="ov-v"
+              ><span class="copyable" data-copy-target="#ipv6"
+                ><span id="ipv6" class="mono">—</span
+                ><i class="fas fa-copy copy-ico"></i></span
+            ></span>
+          </div>
+        </div>
+        <div class="ov-hint">
+          <i class="fas fa-circle-info"></i> Public endpoint values used by
+          configs and links.
+        </div>
+      </div>
+
+      <div class="ov-block peers-mini">
+        <div class="ov-title">
+          <i class="fas fa-users"></i><span>Peers</span>
+          <div
+            class="scope-toggle mini-scope"
+            role="tablist"
+            aria-label="Peer scope"
+          >
+            <input
+              type="radio"
+              id="ps-local"
+              name="peer-scope"
+              value="local"
+              checked
+            />
+            <label for="ps-local" role="tab" aria-selected="true">Local</label>
+            <input type="radio" id="ps-nodes" name="peer-scope" value="nodes" />
+            <label for="ps-nodes" role="tab" aria-selected="false">Nodes</label>
+            <input type="radio" id="ps-total" name="peer-scope" value="total" />
+            <label for="ps-total" role="tab" aria-selected="false">Total</label>
+          </div>
+        </div>
+        <div class="ov-peer-grid">
+          <div
+            class="ov-peer"
+            title="Real connection status: latest WireGuard handshake"
+          >
+            <b id="count-online">0</b><span><i class="dot ok"></i>Online</span>
+          </div>
+          <div
+            class="ov-peer"
+            title="Real connection status: no recent WireGuard handshake"
+          >
+            <b id="count-offline">0</b
+            ><span><i class="dot warn"></i>Offline</span>
+          </div>
+          <div
+            class="ov-peer"
+            title="Expired, data limit reached, or manually blocked"
+          >
+            <b id="count-blocked">0</b
+            ><span><i class="dot mut"></i>Blocked</span>
+          </div>
+          <div class="ov-peer" title="Total peers">
+            <b id="count-total">0</b><span><i class="dot mut"></i>Total</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="ov-block health-block">
+        <div class="ov-title">
+          <i class="fas fa-heartbeat"></i><span>Health</span>
+        </div>
+        <div class="ov-health">
+          <div class="health-line">
+            <i class="fas fa-cube"></i>
+            <span class="h-name">App</span>
+            <span id="app-status" class="badge">—</span>
+            <span class="h-meta">Since <span id="app-since">—</span></span>
+          </div>
+          <div class="health-line">
+            <i class="fa-brands fa-telegram"></i>
+            <span class="h-name">Telegram</span>
+            <span id="tg-status" class="badge">—</span>
+            <span class="h-meta">Last <span id="tg-last">—</span></span>
+          </div>
+        </div>
+        <div class="ov-actions">
+          <span class="small muted">Recent logs and app events</span>
+          <a href="/logs" data-open="dash-logs" class="small"
+            ><i class="far fa-file-alt"></i> Logs</a
+          >
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card info-pro sys-card compact-sys">
+    <div class="title">
+      <span class="chip-icon"><i class="fas fa-microchip"></i></span>
+      <span>System Info</span>
+
+      <span class="sys-head-actions">
+        <button
+          class="sys-log-btn"
+          type="button"
+          data-open="dash-log-center"
+          title="Open panel and node logs"
+        >
+          <i class="fas fa-file-lines"></i>
+          <span>Logs</span>
+        </button>
+
+        <span class="more-wrap">
+          <button
+            class="more-pop"
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+          >
+            <i class="fas fa-circle-info"></i>
+            <span>More</span>
+          </button>
+          <div
+            class="popover"
+            role="dialog"
+            aria-label="More system information"
+          >
+            <div class="kv-grid">
+              <div class="kv-row">
+                <div class="kv-k">OS</div>
+                <div class="kv-v" id="platform">—</div>
+              </div>
+              <div class="kv-row">
+                <div class="kv-k">Kernel</div>
+                <div class="kv-v" id="kernel">—</div>
+              </div>
+              <div class="kv-row">
+                <div class="kv-k">Arch</div>
+                <div class="kv-v" id="arch">—</div>
+              </div>
+            </div>
+          </div>
+        </span>
+      </span>
+    </div>
+    <div class="kv-grid">
+      <div class="kv-row">
+        <div class="kv-k">Hostname</div>
+        <div class="kv-v">
+          <span class="copyable" data-copy-target="#hostname"
+            ><span id="hostname" class="mono">—</span
+            ><i class="far fa-copy copy-ico"></i
+          ></span>
+        </div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-k">Uptime</div>
+        <div class="kv-v" id="uptime">—</div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-k">CPU Cores</div>
+        <div class="kv-v" id="cores-info">—</div>
+      </div>
+      <div class="kv-row">
+        <div class="kv-k">Load Avg</div>
+        <div class="kv-v">
+          <span id="load1">—</span> / <span id="load5">—</span> /
+          <span id="load15">—</span>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div
+  id="dash-log-center-pop"
+  class="dash-popover dash-log-center"
+  hidden
+  aria-hidden="true"
+  role="dialog"
+  aria-label="Panel and node logs"
+>
+  <div class="pop-head">
+    <div class="title">
+      <span class="pop-icon"><i class="fas fa-file-lines"></i></span>
+      <span>Logs</span>
+    </div>
+
+    <div class="actions">
+      <button
+        id="dash-log-center-auto"
+        class="toggle t-dark on"
+        type="button"
+        role="switch"
+        aria-checked="true"
+        title="Auto-refresh active log source"
+      >
+        <span class="dot"></span>
+        <span class="lab">Auto</span>
+      </button>
+
+      <button
+        id="dash-log-center-refresh"
+        class="icon-btn"
+        type="button"
+        title="Refresh active log source"
+      >
+        <i class="fas fa-rotate"></i>
+      </button>
+
+      <button
+        id="dash-log-center-close"
+        class="icon-btn"
+        type="button"
+        title="Close"
+      >
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+  </div>
+
+  <div class="dash-log-tabs" role="tablist" aria-label="Log source">
+    <button
+      id="dash-log-tab-panel"
+      class="dash-log-tab active"
+      type="button"
+      role="tab"
+      aria-selected="true"
+      aria-controls="dash-log-panel-pane"
+      data-log-tab="panel"
+    >
+      <i class="fas fa-display"></i>
+      <span>Panel logs</span>
+    </button>
+
+    {% if HAS_NODES %}
+    <button
+      id="dash-log-tab-node"
+      class="dash-log-tab"
+      type="button"
+      role="tab"
+      aria-selected="false"
+      aria-controls="dash-log-node-pane"
+      data-log-tab="node"
+    >
+      <i class="fas fa-server"></i>
+      <span>Node logs</span>
+    </button>
+    {% endif %}
+
+    <a href="/logs" class="dash-log-full-link" title="Open full logs page">
+      Open full
+      <i class="fas fa-arrow-up-right-from-square"></i>
+    </a>
+  </div>
+
+  <section
+    id="dash-log-panel-pane"
+    class="dash-log-pane active"
+    role="tabpanel"
+    aria-labelledby="dash-log-tab-panel"
+    data-log-pane="panel"
+  >
+    <div id="dash-panel-logs-list" class="pop-body"></div>
+    <div id="dash-panel-logs-empty" class="muted small dash-log-empty" hidden>
+      No recent panel log entries.
+    </div>
+  </section>
+
+  {% if HAS_NODES %}
+  <section
+    id="dash-log-node-pane"
+    class="dash-log-pane"
+    role="tabpanel"
+    aria-labelledby="dash-log-tab-node"
+    data-log-pane="node"
+    hidden
+  >
+    <div class="node-log-toolbar">
+      <label>
+        <span><i class="fas fa-server"></i> Node</span>
+        <select id="dash-node-select">
+          <option value="">Loading nodes…</option>
+        </select>
+      </label>
+
+      <label>
+        <span><i class="fas fa-network-wired"></i> Interface</span>
+        <select id="dash-node-iface-select" disabled>
+          <option value="">Select a node first</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="dash-node-logs-list" class="pop-body"></div>
+    <div id="dash-node-logs-empty" class="muted small dash-log-empty">
+      Select a node and interface to view logs.
+    </div>
+  </section>
+  {% endif %}
+</div>
+
+<script defer src="{{ url_for('static', filename='js/index.js') }}"></script>
+{% if dashboard_is_admin %}
+<script
+  defer
+  src="{{ url_for('static', filename='js/health-center.js') }}"
+></script>
+{% endif %} {% endblock %}
