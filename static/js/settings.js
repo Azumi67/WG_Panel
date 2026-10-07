@@ -12,7 +12,6 @@
   function _normalizeUtcText(value) {
     const text = String(value ?? '').trim();
     if (!text) return '';
-    // Backend/database timestamps without an explicit offset are UTC.
     if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(text)) {
       return text.replace(' ', 'T') + 'Z';
     }
@@ -123,14 +122,28 @@
     now:() => new Date(_panelNowMs()),
   };
 
+  function settingsDeepLink() {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      return {
+        tab: (q.get('tab') || '').trim(),
+        sub: (q.get('sub') || '').trim(),
+        focus: (q.get('focus') || '').trim(),
+        open: (q.get('open') || '').trim(),
+        from: (q.get('from') || '').trim(),
+        ifaceId: (q.get('iface_id') || '').trim(),
+      };
+    } catch (_) {
+      return { tab:'', sub:'', focus:'', open:'', from:'', ifaceId:'' };
+    }
+  }
+
   (function restoreTabAttr() {
     const KEY_NEW    = 'settings:activeTab';
-    const KEY_LEGACY = 'wg:set:tab';  
-
-    const stored = localStorage.getItem(KEY_NEW) || localStorage.getItem(KEY_LEGACY);
-    if (stored) {
-      document.documentElement.setAttribute('data-tab', stored);
-    }
+    const KEY_LEGACY = 'wg:set:tab';
+    const deep = settingsDeepLink();
+    const stored = deep.tab || localStorage.getItem(KEY_NEW) || localStorage.getItem(KEY_LEGACY);
+    if (stored) document.documentElement.setAttribute('data-tab', stored);
   })();
 
   (function initTabs() {
@@ -155,6 +168,17 @@
 
       localStorage.setItem(KEY, name);
       document.documentElement.setAttribute('data-tab', name);
+      const url = new URL(location.href); url.searchParams.set('tab', name); history.replaceState(null, '', url);
+      document.querySelectorAll('.nx-nav [data-settings-nav]').forEach(link => {
+        const active = link.dataset.settingsNav === 'panel';
+        link.classList.toggle('active', active);
+        if(active) link.setAttribute('aria-current','page'); else link.removeAttribute('aria-current');
+      });
+      const title = document.querySelector('.modern-page-heading .page-title');
+      if(title) title.lastChild.textContent = name === 'telegram' ? ' Telegram' : ' Settings';
+      const breadcrumb = document.querySelector('.nx-breadcrumb b');
+      if(breadcrumb) breadcrumb.textContent = name === 'telegram' ? 'Telegram' : 'Settings';
+
 
       if (name === 'iface') {
         const localRadio = document.getElementById('iface-scope-local');
@@ -171,16 +195,76 @@
       showTab(name);
     });
 
-    const initial = localStorage.getItem(KEY) || 'panel';
-    showTab(initial);
+    const deep = settingsDeepLink();
+    const validTabs = new Set(Array.from(tabs.querySelectorAll('.tab')).map(b => b.dataset.tab));
+    const initial = validTabs.has(deep.tab) ? deep.tab : (localStorage.getItem(KEY) || 'panel');
+    showTab(validTabs.has(initial) ? initial : 'panel');
+
   })();
+
+  function renderOperationsReturnBanner(deep) {
+    if (deep?.from !== 'operations' || document.getElementById('settings-operations-return')) return;
+    const title = document.querySelector('.page-title');
+    if (!title) return;
+    const banner = document.createElement('div');
+    banner.id = 'settings-operations-return';
+    banner.className = 'settings-operations-return';
+    banner.innerHTML = `
+      <span class="settings-operations-return__icon"><i class="fa-solid fa-screwdriver-wrench"></i></span>
+      <span><strong>Opened from Operations</strong><small>This page was opened at the setting related to the selected diagnostic finding. Make the intended change, save it, then return to Operations and verify the fix.</small></span>
+      <a class="btn secondary" href="/operations"><i class="fa-solid fa-arrow-left"></i> Back to Operations</a>`;
+    title.insertAdjacentElement('afterend', banner);
+  }
+
+  function focusDeepLinkedSetting(deep) {
+    if (!deep?.focus) return;
+    const tryFocus = (remaining = 50) => {
+      const target = document.getElementById(deep.focus);
+      const visible = target && target.getClientRects().length > 0;
+      if (!visible && remaining > 0) {
+        setTimeout(() => tryFocus(remaining - 1), 120);
+        return;
+      }
+      if (!target) return;
+      target.scrollIntoView({ behavior:'smooth', block:'center' });
+      target.classList.add('settings-deeplink-focus');
+      if (typeof target.focus === 'function' && !target.disabled) {
+        try { target.focus({ preventScroll:true }); } catch (_) {}
+      }
+      setTimeout(() => target.classList.remove('settings-deeplink-focus'), 3200);
+    };
+    tryFocus();
+  }
+
+  function applySettingsDeepLink(deep) {
+    renderOperationsReturnBanner(deep);
+
+    if (deep?.open === 'security-advanced') {
+      setTimeout(() => document.getElementById('sec-advanced-trigger')?.click(), 120);
+    }
+
+    if (deep?.ifaceId) {
+      const selectIface = (remaining = 50) => {
+        const sel = document.getElementById('iface-select');
+        if (!sel || !Array.from(sel.options || []).some(o => String(o.value) === String(deep.ifaceId))) {
+          if (remaining > 0) setTimeout(() => selectIface(remaining - 1), 120);
+          return;
+        }
+        sel.value = String(deep.ifaceId);
+        sel.dispatchEvent(new Event('change', { bubbles:true }));
+      };
+      selectIface();
+    }
+
+    setTimeout(() => focusDeepLinkedSetting(deep), deep?.open ? 260 : 100);
+  }
 
 
   window.toastSafe = window.toastSafe || function (msg, type = 'info') {
     if (typeof window.toast === 'function') return window.toast(msg, type);
     if (type === 'error') console.error(msg); else console.log(msg);
   };
-  const toast = (m, t = 'info') => (window.toastSafe ? window.toastSafe(m, t) : alert(m));
+  const toast = (m, t = 'info') => (window.toastSafe ? window.toastSafe(m, t) : window.toast(m, t));
 
   function csrf(json = false) {
     return (window.csrfHeaders?.(json)) || (function(){
@@ -254,6 +338,7 @@
   });
 
   window.showToast = function showToast(msg, type = 'info', { duration = 3000, actionText, onAction } = {}) {
+    if(document.documentElement.dataset.design==='modern') return window.toast(msg,type,{duration,actionText,onAction});
     const host = document.getElementById('toast-container');
     if (!host) { toast(msg, type); return; }
     const el = document.createElement('div');
@@ -278,8 +363,6 @@
       if (pct > 0) rafId = requestAnimationFrame(tick); else hide();
     });
     el.addEventListener('keydown', (e) => { if (e.key === 'Escape') hide(); });
-    window.toast = window.showToast;        // expose
-    window.toastSafe = (m, t='info') => window.showToast(m, t);
     return { hide };
   };
 
@@ -490,7 +573,6 @@
     }
   }
 
-  /* ____ TLS runtime ____ */
   async function tLSSyncRuntime() {
     const tlsChk  = document.getElementById('tls-enabled');
     const tlsOn   = !!tlsChk?.checked;
@@ -585,7 +667,6 @@
     }
   }
 
-  /* ___ runtime.json ___ */
   async function rtSave() {
     const tlsOn = !!document.getElementById('tls-enabled')?.checked;
     const body = {
@@ -670,11 +751,15 @@ document.getElementById('rt-restart')
 
   document.addEventListener('DOMContentLoaded', async () => {
     await panelClockReady;
-    const savedSub = localStorage.getItem('settings:panelSubtab') || 'tls';
-    subtab(savedSub);
+    const deep = settingsDeepLink();
+    const requestedSub = deep.sub;
+    const validSubs = new Set(Array.from(document.querySelectorAll('#panel-subtabs .subtab')).map(b => b.dataset.sub));
+    const savedSub = validSubs.has(requestedSub) ? requestedSub : (localStorage.getItem('settings:panelSubtab') || 'tls');
+    subtab(validSubs.has(savedSub) ? savedSub : 'tls');
 
     await loadPanelSettings();
     await rtLoad();
+    applySettingsDeepLink(deep);
     document.getElementById('panel-subtabs')?.addEventListener('click', (e) => {
       const b = e.target.closest('.subtab');
       if (!b) return;
@@ -746,7 +831,7 @@ document.getElementById('rt-restart')
   let loadIfaceAbort;
 
   const $  = (s, r = document) => r.querySelector(s);
-  const toast = (m, t='info') => (window.toastSafe ? window.toastSafe(m, t) : alert(m));
+  const toast = (m, t='info') => (window.toastSafe ? window.toastSafe(m, t) : window.toast(m, t));
 
   function setChip(isUp) {
     const chip = $('#iface-scope-chip');
@@ -766,8 +851,6 @@ document.getElementById('rt-restart')
     if (btnUp) { btnUp.dataset.scope = scope; btnUp.dataset.target = String(target ?? ''); }
     if (btnDn) { btnDn.dataset.scope = scope; btnDn.dataset.target = String(target ?? ''); }
 
-    // "Apply to existing peers" rewrites peer rows irreversibly, so the buttons
-    // must never keep a target from a scope the operator has already left.
     const hasTarget = target !== null && target !== undefined && String(target) !== '';
     ['iface-ep-save', 'iface-ep-clear', 'iface-ep-apply'].forEach((id) => {
       const el = document.getElementById(id);
@@ -787,9 +870,6 @@ document.getElementById('rt-restart')
     set('i-listen',  meta?.listen_port ?? '');
     set('i-dns',     meta?.dns ?? '');
     set('i-mtu',     meta?.mtu ?? '');
-    // The endpoint inputs are the only editable fields on node scope, and the
-    // node status poll re-renders this view every 10s. Never overwrite what an
-    // operator is part-way through typing; a deliberate (re)load clears the flag.
     const setEditable = (id, v) => {
       const el = document.getElementById(id);
       if (!el || el === document.activeElement || el.dataset.userEdited === '1') return;
@@ -838,8 +918,6 @@ document.getElementById('rt-restart')
     } catch (e) { console.error(e); toast('Failed to load interfaces', 'error'); }
   }
 
-  // A deliberate (re)load is authoritative: drop any in-progress edit so the
-  // freshly fetched override wins. Only the background poll defers to typing.
   function clearEndpointEdits() {
     ['i-ep-host', 'i-ep-port'].forEach((id) => {
       const el = document.getElementById(id);
@@ -1045,9 +1123,6 @@ document.getElementById('rt-restart')
     try {
       const r = await fetch(`/api/nodes/${IFACE_NODE}/interfaces`, { credentials:'same-origin', cache:'no-store' });
       const j = await r.json();
-      // The listing route never runs endpoint auto-detection, so it reports no
-      // auto_endpoint even when one exists. Keep whatever the per-interface
-      // endpoint-default fetch already resolved instead of blanking the hint.
       const prev = new Map(NODE_IFACES.map((x) => [x.name, x]));
       NODE_IFACES = (Array.isArray(j.interfaces) ? j.interfaces : []).map((it) => {
         const old = prev.get(it.name);
@@ -1147,8 +1222,6 @@ document.getElementById('rt-restart')
       : `/api/nodes/${IFACE_NODE}/iface/${encodeURIComponent(target)}/endpoint-default${suffix}`;
   }
 
-  // Refresh in place: rebuilding the selector would snap it back to the first
-  // interface and make a successful save look like it did nothing.
   async function reloadIfaceCurrent() {
     const cur = $('#iface-select')?.value || '';
     if (IFACE_SCOPE === 'local') {
@@ -1192,7 +1265,7 @@ document.getElementById('rt-restart')
         `Those peers get pinned to this endpoint and stop following the interface ` +
         `default, so later changes here will not reach them.\n` +
         `Already-downloaded configs are not rewritten.`;
-      if (!window.confirm(msg)) return;
+      if (!await window.wgConfirm({title:'Apply endpoint to peers?',body:msg,okText:'Apply endpoint'})) return;
       const done = await jfetch(url, { method: 'POST', body: { dry_run: false } });
       toast(`Applied to ${done.updated} peer(s).`, 'success');
       await reloadIfaceCurrent();
@@ -1237,7 +1310,7 @@ document.getElementById('rt-restart')
 (function ifaceLogs() {
   let RAW_TEXT = '';
   const $  = (s, r = document) => r.querySelector(s);
-  const toast = (m, t='info') => (window.toastSafe ? window.toastSafe(m, t) : alert(m));
+  const toast = (m, t='info') => (window.toastSafe ? window.toastSafe(m, t) : window.toast(m, t));
   const colorize  = window.colorize  || ((t)=>t);
   const highlight = window.highlight || ((t)=>t);
   const saveScope = window.saveScope || (()=>{});
@@ -2237,7 +2310,7 @@ document.getElementById('rt-restart')
       const ce = $('#tg-chip-enabled'), ct = $('#tg-chip-token'), ca = $('#tg-chip-admins');
       if (ce) { ce.textContent = 'Notifications: ' + (enabled ? 'On' : 'Off'); ce.className = 'chip ' + (enabled ? 'green' : 'gray'); }
       if (ct) { ct.textContent = 'Token: ' + (hasTok ? 'Set' : 'Not set'); ct.className = 'chip ' + (hasTok ? 'green' : 'red'); }
-      if (ca) { ca.textContent = 'Admins: ' + admins; ca.className = 'chip ' + (admins > 0 ? 'blue' : 'gray'); }
+      if (ca) { ca.textContent = 'Recipients: ' + admins; ca.className = 'chip ' + (admins > 0 ? 'blue' : 'gray'); }
     }
     function updateStatusChips(st) {
       const b = $('#tg-chip-bot'), ls = $('#tg-chip-seen');
@@ -2447,7 +2520,7 @@ document.getElementById('rt-restart')
       list.innerHTML = logs.map(x => {
         const dt = formatStamp(x);
         const ts = `<span class="log-ts">[${dt.text}] · ${dt.ago}</span>`;
-        return `<div class="log-row">${ts}${badge(x.kind)} ${escapeHtml(x.text || '')}</div>`;
+        return `<div class="log-row">${ts}${badge(x.kind)} <span class="log-message">${escapeHtml(x.text || '')}</span></div>`;
       }).join('');
       list.scrollTop = list.scrollHeight;
     }
@@ -2507,134 +2580,6 @@ document.getElementById('rt-restart')
       await loadStatus();
       setInterval(loadStatus, 60000);
     });
-  })();
-
-
-  (function templatePicker() {
-    const $ = (s, r = document) => r.querySelector(s);
-    const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-
-    (function preview() {
-      const dock  = $('#tpl-preview-dock');
-      const body  = dock?.querySelector('.dock-body');
-      const wrap  = $('#tpl-scale-wrap');
-      const frame = $('#tpl-preview-frame');
-      const title = $('#tpl-preview-title');
-
-      const PRESET = { default:[1100,740], compact:[900,560], minimal:[900,520], pro:[1120,780] };
-      window.__tplDims = PRESET.default;
-
-      function applyScale() {
-        if (!wrap || !frame || !body) return;
-        const [baseW, baseH] = window.__tplDims || PRESET.default;
-        const innerW = body.clientWidth - 24;
-        const rect   = body.getBoundingClientRect();
-        const viewportH = document.documentElement.clientHeight;
-        const reservedBelow = 96;
-        const maxH = Math.max(180, Math.min(440, viewportH - rect.top - reservedBelow));
-        const sW = innerW / baseW;
-        const sH = maxH / baseH;
-        const s  = Math.max(0.34, Math.min(1, Math.min(sW, sH)));
-
-        frame.style.width  = baseW + 'px';
-        frame.style.height = baseH + 'px';
-        frame.style.transform = `scale(${s})`;
-        wrap.style.width  = Math.round(baseW * s) + 'px';
-        wrap.style.height = Math.round(baseH * s) + 'px';
-      }
-      window.applyPreviewScale = applyScale;
-
-      window.showPreview = function(name) {
-        const nice = name.charAt(0).toUpperCase() + name.slice(1);
-        if (title) title.textContent = `${nice} — Preview`;
-        const PRESET = { default:[1100,740], compact:[900,560], minimal:[900,520], pro:[1120,780] };
-        window.__tplDims = PRESET[name] || PRESET.default;
-        const src = `/preview/template/${name}?embed=1`;
-        if (frame && frame.getAttribute('src') !== src) frame.setAttribute('src', src);
-        dock?.setAttribute('aria-hidden', 'false');
-        requestAnimationFrame(applyScale);
-      };
-
-      frame?.addEventListener('load', () => requestAnimationFrame(applyScale));
-      window.addEventListener('resize', applyScale);
-      if (window.ResizeObserver && body) new ResizeObserver(applyScale).observe(body);
-    })();
-
-    let savedSel = 'default';
-    const radioOf = (name) => $$(`input[name="${name}"]`);
-    function currentPending() { return (radioOf('tpl').find(x => x.checked)?.value) || 'default'; }
-    function updateDirty() { const dirty = (currentPending() !== savedSel); const el = $('#tpl-dirty'); if (el) el.style.display = dirty ? 'inline' : 'none'; }
-
-    $$('#tpl-grid .tpl-icon').forEach(tile => {
-      const name = tile.dataset.name;
-      const input = tile.querySelector('input[type="radio"]');
-      tile.addEventListener('click', () => {
-        input.checked = true;
-        $$('#tpl-grid .tpl-icon').forEach(t => t.setAttribute('aria-checked', 'false'));
-        tile.setAttribute('aria-checked', 'true');
-        window.showPreview?.(name);
-        updateDirty();
-      });
-      tile.addEventListener('mouseenter', () => window.showPreview?.(name));
-      tile.addEventListener('focusin',   () => window.showPreview?.(name));
-    });
-
-    $('#tpl-save')?.addEventListener('click', async () => {
-      const sel = currentPending();
-      try {
-        await jfetch('/api/template_settings', { method:'POST', body:{ selected: sel } });
-        savedSel = sel; updateDirty(); toast('Template saved', 'success');
-      } catch { toast('Save failed', 'error'); }
-    });
-
-    function readSocials() {
-      return {
-        telegram:  ($('#soc-telegram')?.value || '').trim(),
-        whatsapp:  ($('#soc-whatsapp')?.value || '').trim(),
-        instagram: ($('#soc-instagram')?.value || '').trim(),
-        phone:     ($('#soc-phone')?.value || '').trim(),
-        website:   ($('#soc-website')?.value || '').trim(),
-        email:     ($('#soc-email')?.value || '').trim(),
-      };
-    }
-    async function loadSocials() {
-      try {
-        const j = await jfetch('/api/template_settings');
-        const s = j.socials || {};
-        if ($('#soc-telegram'))  $('#soc-telegram').value  = s.telegram  || '';
-        if ($('#soc-whatsapp'))  $('#soc-whatsapp').value  = s.whatsapp  || '';
-        if ($('#soc-instagram')) $('#soc-instagram').value = s.instagram || '';
-        if ($('#soc-phone'))     $('#soc-phone').value     = s.phone     || '';
-        if ($('#soc-website'))   $('#soc-website').value   = s.website   || '';
-        if ($('#soc-email'))     $('#soc-email').value     = s.email     || '';
-      } catch { toast('Failed to load socials', 'error'); }
-    }
-    $('#soc-save')?.addEventListener('click', async () => {
-      try {
-        await jfetch('/api/template_settings', { method:'POST', body:{ socials: readSocials() } });
-        toast('Socials saved', 'success');
-      } catch (e) { toast('Save failed: ' + (e.message || e), 'error'); }
-    });
-
-  document.getElementById('set-tabs')?.addEventListener('click', (e) => {
-      const b = e.target.closest('.tab');
-      if (b?.dataset.tab === 'template') loadSocials();
-    });
-
-    (async function boot() {
-      try {
-        const j = await jfetch('/api/template_settings');
-        savedSel = j.selected || 'default';
-        radioOf('tpl').forEach(x => {
-          const on = (x.value === savedSel);
-          x.checked = on;
-          x.closest('.tpl-icon')?.setAttribute('aria-checked', on ? 'true' : 'false');
-        });
-        window.showPreview?.(savedSel);
-        updateDirty();
-      } catch { window.showPreview?.('default'); }
-      if (document.querySelector('.panel[data-panel="template"].active')) loadSocials();
-    })();
   })();
 
 
@@ -3163,9 +3108,6 @@ async function loadAdminLogs() {
   });
 })();
 
-/* ============================================================
-   Traffic Control · WireGuard forwarding policy · V1.8
-   ============================================================ */
 (() => {
   const byId = (id) => document.getElementById(id);
   if (!byId('traffic-tab')) return;
@@ -3402,7 +3344,9 @@ async function loadAdminLogs() {
     ['domains','cidrs','countries'].forEach(hideTokenSuggestions);
   }
 
+  let policyEditorOpener = null;
   function openPolicyEditor(policy = null) {
+    policyEditorOpener = document.activeElement;
     resetEditor();
     const editing=!!policy;
     if (editing) {
@@ -3420,7 +3364,7 @@ async function loadAdminLogs() {
     byId('traffic-editor-title').textContent=editing ? 'Edit policy' : 'Add policy';
     byId('traffic-editor-subtitle').textContent=editing ? 'Update this policy. The saved configuration and live rules will refresh automatically.' : 'Choose who is protected and add destinations. The policy will save and activate automatically.';
     byId('traffic-policy-save').innerHTML=editing ? '<i class="fa-solid fa-check"></i> Update policy' : '<i class="fa-solid fa-plus"></i> Add policy';
-    const modal=byId('traffic-policy-modal'); if (modal) { modal.hidden=false; modal.style.display='grid'; modal.setAttribute('aria-hidden','false'); }
+    const modal=byId('traffic-policy-modal'); if (modal) { document.body.appendChild(modal); modal.hidden=false; modal.style.display='grid'; modal.setAttribute('aria-hidden','false'); }
     document.body.classList.add('traffic-modal-open');
     setTimeout(() => byId('traffic-policy-name')?.focus(), 20);
   }
@@ -3428,6 +3372,7 @@ async function loadAdminLogs() {
   function closePolicyEditor() {
     const modal=byId('traffic-policy-modal'); if (modal) { modal.hidden=true; modal.style.display='none'; modal.setAttribute('aria-hidden','true'); }
     document.body.classList.remove('traffic-modal-open');
+    policyEditorOpener?.focus?.();
     resetEditor();
   }
 
@@ -3673,7 +3618,7 @@ async function loadAdminLogs() {
 
   byId('traffic-policy-list')?.addEventListener('click',async e=>{const toggle=e.target.closest('[data-traffic-chip-toggle]'),closeChip=e.target.closest('[data-traffic-chip-close]'),verify=e.target.closest('[data-traffic-verify]'),manual=e.target.closest('[data-traffic-manual]'),edit=e.target.closest('[data-traffic-edit]'),del=e.target.closest('[data-traffic-delete]');if(toggle){const id=String(toggle.dataset.trafficChipToggle||'');document.querySelectorAll('.traffic-chip-popover').forEach(pop=>{if(pop.id!==`traffic-chip-popover-${id}`)pop.hidden=true;});document.querySelectorAll('[data-traffic-chip-toggle]').forEach(btn=>{if(btn!==toggle)btn.setAttribute('aria-expanded','false');});const pop=byId(`traffic-chip-popover-${id}`);if(pop){const open=pop.hidden;pop.hidden=!open;toggle.setAttribute('aria-expanded',open?'true':'false');}return;}if(closeChip){const id=String(closeChip.dataset.trafficChipClose||'');const pop=byId(`traffic-chip-popover-${id}`),btn=document.querySelector(`[data-traffic-chip-toggle="${id}"]`);if(pop)pop.hidden=true;if(btn)btn.setAttribute('aria-expanded','false');return;}if(verify){await testPolicy(Number(verify.dataset.trafficVerify));return;}if(manual){openManualDestinationTest(Number(manual.dataset.trafficManual));return;}if(edit){const p=policies[Number(edit.dataset.trafficEdit)];if(p)openPolicyEditor(p);return;}if(del){const index=Number(del.dataset.trafficDelete),p=policies[index];if(!p)return;const ok=await window.confirmDialog?.({title:'Delete traffic policy?',body:`Remove “${p.name||'Traffic policy'}”? This will also remove its live rule immediately.`,okText:'Delete',cancelText:'Cancel'});if(!ok)return;const before=policies.map(row=>({...row,domains:[...(row.domains||[])],cidrs:[...(row.cidrs||[])],countries:[...(row.countries||[])]}));policies.splice(index,1);renderPolicies();closeVerify();closeManual();const saved=await persistTrafficAutomatically('Policy deleted and live rules updated.');if(!saved){policies=before;renderPolicies();}}});
 
-  document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!byId('traffic-policy-modal')?.hidden)closePolicyEditor();});
+  document.addEventListener('keydown',e=>{const modal=byId('traffic-policy-modal');if(!modal||modal.hidden)return;if(e.key==='Escape'){e.preventDefault();closePolicyEditor();}if(e.key==='Tab'){const items=[...modal.querySelectorAll('button,input,select,textarea,[tabindex]')].filter(el=>!el.disabled&&el.tabIndex>=0&&el.getClientRects().length);const first=items[0],last=items.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus();}}});
   document.addEventListener('click',e=>{if(!e.target.closest('.traffic-token-card'))['domains','cidrs','countries'].forEach(hideTokenSuggestions);if(!e.target.closest('.traffic-autocomplete-field')){const box=byId('traffic-test-autocomplete');if(box){box.hidden=true;box.style.display='none';}}});
   document.getElementById('set-tabs')?.addEventListener('click',e=>{if(e.target.closest('.tab')?.dataset?.tab==='traffic')loadTraffic();});
   if(document.documentElement.getAttribute('data-tab')==='traffic')loadTraffic();
