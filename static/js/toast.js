@@ -145,6 +145,7 @@
       el.setAttribute('aria-live', 'polite');
       document.body.appendChild(el);
     }
+    if(el.parentElement!==document.body) document.body.appendChild(el);
     return el;
   }
 
@@ -201,6 +202,11 @@
 
     const close = () => closeToast(el, key);
     el.close = close;
+    el.hide = close;
+    if(options.actionText && typeof options.onAction==='function') {
+      const action=document.createElement('button');action.type='button';action.className='ui-toast-action';action.textContent=options.actionText;
+      action.addEventListener('click',()=>{try{options.onAction();}finally{close();}},{once:true});el.querySelector('.ui-toast-copy').appendChild(action);
+    }
     el.querySelector('.ui-toast-close')?.addEventListener('click', close, { once: true });
 
     const h = host();
