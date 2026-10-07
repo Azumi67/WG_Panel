@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
 BOOTSTRAP_DIR="${WG_BOOTSTRAP_DIR:-${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/wg-panel-bootstrap}"
 VENV_DIR="${VENV_DIR:-$BOOTSTRAP_DIR/venv}"
 PY="$VENV_DIR/bin/python"
@@ -264,9 +265,6 @@ main() {
     shift
   fi
 
-  # When the user downloads wg.sh and wg.py together, use the matching local
-  # installer instead of silently fetching/caching an outdated upstream wg.py.
-  # bash -c has no real script filename, so never guess from its working dir.
   if [ -z "$WG_PY_FILE" ] && [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
     local sibling
     sibling="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/wg.py"
