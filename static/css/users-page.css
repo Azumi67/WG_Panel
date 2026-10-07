@@ -2436,11 +2436,11 @@ html[data-theme="dark"] .endpoint-info-trigger small{color: #87939f !important;}
 #peer-modal .peerx-dialog, #edit-peer-modal .peerx-dialog, #bulk-modal .peerx-bulk-dialog{width: calc(100vw - 14px) !important;max-width: none !important;}
 }
 
-#create-peer-btn, #bulk-btn, #create-iface-btn{display: inline-flex !important;align-items: center !important;justify-content: flex-start !important;gap: 9px !important;}
+#create-peer-btn, #bulk-btn, :is(#create-iface-btn, #peer-template-open){display: inline-flex !important;align-items: center !important;justify-content: flex-start !important;gap: 9px !important;}
 
-#create-peer-btn > i, #bulk-btn > i, #create-iface-btn > i{width: 27px !important;height: 27px !important;min-width: 27px !important;flex: 0 0 27px !important;display: inline-grid !important;place-items: center !important;margin: 0 !important;border: 1px solid #a7f3d0 !important;border-radius: 9px !important;background: linear-gradient(180deg, #ecfdf5, #d1fae5) !important;color: #047857 !important;box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;font-size: 11px !important;line-height: 1 !important;}
+#create-peer-btn > i, #bulk-btn > i, :is(#create-iface-btn, #peer-template-open) > i{width: 27px !important;height: 27px !important;min-width: 27px !important;flex: 0 0 27px !important;display: inline-grid !important;place-items: center !important;margin: 0 !important;border: 1px solid #a7f3d0 !important;border-radius: 9px !important;background: linear-gradient(180deg, #ecfdf5, #d1fae5) !important;color: #047857 !important;box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8) !important;font-size: 11px !important;line-height: 1 !important;}
 
-#create-peer-btn:hover > i, #bulk-btn:hover > i, #create-iface-btn:hover > i{background: linear-gradient(180deg, #d1fae5, #a7f3d0) !important;border-color: #6ee7b7 !important;color: #065f46 !important;}
+#create-peer-btn:hover > i, #bulk-btn:hover > i, :is(#create-iface-btn, #peer-template-open):hover > i{background: linear-gradient(180deg, #d1fae5, #a7f3d0) !important;border-color: #6ee7b7 !important;color: #065f46 !important;}
 
 #peer-modal .peerx-form-actions .btn:not(.secondary), #edit-peer-modal .peerx-form-actions .btn:not(.secondary), #bulk-modal .peerx-form-actions .btn:not(.secondary), #iface-create-modal .iface-create-actions .btn:not(.secondary){background: linear-gradient(180deg, #159a67, #087a52) !important;color: #ffffff !important;border: 1px solid #087a52 !important;box-shadow: 0 8px 20px rgba(5, 150, 105, 0.18) !important;}
 
@@ -2469,7 +2469,7 @@ html[data-theme="dark"] .endpoint-info-trigger small{color: #87939f !important;}
 #iface-create-modal .iface-auto-up-copy > small{display: block !important;color: #64748b !important;font-size: 10px !important;font-weight: 700 !important;line-height: 1.25 !important;}
 
 @media (max-width: 620px) {
-#create-peer-btn > i, #bulk-btn > i, #create-iface-btn > i{width: 25px !important;height: 25px !important;min-width: 25px !important;flex-basis: 25px !important;}
+#create-peer-btn > i, #bulk-btn > i, :is(#create-iface-btn, #peer-template-open) > i{width: 25px !important;height: 25px !important;min-width: 25px !important;flex-basis: 25px !important;}
 
 #iface-create-modal .iface-auto-up.iface-auto-up-toggle{min-height: 58px !important;}
 }
@@ -3123,11 +3123,11 @@ body.peers-is-loading .peer-skeleton-card{display: block !important;}
 #edit-peer-modal .peerx-endpoint-field > .ep-row select, #edit-peer-modal .peerx-endpoint-field + .ep-row select{width: 100% !important;min-width: 0 !important;height: 40px !important;}
 #edit-peer-modal .peerx-endpoint-field > .ep-row .btn, #edit-peer-modal .peerx-endpoint-field + .ep-row .btn{width: 40px !important;height: 40px !important;min-width: 40px !important;border-radius: 12px !important;}
 .peer-page-actions{gap: 7px !important;margin: 7px 0 10px !important;padding: 7px !important;border-radius: 15px !important;}
-.peer-page-actions .btn, .peer-page-actions .iface-action-btn, #create-peer-btn, #bulk-btn, #create-iface-btn{min-height: 34px !important;height: 34px !important;padding: 0 12px !important;border-radius: 11px !important;font-size: 12.5px !important;box-shadow: 0 5px 12px rgba(15, 23, 42, 0.055) !important;}
-.peer-page-actions .btn i, #create-peer-btn i, #bulk-btn i, #create-iface-btn i{font-size: 11px !important;}
+.peer-page-actions .btn, .peer-page-actions .iface-action-btn, #create-peer-btn, #bulk-btn, :is(#create-iface-btn, #peer-template-open){min-height: 34px !important;height: 34px !important;padding: 0 12px !important;border-radius: 11px !important;font-size: 12.5px !important;box-shadow: 0 5px 12px rgba(15, 23, 42, 0.055) !important;}
+.peer-page-actions .btn i, #create-peer-btn i, #bulk-btn i, :is(#create-iface-btn, #peer-template-open) i{font-size: 11px !important;}
 @media (max-width: 760px) {
 .peer-page-actions{display: grid !important;grid-template-columns: 1fr !important;}
-.peer-page-actions .btn, #create-peer-btn, #bulk-btn, #create-iface-btn{width: 100% !important;}
+.peer-page-actions .btn, #create-peer-btn, #bulk-btn, :is(#create-iface-btn, #peer-template-open){width: 100% !important;}
 #edit-peer-modal .peerx-endpoint-field > .ep-row, #edit-peer-modal .peerx-endpoint-field + .ep-row{grid-template-columns: 1fr repeat(3, 38px) !important;}
 }
 
@@ -3330,7 +3330,7 @@ html:not([data-theme="light"]) .cbi-copy p{color: #9aaab5 !important;}
 
 #create-peer-btn{background: linear-gradient(180deg, #f4faf8, #eaf6f2) !important;color: var(--peer-action-soft-text) !important;border-color: var(--peer-action-soft-border) !important;box-shadow: 0 6px 16px rgba(49, 107, 90, 0.08) !important;}
 #create-peer-btn:hover{background: linear-gradient(180deg, #edf8f4, #e0f1eb) !important;color: #194d41 !important;border-color: #83bbaa !important;box-shadow: 0 8px 18px rgba(49, 107, 90, 0.12) !important;}
-#create-peer-btn > i, #bulk-btn > i, #create-iface-btn > i{background: #e9f6f2 !important;color: #2d7a66 !important;border-color: #b7ded2 !important;}
+#create-peer-btn > i, #bulk-btn > i, :is(#create-iface-btn, #peer-template-open) > i{background: #e9f6f2 !important;color: #2d7a66 !important;border-color: #b7ded2 !important;}
 
 .iface-btn[aria-pressed="true"], .iface-btn.is-active{color: #173f35 !important;}
 .iface-btn[aria-pressed="true"] .iface-name, .iface-btn.is-active .iface-name{color: #173f35 !important;}
