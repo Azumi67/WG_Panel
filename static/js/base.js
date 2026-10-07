@@ -348,16 +348,12 @@
     const updateOpen = document.getElementById("sb2-update-open");
     const updateModal = document.getElementById("panel-update-modal");
     if (updateOpen) {
-      updateOpen.addEventListener(
-        "pointerdown",
-        () => setMobileOpen(false, false),
-        true,
-      );
+
       updateOpen.addEventListener(
         "click",
         () => {
-          setMobileOpen(false, false);
-          if (mobile()) document.body.classList.add("mobile-panel-update-open");
+          if (!mobile()) return;
+          queueMicrotask(() => setMobileOpen(false, false));
         },
         true,
       );
