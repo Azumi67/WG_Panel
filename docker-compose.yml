@@ -1,0 +1,90 @@
+services:
+  panel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wg-panel:local
+    container_name: wg-panel
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_MODULE
+    environment:
+      WG_CONTAINER_ROLE: panel
+      DOCKER_MODE: "1"
+      BIND: "${WG_PANEL_BIND:-0.0.0.0:8000}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      SECURE_COOKIES: "${SECURE_COOKIES:-0}"
+      WIREGUARD_CONF_PATH: /etc/wireguard
+      DATABASE_URL: "${DATABASE_URL:-sqlite:///instance/wg_panel.db}"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-}"
+      FERNET_KEY: "${FERNET_KEY:-}"
+      API_KEY: "${API_KEY:-}"
+      SETUP_TOKEN: "${SETUP_TOKEN:-}"
+      TG_HEARTBEAT_SEC: "${TG_HEARTBEAT_SEC:-60}"
+      WG_ONLINE_PROBE_FIRST: "${WG_ONLINE_PROBE_FIRST:-1}"
+      WG_ONLINE_HANDSHAKE_FALLBACK: "${WG_ONLINE_HANDSHAKE_FALLBACK:-0}"
+      WG_ONLINE_HANDSHAKE_WINDOW: "${WG_ONLINE_HANDSHAKE_WINDOW:-45}"
+    volumes:
+      - wg_panel_instance:/app/instance
+      - /etc/wireguard:/etc/wireguard
+      - /lib/modules:/lib/modules:ro
+    stop_grace_period: 30s
+
+  telegram-bot:
+    image: wg-panel:local
+    command: ["python", "telegram_bot.py"]
+    container_name: wg-panel-bot
+    restart: unless-stopped
+    network_mode: host
+    profiles: ["telegram"]
+    depends_on:
+      - panel
+    environment:
+      WG_CONTAINER_ROLE: bot
+      DOCKER_MODE: "1"
+      PANEL_BASE_URL: "${PANEL_BASE_URL:-http://127.0.0.1:8000}"
+      PANEL: "${PANEL_BASE_URL:-http://127.0.0.1:8000}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-}"
+      FERNET_KEY: "${FERNET_KEY:-}"
+      API_KEY: "${API_KEY:-}"
+      TG_BOT_TOKEN: "${TG_BOT_TOKEN:-}"
+      TG_HEARTBEAT_SEC: "${TG_HEARTBEAT_SEC:-60}"
+    volumes:
+      - wg_panel_instance:/app/instance
+
+  node-agent:
+    command: ["python", "agent/node_agent.py"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wg-panel:local
+    container_name: wg-node-agent
+    restart: unless-stopped
+    network_mode: host
+    profiles: ["node"]
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_MODULE
+    environment:
+      WG_CONTAINER_ROLE: agent
+      DOCKER_MODE: "1"
+      BIND: "${WG_NODE_BIND:-0.0.0.0:9898}"
+      API_KEY: "${NODE_API_KEY:-}"
+      WIREGUARD_CONF_PATH: /etc/wireguard
+      WG_ONLINE_PROBE_FIRST: "${WG_ONLINE_PROBE_FIRST:-1}"
+      WG_ONLINE_HANDSHAKE_FALLBACK: "${WG_ONLINE_HANDSHAKE_FALLBACK:-0}"
+      WG_ONLINE_HANDSHAKE_WINDOW: "${WG_ONLINE_HANDSHAKE_WINDOW:-45}"
+    volumes:
+      - wg_node_agent_instance:/app/instance
+      - /etc/wireguard:/etc/wireguard
+      - /lib/modules:/lib/modules:ro
+    stop_grace_period: 30s
+
+volumes:
+  wg_panel_instance:
+  wg_node_agent_instance:
