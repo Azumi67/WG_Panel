@@ -1252,6 +1252,14 @@ def _github_latest_panel_version():
         "Cache-Control": "no-cache",
     }
 
+    github_token = (
+        os.getenv("GITHUB_TOKEN")
+        or os.getenv("GH_TOKEN")
+        or ""
+    ).strip()
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+
     commit_sha = ""
     commit_url = ""
     commit_date = ""
@@ -1294,6 +1302,41 @@ def _github_latest_panel_version():
             "Could not read GitHub main commit: %s",
             exc,
         )
+
+    # GitHub's REST API can be rate-limited even while github.com itself is
+    # reachable.  Falling back to git ls-remote prevents the sidebar from
+    # incorrectly reporting CURRENT just because the commit API failed.
+    if not commit_sha:
+        try:
+            git_bin = shutil.which("git")
+            if git_bin:
+                result = subprocess.run(
+                    [
+                        git_bin,
+                        "ls-remote",
+                        f"https://github.com/{PANEL_REPO}.git",
+                        "refs/heads/main",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=12,
+                    check=False,
+                )
+                if result.returncode == 0:
+                    line = (result.stdout or "").strip().splitlines()
+                    if line:
+                        candidate = line[0].split()[0].strip()
+                        if re.fullmatch(r"[0-9a-fA-F]{40,64}", candidate):
+                            commit_sha = candidate
+                            commit_url = (
+                                f"https://github.com/{PANEL_REPO}/commit/{candidate}"
+                            )
+        except Exception as exc:
+            logging.getLogger(__name__).debug(
+                "git ls-remote fallback failed: %s",
+                exc,
+            )
 
     try:
         response = requests.get(
@@ -1397,17 +1440,46 @@ def api_panel_version():
 
     installed_revision = str(
         installed.get("revision")
+        or os.getenv("WG_PANEL_REVISION")
+        or os.getenv("PANEL_REVISION")
+        or os.getenv("GIT_COMMIT")
         or ""
     ).strip()
+
+    if not installed_revision:
+        try:
+            git_dir = Path(BASE_DIR) / ".git"
+            git_bin = shutil.which("git")
+            if git_bin and git_dir.exists():
+                result = subprocess.run(
+                    [git_bin, "rev-parse", "HEAD"],
+                    cwd=BASE_DIR,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                    timeout=4,
+                    check=False,
+                )
+                candidate = (result.stdout or "").strip()
+                if result.returncode == 0 and re.fullmatch(
+                    r"[0-9a-fA-F]{40,64}", candidate
+                ):
+                    installed_revision = candidate
+        except Exception:
+            pass
 
     version_update_available = (
         _version_tuple(latest_version)
         > _version_tuple(current_version)
     )
 
-    revision_update_available = bool(
+    revision_comparison_complete = bool(
         remote_revision
         and installed_revision
+    )
+
+    revision_update_available = bool(
+        revision_comparison_complete
         and remote_revision != installed_revision
     )
 
@@ -1425,12 +1497,23 @@ def api_panel_version():
     elif revision_update_available:
         update_reason = "revision"
 
+    elif not revision_comparison_complete:
+        # Do not claim CURRENT when we could not establish both revisions.
+        # The frontend renders this as UNKNOWN and lets the next fresh check
+        # retry instead of hiding a real main-branch update.
+        update_reason = "check_incomplete"
+
     else:
         update_reason = "current"
 
     update_available = bool(
         version_update_available
         or revision_update_available
+    )
+
+    comparison_complete = bool(
+        version_update_available
+        or revision_comparison_complete
     )
 
     payload = {
@@ -1474,6 +1557,14 @@ def api_panel_version():
 
         "revision_tracked": bool(
             installed_revision
+        ),
+
+        "revision_check_ok": bool(
+            remote_revision
+        ),
+
+        "comparison_complete": (
+            comparison_complete
         ),
 
         "version_update_available": (
