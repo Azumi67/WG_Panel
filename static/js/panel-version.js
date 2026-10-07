@@ -32,6 +32,8 @@
     );
 
     const available = !!payload?.update_available;
+    const comparisonComplete = payload?.comparison_complete !== false
+      && payload?.update_reason !== 'check_incomplete';
 
     const currentRevision = shortRevision(
       payload,
@@ -44,27 +46,12 @@
     );
 
     if (currentElement) {
-      const revisionLabel = (
-        available
-          ? latestRevision
-          : currentRevision
-      );
-
-      currentElement.textContent = (
-        current
-          ? (
-            revisionLabel
-              ? `v${current} · main ${revisionLabel}`
-              : `v${current}`
-          )
-          : '—'
-      );
-
-      currentElement.title = (
-        revisionLabel
-          ? `Installed version ${current || 'unknown'}, main revision ${revisionLabel}`
-          : `Installed version ${current || 'unknown'}`
-      );
+      // Keep the compact sidebar readable.  Revisions stay in the tooltip;
+      // placing them beside the version collided with the state badge.
+      currentElement.textContent = current ? `v${current}` : '—';
+      currentElement.title = currentRevision
+        ? `Installed version ${current || 'unknown'}, revision ${currentRevision}`
+        : `Installed version ${current || 'unknown'}`;
     }
 
     if (directionElement) {
@@ -74,6 +61,32 @@
     if (latestElement) {
       latestElement.hidden = true;
       latestElement.textContent = '';
+    }
+
+    if (!available && !comparisonComplete) {
+      if (stateElement) {
+        stateElement.textContent = 'UNKNOWN';
+        stateElement.classList.remove(
+          'is-current',
+          'is-update',
+        );
+        stateElement.classList.add('is-error');
+      }
+
+      if (hintElement) {
+        hintElement.textContent = 'Could not verify GitHub main';
+      }
+
+      if (card) {
+        card.dataset.updateAvailable = '0';
+        card.dataset.target = 'main';
+        card.dataset.latestRevision = latestRevision;
+        card.setAttribute(
+          'aria-label',
+          'WG Panel update status could not be verified'
+        );
+      }
+      return;
     }
 
     if (available) {
@@ -315,6 +328,8 @@
     );
 
     const available = !!payload?.update_available;
+    const comparisonComplete = payload?.comparison_complete !== false
+      && payload?.update_reason !== 'check_incomplete';
     const currentRevision = shortRevision(payload, 'current');
     const latestRevision = shortRevision(payload, 'latest');
 
@@ -334,9 +349,17 @@
         'is-error',
       );
 
-      statusElement.textContent = available ? 'UPDATE' : 'CURRENT';
+      statusElement.textContent = available
+        ? 'UPDATE'
+        : comparisonComplete
+          ? 'CURRENT'
+          : 'UNKNOWN';
       statusElement.classList.add(
-        available ? 'is-update' : 'is-current',
+        available
+          ? 'is-update'
+          : comparisonComplete
+            ? 'is-current'
+            : 'is-error',
       );
     }
 
@@ -345,6 +368,8 @@
         noteElement.textContent = latestRevision
           ? `New main revision · ${latestRevision}`
           : 'New main revision available';
+      } else if (!comparisonComplete) {
+        noteElement.textContent = 'Could not verify GitHub main';
       } else {
         noteElement.textContent = currentRevision
           ? `Main revision · ${currentRevision}`
