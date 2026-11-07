@@ -11916,12 +11916,12 @@ def find_iface(path):
                 address = val
             elif lk == 'listenport':
                 try: listen_port = int(val)
-                except: pass
+                except ValueError: pass
             elif lk == 'privatekey':
                 private_key = val
             elif lk == 'mtu':
                 try: mtu = int(val)
-                except: pass
+                except ValueError: pass
             elif lk == 'dns':
                 dns = val
             elif lk == 'postup':
