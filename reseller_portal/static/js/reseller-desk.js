@@ -38,7 +38,7 @@
        return;
      }finally{clearTimeout(timer);loading.close();loading.remove();open.disabled=false;open.removeAttribute('aria-busy');}
    }
-   if(dialog&&!dialog.open){dialog.showModal();if(dialog.classList.contains('rp-plan-dialog')) window.rpPlanDialogOpened?.(dialog);}
+   if(dialog&&!dialog.open){if(dialog.id.startsWith('account-'))window.rpHydrateAccountDialog?.(dialog);dialog.showModal();if(dialog.classList.contains('rp-plan-dialog')) window.rpPlanDialogOpened?.(dialog);}
  });
  desk.querySelector('[data-auto-open]')?.showModal();
  desk.addEventListener('click',async e=>{const b=e.target.closest('[data-copy-value]');if(!b)return;const input=document.getElementById(b.dataset.copyValue);try{await navigator.clipboard.writeText(input.value);b.textContent='Copied';}catch(_){input.focus();input.select();b.textContent='Select and copy';}});
@@ -49,6 +49,7 @@
 
 
 (() => {
+ const sections=new WeakMap();
  function hydrate(dialog, selected=0){
   const body=dialog.querySelector('.rp-dialog-body');if(!body||body.querySelector('.rp-manage-nav'))return;
   dialog.classList.add('rp-manage-dialog');const access=document.createElement('section');
@@ -57,10 +58,22 @@
   body.tabIndex=0;body.setAttribute('role','region');body.setAttribute('aria-label','Account settings');content.append(...panels);body.replaceChildren(nav,content);
   const buttons=panels.map((panel,i)=>{panel.classList.add('rp-manage-panel');if(panel.tagName==='DETAILS')panel.open=true;panel.id=dialog.id+'-panel-'+i;panel.setAttribute('role','tabpanel');const b=document.createElement('button');b.type='button';b.className='rp-btn';if(panel.classList.contains('rp-account-removal'))b.classList.add('rp-removal-tab');b.textContent=i===0?'Access & status':panel.querySelector('summary').textContent;b.id=dialog.id+'-tab-'+i;b.setAttribute('role','tab');b.setAttribute('aria-controls',panel.id);panel.setAttribute('aria-labelledby',b.id);nav.append(b);return b;});
   const picker=document.createElement('label');picker.className='rp-manage-picker';picker.textContent='Account section';const select=document.createElement('select');select.className='rp-input';select.setAttribute('aria-label','Account section');buttons.forEach((b,i)=>select.add(new Option(b.textContent,String(i))));picker.append(select);body.insertBefore(picker,nav);
-  const show=index=>{dialog.dataset.selectedPanel=String(index);select.value=String(index);body.scrollTop=0;content.scrollTop=0;panels.forEach((p,i)=>p.hidden=i!==index);buttons.forEach((b,i)=>{b.setAttribute('aria-selected',String(i===index));b.tabIndex=i===index?0:-1;});};
-  select.addEventListener('change',()=>show(Number(select.value)));buttons.forEach((b,i)=>{b.onclick=()=>show(i);b.onkeydown=e=>{if(!['ArrowRight','ArrowLeft','Home','End'].includes(e.key))return;e.preventDefault();const j=e.key==='Home'?0:e.key==='End'?buttons.length-1:(i+(e.key==='ArrowRight'?1:-1)+buttons.length)%buttons.length;show(j);buttons[j].focus();};});access.querySelector('[data-open-removal]')?.addEventListener('click',()=>{const i=panels.findIndex(p=>p.classList.contains('rp-account-removal'));if(i>=0){show(i);(picker.offsetWidth?select:buttons[i]).focus();}});show(Math.min(selected,panels.length-1));
+  const show=index=>{if(!Number.isInteger(index)||!panels[index])return;dialog.dataset.selectedPanel=String(index);select.value=String(index);body.scrollTop=0;content.scrollTop=0;panels.forEach((p,i)=>p.hidden=i!==index);buttons.forEach((b,i)=>{b.setAttribute('aria-selected',String(i===index));b.tabIndex=i===index?0:-1;});};
+  select.addEventListener('change',()=>show(Number(select.value)));buttons.forEach((b,i)=>{b.onclick=()=>show(i);b.onkeydown=e=>{if(!['ArrowRight','ArrowLeft','Home','End'].includes(e.key))return;e.preventDefault();const j=e.key==='Home'?0:e.key==='End'?buttons.length-1:(i+(e.key==='ArrowRight'?1:-1)+buttons.length)%buttons.length;show(j);buttons[j].focus();};});sections.set(dialog,section=>{const i=panels.findIndex(p=>p.dataset.manageSection===section||(section==='customers'&&p.classList.contains('rp-customer-inventory')));if(i<0)return false;show(i);(picker.offsetWidth?select:buttons[i]).focus();return true;});access.querySelector('[data-open-removal]')?.addEventListener('click',()=>{const i=panels.findIndex(p=>p.classList.contains('rp-account-removal'));if(i>=0){show(i);(picker.offsetWidth?select:buttons[i]).focus();}});show(Math.min(selected,panels.length-1));
  }
  window.rpHydrateAccountDialog=hydrate;
+ document.addEventListener('click',e=>{
+  const button=e.target.closest('[data-open-customers]');if(!button)return;
+  const dialog=button.closest('dialog');if(!dialog)return;
+  e.preventDefault();
+  hydrate(dialog);
+  if(sections.get(dialog)?.('customers'))return;
+  const panel=dialog.querySelector('[data-manage-section=customers],.rp-customer-inventory');
+  if(!panel){status(dialog,'Customer inventory is unavailable. Close the account and reload the page.',true);return;}
+  const tab=Array.from(dialog.querySelectorAll('[role=tab]')).find(b=>b.getAttribute('aria-controls')===panel.id);
+  if(tab){tab.click();return;}
+  panel.hidden=false;panel.open=true;panel.scrollIntoView({block:'nearest'});
+ });
  function status(dialog,message,error=false){let n=dialog.querySelector('.rp-save-status');if(!n){n=document.createElement('p');n.className='rp-save-status';n.setAttribute('role','status');dialog.querySelector('header').after(n);}n.textContent=message;n.dataset.error=String(error);}
  document.addEventListener('DOMContentLoaded',()=>{
   document.querySelectorAll('dialog[id^="account-"]').forEach(d=>{hydrate(d);d.addEventListener('cancel',e=>{if(d.dataset.saving==='true')e.preventDefault();});});

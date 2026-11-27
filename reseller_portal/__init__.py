@@ -355,8 +355,13 @@ def account_resources(aid):
     account=db.session.get(Account,aid) or abort(404)
     if account.state=='deleted':abort(404)
     query=Ownership.query.join(Peer,Peer.id==Ownership.peer_id).filter(Ownership.account_id==aid,Ownership.deleted==False)
-    q=request.args.get('q','').strip()[:100];status=request.args.get('status','')
-    if q:query=query.filter(Peer.name.ilike('%'+q.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')+'%',escape='\\'))
+    q=request.args.get('q','').strip()[:100];status=request.args.get('status','');kind=request.args.get('kind','')
+    if kind=='peers':query=query.filter(Ownership.subscription_id.is_(None))
+    elif kind=='subscriptions':query=query.filter(Ownership.subscription_id.is_not(None))
+    if q:
+        from sqlalchemy import or_
+        pattern='%'+q.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')+'%'
+        query=query.filter(or_(Peer.name.ilike(pattern,escape='\\'),Ownership.subscription_id.in_(db.session.query(Subscription.id).filter(Subscription.name.ilike(pattern,escape='\\')))))
     if status=='blocked':query=query.filter(Ownership.blocked==True)
     elif status=='paused':query=query.filter(Ownership.blocked==False,Peer.status!='online')
     elif status=='enabled':query=query.filter(Ownership.blocked==False,Peer.status=='online')

@@ -993,7 +993,7 @@
       defer
       src="{{ url_for('static', filename='js/account-profile.js') }}"
     ></script>{% endif %}
-{% endif %}    {% if tenant %}<link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-polish.css')}}">{% endif %}{% if not tenant and request.endpoint in ('reseller.admin_page','users','subscriptions_page') %}<link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-visibility.css')}}"><script defer src="{{url_for('reseller.static',filename='js/reseller-visibility.js')}}"></script>{% endif %}
+{% endif %}    {% if tenant %}<link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-polish.css')}}">{% endif %}{% if not tenant and request.endpoint in ('reseller.admin_page','users','subscriptions_page') %}<link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-visibility.css',v='20261127f')}}"><script defer src="{{url_for('reseller.static',filename='js/reseller-visibility.js',v='20261127b')}}"></script>{% endif %}
     {% block body_extras %}{% endblock %}
 
     <script src="{{ url_for('static', filename='js/visual-preferences.js') }}"></script>

@@ -93,10 +93,10 @@
                          role="listbox"
                          hidden></div>
                 </div>
+                <small id="iface-status-assignment" class="iface-reseller-assignment" hidden></small>
             </div>
 
             <div id="iface-bar" class="iface-bar iface-bar-legacy" aria-hidden="true"></div>
-            <div id="iface-status-assignment" class="iface-reseller-assignment" aria-live="polite" hidden></div>
 
             <div id="iface-active-row" class="iface-active-row" aria-label="Selected interface state and actions">
                 <div id="active-iface-chip" class="iface-chip" aria-live="polite" style="display:none;"></div>
@@ -485,7 +485,7 @@
   const menu = document.getElementById('iface-status-menu');
   const label = document.getElementById('iface-status-label');
   const visibleDot = document.getElementById('iface-status-dot');
-  const assignmentLabel = document.getElementById('iface-status-assignment');
+  const assignmentBadge = document.getElementById('iface-status-assignment');
 
   const legacy = document.getElementById('iface-bar');
   const compatMenu = document.getElementById('iface-picker-menu');
@@ -616,7 +616,11 @@
     if (!list.length) {
       trigger.disabled = true;
       label.textContent = 'Loading interfaces…';
-      if (assignmentLabel) { assignmentLabel.hidden = true; assignmentLabel.textContent = ''; }
+      if (assignmentBadge) {
+        assignmentBadge.hidden = true;
+        assignmentBadge.textContent = '';
+      }
+      trigger.removeAttribute('title');
       visibleDot.className = 'iface-dot';
       closeMenu();
       return;
@@ -629,12 +633,16 @@
       list.find(iface => ifaceId(iface) === selectedId) ||
       list[0];
 
-    label.textContent = ifaceName(selected);
-    if (assignmentLabel) {
-      const assignment = window.WGResellerAssignment?.label(selected) || '';
-      assignmentLabel.textContent = assignment;
-      assignmentLabel.hidden = !assignment;
+    const assignment = window.WGResellerAssignment?.label(selected) || '';
+    const name = document.createElement('span');
+    name.className = 'iface-selected-name';
+    name.textContent = ifaceName(selected);
+    label.replaceChildren(name);
+    if (assignmentBadge) {
+      assignmentBadge.textContent = assignment;
+      assignmentBadge.hidden = !assignment;
     }
+    trigger.title = [ifaceName(selected), assignment].filter(Boolean).join(' · ');
     visibleDot.className =
       ['iface-dot', stateClass(selected)]
         .filter(Boolean)

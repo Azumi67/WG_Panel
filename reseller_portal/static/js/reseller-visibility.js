@@ -13,13 +13,20 @@ window.WGResellerAssignment = {label, confirm: confirmAssignments};
 const host=document.querySelector('[data-reseller-visibility]');
 if(!host||host.dataset.mounted)return;
 host.dataset.mounted='true';
-const title=document.createElement('label');title.textContent='Customer ownership';title.htmlFor='reseller-visibility-mode';
+const title=document.createElement('label');title.textContent='Show customers';title.htmlFor='reseller-visibility-mode';
 const select=document.createElement('select');select.id=title.htmlFor;select.className='input reseller-visibility-select';select.disabled=true;
 for(const [value,text] of [['admin','Admin only'],['resellers','Resellers only'],['all','All customers']]){const opt=document.createElement('option');opt.value=value;opt.textContent=text;select.append(opt);}
 const status=document.createElement('span');status.className='reseller-visibility-status';status.setAttribute('role','status');status.textContent='Loading…';
 host.replaceChildren(title,select,status);
 async function request(options={}){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);try{const res=await fetch('/resellers/resource-visibility',{credentials:'same-origin',cache:'no-store',...options,signal:controller.signal});const data=await res.json();if(!res.ok||!['admin','resellers','all'].includes(data.mode))throw Error();return data;}finally{clearTimeout(timer);}}
-async function load(){select.disabled=true;try{select.value=(await request()).mode;status.textContent='Peers & subscriptions';select.disabled=false;}catch(_){status.textContent='Unavailable · Reload to retry';}}
-select.onchange=async()=>{select.disabled=true;status.textContent='Saving…';try{const data=await request({method:'POST',headers:{...window.csrfHeaders?.(true),'Content-Type':'application/json','X-CSRFToken':document.querySelector('meta[name="csrf-token"]')?.content||''},body:JSON.stringify({mode:select.value})});select.value=data.mode;status.textContent='Saved';if(host.hasAttribute('data-resource-reload')){location.reload();return;}select.disabled=false;}catch(_){await load();status.textContent='Save not confirmed · '+status.textContent;}};
+function saveHeaders(){
+    const headers = new Headers(window.csrfHeaders?.(true) || {});
+    const token = headers.get('X-CSRFToken') || document.querySelector('meta[name="csrf-token"]')?.content || document.querySelector('#panel-notifications')?.dataset.csrf || '';
+    if (token) headers.set('X-CSRFToken', token);
+    headers.set('Content-Type', 'application/json');
+    return headers;
+}
+async function load(){select.disabled=true;try{select.value=(await request()).mode;status.textContent='Filter by customer owner';select.disabled=false;}catch(_){status.textContent='Unavailable · Reload to retry';}}
+select.onchange=async()=>{select.disabled=true;status.textContent='Saving…';try{const data=await request({method:'POST',headers:saveHeaders(),body:JSON.stringify({mode:select.value})});select.value=data.mode;status.textContent='Saved';if(host.hasAttribute('data-resource-reload')){location.reload();return;}select.disabled=false;}catch(_){await load();status.textContent='Save not confirmed · '+status.textContent;}};
 load();
 })();
