@@ -1,0 +1,28 @@
+
+html[data-design=modern][data-theme] body .peerx-wireguard-card{position:static!important;inset:auto!important;transform:none!important;align-self:start!important}
+html[data-design=modern][data-theme] body .peerx-column{min-width:0;height:auto!important}
+html[data-design=modern][data-theme] body .peerx-form-modal .modal-content{max-height:calc(100dvh - 24px)!important;overflow:auto!important}
+html[data-design=modern][data-theme] body .peerx-form-modal .modal-actions{position:relative!important;bottom:auto!important;clear:both}
+html[data-reseller-workspace][data-theme] body :is(#ui-toast-container,#subx-toast-box,.toast-container,.toast-stack,#toast-container,#toast-stack,.rp-toast,.bk-toast-stack){position:fixed!important;top:calc(76px + env(safe-area-inset-top))!important;bottom:auto!important;right:16px!important;max-width:calc(100vw - 32px);z-index:2147483000!important}
+.operation-progress{border:1px solid var(--border,#d8ddea);border-radius:16px;padding:28px;max-width:min(420px,calc(100vw - 32px));background:var(--card-bg,#fff);color:var(--text-primary,#172033);text-align:center;box-shadow:0 20px 80px #0004}
+.operation-progress::backdrop{background:#10182788;backdrop-filter:blur(3px)}
+.operation-progress .operation-spinner{display:block;margin:0 auto 18px;width:30px;height:30px;border:3px solid #a9a2c4;border-top-color:#7355ed;border-radius:50%;animation:operation-spin .8s linear infinite}
+@keyframes operation-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.operation-spinner{animation:none!important}}
+.rb-card input::file-selector-button{border:1px solid var(--border,#d8ddea);border-radius:8px;background:var(--card-bg,#fff);color:inherit;padding:10px 14px;cursor:pointer;margin-right:10px}.rb-card button.rb-button{border:0}
+@media(max-width:700px){html[data-design=modern][data-theme] body .peerx-form-grid{grid-template-columns:minmax(0,1fr)!important}html[data-design=modern][data-theme] body .peerx-form-modal .modal-content{width:calc(100vw - 16px)!important;max-width:none!important;margin:8px!important}.peerx-endpoint-label{flex-wrap:wrap}.subscription-overview-metrics{grid-template-columns:repeat(2,minmax(0,1fr))!important}.subscription-overview-detail{display:flex;flex-wrap:wrap}.rp-dialog{max-width:calc(100vw - 16px)!important}.rp-fields{grid-template-columns:minmax(0,1fr)!important}.rb-page{padding:16px!important}.rb-grid{grid-template-columns:1fr!important}}
+
+
+#create-peer-btn .peer-create-plus{display:inline-block;flex:0 0 18px;color:inherit;vertical-align:middle;opacity:1}
+
+
+html[data-theme="dark"] body.peers-page .peer-page-actions #create-peer-btn .btn-mini-on{background:#24194b!important;color:#f4efff!important;-webkit-text-fill-color:#f4efff!important;border-color:#c5b6ff!important;opacity:1!important}
+
+.peer-hero-live[data-live-state="stale"]>span{background:#d97706!important;box-shadow:none!important;animation:none!important}
+.peer-hero-live[data-live-state="loading"]>span,.peer-hero-live[data-live-state="paused"]>span{background:var(--ws-muted,#64748b)!important;box-shadow:none!important;animation:none!important}
+.peer-hero-live[data-live-state="stale"] b{color:var(--ws-text,var(--text,#20293b))!important}
+.rp-operation-progress{position:fixed;inset:12px 12px auto auto;z-index:2147483647;display:flex;align-items:center;flex-wrap:wrap;gap:8px;width:max-content;max-width:min(420px,calc(100vw - 24px));box-sizing:border-box;margin:0;padding:12px;background:var(--ws-panel,var(--card-bg,#fff));color:var(--ws-text,var(--text,#152238));border:1px solid var(--ws-line,var(--line,#94a3b8));border-radius:10px;box-shadow:0 4px 20px #0003;overflow-wrap:anywhere}
+.rp-operation-progress button{margin-inline-start:auto;min-width:32px;min-height:32px;display:grid;place-items:center;border:1px solid var(--ws-line,var(--line,#94a3b8));border-radius:6px;background:transparent;color:inherit;cursor:pointer}
+.rp-operation-progress a{color:var(--ws-accent,#6554dc);font-weight:600}
+@media(max-width:760px){.rp-operation-progress{inset:calc(var(--wg-mobile-topbar-h,56px) + 8px) 8px auto 8px;width:auto;max-width:none}.subx-pagination .subx-page-controls{flex-wrap:wrap;min-width:0;max-width:100%}.subx-pagination .subx-page-controls select{max-width:100%}}
+@media(prefers-reduced-motion:reduce){.peer-hero-live>span,.operation-spinner{animation:none!important}.rp-operation-progress{transition:none!important}}

@@ -163,3 +163,18 @@
   grid-row: 1 !important;
   justify-self: center !important;
 }
+
+
+html[data-theme=light] .sb2-update-card .sb2-update-state{color:#075b42!important;background:#d9f5eb!important;border-color:#72cfb1!important}
+html[data-theme=light] .sb2-update-card .sb2-update-k{color:#475569!important}
+html[data-theme=light] .sb2-update-card #sb2-version-current{color:#172c42!important}
+
+
+html[data-design=legacy][data-theme=light] #panel-sidebar .sb2-update-card,
+html[data-design=legacy][data-theme=light] #panel-sidebar .sb2-update-card :is(.sb2-update-k,.sb2-update-versions,#sb2-version-current){color:#f3f7fc!important}
+html[data-design=legacy][data-theme=light] #panel-sidebar .sb2-update-card .sb2-update-k{color:#bacbdd!important;opacity:1!important}
+html[data-design=legacy][data-theme=light] #panel-sidebar .sb2-update-state{background:#d5fff1!important;color:#086c52!important}
+
+html[data-design=legacy][data-theme=light] body #panel-sidebar .sb2-update-card #sb2-version-state{color:#075b42!important;background:#d5fff1!important;border-color:#72cfb1!important}
+html[data-design=legacy][data-theme=light] body #panel-sidebar .sb2-update-card #sb2-version-state.is-update{color:#78350f!important;background:#fef3c7!important;border-color:#fbbf24!important}
+html[data-design=legacy][data-theme=light] body #panel-sidebar .sb2-update-card #sb2-version-state.is-error{color:#991b1b!important;background:#fee2e2!important;border-color:#fca5a5!important}

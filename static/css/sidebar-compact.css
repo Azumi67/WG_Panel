@@ -458,3 +458,8 @@ html[data-theme="light"] .sb2-footer-icon {
   opacity: 1;
   transform: scale(1);
 }
+html[data-design] body .sidebar.sb2 nav[aria-label=Primary]{scrollbar-width:thin!important;scrollbar-color:#73809b66 transparent!important;scrollbar-gutter:stable}
+html[data-design] body .sidebar.sb2 nav[aria-label=Primary]::-webkit-scrollbar{display:block!important;width:5px!important}
+html[data-design] body .sidebar.sb2 nav[aria-label=Primary]::-webkit-scrollbar-thumb{background:#73809b66;border-radius:8px}
+.sb2-overflow-hint{flex:0 0 auto;display:block;margin:2px 12px 6px;padding:7px 8px;min-height:32px;border:1px solid var(--m-line,#66708555);border-radius:7px;background:transparent;color:inherit;font:inherit;font-size:11px;cursor:pointer;text-align:center}
+.sb2-overflow-hint[hidden]{display:none!important}.sb2.is-collapsed .sb2-overflow-hint{font-size:0;margin-inline:9px}.sb2.is-collapsed .sb2-overflow-hint:after{content:'↓';font-size:16px}.sb2.is-collapsed .sb2-overflow-hint[data-direction=up]:after{content:'↑'}
