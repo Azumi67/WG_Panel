@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+if __package__:
+    from .node_values import (_first_cidr, _upsert_peer_block_text, _traffic_host_addresses, _traffic_normalize_domain, _traffic_resolve_domains, _traffic_parse_cidrs)
+else:
+    from node_values import (_first_cidr, _upsert_peer_block_text, _traffic_host_addresses, _traffic_normalize_domain, _traffic_resolve_domains, _traffic_parse_cidrs)
+
 import os, json, subprocess, time, socket, ssl, sys, shutil, stat
 from pathlib import Path
 from flask import Flask, request, jsonify, abort, send_file
@@ -10,7 +15,6 @@ from contextlib import contextmanager
 import fcntl
 import re
 import ipaddress as ipa
-import subprocess, os
 import requests
 import hmac
 
@@ -21,7 +25,7 @@ try:
 except Exception:
     pass
 
-API_KEY = os.environ.get('API_KEY','') 
+API_KEY = os.environ.get('API_KEY','')
 WG_CONF_PATH = os.environ.get('WIREGUARD_CONF_PATH','/etc/wireguard')
 
 app = Flask(__name__)
@@ -33,12 +37,16 @@ def require_api_key(f):
         if not want:
             return jsonify({'error': 'Unauthorized'}), 401
 
-        auth = (request.headers.get('Authorization') or '').strip()
-        bearer = auth.split(None, 1)[1].strip() if auth.startswith('Bearer ') else ''
+        auth = (request.headers.get('Authorization') or '').strip().split(None,1)
+        if auth and (len(auth)!=2 or auth[0].lower()!='bearer' or not auth[1].strip()):
+            return jsonify({'error':'Unauthorized'}),401
+        bearer = auth[1].strip() if auth else ''
         xhdr = (request.headers.get('X-API-KEY') or '').strip()
 
         supplied = bearer or xhdr
-        if supplied and hmac.compare_digest(supplied, want):
+        if bearer and xhdr and not hmac.compare_digest(bearer.encode(),xhdr.encode()):
+            return jsonify({'error':'Unauthorized'}),401
+        if supplied and hmac.compare_digest(supplied.encode(), want.encode()):
             return f(*a, **k)
         return jsonify({'error': 'Unauthorized'}), 401
     return inner
@@ -116,7 +124,7 @@ def _iface_up(name: str) -> bool:
         ).returncode == 0
     except Exception:
         return False
-    
+
 def _split_address(addr_field: str) -> list[str]:
     if not addr_field:
         return []
@@ -411,13 +419,13 @@ def hostPrefix(host_cidr):
     return f"{ip}/{32 if ip.version==4 else 128}"
 
 def _orig_host(allowed: str | None) -> str | None:
-    if not allowed: 
+    if not allowed:
         return None
     for c in (x.strip() for x in allowed.split(',')):
         try:
             ii = ipa.ip_interface(c)
             if ii.network.prefixlen in (32, 128):
-                return hostPrefix(c)  
+                return hostPrefix(c)
         except Exception:
             pass
     return None
@@ -425,21 +433,19 @@ def _orig_host(allowed: str | None) -> str | None:
 def _route(cmd, cidr):
     try:
         subprocess.run(['ip', 'route', *cmd, 'blackhole', cidr],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5, check=False)
     except Exception:
         pass
+
+@app.get('/api/system/healthz')
+@require_api_key
+def node_healthz():
+    return jsonify(ok=True, wireguard=bool(shutil.which('wg'))), 200 if shutil.which('wg') else 503
+
 
 @app.route('/api/health')
 @require_api_key
 def health():
-    """
-    Return node health, uptime, version, and WireGuard interface state.
-
-    The panel uses this information for:
-    - node online/offline monitoring
-    - node recovery notifications
-    - interface up/down notifications
-    """
     interface_states = []
 
     try:
@@ -515,13 +521,12 @@ def health():
         public_ipv6=_public_ipv6(),
         uptime_seconds=uptime_seconds,
         version=NODE_AGENT_VERSION,
+        capabilities={"peer_update": True, "peer_enable": True, "peer_pause": True,
+                      "usage_snapshot": True, "reseller_policy": "central-panel"},
         interfaces=interface_states,
     )
 
 
-# -----------
-# Operations
-# -----------
 _NODE_OPS_PACKAGE_CANDIDATES = (
     ('apt', 'apt-get'), ('dnf', 'dnf'), ('yum', 'yum'),
     ('zypper', 'zypper'), ('pacman', 'pacman'), ('apk', 'apk'),
@@ -856,12 +861,6 @@ def _node_ops_snapshot_root():
 
 @contextmanager
 def _node_ops_locked():
-    """Serialize mutating Operations calls across gunicorn workers.
-
-    The node agent can run multiple gunicorn workers/threads, so a process-local
-    threading lock is not sufficient.  Use a restricted flock file in the
-    Operations state directory and fail fast rather than overlapping repairs.
-    """
     root = _node_ops_snapshot_root()
     lock_path = root / '.repair.lock'
     flags = os.O_CREAT | os.O_RDWR
@@ -996,11 +995,6 @@ def node_operations_diagnostic():
 @app.post('/api/operations/peer-diagnostic')
 @require_api_key
 def node_operations_peer_diagnostic():
-    """Return read-only runtime evidence for exactly one WireGuard peer.
-
-    Inputs are deliberately limited to a validated interface name and public
-    key.  The response never includes private or preshared key material.
-    """
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return jsonify(ok=False, error='invalid_request'), 400
@@ -1198,10 +1192,7 @@ def _safe_iface_name(
             'underscore, dot, or dash.'
         )
 
-    if name in {
-        '.',
-        '..',
-    }:
+    if name.startswith('-') or name in {'.', '..'}:
         raise ValueError(
             'Invalid interface name.'
         )
@@ -1210,11 +1201,102 @@ def _safe_iface_name(
 
 
 def _wg_conf_dir() -> str:
-    return WG_CONF_PATH if os.path.isdir(WG_CONF_PATH) else os.path.dirname(WG_CONF_PATH)
+    return os.path.dirname(WG_CONF_PATH) or "." if str(WG_CONF_PATH).endswith(".conf") and not os.path.isdir(WG_CONF_PATH) else WG_CONF_PATH
 
 
 def _iface_conf_path(name: str) -> str:
     return os.path.join(_wg_conf_dir(), f'{name}.conf')
+
+
+class InterfaceBusy(RuntimeError):
+    pass
+
+
+@contextmanager
+def _interface_operation(name, timeout=5):
+    name = _safe_iface_name(name)
+    path = _iface_conf_path(name) + '.lock'
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'r+') as handle:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise InterfaceBusy('Interface is busy; retry after checking operation status.')
+                time.sleep(.05)
+        yield
+
+
+@app.errorhandler(InterfaceBusy)
+def _interface_busy(_error):
+    return jsonify(ok=False,error='interface_busy',detail='Interface is busy; check operation status before retrying.'), 503
+
+
+def _interface_mutation(fn):
+    @wraps(fn)
+    def inner(name, *args, **kwargs):
+        try:
+            name = _safe_iface_name(name)
+        except ValueError:
+            return jsonify(ok=False,error='invalid_iface'),400
+        with _interface_operation(name):
+            return fn(name,*args,**kwargs)
+    return inner
+
+
+def _creation_lock(fn):
+    @wraps(fn)
+    def inner():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload,dict):
+            return jsonify(ok=False,error='invalid_payload'),400
+        try:
+            name = _safe_iface_name(payload.get('name'))
+        except ValueError:
+            return jsonify(ok=False,error='invalid_iface'),400
+        with _interface_operation(name):
+            return fn()
+    return inner
+
+
+def _peer_interfaces(pub):
+    names = set()
+    for path in Path(_wg_conf_dir()).glob('*.conf'):
+        with path.open(encoding='utf-8') as stream:
+            if any('=' in line and line.split('=',1)[0].strip().lower()=='publickey' and line.split('=',1)[1].strip()==pub for line in stream):
+                names.add(_safe_iface_name(path.stem))
+    
+    dump = subprocess.check_output(['wg','show','all','dump'],timeout=8).decode('utf-8','replace')
+    for line in dump.splitlines():
+        parts = line.split('\t')
+        if len(parts)>=9 and parts[1]==pub:
+            names.add(_safe_iface_name(parts[0]))
+    return names
+
+
+def _peer_mutation(fn):
+    @wraps(fn)
+    def inner(pub):
+        from contextlib import ExitStack
+        if not _valid_wg_key(pub):
+            return jsonify(ok=False,error='invalid_public_key'),400
+        try:
+            names = _peer_interfaces(pub)
+            with ExitStack() as stack:
+                for name in sorted(names):
+                    stack.enter_context(_interface_operation(name))
+                if _peer_interfaces(pub)!=names:
+                    return jsonify(ok=False,error='peer_state_changed'),409
+                return fn(pub)
+        except InterfaceBusy:
+            raise
+        except (OSError,subprocess.SubprocessError,ValueError):
+            return jsonify(ok=False,error='peer_state_unavailable'),503
+    return inner
 
 
 def _write_conf_atomic(path: str, text: str):
@@ -1247,77 +1329,29 @@ def _write_conf_atomic(path: str, text: str):
 
 
 def _conf_has_peer(path: str, pub: str) -> bool:
-    if not os.path.isfile(path):
-        return False
-
     try:
-        with open(path, 'r', encoding='utf-8', errors='ignore') as handle:
+        with open(path, 'r', encoding='utf-8') as handle:
             in_peer = False
             for raw in handle:
                 line = raw.strip()
                 if line.startswith('[') and line.endswith(']'):
                     in_peer = (line[1:-1].lower() == 'peer')
                     continue
-                if in_peer and line.lower().startswith('publickey') and '=' in line:
-                    if line.split('=', 1)[1].strip() == pub:
-                        return True
-    except OSError:
+                key, sep, value = line.partition('=')
+                if in_peer and sep and key.strip().lower() == 'publickey' and value.strip() == pub:
+                    return True
+    except FileNotFoundError:
         return False
-
     return False
 
 
-def _upsert_peer_block_text(existing: str, pub: str, block_lines: list[str]) -> str:
-    lines = (existing or '').splitlines(keepends=True)
-    out = []
-    replaced = False
-    i = 0
-
-    while i < len(lines):
-        if lines[i].strip().lower() != '[peer]':
-            out.append(lines[i])
-            i += 1
-            continue
-
-        block = [lines[i]]
-        i += 1
-        while i < len(lines) and not lines[i].strip().startswith('['):
-            block.append(lines[i])
-            i += 1
-
-        block_pub = ''
-        for line in block:
-            text = line.strip()
-            if text.lower().startswith('publickey') and '=' in text:
-                block_pub = text.split('=', 1)[1].strip()
-                break
-
-        if block_pub == pub:
-            if not replaced:
-                out.append('\n'.join(block_lines).rstrip('\n') + '\n')
-                replaced = True
-        else:
-            out.extend(block)
-
-    if not replaced:
-        prefix = ''.join(out).rstrip('\n')
-        if prefix:
-            prefix += '\n\n'
-        return prefix + '\n'.join(block_lines).rstrip('\n') + '\n'
-
-    return ''.join(out)
-
-
 def _runtime_has_peer(iface: str, pub: str) -> bool:
-    try:
-        out = subprocess.check_output(
-            ['wg', 'show', iface, 'allowed-ips'],
-            stderr=subprocess.DEVNULL, timeout=4,
-        ).decode('utf-8', 'replace')
-    except Exception:
-        return False
-
+    out = subprocess.check_output(
+        ['wg', 'show', iface, 'allowed-ips'],
+        stderr=subprocess.DEVNULL, timeout=4,
+    ).decode('utf-8', 'replace')
     return any(line.split('\t', 1)[0].strip() == pub for line in out.splitlines())
+
 
 def _safe_conf_filename(filename: str) -> str:
     filename = os.path.basename((filename or '').strip())
@@ -1361,10 +1395,6 @@ def _read_node_wg_confs() -> list[tuple[str, bytes]]:
     return out
 
 def _node_env_path() -> str | None:
-    """
-    Return this node agent's .env path if it exists.
-
-    """
     here = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.path.join(here, ".env"),
@@ -1418,6 +1448,27 @@ def node_backup_wg():
         as_attachment=True,
         download_name=f'node_wg_backup_{socket.gethostname()}_{ts}.zip',
     )
+
+def _restore_private_file(destination, content):
+    import tempfile
+    import shutil
+    from pathlib import Path
+    path=Path(destination)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError('Unsafe existing restore destination.')
+    if path.exists():
+        fd, saved=tempfile.mkstemp(prefix=path.name+'.restorebak.',dir=path.parent)
+        with os.fdopen(fd,'wb') as out, path.open('rb') as source:
+            shutil.copyfileobj(source,out)
+            out.flush();os.fsync(out.fileno())
+    fd, tmp=tempfile.mkstemp(prefix='.restore-',dir=path.parent)
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as out:
+            out.write(content);out.flush();os.fsync(out.fileno())
+        os.replace(tmp,path)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
 
 @app.post('/api/backup/wg/restore')
 @require_api_key
@@ -1491,86 +1542,52 @@ def node_restore_wg():
                 filename,
             )
 
-            if os.path.isfile(destination):
-                safety_copy = (
-                    f'{destination}.restorebak.'
-                    f'{timestamp}'
-                )
+            with _interface_operation(interface_name):
+                _restore_private_file(destination,text.strip()+'\n')
 
-                try:
-                    os.replace(
-                        destination,
-                        safety_copy,
-                    )
-                except Exception:
-                    pass
+                restored.append(filename)
 
-            temporary_path = (
-                f'{destination}.tmp.{timestamp}'
-            )
+                if bring_up:
+                    try:
+                        subprocess.run(
+                            [
+                                'wg-quick',
+                                'down',
+                                interface_name,
+                            ],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=20,
+                            check=False,
+                        )
+                    except Exception:
+                        pass
 
-            with open(
-                temporary_path,
-                'w',
-                encoding='utf-8',
-            ) as handle:
-                handle.write(
-                    text.strip() + '\n'
-                )
-
-            os.chmod(
-                temporary_path,
-                0o600,
-            )
-
-            os.replace(
-                temporary_path,
-                destination,
-            )
-
-            restored.append(filename)
-
-            if bring_up:
-                try:
-                    subprocess.run(
+                    up_process = subprocess.run(
                         [
                             'wg-quick',
-                            'down',
+                            'up',
                             interface_name,
                         ],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
                         timeout=20,
                         check=False,
                     )
-                except Exception:
-                    pass
 
-                up_process = subprocess.run(
-                    [
-                        'wg-quick',
-                        'up',
-                        interface_name,
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=20,
-                    check=False,
-                )
-
-                if up_process.returncode != 0:
-                    errors.append({
-                        'file': filename,
-                        'error': (
-                            up_process.stderr
-                            or up_process.stdout
-                            or (
-                                'wg-quick up '
-                                f'{interface_name} failed'
-                            )
-                        ).strip(),
-                    })
+                    if up_process.returncode != 0:
+                        errors.append({
+                            'file': filename,
+                            'error': (
+                                up_process.stderr
+                                or up_process.stdout
+                                or (
+                                    'wg-quick up '
+                                    f'{interface_name} failed'
+                                )
+                            ).strip(),
+                        })
 
         except Exception as exc:
             errors.append({
@@ -1592,39 +1609,7 @@ def node_restore_wg():
                 )
             )
 
-            if os.path.isfile(env_path):
-                safety_env = (
-                    f'{env_path}.restorebak.'
-                    f'{timestamp}'
-                )
-
-                os.replace(
-                    env_path,
-                    safety_env,
-                )
-
-            temporary_env = (
-                f'{env_path}.tmp.{timestamp}'
-            )
-
-            with open(
-                temporary_env,
-                'w',
-                encoding='utf-8',
-            ) as handle:
-                handle.write(
-                    str(env_file)
-                )
-
-            os.chmod(
-                temporary_env,
-                0o600,
-            )
-
-            os.replace(
-                temporary_env,
-                env_path,
-            )
+            _restore_private_file(env_path,str(env_file))
 
             env_restored = True
 
@@ -1640,7 +1625,6 @@ def node_restore_wg():
         env_restored=env_restored,
         errors=errors,
     ), 200 if not errors else 207
-
 
 
 def _validate_new_interface(
@@ -2453,39 +2437,10 @@ def _write_interface_conf(
         path,
     )
 
-def _first_cidr(s: str | None) -> str | None:
-    """
-    Return the first valid CIDR from an Interface Address.
-    Prefer IPv4, otherwise return the first valid CIDR.
-    Example:
-      "10.8.0.1/24, fd42::1/64" -> "10.8.0.1/24"
-    """
-    if not s:
-        return None
-
-    v4 = None
-    first = None
-
-    for part in re.split(r'[,\s]+', str(s).strip()):
-        part = part.strip()
-        if not part or '/' not in part:
-            continue
-
-        try:
-            ii = ipa.ip_interface(part)
-        except Exception:
-            continue
-
-        if first is None:
-            first = part
-
-        if ii.version == 4 and v4 is None:
-            v4 = part
-
-    return v4 or first
 
 @app.route('/api/interfaces/create', methods=['POST'])
 @require_api_key
+@_creation_lock
 def create_interface():
     j = request.get_json(silent=True) or {}
 
@@ -2758,13 +2713,6 @@ def _node_ping_peer(iface: str, allowed: str) -> bool:
 def _wg_runtime_endpoint_host(
     endpoint: str,
 ) -> str:
-    """
-    Extract the IP address from a WireGuard runtime endpoint.
-
-    Examples:
-        1.2.3.4:51820
-        [2001:db8::1]:51820
-    """
 
     endpoint = str(
         endpoint or ''
@@ -2890,15 +2838,9 @@ def _wg_transport_path(
 @app.route('/api/peers')
 @require_api_key
 def peers():
-    """Return WireGuard peer runtime state for the node API.
-
-    ``endpoint`` is the remote endpoint currently observed by WireGuard
-    (for example ``203.0.113.10:51820`` or ``[2001:db8::10]:51820``).
-    It is not necessarily the subscriber's original/public ISP address;
-    NAT, CGNAT, VPNs and other relays can change what the server observes.
-    """
     want_iface = (request.args.get('iface') or '').strip()
     peers = []
+    runtime_available = False
     now = int(time.time())
 
     try:
@@ -3001,6 +2943,7 @@ def peers():
                 'status': status,
             })
 
+        runtime_available = True
     except subprocess.TimeoutExpired:
         app.logger.warning('Timed out while reading WireGuard peer state')
     except subprocess.CalledProcessError as exc:
@@ -3010,7 +2953,7 @@ def peers():
     except Exception:
         app.logger.exception('Could not collect WireGuard peer state')
 
-    return jsonify(peers=peers)
+    return jsonify(peers=peers, runtime_available=runtime_available)
 
 def _node_version() -> str:
 
@@ -3067,89 +3010,18 @@ def _node_update_status_path():
 
 
 def _node_write_status(payload):
-    path = _node_update_status_path()
-
-    path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    temporary = path.with_suffix(
-        path.suffix + ".tmp"
-    )
-
-    temporary.write_text(
-        json.dumps(
-            payload,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    os.replace(
-        temporary,
-        path,
-    )
+    root = _node_root()
+    if str(root) not in sys.path:sys.path.insert(0,str(root))
+    from scripts.panel_update import atm_json
+    atm_json(_node_update_status_path(),payload)
 
 
 def _node_update_lock_active() -> bool:
-    lock_path = (
-        _node_root()
-        / "instance"
-        / "update.lock"
-    )
-
-    if not lock_path.exists():
-        return False
-
-    try:
-        pid = int(
-            lock_path.read_text(
-                encoding="utf-8"
-            ).strip()
-        )
-
-        if pid <= 1:
-            raise ValueError(
-                "Invalid updater PID."
-            )
-
-        os.kill(pid, 0)
-        return True
-
-    except ProcessLookupError:
-        try:
-            lock_path.unlink(
-                missing_ok=True,
-            )
-        except Exception:
-            pass
-
-        return False
-
-    except PermissionError:
-        return True
-
-    except Exception:
-        try:
-            lock_age = (
-                time.time()
-                - lock_path.stat().st_mtime
-            )
-        except Exception:
-            lock_age = 999999
-
-        if lock_age > 300:
-            try:
-                lock_path.unlink(
-                    missing_ok=True,
-                )
-            except Exception:
-                pass
-
-            return False
-
-        return True
+    root = _node_root()
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from scripts.deployment import lock_active
+    return lock_active(root)
 
 
 def _node_update_status():
@@ -3200,39 +3072,11 @@ def _node_update_status():
     "rollback_restart",
     }
 
-    if (
-        busy
-        and not _node_update_lock_active()
-    ):
-        recovered = {
-            "status": "idle",
-            "stage": "idle",
-            "percent": 0,
-            "message": (
-                "Previous interrupted node "
-                "update state was cleared."
-            ),
-            "previous_status": status.get(
-                "status"
-            ),
-            "previous_message": status.get(
-                "message"
-            ),
-            "recovered": True,
-            "log": list(
-                status.get("log")
-                or []
-            )[-20:],
-        }
-
-        try:
-            _node_write_status(
-                recovered
-            )
-        except Exception:
-            pass
-
-        return recovered
+    if busy and not _node_update_lock_active():
+        if status.get('status') == 'queued' and time.time() - float(status.get('requested_at') or 0) < 30:
+            return status
+        return dict(status, status='failed', stage='interrupted', percent=100,
+                    message='Previous node deployment was interrupted. Check service journals and recovery snapshot.')
 
     return status
 
@@ -3503,9 +3347,8 @@ def node_system_update_status():
 @app.post("/api/system/update")
 @require_api_key
 def node_system_update_start():
-    data = request.get_json(
-        silent=True
-    ) or {}
+    if str(os.getenv('DOCKER_MODE','')).lower() in ('1','true','yes','on') or not shutil.which('systemd-run'):
+        return jsonify(ok=False,error='manual_deployment_required',detail='Rebuild containers or use independent systemd maintenance.'),409
 
     target = "main"
 
@@ -3522,6 +3365,8 @@ def node_system_update_start():
     )
 
     current = _node_update_status()
+    if current.get('stage')=='interrupted':
+        return jsonify(ok=False,error='interrupted_deployment',detail='Verify or restore previous code before another update.'),409
 
     if str(
         current.get("status")
@@ -3589,6 +3434,7 @@ def node_system_update_start():
         "stage": "queued",
         "percent": 2,
         "message": "Node update is starting…",
+        "requested_at": time.time(),
         "target": target,
         "launcher": "pending",
         "unit": None,
@@ -3632,7 +3478,7 @@ def node_system_update_start():
                     "--collect",
                     "--quiet",
                     "--property=Type=exec",
-                    "--property=KillMode=process",
+                    
                     "--property=TimeoutStopSec=10min",
                     f"--working-directory={root}",
                     "--",
@@ -3728,65 +3574,7 @@ def node_system_update_start():
             status=failed,
         ), 500
 
-    latest_status = _node_update_status()
-
-    latest_state = str(
-        latest_status.get("status")
-        or ""
-    ).strip().lower()
-
-    if latest_state in {
-        "",
-        "idle",
-        "queued",
-    }:
-        latest_status.update({
-            "status": "queued",
-            "stage": "queued",
-            "percent": max(
-                2,
-                int(
-                    latest_status.get("percent")
-                    or 0
-                ),
-            ),
-            "message": (
-                latest_status.get("message")
-                or "Node update is starting…"
-            ),
-            "target": target,
-            "launcher": launch_info.get(
-                "launcher"
-            ),
-            "unit": launch_info.get(
-                "unit"
-            ),
-            "pid": launch_info.get(
-                "pid"
-            ),
-            "log": list(
-                latest_status.get("log")
-                or []
-            ),
-        })
-
-        try:
-            _node_write_status(
-                latest_status
-            )
-        except Exception:
-            pass
-
-        queued = latest_status
-
-    else:
-        queued = latest_status
-
-    return jsonify(
-        ok=True,
-        message="Node update started.",
-        status=queued,
-    ), 202
+    return jsonify(ok=True,message='Node update started.',status=_node_update_status()),202
 
 def _runtime_endpoint(value: str | None) -> str:
 
@@ -3987,7 +3775,7 @@ def add_peer():
             or ''
         ).strip()
 
-        if not iface or not public_key:
+        if not iface or not _valid_wg_key(public_key):
             return jsonify(
                 ok=False,
                 error='iface_and_public_key_required',
@@ -3999,10 +3787,7 @@ def add_peer():
 
         host = None
 
-        conf = os.path.join(
-            WG_CONF_PATH,
-            f'{iface}.conf',
-        )
+        conf = _iface_conf_path(iface)
 
         lock_path = (
             conf
@@ -4304,14 +4089,7 @@ def add_peer():
                     ).strip()
                 )
 
-        with open(
-            lock_path,
-            'w',
-        ) as lock_file:
-            fcntl.flock(
-                lock_file,
-                fcntl.LOCK_EX,
-            )
+        with _interface_operation(iface):
 
             metadata = (
                 _read_iface(conf)
@@ -4769,6 +4547,9 @@ def add_peer():
                 ),
             ), 200
 
+    except InterfaceBusy:
+        raise
+
     except subprocess.TimeoutExpired as exc:
         app.logger.exception(
             'WireGuard peer operation timed out'
@@ -4793,10 +4574,10 @@ def add_peer():
 
 
 def _peer_conf(pub):
-    for fn in os.listdir(WG_CONF_PATH):
+    for fn in os.listdir(_wg_conf_dir()):
         if not fn.endswith('.conf'): continue
         iface = fn[:-5]
-        with open(os.path.join(WG_CONF_PATH, fn)) as f:
+        with open(os.path.join(_wg_conf_dir(), fn)) as f:
             lines = [ln.strip() for ln in f]
         for i, ln in enumerate(lines):
             if ln.lower().startswith('publickey') and ln.split('=',1)[1].strip() == pub:
@@ -4866,6 +4647,7 @@ def _peerlive_transfer_bytes(pub: str) -> dict:
 
 @app.route('/api/peer/<path:pub>/reset_data', methods=['POST'])
 @require_api_key
+@_peer_mutation
 def reset_peer_data(pub):
 
     try:
@@ -4894,12 +4676,13 @@ def reset_peer_data(pub):
             error='peer_transfer_read_failed',
             detail=str(exc),
         ), 500
-    
+
 @app.route(
     '/api/peer/<path:pub>/enable',
     methods=['POST'],
 )
 @require_api_key
+@_peer_mutation
 def enable_peer(pub):
 
     info = _peer_conf(
@@ -5130,6 +4913,7 @@ def enable_peer(pub):
 
 @app.route('/api/peer/<path:pub>/disable', methods=['POST'])
 @require_api_key
+@_peer_mutation
 def disable_peer(pub):
 
     payload = request.get_json(silent=True)
@@ -5215,6 +4999,7 @@ def disable_peer(pub):
 
 @app.route('/api/peer/<path:pub>', methods=['DELETE'])
 @require_api_key
+@_peer_mutation
 def delete_peer(pub):
 
     import fcntl
@@ -5277,39 +5062,35 @@ def delete_peer(pub):
         lock_path = path + '.lock'
 
         try:
-            with open(lock_path, 'w') as lockf:
-                fcntl.flock(lockf, fcntl.LOCK_EX)
+            with open(path, 'r', encoding='utf-8', errors='ignore') as handle:
+                lines = handle.readlines()
 
-                with open(path, 'r', encoding='utf-8', errors='ignore') as handle:
-                    lines = handle.readlines()
-
-                out, i = [], 0
-                while i < len(lines):
-                    if lines[i].strip().lower() == '[peer]':
-                        block = [lines[i]]
+            out, i = [], 0
+            while i < len(lines):
+                if lines[i].strip().lower() == '[peer]':
+                    block = [lines[i]]
+                    i += 1
+                    while i < len(lines) and not lines[i].strip().startswith('['):
+                        block.append(lines[i])
                         i += 1
-                        while i < len(lines) and not lines[i].strip().startswith('['):
-                            block.append(lines[i])
-                            i += 1
-                        matches = any(
-                            l.strip().lower().startswith('publickey')
-                            and '=' in l
-                            and l.split('=', 1)[1].strip() == pub
-                            for l in block
-                        )
-                        if not matches:
-                            out.extend(block)
-                    else:
-                        out.append(lines[i])
-                        i += 1
-
-                _write_conf_atomic(path, ''.join(out))
-
-                if _conf_has_peer(path, pub):
-                    errors.append(f'{fn}: the peer block is still present after removal')
+                    matches = any(
+                        l.partition('=')[0].strip().lower() == 'publickey'
+                        and '=' in l
+                        and l.split('=', 1)[1].strip() == pub
+                        for l in block
+                    )
+                    if not matches:
+                        out.extend(block)
                 else:
-                    config_removed = True
+                    out.append(lines[i])
+                    i += 1
 
+            _write_conf_atomic(path, ''.join(out))
+
+            if _conf_has_peer(path, pub):
+                errors.append(f'{fn}: the peer block is still present after removal')
+            else:
+                config_removed = True
         except Exception as e:
             errors.append(f'{fn}: {e}')
 
@@ -5336,30 +5117,56 @@ def delete_peer(pub):
 @app.route('/api/iface/<name>/available_ips')
 @require_api_key
 def iface_availableIPS(name):
-    conf = os.path.join(WG_CONF_PATH, f'{name}.conf')
+    try:
+        name = _safe_iface_name(name)
+    except ValueError:
+        return jsonify(error='invalid_iface'),400
+    conf = _iface_conf_path(name)
     if not os.path.isfile(conf):
         return jsonify(error='not_found'), 404
     meta = _read_iface(conf)
     if not meta:
         return jsonify(error='bad_conf'), 400
-    ips = available_ips(name, meta['address'], WG_CONF_PATH)
+    ips = available_ips(name, meta['address'], _wg_conf_dir())
     return jsonify(available_ips=ips)
+
+
+def _active_interfaces():
+    return set(subprocess.check_output(['wg','show','interfaces'],timeout=6).decode().split())
+
+
+def _change_interface_state(name, action):
+    try:
+        if not os.path.isfile(_iface_conf_path(name)):
+            return jsonify(ok=False,error='not_found'),404
+        want_up = action == 'up'
+        if (name in _active_interfaces()) == want_up:
+            return jsonify(ok=True,already=True)
+        result = subprocess.run(['wg-quick',action,name],capture_output=True,text=True,timeout=30)
+        if result.returncode or (name in _active_interfaces()) != want_up:
+            return jsonify(ok=False,error='interface_state_change_failed'),500
+        return jsonify(ok=True)
+    except subprocess.TimeoutExpired:
+        return jsonify(ok=False,error='interface_state_uncertain'),504
+    except (OSError,subprocess.SubprocessError):
+        return jsonify(ok=False,error='interface_state_unavailable'),503
 
 
 @app.route('/api/iface/<name>/up', methods=['POST'])
 @require_api_key
+@_interface_mutation
 def iface_up(name):
-    subprocess.check_call(['wg-quick','up', name])
-    return jsonify(ok=True)
+    return _change_interface_state(name,'up')
 
 @app.route('/api/iface/<name>/down', methods=['POST'])
 @require_api_key
+@_interface_mutation
 def iface_down(name):
-    subprocess.check_call(['wg-quick','down', name])
-    return jsonify(ok=True)
+    return _change_interface_state(name,'down')
 
 @app.route('/api/iface/<name>', methods=['DELETE'])
 @require_api_key
+@_interface_mutation
 def iface_delete(name):
     try:
         name = _safe_iface_name(name)
@@ -5394,8 +5201,8 @@ def iface_delete(name):
             for line in f:
                 if line.strip().lower() == '[peer]':
                     peer_count += 1
-    except Exception:
-        peer_count = 0
+    except OSError:
+        return jsonify(ok=False,error='interface_config_unreadable'),503
 
     if peer_count and not force:
         return jsonify(
@@ -5406,28 +5213,19 @@ def iface_delete(name):
         ), 409
 
     try:
-        subprocess.run(
-            ['wg-quick', 'down', name],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=20,
-            check=False
-        )
-    except Exception:
-        pass
+        if name in _active_interfaces():
+            result = subprocess.run(['wg-quick','down',name],capture_output=True,text=True,timeout=30)
+            if result.returncode or name in _active_interfaces():
+                return jsonify(ok=False,error='interface_down_failed'),500
+    except subprocess.TimeoutExpired:
+        return jsonify(ok=False,error='interface_state_uncertain'),504
+    except (OSError,subprocess.SubprocessError):
+        return jsonify(ok=False,error='interface_state_unavailable'),503
 
     try:
         os.remove(conf_path)
     except Exception as e:
         return jsonify(error='remove_conf_failed', detail=str(e)), 500
-
-    try:
-        lock_path = conf_path + '.lock'
-        if os.path.isfile(lock_path):
-            os.remove(lock_path)
-    except Exception:
-        pass
 
     return jsonify(
         ok=True,
@@ -5472,7 +5270,7 @@ def iface_pubkey(name):
 
     return jsonify(error='pubkey_unavailable'), 404
 
-IFACE_CLEAR_MARK = {} 
+IFACE_CLEAR_MARK = {}
 
 @app.route('/api/iface/<name>/logs', methods=['GET', 'DELETE'])
 @require_api_key
@@ -5494,7 +5292,7 @@ def agent_iface_logs(name):
         except Exception:
             return ''
 
-    since = IFACE_CLEAR_MARK.get(name)  
+    since = IFACE_CLEAR_MARK.get(name)
     if since:
         since_arg = since.replace('T', ' ').split('.')[0].rstrip('Z')
         since_flag = f'--since "{since_arg}"'
@@ -5523,9 +5321,7 @@ def agent_iface_logs(name):
 
     return jsonify({'logs': logs})
 
-# ====================================================
-# Traffic Control / WG forwarding policy (node agent)
-# ====================================================
+
 TRAFFIC_GEO_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "instance", "traffic_geo")
 TRAFFIC_NFT_TABLE = "wgpanel_traffic"
 TRAFFIC_GEO_MAX_AGE = 86400
@@ -5549,82 +5345,6 @@ def _traffic_clean_iface(value):
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,32}", value):
         raise ValueError("Invalid WireGuard interface name.")
     return value
-
-
-def _traffic_host_addresses(value):
-    out = []
-    for raw in re.split(r"[\s,]+", str(value or "").strip()):
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            obj = ipa.ip_interface(raw) if "/" in raw else ipa.ip_address(raw)
-            ip_obj = obj.ip if hasattr(obj, "ip") else obj
-            text = str(ip_obj)
-            if text not in out:
-                out.append(text)
-        except Exception:
-            continue
-    return out
-
-
-def _traffic_normalize_domain(raw):
-    raw = str(raw or "").strip()
-    if not raw:
-        return None
-    try:
-        from urllib.parse import urlparse
-        host = (urlparse(raw).hostname or "") if "://" in raw else raw.split("/", 1)[0]
-        if host.count(":") == 1 and host.rsplit(":", 1)[1].isdigit():
-            host = host.rsplit(":", 1)[0]
-        host = host.strip().strip(".").lower()
-        if host.startswith("*."):
-            host = host[2:]
-        return host if host and len(host) <= 253 and re.fullmatch(r"[a-z0-9._-]+", host) else None
-    except Exception:
-        return None
-
-
-def _traffic_resolve_domains(domains):
-    v4, v6, warnings = set(), set(), []
-    resolved = {}
-    for raw in list(domains or []):
-        host = _traffic_normalize_domain(raw)
-        if not host:
-            warnings.append(f"Invalid domain: {raw}")
-            continue
-        found = []
-        try:
-            for _family, _socktype, _proto, _canon, sockaddr in socket.getaddrinfo(host, None):
-                try:
-                    ip_obj = ipa.ip_address(sockaddr[0])
-                except Exception:
-                    continue
-                (v4 if ip_obj.version == 4 else v6).add(str(ip_obj))
-                if str(ip_obj) not in found:
-                    found.append(str(ip_obj))
-        except Exception as exc:
-            warnings.append(f"Could not resolve {host}: {exc}")
-        resolved[host] = found
-    return v4, v6, resolved, warnings
-
-
-def _traffic_parse_cidrs(values):
-    v4, v6, warnings = set(), set(), []
-    for raw in list(values or []):
-        raw = str(raw or "").strip()
-        if not raw:
-            continue
-        try:
-            if "/" in raw:
-                net = ipa.ip_network(raw, strict=False)
-            else:
-                ip_obj = ipa.ip_address(raw)
-                net = ipa.ip_network(f"{ip_obj}/{32 if ip_obj.version == 4 else 128}", strict=False)
-            (v4 if net.version == 4 else v6).add(str(net))
-        except Exception:
-            warnings.append(f"Invalid IP/CIDR: {raw}")
-    return v4, v6, warnings
 
 
 def _traffic_geo_path(country, version):
@@ -6233,13 +5953,6 @@ def traffic_control_test():
         return jsonify(ok=False, error="traffic_test_failed", detail=str(exc)), 500
 
 def _traffic_live_set_contains(set_name, address):
-    """
-    Return True when *address* is covered by a live nftables set.
-
-    Exact addresses are checked directly through nftables first.
-    The fallback parser handles CIDRs / interval Geo sets and works
-    with both one-line and multiline `nft list set` output.
-    """
     try:
         wanted = ipa.ip_address(
             str(address or '').strip()
@@ -6364,7 +6077,6 @@ def _traffic_live_set_contains(set_name, address):
             continue
 
     return False
-
 
 
 def _traffic_manual_target_addresses(target):
@@ -6620,7 +6332,7 @@ if __name__ == "__main__":
 
     port = os.getenv("PORT") or "9898"
     bind = os.getenv("BIND") or f"0.0.0.0:{port}"
-    workers = int(os.getenv("WORKERS") or (multiprocessing.cpu_count() * 2 + 1))
+    workers = int(os.getenv("WORKERS") or min(4,max(2,multiprocessing.cpu_count())))
     threads = int(os.getenv("THREADS") or 4)
     timeout = int(os.getenv("TIMEOUT") or 60)
     graceful_timeout = int(os.getenv("GRACEFUL_TIMEOUT") or 30)
@@ -6639,9 +6351,9 @@ if __name__ == "__main__":
         "preload_app": False,
         "capture_output": True,
     }
-    certfile = (os.getenv("AGENT_SSL_CERT") or "").strip()   # e.g. /etc/letsencrypt/live/agent.azumi.com/fullchain.pem
-    keyfile  = (os.getenv("AGENT_SSL_KEY")  or "").strip()   # e.g. /etc/letsencrypt/live/agent.azumi.com/privkey.pem
-    cafile   = (os.getenv("AGENT_SSL_CA")   or "").strip()   
+    certfile = (os.getenv("AGENT_SSL_CERT") or "").strip()
+    keyfile  = (os.getenv("AGENT_SSL_KEY")  or "").strip()
+    cafile   = (os.getenv("AGENT_SSL_CA")   or "").strip()
 
     if certfile and keyfile:
         if not os.path.isfile(certfile):
@@ -6656,6 +6368,6 @@ if __name__ == "__main__":
             if not os.path.isfile(cafile):
                 raise RuntimeError(f"AGENT_SSL_CA not found: {cafile}")
             options["ca_certs"]  = cafile
-            options["cert_reqs"] = ssl.CERT_REQUIRED  
+            options["cert_reqs"] = ssl.CERT_REQUIRED
 
     _Guni(app, options).run()
