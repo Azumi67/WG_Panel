@@ -1,0 +1,7 @@
+{% macro tabs(items, active, nav_class, label, button_attribute, state_attribute) -%}
+<nav class="{{nav_class}}" aria-label="{{label}}">
+{% for key, title, icon, href in items %}
+{% if href %}<a href="{{href}}"{% if active==key %} aria-current="page"{% endif %}><i class="fas {{icon}}" aria-hidden="true"></i> {{title}}</a>
+{% else %}<button type="button" {{button_attribute}}="{{key}}" {{state_attribute}}="{{'true' if active==key else 'false'}}"><i class="fas {{icon}}" aria-hidden="true"></i> {{title}}</button>{% endif %}
+{% endfor %}</nav>
+{%- endmacro %}

@@ -18,6 +18,7 @@
 {% include 'peer_template_editor.html' %}
 <script defer src="{{ url_for('static', filename='js/peer-template-editor.js') }}"></script>
 <script>document.body.classList.add('peers-page');</script>
+{% if reseller_mode|default(false) and request.args.get('operation') %}<noscript><p>Peer request submitted. <a href="{{url_for('reseller.operations',jid=request.args.get('operation'))}}">Check the result</a>.</p></noscript>{% endif %}
 <script>window.WG_PANEL_IS_ADMIN = {{ (current_user.is_authenticated and (current_user.is_admin|default(false) or current_user.is_superuser|default(false)))|tojson }};</script>
 
 <section class="peer-page-hero" aria-label="Peers workspace">
@@ -26,7 +27,7 @@
         <span class="ws-eyebrow">ACCESS / CLIENT DIRECTORY</span><h1 class="page-title">Peer workspace</h1>
         <p>Manage WireGuard peers, view usage, and control access to your network.</p>
     </div>
-    <div class="peer-hero-live"><span></span><b>Live</b><small id="peer-hero-updated">Auto refresh</small></div>
+    <div class="peer-hero-live" data-live-state="loading" role="status"><span aria-hidden="true"></span><b>Updating</b><small id="peer-hero-updated">Fetching status</small></div>
 </section>
 
 <section class="peer-context-workspace" aria-label="Server and interface context">
@@ -95,6 +96,7 @@
             </div>
 
             <div id="iface-bar" class="iface-bar iface-bar-legacy" aria-hidden="true"></div>
+            <div id="iface-status-assignment" class="iface-reseller-assignment" aria-live="polite" hidden></div>
 
             <div id="iface-active-row" class="iface-active-row" aria-label="Selected interface state and actions">
                 <div id="active-iface-chip" class="iface-chip" aria-live="polite" style="display:none;"></div>
@@ -103,6 +105,7 @@
     </div>
 </section>
 
+{% if reseller_mode|default(false) %}<script>window.RESELLER_BOOTSTRAP_NODES={{ reseller_bootstrap_nodes|default([])|tojson }};</script>{% endif %}
 <script src="{{ url_for('static', filename='js/users-scope.js') }}"></script>
 
 <section class="peer-manage-section" aria-label="Manage peers">
@@ -113,17 +116,18 @@
             <small>Create peers or manage the selected interface.</small>
         </div>
     </div>
+{% if not reseller_mode|default(false) and current_user.is_authenticated and current_user.is_admin|default(false) %}<div data-reseller-visibility data-resource-reload></div>{% endif %}
     <div class="peer-page-actions">
 
         <button id="create-peer-btn" class="btn" type="button">
-            <i class="fas fa-plus"></i> Create Peer
+            <svg class="peer-create-plus" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg> Create Peer
         </button>
         <button id="bulk-btn" class="btn secondary" type="button">
             <i class="fas fa-layer-group"></i> Bulk create
         </button>
-        <button id="create-iface-btn" class="btn secondary" type="button">
+        {% if not reseller_mode|default(false) %}<button id="create-iface-btn" class="btn secondary" type="button">
             <i class="fas fa-diagram-project"></i> New interface
-        </button>
+        </button>{% endif %}
         <button id="peer-template-open" class="btn secondary" type="button" title="Peer page template"><i class="fas fa-palette" aria-hidden="true"></i> Template</button>
     </div>
 </section>
@@ -180,7 +184,7 @@
     </div>
 </div>
 
-<div id="spinner-peers" class="spinner overlay" style="display:none"></div>
+<div id="spinner-peers" class="overlay" style="display:none"></div>
 <div class="peers-container"></div>
 <div id="peer-modal" class="modal peerx-form-modal" aria-hidden="true" aria-labelledby="peer-modal-title" role="dialog">
     <div class="modal-backdrop" tabindex="-1"></div>
@@ -194,7 +198,7 @@
             </div>
         </div>
 
-        <form id="create-peer-form" method="post" autocomplete="off" class="peerx-smart-form">
+        <form id="create-peer-form" method="post" {% if reseller_mode|default(false) %}action="{{url_for('reseller.shared_form_create')}}"{% endif %} autocomplete="off" class="peerx-smart-form">
             {{ form.hidden_tag() }}
             <input type="hidden" id="create-iface-id" name="iface">
 
@@ -213,7 +217,7 @@
                     </label>
                     <div class="profile-picker" style="position:relative;">
                         <i class="fas fa-layer-group" aria-hidden="true"></i>
-                        <select id="profile-select" title="Choose a saved profile"><!-- populated by JS --></select>
+                        <select id="profile-select" title="Choose a saved profile"></select>
                         <button id="save-profile-btn" type="button" class="icon-btn" title="Save to this profile"><i class="fas fa-save"></i></button>
                         <button id="profile-menu-btn" type="button" class="icon-btn" title="More actions" aria-haspopup="true" aria-expanded="false"><i class="fas fa-ellipsis-vertical"></i></button>
                         <div id="profile-menu" class="dropdown-panel peerx-profile-menu">
@@ -231,12 +235,12 @@
                 <div class="peerx-section-head"><span><i class="fas fa-id-card"></i></span><div><b>Identity</b><small>Name and client address.</small></div></div>
                 <div class="peerx-form-grid two">
                     <label class="form-group">{{ form.name.label }} {{ form.name(class="input", placeholder="e.g. azumi") }}</label>
-                    <label class="form-group peer-ip-address-group"><span>IP Address</span><select id="create-address-select" class="input peerx-ip-select"></select><small class="hint peer-ip-address-hint">Choose from the free addresses on the selected interface.</small></label>
+                    <label class="form-group peer-ip-address-group"><span>IP Address</span><select id="create-address-select" class="input peerx-ip-select"></select><small class="hint peer-ip-address-hint">{% if reseller_mode|default(false) %}Automatic allocation is recommended. Explicit addresses are checked again when saved.{% else %}Choose from the free addresses on the selected interface.{% endif %}</small></label>
                     <input type="hidden" id="create-address" name="address">
                 </div>
             </section>
 <section class="peerx-form-card">
-                <div class="peerx-section-head"><span><i class="fas fa-gauge-high"></i></span><div><b>Limits</b><small>Traffic, timer, first-use, and unlimited rules.</small></div></div>
+                <div class="peerx-section-head"><span><i class="fas fa-gauge-high"></i></span><div><b>Limits</b><small>Traffic, timer and first-use settings.</small></div></div>
                 <div class="peerx-form-grid limits">
                     <label class="form-group">{{ form.data_limit.label }} {{ form.data_limit(class="input", id="peer-data-limit-value", placeholder="e.g. 10") }}</label>
                     <label class="form-group">{{ form.limit_unit.label }} {{ form.limit_unit(class="input", id="peer-data-limit-unit") }}</label>
@@ -244,7 +248,7 @@
                     <label class="form-group"><span>Hours</span>{{ form.time_limit_hours(class="input", id="time_limit_hours", min="0", max="23", placeholder="0–23") }}</label>
                     <div class="peerx-limit-switch-row">
                     <label class="peerx-switch">{{ form.start_on_first_use(id="peer-start-first-use") }}<span></span><b>Start timer on first connection</b></label>
-                    <label class="peerx-switch">{{ form.unlimited(id="peer-unlimited") }}<span></span><b>Unlimited</b></label>
+                    {% if not reseller_mode|default(false) %}<label class="peerx-switch">{{ form.unlimited(id="peer-unlimited") }}<span></span><b>Unlimited</b></label>{% endif %}
                     </div>
                 </div>
             </section>
@@ -288,6 +292,7 @@
                 </div>
             </section>
             </div>
+            {% if reseller_mode|default(false) %}<div id="rp-create-peer-error" role="alert" hidden style="grid-column:1/-1;padding:10px 12px;border:1px solid #d97706;border-radius:8px;overflow-wrap:anywhere"></div>{% endif %}
             <footer class="modal-footer peerx-form-actions">
                 <button type="button" class="btn secondary" id="create-cancel">Cancel</button>
                 <button type="submit" class="btn"><i class="fas fa-save"></i> Save peer</button>
@@ -332,11 +337,11 @@
                             <b>Start timer on first connection</b>
                         </label>
                     
-                        <label class="peerx-switch">
+                        {% if not reseller_mode|default(false) %}<label class="peerx-switch">
                             <input type="checkbox" name="unlimited">
                             <span></span>
                             <b>Unlimited</b>
-                        </label>
+                        </label>{% endif %}
                     </div>
                 </div>
             </section>
@@ -403,6 +408,7 @@
 
             
             <div class="peerx-column peerx-left-col">
+{% if reseller_mode|default(false) %}{% include 'reseller/bulk_profile.html' %}{% endif %}
 <section class="peerx-form-card peerx-bulk-count-card">
                 <div class="peerx-section-head"><span><i class="fas fa-list-ol"></i></span><div><b>Batch</b><small>Choose count and naming pattern.</small></div></div>
                 <div class="peerx-form-grid two">
@@ -424,11 +430,11 @@
                             <b>Start timer on first connection</b>
                         </label>
                     
-                        <label class="peerx-switch">
+                        {% if not reseller_mode|default(false) %}<label class="peerx-switch">
                             <input id="bulk-unlimited" type="checkbox" name="unlimited">
                             <span></span>
                             <b>Unlimited</b>
-                        </label>
+                        </label>{% endif %}
                     </div>
                 </div>
             </section>
@@ -479,6 +485,7 @@
   const menu = document.getElementById('iface-status-menu');
   const label = document.getElementById('iface-status-label');
   const visibleDot = document.getElementById('iface-status-dot');
+  const assignmentLabel = document.getElementById('iface-status-assignment');
 
   const legacy = document.getElementById('iface-bar');
   const compatMenu = document.getElementById('iface-picker-menu');
@@ -507,10 +514,10 @@
 
   const stateText = iface =>
     iface?.is_up === true
-      ? 'Online'
+      ? 'Running'
       : iface?.is_up === false
-        ? 'Offline'
-        : 'Unknown';
+        ? 'Stopped'
+        : 'Unavailable';
 
   const currentSelectedId = () => {
     const compatOptions = compatMenu
@@ -556,7 +563,7 @@
         ?.trim();
 
     const byName = interfaces().find(
-      iface => ifaceName(iface) === currentLabel
+      iface => ifaceName(iface) === currentLabel || [ifaceName(iface), window.WGResellerAssignment?.label(iface)].filter(Boolean).join(" · ") === currentLabel
     );
 
     return byName
@@ -609,6 +616,7 @@
     if (!list.length) {
       trigger.disabled = true;
       label.textContent = 'Loading interfaces…';
+      if (assignmentLabel) { assignmentLabel.hidden = true; assignmentLabel.textContent = ''; }
       visibleDot.className = 'iface-dot';
       closeMenu();
       return;
@@ -622,6 +630,11 @@
       list[0];
 
     label.textContent = ifaceName(selected);
+    if (assignmentLabel) {
+      const assignment = window.WGResellerAssignment?.label(selected) || '';
+      assignmentLabel.textContent = assignment;
+      assignmentLabel.hidden = !assignment;
+    }
     visibleDot.className =
       ['iface-dot', stateClass(selected)]
         .filter(Boolean)
@@ -688,6 +701,13 @@
         : 'WireGuard interface';
 
       copy.append(top, meta);
+      const assignment = window.WGResellerAssignment?.label(iface);
+      if (assignment) {
+        const owner = document.createElement('small');
+        owner.className = 'iface-reseller-assignment';
+        owner.textContent = assignment;
+        copy.append(owner);
+      }
       main.append(dot, copy);
       option.appendChild(main);
 

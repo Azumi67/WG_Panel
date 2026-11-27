@@ -24,8 +24,7 @@
           ><span class="modern-only">Panel Center</span>
         </h1>
         <p>
-          Diagnose problems, review guidance, repair safe issues, and verify the
-          result.
+          System health, diagnostics and recovery.
         </p>
       </div>
     </div>
@@ -51,33 +50,7 @@
     </div>
   </header>
 
-  <section class="ops2-journey" id="ops-journey" aria-label="Recovery workflow">
-    <div class="ops2-journey-step is-current" data-journey="diagnose">
-      <span>1</span>
-      <div><strong>Diagnose</strong><small>Scan system for issues</small></div>
-    </div>
-    <i class="ops2-journey-line" aria-hidden="true"></i>
-    <div class="ops2-journey-step" data-journey="review">
-      <span>2</span>
-      <div><strong>Review</strong><small>Check findings</small></div>
-    </div>
-    <i class="ops2-journey-line" aria-hidden="true"></i>
-    <div class="ops2-journey-step" data-journey="repair">
-      <span>3</span>
-      <div>
-        <strong>Repair</strong
-        ><small>Apply a safe fix or follow guidance</small>
-      </div>
-    </div>
-    <i class="ops2-journey-line" aria-hidden="true"></i>
-    <div class="ops2-journey-step" data-journey="verify">
-      <span>4</span>
-      <div>
-        <strong>Verify</strong><small>Confirm everything is healthy</small>
-      </div>
-    </div>
-  </section>
-
+<details class="ops-host-details"><summary><i class="fas fa-server" aria-hidden="true"></i> Server details & diagnostic target</summary>
   <section class="ops2-host" aria-label="Diagnostic target">
     <div class="ops2-host-main ops2-host-card">
       <span class="ops2-host-icon"
@@ -119,11 +92,38 @@
     </div>
   </section>
 
+</details>
+  <section hidden class="ops2-journey" id="ops-journey" aria-label="Recovery workflow">
+    <div class="ops2-journey-step is-current" data-journey="diagnose">
+      <span>1</span>
+      <div><strong>Diagnose</strong><small>Scan system for issues</small></div>
+    </div>
+    <i class="ops2-journey-line" aria-hidden="true"></i>
+    <div class="ops2-journey-step" data-journey="review">
+      <span>2</span>
+      <div><strong>Review</strong><small>Check findings</small></div>
+    </div>
+    <i class="ops2-journey-line" aria-hidden="true"></i>
+    <div class="ops2-journey-step" data-journey="repair">
+      <span>3</span>
+      <div>
+        <strong>Repair</strong
+        ><small>Apply a safe fix or follow guidance</small>
+      </div>
+    </div>
+    <i class="ops2-journey-line" aria-hidden="true"></i>
+    <div class="ops2-journey-step" data-journey="verify">
+      <span>4</span>
+      <div>
+        <strong>Verify</strong><small>Confirm everything is healthy</small>
+      </div>
+    </div>
+  </section>
+
   <div id="ops-status" class="ops2-status" role="status" aria-live="polite">
     <span class="ops2-status-dot"></span>
     <span
-      >Run a diagnostic. WG Panel will prioritize only the items that need
-      attention.</span
+      >Ready to check your server. Diagnostics do not change settings.</span
     >
   </div>
 
@@ -294,6 +294,7 @@
           </button>
         </div>
       </div>
+<nav class="ops-pager" aria-label="Findings pages"><button type="button" id="ops-prev" disabled aria-label="Previous findings">‹ Previous</button><span id="ops-page" role="status">No results</span><button type="button" id="ops-next" disabled aria-label="Next findings">Next ›</button></nav>
     </section>
 
     <aside
@@ -326,11 +327,9 @@
           <span class="ops2-resolution-empty-icon"
             ><i class="fas fa-route"></i
           ></span>
-          <strong>Your recovery plan appears here</strong>
+          <strong>Select a finding</strong>
           <p>
-            Select a finding to get one recommended path: automatic repair when
-            safe, the exact related panel setting, or a short host-level
-            procedure.
+            Review evidence and available actions here.
           </p>
           <div class="ops2-resolution-empty-points">
             <span

@@ -652,6 +652,18 @@
       rel="stylesheet"
       href="{{ url_for('static', filename='css/auth-workspace.css') }}"
     />
+    <style>
+      #twofa-modal:not([open]){display:none!important}
+      #twofa-modal[open]{display:block!important;position:fixed;inset:0;margin:auto;padding:0;width:min(880px,calc(100vw - 28px));height:fit-content;max-height:calc(100dvh - 32px);overflow:auto;border:1px solid var(--auth-line,var(--line));border-radius:16px;background:var(--auth-card,var(--card-bg));color:var(--auth-ink,var(--text))}
+      #twofa-modal::backdrop{background:#0b1020aa;backdrop-filter:blur(4px)}
+      #twofa-modal .modal-card{width:100%;max-width:none;max-height:none;margin:0;box-sizing:border-box;border:0;box-shadow:none;overflow:visible}
+      html[data-auth-modal=open]{overflow:hidden}
+      html[data-auth-modal=open] .auth-live-scene *{animation-play-state:paused!important}
+      .btn i,.icon-btn i{color:inherit!important}
+      html[data-theme=dark] .icon-btn{color:#edf0fa;background:#222b40;border-color:#44506b}
+      html[data-theme=dark] .auth-card .btn.ghost{color:#d6caff!important}
+      #twofa-modal .icon-btn{color:var(--auth-ink,var(--text));background:var(--auth-soft,var(--chip))}
+    </style>
   </head>
 
   <body class="bg-glow">
@@ -763,8 +775,8 @@
             </div>
           </section>
 
-          <div class="modal" id="twofa-modal" hidden aria-hidden="true">
-            <div class="modal-backdrop"></div>
+          <dialog class="modal" id="twofa-modal" aria-labelledby="twofa-heading">
+
             <div
               class="modal-card"
               role="dialog"
@@ -780,7 +792,7 @@
                     Use an authenticator app to generate login codes.
                   </div>
                 </div>
-                <button class="icon-btn" id="twofa-close" aria-label="Close">
+                <button type="button" class="icon-btn" id="twofa-close" aria-label="Close">
                   ✕
                 </button>
               </div>
@@ -806,7 +818,7 @@
                       <div class="label muted">Secret key</div>
                       <div class="key-row">
                         <code id="twofa-secret">—</code>
-                        <button
+                        <button type="button"
                           class="icon-btn"
                           id="twofa-copy"
                           title="Copy secret"
@@ -835,7 +847,7 @@
                       maxlength="6"
                       autocomplete="one-time-code"
                     />
-                    <button class="btn" id="twofa-verify">Enable</button>
+                    <button type="button" class="btn" id="twofa-verify">Enable</button>
                   </div>
                   <p class="muted">
                     After enabling, you’ll enter a 6-digit code each time you
@@ -852,7 +864,7 @@
                   </p>
                   <pre class="recovery-list" id="twofa-recovery-list"></pre>
                   <div class="row">
-                    <button
+                    <button type="button"
                       class="btn"
                       id="twofa-download"
                       title="Save recovery codes"
@@ -860,7 +872,7 @@
                     >
                       <i class="fas fa-save" style="margin-right: 6px"></i> Save
                     </button>
-                    <button
+                    <button type="button"
                       class="btn"
                       id="twofa-copy-recovery"
                       title="Copy recovery codes"
@@ -872,7 +884,7 @@
                 </div>
               </div>
             </div>
-          </div>
+          </dialog>
 
           <div class="actions">
             <button type="submit" class="btn">Create Account</button>
@@ -893,7 +905,7 @@
 
     <script
       defer
-      src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"
+      src="{{ url_for('static', filename='js/qrcode.min.js') }}"
     ></script>
 
     <script>
@@ -1037,6 +1049,7 @@
         const openBtn = $("#twofa-open");
         const modal = $("#twofa-modal");
         const closeBtn = $("#twofa-close");
+        document.body.appendChild(modal);                                                        
 
         const qrBox = $("#twofa-qr");
         const secretEl = $("#twofa-secret");
@@ -1071,9 +1084,9 @@
           codeEl.value = "";
           if (recWrap) recWrap.hidden = true;
 
-          modal.removeAttribute("hidden");
-          modal.classList.add("open");
-          modal.setAttribute("aria-hidden", "false");
+          modal.showModal();
+          document.documentElement.dataset.authModal="open";
+          closeBtn.focus();
         }
         async function onGenerate() {
           if (inFlight) return;
@@ -1137,7 +1150,7 @@
             } else {
               qrBox.innerHTML = "";
               if (window.QRCode)
-                new QRCode(qrBox, { text: uri, width: 180, height: 180 });
+                new window.QRCode(qrBox, { text: uri, width: 180, height: 180 });
               else qrBox.textContent = uri;
             }
             toastPanel("TOTP secret generated", "ok");
@@ -1153,8 +1166,8 @@
               ?.addEventListener("click", onGenerate);
             toastPanel("Could not generate TOTP key", "bad");
           } finally {
-            // The button captured above was replaced along with qrBox's
-            // contents, so re-resolve whichever one is on screen now.
+                                                                        
+                                                                      
             const btn = document.getElementById("twofa-generate");
             if (btn) {
               btn.disabled = false;
@@ -1165,9 +1178,7 @@
         }
 
         function closeModal() {
-          modal.classList.remove("open");
-          modal.setAttribute("hidden", "");
-          modal.setAttribute("aria-hidden", "true");
+          modal.close();
         }
 
         openBtn?.addEventListener("click", (e) => {
@@ -1175,17 +1186,9 @@
           openModal();
         });
         closeBtn?.addEventListener("click", closeModal);
-        modal?.addEventListener("click", (e) => {
-          if (
-            e.target === modal ||
-            e.target.classList.contains("modal-backdrop")
-          )
-            closeModal();
-        });
-        document.addEventListener("keydown", (e) => {
-          if (e.key === "Escape" && modal && !modal.hasAttribute("hidden"))
-            closeModal();
-        });
+        modal.addEventListener('close',()=>{delete document.documentElement.dataset.authModal;openBtn.focus();});
+        codeEl.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();verifyBtn.click();}});
+        modal.addEventListener('click',e=>{if(e.target!==modal)return;const box=modal.getBoundingClientRect();if(e.clientX<box.left||e.clientX>box.right||e.clientY<box.top||e.clientY>box.bottom)closeModal();});
 
         copyBtn?.addEventListener("click", async () => {
           const t = (secretEl.textContent || "").trim();

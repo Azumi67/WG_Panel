@@ -1,0 +1,7 @@
+{% from 'workspace_tabs.html' import tabs %}
+{% set items = [] %}
+{% for key, label, icon in [('connection','Connection & recipients','fa-plug'),('notifications','Notification rules','fa-bell'),('applications','Applications','fa-code')] %}
+{% set href = url_for('reseller.admin_app_key',role='admin') if key=='applications' else url_for('settings_page',tab='telegram',sub=key) if tab_links else none %}
+{% set _ = items.append((key,label,icon,href)) %}
+{% endfor %}
+{{tabs(items, active, 'tg-section-tabs ws-tg-tabs', 'Telegram sections', 'data-tg-view', 'aria-pressed')}}

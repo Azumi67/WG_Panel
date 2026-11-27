@@ -10,16 +10,17 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/backup.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/backup-dark.css') }}">
 {% endblock %}
+{% block final_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/backup-workspace.css') }}">{% endblock %}
 {% block responsive_extras %}
 {% endblock %}
 
 
 {% block content %}
-<div class="backup-shell">
+<div class="backup-shell bk-reworked">
   <div class="bk-top">
     <div class="bk-title">
       <h1><i class="fas fa-box-archive"></i> Backup & restore</h1>
-      <p>Portable backups for database, subscriptions, short links, local WG configs, and reachable node configs.</p>
+      <p>Download, inspect and recover your panel data.</p>
     </div>
     <div class="bk-pills"><span id="status-pill" class="bk-pill muted">Status: Loading</span><span id="next-run-pill" class="bk-pill muted">Next: —</span></div>
   </div>
@@ -35,19 +36,23 @@
       <div class="bk-card">
         <div class="bk-head"><div class="ttl"><i class="fas fa-download"></i> Create backup</div><span id="full-last" class="bk-pill muted">Last: —</span></div>
         <div class="bk-body">
-          <div class="bk-hero">
-            <div><div class="name">Full backup</div><div class="desc">DB + subscriptions + settings + optional local/node WireGuard configs</div></div>
+          <div class="bk-download-grid">
+          <div class="bk-hero bk-download-card">
+            <div><span class="bk-download-symbol"><i class="fas fa-box-archive"></i></span><div class="name">Full backup</div><div class="desc">Database, panel settings and optional WireGuard configurations.</div></div>
             <button id="btn-full" class="bk-primary-btn" type="button"><i class="fas fa-cloud-arrow-down"></i> Download</button>
           </div>
-          <div class="bk-mini-row">
-            <div class="bk-mini"><div><div class="name">Database</div><div id="db-last" class="bk-subline">Last: —</div></div><button id="btn-db" class="bk-icon" type="button" title="Download database"><i class="fas fa-database"></i></button></div>
-            <div class="bk-mini"><div><div class="name">Settings</div><div id="settings-last" class="bk-subline">Last: —</div></div><button id="btn-settings" class="bk-icon" type="button" title="Download settings"><i class="fas fa-sliders"></i></button></div>
+          <div class="bk-mini bk-download-card"><div><span class="bk-download-symbol"><i class="fas fa-database"></i></span><div class="name">Database</div><div class="desc">Customers, resellers and purchases.</div><div id="db-last" class="bk-subline">Last: —</div></div><button id="btn-db" class="bk-btn" type="button"><i class="fas fa-download"></i> Download</button></div>
+            <div class="bk-mini bk-download-card"><div><span class="bk-download-symbol"><i class="fas fa-sliders"></i></span><div class="name">Settings</div><div class="desc">Panel configuration files.</div><div id="settings-last" class="bk-subline">Last: —</div></div><button id="btn-settings" class="bk-btn" type="button"><i class="fas fa-download"></i> Download</button></div>
           </div>
+          <h3 class="bk-option-heading">Download options</h3>
           <div class="bk-switch-row">
             <label class="bk-switch"><input id="include-wg" type="checkbox"><span class="track"></span><span>Include WireGuard configs</span></label>
             <label class="bk-switch"><input id="send-telegram" type="checkbox"><span class="track"></span><span>Send copy to Telegram</span></label>
           </div>
-          <div class="bk-compact-note warn bk-small"><strong>Safe restore:</strong> runtime/domain/port/TLS files are backed up for reference, but restore should use Keep current, Use saved, or Customize.</div>
+          <div class="bk-compact-note bk-small"><i class="fas fa-shield-halved"></i> Full and database archives contain sensitive records, including reseller data. Keep downloads private.</div>
+          {% if database_backend == 'postgresql' %}
+          {% include "backup_offline_restore.html" %}
+          {% endif %}
         </div>
       </div>
       <aside class="bk-card">
@@ -55,7 +60,7 @@
         <div class="bk-body">
           <div id="live-backup-preview" class="bk-preview">
             <div class="bk-preview-title"><i class="fas fa-magnifying-glass-chart"></i> Downloaded backup contents</div>
-            <div id="live-preview-subtitle" class="bk-small bk-muted">Download a backup and its contents will appear here automatically.</div>
+            <div id="live-preview-subtitle" class="bk-small bk-muted">Download an archive to view its contents and integrity information.</div>
             <div id="live-preview-grid" class="bk-preview-grid empty"></div>
           </div>
         </div>
@@ -71,6 +76,7 @@
           <span class="bk-pill warn">Review before restore</span>
         </div>
         <div class="bk-body bk-restore-flow">
+          {% if database_backend == "postgresql" %}{% include "backup_offline_restore.html" %}{% endif %}
           <div class="bk-step-card bk-step-upload">
             <div class="bk-step-mark">1</div>
             <div class="bk-step-content">
@@ -93,7 +99,7 @@
               <div class="bk-step-title-row">
                 <div>
                   <div class="bk-step-title">Restore options</div>
-                  <div class="bk-small bk-muted">Defaults are safe for normal restores. Change only what you need.</div>
+                  <div class="bk-small bk-muted">Defaults are safe for normal restores. Change only what you need.</div><p class="bk-small" style="line-height:1.6;margin-top:10px"><strong>Reseller restore scope:</strong> Database or Full restores replace the entire panel database, including ALL reseller accounts, permissions, 2FA records, purchases and ownership records. They cannot select an individual reseller. Settings restores do not restore reseller records. WireGuard configurations are restored separately only when selected. Review and save a recovery copy before proceeding.</p>
                 </div>
                 <span id="server-settings-pill" class="bk-pill ok">Protected</span>
               </div>
@@ -218,7 +224,7 @@
             <button id="save-schedule" class="bk-btn" type="button"><i class="fas fa-floppy-disk"></i> Save</button>
             <button id="save-run-schedule" class="bk-btn primary" type="button"><i class="fas fa-bolt"></i> Save &amp; run now</button>
           </div>
-          <div class="bk-small bk-muted"><strong>Save</strong> stores the schedule only. <strong>Save &amp; run now</strong> stores the same schedule, creates a complete backup immediately, saves it under <code>instance/backups</code>, and sends it to the selected Telegram recipient when Telegram is enabled.</div>
+          <div class="bk-small bk-muted">Scheduled archives are stored in <code>instance/backups</code>. Enable Telegram only if you want a copy sent to the selected administrator.</div>
         </div>
       </div>
       <aside class="bk-card">
