@@ -1,4 +1,4 @@
-
+"""Authentication helpers that do not depend on Flask application state."""
 from __future__ import annotations
 import hashlib
 import secrets

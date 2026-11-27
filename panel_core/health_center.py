@@ -1,4 +1,4 @@
-
+"""Read-only Dashboard Health Center  WG Panel"""
 from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,10 +31,16 @@ def _item(key: str, label: str, state: str, summary: str, *, detail: str = "", h
 
 
 def build_health_center(context: dict[str, Any], *, now_ts: int | None = None) -> dict[str, Any]:
+    """Build a compact, read-only panel health summary.
+
+    ``context`` is normally ``globals()`` from app.py.  Every subsystem is
+    guarded independently so one degraded optional component cannot make the
+    whole endpoint fail.
+    """
     now = int(now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp())
     items: list[dict[str, Any]] = []
 
-
+    # Panel/database 
     try:
         db = context.get("db")
         sql_text = context.get("text")
@@ -45,7 +51,7 @@ def build_health_center(context: dict[str, Any], *, now_ts: int | None = None) -
     except Exception:
         items.append(_item("panel", "Panel & database", "attention", "Database health could not be confirmed.", detail="Open Operations or panel logs before making changes.", href="/operations"))
 
-
+    # Local interfaces 
     try:
         InterfaceConfig = context.get("InterfaceConfig")
         rows = InterfaceConfig.query.filter_by(node_id=None).all() if InterfaceConfig is not None else []
@@ -57,7 +63,7 @@ def build_health_center(context: dict[str, Any], *, now_ts: int | None = None) -
     except Exception:
         items.append(_item("wireguard", "Local WireGuard", "unknown", "Interface inventory could not be read.", href="/operations"))
 
-
+    # Nodes 
     try:
         Node = context.get("Node")
         rows = Node.query.filter_by(enabled=True).all() if Node is not None else []
@@ -79,7 +85,7 @@ def build_health_center(context: dict[str, Any], *, now_ts: int | None = None) -
     except Exception:
         items.append(_item("nodes", "Remote nodes", "unknown", "Node health could not be summarized.", href="/nodes"))
 
-
+    # Subscriptions 
     try:
         Subscription = context.get("Subscription")
         subscription_access = context.get("subscription_access")
@@ -115,7 +121,7 @@ def build_health_center(context: dict[str, Any], *, now_ts: int | None = None) -
     except Exception:
         items.append(_item("subscriptions", "Subscriptions", "unknown", "Subscription lifecycle could not be summarized.", href="/subscriptions"))
 
-
+    # Automatic backup 
     try:
         load_sched = context.get("_load_backup_schedule")
         load_last = context.get("_load_backup_last")
@@ -143,7 +149,7 @@ def build_health_center(context: dict[str, Any], *, now_ts: int | None = None) -
     except Exception:
         items.append(_item("backup", "Automatic backup", "unknown", "Backup status could not be summarized.", href="/backup"))
 
-
+    # Telegram 
     try:
         hb_path = context.get("TELEGRAM_HB_FILE")
         json_load = context.get("_json_load")
@@ -164,7 +170,7 @@ def build_health_center(context: dict[str, Any], *, now_ts: int | None = None) -
     except Exception:
         items.append(_item("telegram", "Telegram", "unknown", "Telegram health could not be summarized.", href="/settings"))
 
-
+    # HTTP protection 
     try:
         loader = context.get("_load_http_security_settings")
         settings = loader() if callable(loader) else {}

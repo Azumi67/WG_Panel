@@ -1,4 +1,4 @@
-
+"""subscription policy for WG Panel"""
 from __future__ import annotations
 from typing import Any, Mapping
 
@@ -20,6 +20,7 @@ _REASON_MESSAGES = {
 
 
 def reason_label(reason: str | None) -> str:
+    """Return a stable short label for a lifecycle reason."""
     key = str(reason or "").strip().lower()
     return _REASON_LABELS.get(key, key.replace("_", " ").strip().title() or "Ready")
 
@@ -33,6 +34,14 @@ def compute_subscription_access(
     limit_bytes: int | None,
     used_bytes: int | float | None,
 ) -> dict[str, Any]:
+    """Return the canonical access decision for one subscription.
+
+    Precedence is deliberate and stable:
+      1. an explicit administrator disable always wins;
+      2. unlimited subscriptions ignore timer/data limits;
+      3. expiry is evaluated before shared data exhaustion;
+      4. otherwise access is allowed.
+    """
     if not bool(enabled):
         reason = "disabled"
     elif bool(unlimited):
@@ -71,6 +80,12 @@ def effective_peer_state(
     peer_status: str | None,
     subscription_access: Mapping[str, Any] | None = None,
 ) -> dict[str, str | bool]:
+    """Explain a peer's effective administrative state.
+
+    For subscription-managed peers the subscription access decision is the
+    authoritative reason when it denies access.  Otherwise the peer's own
+    administrative state is used.
+    """
     status = str(peer_status or "offline").strip().lower() or "offline"
     access = dict(subscription_access or {})
     if access and access.get("allowed") is False:
