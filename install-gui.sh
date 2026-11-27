@@ -6,6 +6,11 @@ if [[ ! -f "app.py" ]]; then
   exit 1
 fi
 
+if [[ ! -f "installer/installer_web.py" ]]; then
+  echo "The optional GUI installer backend is not included in this release. Use sudo python3 wg.py instead."
+  exit 1
+fi
+
 sudo apt-get update -y
 sudo apt-get install -y python3 python3-venv python3-pip
 

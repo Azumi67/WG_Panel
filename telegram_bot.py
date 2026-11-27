@@ -1,6 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+from panel_core.telegram_update_view import (
+    _update_state,
+    _update_stage,
+    _update_busy,
+    _update_terminal,
+    _update_percent,
+    _update_status_icon,
+    _update_stage_label,
+)
+
+from panel_core.qr import PNGImage
+from panel_core.private_json import save_private_json
+from panel_core.notification_values import _tg_parse_datetime, _tg_human_delta as _tg_relative
 import time, threading, queue
 from datetime import datetime, time as dtime, timezone
 import os, io, json, logging, math, re, asyncio, ipaddress
@@ -10,7 +23,6 @@ from urllib.parse import quote
 from typing import Dict, Any, Tuple, List, Optional, Set
 import requests
 from requests import HTTPError, RequestException
-from requests.exceptions import HTTPError
 from zoneinfo import ZoneInfo
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputMediaPhoto, InputMediaDocument
@@ -20,12 +32,12 @@ from telegram.ext import (
     Application, CommandHandler, ContextTypes, CallbackQueryHandler,
     MessageHandler, filters
 )
-from telegram.error import BadRequest
+from telegram.error import BadRequest, NetworkError, RetryAfter
 import telegram_admin as admin_azumi
 import html as py_html
 import qrcode
 try:
-    from telegram.helpers import escape as tg_escape   
+    from telegram.helpers import escape as tg_escape
 except Exception:
     def tg_escape(s):
         return py_html.escape('' if s is None else str(s), quote=False)
@@ -52,12 +64,6 @@ _TG_TIMEZONE_CACHE = {
 
 
 def _tg_system_timezone():
-    """
-    Resolve the saved global panel timezone at call time.
-
-    Never fall back to the host OS timezone: the host may run in UTC or a
-    different region. The panel setting is the only human-facing timezone.
-    """
     now_mono = time.monotonic()
     timezone_name = ""
     settings_path = globals().get("PANEL_SETTINGS_FILE")
@@ -103,7 +109,7 @@ def _tg_system_timezone():
             timezone_name = ""
 
     try:
-        resolved = ZoneInfo(timezone_name or "UTC")
+        resolved = ZoneInfo(timezone_name) if timezone_name else (cached_tz or ZoneInfo("UTC"))
     except Exception:
         timezone_name = "UTC"
         resolved = ZoneInfo("UTC")
@@ -111,78 +117,13 @@ def _tg_system_timezone():
     _TG_TIMEZONE_CACHE.update({
         "name": timezone_name,
         "tz": resolved,
-        "expires": now_mono + 2.0,
+        "expires": now_mono + 60.0,
         "settings_mtime_ns": settings_mtime_ns,
     })
     return resolved
 
-def _tg_parse_datetime(value):
-    if value in (None, "", "—"):
-        return None
-
-    if isinstance(value, datetime):
-        parsed = value
-
-    elif isinstance(value, (int, float)):
-        try:
-            parsed = datetime.fromtimestamp(
-                float(value),
-                tz=timezone.utc,
-            )
-        except Exception:
-            return None
-
-    else:
-        raw = str(value).strip()
-
-        if not raw:
-            return None
-
-        try:
-            if re.fullmatch(r"\d+(?:\.\d+)?", raw):
-                parsed = datetime.fromtimestamp(
-                    float(raw),
-                    tz=timezone.utc,
-                )
-            else:
-                if raw.endswith("Z"):
-                    raw = raw[:-1] + "+00:00"
-
-                parsed = datetime.fromisoformat(raw)
-
-        except Exception:
-            return None
-
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-
-    return parsed
 
 
-def _tg_relative(seconds):
-    future = seconds < 0
-    seconds = abs(int(seconds))
-
-    if seconds < 10:
-        return "in a moment" if future else "just now"
-
-    units = (
-        (31536000, "year"),
-        (2592000, "month"),
-        (604800, "week"),
-        (86400, "day"),
-        (3600, "hour"),
-        (60, "minute"),
-        (1, "second"),
-    )
-
-    for unit_seconds, label in units:
-        if seconds >= unit_seconds:
-            count = max(1, seconds // unit_seconds)
-            text = f"{count} {label}{'s' if count != 1 else ''}"
-            return f"in {text}" if future else f"{text} ago"
-
-    return "just now"
 
 
 def tg_time(
@@ -297,11 +238,36 @@ def _detect_panel_base() -> str:
 
 
 PANEL = _detect_panel_base().rstrip("/")
+
+
+def _internal_panel_base():
+
+    from urllib.parse import urlsplit
+    internal = os.getenv("PANEL_INTERNAL_BASE_URL", "").strip().rstrip("/")
+    if not internal:
+        return PANEL
+    parsed = urlsplit(internal)
+    if (parsed.scheme not in ("http", "https") or
+        (parsed.hostname or "").lower() not in ("localhost", "127.0.0.1", "::1") or
+        parsed.username or parsed.password or parsed.query or parsed.fragment or
+        parsed.path not in ("", "/") or parsed.port is None):
+        raise ValueError("PANEL_INTERNAL_BASE_URL must be a loopback http(s) origin with an explicit port")
+    return internal
+
+
+API_PANEL = _internal_panel_base()
+
+
+def _api_url(url):
+    if API_PANEL != PANEL and (url == PANEL or url.startswith(PANEL + "/")):
+        return API_PANEL + url[len(PANEL):]
+    return url
+
 API_KEY = (os.getenv("PANEL_API_KEY") or os.getenv("API_KEY") or "").strip()
 
 BOT_TOKEN = (
     os.getenv("TG_BOT_TOKEN")
-    or os.getenv("TELEGRAM_BOT_TOKEN")  
+    or os.getenv("TELEGRAM_BOT_TOKEN")
     or ""
 ).strip()
 
@@ -315,15 +281,22 @@ def load_bot_token() -> str:
     except Exception:
         return ""
 
-api = requests.Session()
-api.trust_env = False
-if API_KEY:
-    api.headers.update({
-        "Authorization": f"Bearer {API_KEY}",
-        "X-API-KEY": API_KEY,
-    })
+class _ThreadAPI:
+    def __init__(self):
+        self.local = threading.local()
 
-# _________ Optional: session login (OFF by default)
+    def __getattr__(self, name):
+        client = getattr(self.local, 'client', None)
+        if client is None:
+            client = requests.Session()
+            client.trust_env = False
+            if API_KEY:
+                client.headers.update({'Authorization': f'Bearer {API_KEY}', 'X-API-KEY': API_KEY})
+            self.local.client = client
+        return getattr(client, name)
+
+api = _ThreadAPI()
+
 
 USE_PANEL_SESSION = os.getenv("USE_PANEL_SESSION", "0") == "1"
 PANEL_ADMIN_USER = os.getenv("PANEL_ADMIN_USER", "").strip()
@@ -368,23 +341,30 @@ def _login(func):
     return _wrap
 
 
-_admin_cache = {"ids": set(), "ts": 0.0, "full": [], "ttl": 90.0}
+_admin_cache = {"ids": set(), "ts": 0.0, "full": [], "ttl": 90.0, "failed": False}
+_admin_refresh_lock = threading.Lock()
 
-def _fetch_admins() -> list[dict]:
+def _fetch_admins():
     try:
-        r = api.get(f"{PANEL}/api/telegram/admins", timeout=8) 
+        r = api.get(f"{API_PANEL}/api/telegram/admins", timeout=(3,5), allow_redirects=False)
         r.raise_for_status()
-        return r.json().get("admins", []) or []
+        rows=r.json().get('admins')
+        return rows if isinstance(rows,list) and all(isinstance(row,dict) for row in rows) else None
     except Exception:
-        return []
+        return None
+
 
 def _refresh_admin(force: bool = False) -> None:
-    now = time.time()
-    if not force and (now - _admin_cache["ts"] < _admin_cache["ttl"]):
-        return
-    full = _fetch_admins()
-    ids  = {str(a.get("id")) for a in full if a.get("id")}
-    _admin_cache.update({"ids": ids, "full": full, "ts": now})
+    with _admin_refresh_lock:
+        now = time.monotonic()
+        ttl=5 if _admin_cache['failed'] else _admin_cache['ttl']
+        if not force and now - _admin_cache['ts'] < ttl:
+            return
+        full = _fetch_admins()
+        
+        ids = {str(a.get('id')) for a in (full or []) if a.get('id')}
+        _admin_cache.update(ids=ids, full=full or [], ts=time.monotonic(), failed=full is None)
+
 
 def current_admin_ids() -> set[str]:
     _refresh_admin()
@@ -405,8 +385,8 @@ def log_admin(uid: str, uname: str, action: str, details: str = ""):
             "admin_username": str(uname or ""),
             "action": action,
             "details": details,
-            "via": "telegram",   
-            "channel": "telegram",   
+            "via": "telegram",
+            "channel": "telegram",
         }
         _post_soft(f"{PANEL}/api/admin_logs", session="api", json=payload)
     except Exception:
@@ -462,7 +442,6 @@ class SafeBotFormatter(logging.Formatter):
 
 
 class PanelLogHandler(logging.Handler):
-    """Best-effort forwarding must never block polling or health reporting."""
     def __init__(self, admin_id="bot", admin_username="bot", level=logging.INFO):
         super().__init__(level)
         self.admin_id = str(admin_id)
@@ -491,7 +470,7 @@ class PanelLogHandler(logging.Handler):
                     continue
                 try:
                     if API_KEY:
-                        with transport.post(f"{PANEL}/api/telegram/admin_log", json={
+                        with transport.post(f"{API_PANEL}/api/telegram/admin_log", json={
                             "admin_id": self.admin_id, "admin_username": self.admin_username,
                             "action": "log", "details": message,
                         }, timeout=(3, 3), allow_redirects=False) as response:
@@ -509,9 +488,9 @@ class PanelLogHandler(logging.Handler):
 def csrf_headers(extra: dict | None = None) -> dict:
     tok = (sess.cookies.get("csrf_token") or "").strip()
     hdr = {
-        "X-CSRFToken": tok,          
-        "X-CSRF-Token": tok,        
-        "Referer": PANEL,            
+        "X-CSRFToken": tok,
+        "X-CSRF-Token": tok,
+        "Referer": PANEL,
     }
     if extra:
         hdr.update(extra)
@@ -536,19 +515,19 @@ def _post_soft(url: str, session="auto", **kw):
     timeout = kw.pop("timeout", 12)
 
     if session == "api":
-        return api.post(url, timeout=timeout, **kw)
+        return api.post(_api_url(url), timeout=timeout, **kw)
     if session == "sess":
         return sess.post(url, timeout=timeout, **kw)
 
     if API_KEY:
         try:
-            r = api.post(url, timeout=timeout, **kw)
+            r = api.post(_api_url(url), timeout=timeout, **kw)
             r.raise_for_status()
             return r
         except HTTPError as e:
             sc = getattr(getattr(e, "response", None), "status_code", None)
             if sc not in (401, 403):
-                return e.response  
+                return e.response
         except RequestException:
             raise
 
@@ -626,7 +605,7 @@ def _peer_lines(p: Dict[str, Any]) -> str:
     ])
 
 def _peer_more_info(p: Dict[str, Any]) -> str:
-    def g(k, alt=None): 
+    def g(k, alt=None):
         v = p.get(k, p.get(alt) if alt else None)
         return "—" if v in (None, "", []) else str(v)
 
@@ -654,7 +633,6 @@ def scope_keyboard(prefix: str) -> InlineKeyboardMarkup:
     ])
 
 def _bundle_kb(p: Dict[str, Any]) -> InlineKeyboardMarkup:
-    """Keyboard for the bundle card: no enable/disable here."""
     pid = int(p.get("id"))
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("↻ Refresh", callback_data=f"peer:bundle:{pid}"),
@@ -690,7 +668,7 @@ def _caption(p: Dict[str, Any], short_url: Optional[str], cfg: str) -> str:
     )
 
 
-MAX_CAPTION = 1024  
+MAX_CAPTION = 1024
 
 def _cap_render(cfg_text: str, short: str | None) -> str:
 
@@ -699,8 +677,7 @@ def _cap_render(cfg_text: str, short: str | None) -> str:
     return body if len(body) <= MAX_CAPTION else ""
 
 async def send_peers(update: Update, pid: int):
-    """Send the peer config and QR as two self-contained Telegram cards."""
-    p = peer_by_id(pid) if 'peer_by_id' in globals() else get_peer(pid)
+    p = (await asyncio.to_thread(peer_by_id, pid)) if 'peer_by_id' in globals() else (await asyncio.to_thread(get_peer, pid))
     if not p:
         await edit_send(update, "Peer not found.", KB.peers_index())
         return
@@ -709,12 +686,12 @@ async def send_peers(update: Update, pid: int):
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_name).strip("._") or f"peer-{pid}"
 
     try:
-        short = get_shortlink(pid, p) if "get_shortlink" in globals() else ""
+        short = (await asyncio.to_thread(get_shortlink, pid, p)) if "get_shortlink" in globals() else ""
     except Exception:
         short = ""
 
     try:
-        cfg = _peer_config(pid, short) or ""
+        cfg = (await asyncio.to_thread(_peer_config, pid, short)) or ""
     except Exception as exc:
         logging.getLogger(__name__).exception("Could not fetch peer config %s", pid)
         await edit_send(
@@ -751,7 +728,7 @@ async def send_peers(update: Update, pid: int):
     )
 
     try:
-        png = _peer_qr(pid, cfg)
+        png = (await asyncio.to_thread(_peer_qr, pid, cfg))
     except Exception:
         png = b""
         logging.getLogger(__name__).exception("Could not fetch peer QR %s", pid)
@@ -869,7 +846,15 @@ def admin_only(func):
             or ""
         )
 
-        ids = current_admin_ids()
+        ids = await asyncio.to_thread(current_admin_ids)
+
+        if _admin_cache['failed']:
+            if update.effective_message:
+                try:
+                    await update.effective_message.reply_text(_bot_reliability_text('auth'))
+                except (BadRequest,NetworkError,RetryAfter):
+                    pass
+            return
 
         if (
             not uid
@@ -926,7 +911,7 @@ async def cmd_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def cmd_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rows = current_admins_full()
+    rows = (await asyncio.to_thread(current_admins_full))
     if not rows:
         await update.message.reply_text("No admins configured in panel.")
         return
@@ -945,13 +930,12 @@ async def cmd_reload_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await send_text(update, render_home(update), kb=KB.home())
+    await send_text(update, (await asyncio.to_thread(render_home, update)), kb=KB.home())
 
 @admin_only
 async def cmd_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text, keyboard = await asyncio.to_thread(render_update_center, fresh=True)
     await send_text(update, text, kb=keyboard)
-
 
 
 @admin_only
@@ -962,7 +946,7 @@ async def cmd_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def cmd_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text_out, keyboard = render_clients()
+    text_out, keyboard = (await asyncio.to_thread(render_clients))
     await send_text(update, text_out, kb=keyboard)
 
 
@@ -1052,24 +1036,25 @@ def render_home(update) -> str:
     )
     activity_minutes = max(1, int(math.ceil(activity_window / 60)))
 
+    fa=_configured_bot_language()=='fa'
+    tr=lambda en,persian:persian if fa else en
     panel_url = str(PANEL or "").strip()
-    panel_line = f'<a href="{html(panel_url)}">Open panel</a>' if panel_url else "Unavailable"
+    panel_line = f'<a href="{html(panel_url)}">{tr("Open panel","ورود به پنل")}</a>' if panel_url else tr("Unavailable","در دسترس نیست")
 
     return "\n".join([
-        "◇ <b>Dashboard</b>",
+        tr("◇ <b>Dashboard</b>","◇ <b>داشبورد</b>"),
         f"♙ <b>{html(uline)}</b>  <code>{html(uid)}</code>",
         f"⌁ {panel_line}",
         "",
-        "▦ <b>System</b>",
+        tr("▦ <b>System</b>","▦ <b>سیستم</b>"),
         f"<pre>CPU     {html(cpu):>7}   Memory  {html(mem):>7}\nDisk    {html(disk):>7}   Uptime  {html(upt):>7}</pre>",
-        "⌘ <b>Peer activity</b>",
+        tr("⌘ <b>User activity</b>","⌘ <b>فعالیت کاربران</b>"),
         (
-            f"● Active ≤{activity_minutes}m <code>{active}</code>   "
-            f"○ No recent handshake <code>{idle}</code>"
+            tr(f"● Active ≤{activity_minutes}m <code>{active}</code>   ○ No recent handshake <code>{idle}</code>", f"● فعال <code>{active}</code>   ○ بدون اتصال اخیر <code>{idle}</code>")
         ),
-        f"⊘ Blocked <code>{blocked}</code>   ◇ Total <code>{total}</code>",
+        tr(f"⊘ Blocked <code>{blocked}</code>   ◇ Total <code>{total}</code>", f"⊘ مسدود <code>{blocked}</code>   ◇ مجموع <code>{total}</code>"),
         "",
-        f"✦ <b>Bot</b> <code>{html(BOT_VERSION)}</code>",
+        tr(f"✦ <b>Bot</b> <code>{html(BOT_VERSION)}</code>",f"✦ <b>ربات</b> <code>{html(BOT_VERSION)}</code>"),
     ])
 def file_zip(b: bytes) -> bool:
     return isinstance(b, (bytes, bytearray)) and b[:4] == b'PK\x03\x04'
@@ -1093,15 +1078,47 @@ def human_ttl(ttl: Optional[int]) -> str:
     if m: out.append(f"{m}m")
     return " ".join(out) or "0m"
 
+def _bot_reliability_text(kind):
+    try:
+        fa=_read_json(TELEGRAM_SETTINGS_FILE,{}).get('language')=='fa'
+    except Exception:
+        fa=False
+    messages={
+        'auth':('Administrator access could not be verified. Please try again shortly.','دسترسی مدیر تأیید نشد. کمی بعد دوباره تلاش کنید.'),
+        'expired':('This button has expired. Open the menu again.','اعتبار این دکمه پایان یافته است. منو را دوباره باز کنید.'),
+        'uncertain':('The result could not be confirmed. Check the panel before repeating a change.','نتیجه تأیید نشد. پیش از تکرار تغییر، وضعیت را در پنل بررسی کنید.'),
+    }
+    return messages[kind][int(fa)]
+
+
+async def _rate_limited_send(call, *args, **kwargs):
+    try:
+        return await call(*args, **kwargs)
+    except RetryAfter as exc:
+        delay=exc.retry_after
+        seconds=delay.total_seconds() if hasattr(delay,'total_seconds') else float(delay)
+        if not 0<=seconds<=5:
+            raise
+        await asyncio.sleep(seconds+.1)
+        return await call(*args, **kwargs)
+
+
 async def edit_send(update: Update, text: str, kb=None):
     m = update.callback_query.message if update.callback_query else update.effective_message
     try:
-        await m.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
-    except Exception:
-        await m.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        await _rate_limited_send(m.edit_text,text,parse_mode=ParseMode.HTML,reply_markup=kb)
+    except BadRequest as exc:
+        reason=str(exc).lower()
+        if 'message is not modified' in reason:
+            return
+        if not any(word in reason for word in ("message to edit not found", "message can't be edited", "message can not be edited", "there is no text in the message to edit")):
+            raise
+        await _rate_limited_send(m.reply_text,text,parse_mode=ParseMode.HTML,reply_markup=kb)
+
 
 async def send_text(update: Update, text: str, kb=None):
-    await (update.effective_message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb))
+    await _rate_limited_send(update.effective_message.reply_text,text,parse_mode=ParseMode.HTML,reply_markup=kb)
+
 
 def _node_peer(p: dict) -> bool:
     s = str(p.get("scope") or "").lower()
@@ -1149,7 +1166,7 @@ def _bool01(v) -> str:
     s = str(v).strip().lower()
     if s in {"1","true","yes","on","y"}:  return "1"
     if s in {"0","false","no","off","n"}: return "0"
-    return "0" if s == "" else s  
+    return "0" if s == "" else s
 
 def _float(x):
     try: return float(x)
@@ -1163,7 +1180,7 @@ def _current_value(peer: Dict[str, Any] | None, key: str) -> str:
             return peer.get("data_limit_value", peer.get("data_limit"))
         if k == "data_limit_unit":
             return peer.get("data_limit_unit", peer.get("limit_unit"))
-        api_key = FIELD_MAP.get(k, k)     
+        api_key = FIELD_MAP.get(k, k)
         return peer.get(api_key, peer.get(k))
 
     if key in {"start_on_first_use", "unlimited"}:
@@ -1200,7 +1217,6 @@ def _current_value(peer: Dict[str, Any] | None, key: str) -> str:
     return "" if v is None else str(v)
 
 def _raise_if_login_html(response, requested_url: str) -> None:
-    """Turn silent Flask login redirects into an actionable API-auth error."""
     final_url = str(getattr(response, "url", "") or "")
     history = list(getattr(response, "history", []) or [])
     redirected_to_login = any(
@@ -1222,7 +1238,7 @@ def _get(url: str, session="auto", **kw):
     timeout = kw.pop("timeout", 12)
 
     if session == "api":
-        r = api.get(url, timeout=timeout, **kw)
+        r = api.get(_api_url(url), timeout=timeout, **kw)
         r.raise_for_status()
         _raise_if_login_html(r, url)
         return r
@@ -1234,7 +1250,7 @@ def _get(url: str, session="auto", **kw):
 
     if API_KEY:
         try:
-            r = api.get(url, timeout=timeout, **kw)
+            r = api.get(_api_url(url), timeout=timeout, **kw)
             r.raise_for_status()
             _raise_if_login_html(r, url)
             return r
@@ -1254,7 +1270,7 @@ def _post(url: str, session="auto", **kw):
     timeout = kw.pop("timeout", 20)
 
     if session == "api":
-        r = api.post(url, timeout=timeout, **kw)
+        r = api.post(_api_url(url), timeout=timeout, **kw)
         r.raise_for_status()
         return r
 
@@ -1267,7 +1283,7 @@ def _post(url: str, session="auto", **kw):
 
     if API_KEY:
         try:
-            r = api.post(url, timeout=timeout, **kw)
+            r = api.post(_api_url(url), timeout=timeout, **kw)
             r.raise_for_status()
             return r
         except HTTPError as e:
@@ -1287,7 +1303,7 @@ def _put(url: str, session="auto", **kw):
     timeout = kw.pop("timeout", 20)
 
     if session == "api":
-        r = api.put(url, timeout=timeout, **kw)
+        r = api.put(_api_url(url), timeout=timeout, **kw)
         r.raise_for_status()
         return r
 
@@ -1300,7 +1316,7 @@ def _put(url: str, session="auto", **kw):
 
     if API_KEY:
         try:
-            r = api.put(url, timeout=timeout, **kw)
+            r = api.put(_api_url(url), timeout=timeout, **kw)
             r.raise_for_status()
             return r
         except HTTPError as e:
@@ -1340,7 +1356,7 @@ def _set_backup_schedule(payload: dict) -> dict:
     except Exception:
         return {"ok": False}
 
-    
+
 def kb_backup_schedule(s: dict) -> InlineKeyboardMarkup:
     enabled = bool(s.get("enabled"))
     return InlineKeyboardMarkup([
@@ -1356,7 +1372,7 @@ def _delete(url: str, session="auto", **kw):
     timeout = kw.pop("timeout", 12)
 
     if session == "api":
-        r = api.delete(url, timeout=timeout, **kw)
+        r = api.delete(_api_url(url), timeout=timeout, **kw)
         r.raise_for_status()
         return r
 
@@ -1369,7 +1385,7 @@ def _delete(url: str, session="auto", **kw):
 
     if API_KEY:
         try:
-            r = api.delete(url, timeout=timeout, **kw)
+            r = api.delete(_api_url(url), timeout=timeout, **kw)
             r.raise_for_status()
             return r
         except HTTPError as e:
@@ -1402,7 +1418,7 @@ def _json_txt(r):
         return r.json()
     except Exception:
         return {"text": r.text}
-    
+
 def _json(resp):
     ct = (resp.headers.get("content-type") or "").lower()
     return ct.startswith("application/json")
@@ -1462,6 +1478,14 @@ def peer_reset_timer(pid: int):
 def peer_stats():
     r = _get(f"{PANEL}/api/stats/mini", session="api")
     return _json_txt(r) or {}
+
+def interface_choice_label(iface, include_id=False):
+    name = str(iface.get('name') or 'Interface')
+    if include_id:
+        name += f" (id {iface.get('id')})"
+    owners = [str(owner.get('username') or '') for owner in iface.get('reseller_assignments', []) if isinstance(owner, dict)]
+    return name + (' · Reseller: ' + ', '.join(filter(None, owners)) if any(owners) else '')
+
 
 def peer_ifaces() -> List[Dict[str, Any]]:
     j = _get(f"{PANEL}/api/get-interfaces").json()
@@ -1575,7 +1599,7 @@ def _peer_qr(pid: int, cfg_text: str = "") -> bytes:
         )
         qr.add_data(cfg_text)
         qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+        img = qr.make_image(image_factory=PNGImage)
         out = io.BytesIO()
         img.save(out, format="PNG", optimize=False)
         out.seek(0)
@@ -1658,10 +1682,10 @@ PANEL_DEFAULTS: Dict[str, Any] = {
     "allowed_ips": "0.0.0.0/0, ::/0",
     "endpoint": "",
     "peer_endpoint": "",
-    "persistent_keepalive": 25,  
+    "persistent_keepalive": 25,
     "data_limit_value": 0,
-    "data_limit_unit": "Mi",     
-    "start_on_first_use": False,  
+    "data_limit_unit": "Mi",
+    "start_on_first_use": False,
     "time_limit_days": 0,
     "time_limit_hours": 0,
     "time_limit_minutes": 0,
@@ -1677,7 +1701,6 @@ PANEL_DEFAULTS: Dict[str, Any] = {
 PROFILE_KEYS = set(PANEL_DEFAULTS.keys()) | {"name", "use_for"}
 
 def _profiles_load() -> Dict[str, Any]:
-    """Read peer profiles from the panel API, matching the web UI exactly."""
     listing = _api_data("GET", "/api/peer_profiles", timeout=15)
     if isinstance(listing, dict) and listing.get("profiles") is not None:
         active = str(listing.get("active") or "Default").strip() or "Default"
@@ -1706,7 +1729,6 @@ def _profiles_load() -> Dict[str, Any]:
 
 
 def _profiles_save(data: Dict[str, Any]) -> None:
-    """Compatibility helper: save profiles through the panel API."""
     profiles = data.get("profiles") if isinstance(data, dict) else {}
     for name, values in (profiles or {}).items():
         profile_set(str(name), dict(values or {}))
@@ -1774,7 +1796,7 @@ def profile_scope(scope: str) -> tuple[Optional[str], Dict[str, Any]]:
     return None, dict(PANEL_DEFAULTS)
 
 BOOL_KEYS = {"start_on_first_use", "unlimited", "include_internal_network"}
-UNIT_KEYS = {"data_limit_unit"}  
+UNIT_KEYS = {"data_limit_unit"}
 
 def menu_kb(flow: str, key: str, allow_skip: bool = True) -> InlineKeyboardMarkup:
     rows = []
@@ -2227,188 +2249,6 @@ def start_panel_update(target: str = "main") -> dict: return _api_data("POST", "
 def start_node_update(node_id: int, target: str = "main") -> dict: return _api_data("POST", f"/api/nodes/{int(node_id)}/update", payload={"target": "main"}, timeout=20)
 def node_update_status(node_id: int) -> dict: return _api_data("GET", f"/api/nodes/{int(node_id)}/update/status", timeout=12)
 
-def _update_state(status: dict) -> str:
-    return str(
-        (status or {}).get("status")
-        or "idle"
-    ).strip().lower()
-
-
-def _update_stage(status: dict) -> str:
-    return str(
-        (status or {}).get("stage")
-        or _update_state(status)
-        or "idle"
-    ).strip().lower()
-
-
-def _update_busy(status: dict) -> bool:
-    return _update_state(status) in {
-        "queued",
-        "running",
-        "backup",
-        "downloading",
-        "download",
-        "extract",
-        "install",
-        "installing",
-        "dependencies",
-        "validate",
-        "validating",
-        "restart",
-        "restarting",
-        "rollback",
-        "rolling_back",
-    }
-
-
-def _update_terminal(status: dict) -> bool:
-    return _update_state(status) in {
-        "completed",
-        "complete",
-        "done",
-        "success",
-        "rollback_completed",
-        "failed",
-        "error",
-        "rollback_failed",
-        "cancelled",
-        "canceled",
-    }
-
-
-def _update_percent(status: dict) -> int:
-    try:
-        return max(
-            0,
-            min(
-                100,
-                int(
-                    (status or {}).get("percent")
-                    or 0
-                ),
-            ),
-        )
-    except Exception:
-        return 0
-
-
-def _update_status_icon(status: dict) -> str:
-    state = _update_state(status)
-    stage = _update_stage(status)
-
-    if state in {
-        "completed",
-        "complete",
-        "done",
-        "success",
-    }:
-        return "●"
-
-    if state == "rollback_completed":
-        return "○"
-
-    if state in {
-        "failed",
-        "error",
-        "rollback_failed",
-        "cancelled",
-        "canceled",
-        "offline",
-    }:
-        return "⊘"
-
-    if state in {
-        "restart",
-        "restarting",
-    } or stage in {
-        "restart",
-        "restarting",
-    }:
-        return "◐"
-
-    if state in {
-        "rollback",
-        "rolling_back",
-    } or stage in {
-        "rollback",
-        "rolling_back",
-    }:
-        return "○"
-
-    if state in {
-        "install",
-        "installing",
-        "dependencies",
-    } or stage in {
-        "install",
-        "installing",
-        "dependencies",
-    }:
-        return "◆"
-
-    if state in {
-        "validate",
-        "validating",
-    } or stage in {
-        "validate",
-        "validating",
-    }:
-        return "◐"
-
-    if state in {
-        "queued",
-    }:
-        return "○"
-
-    if _update_busy(status):
-        return "◉"
-
-    return "○"
-
-
-def _update_stage_label(status: dict) -> str:
-    state = _update_state(status)
-    stage = _update_stage(status)
-
-    labels = {
-        "idle": "Ready",
-        "queued": "Queued",
-        "running": "Working",
-        "backup": "Creating rollback backup",
-        "download": "Downloading main",
-        "downloading": "Downloading main",
-        "extract": "Preparing files",
-        "install": "Installing",
-        "installing": "Installing",
-        "dependencies": "Installing dependencies",
-        "validate": "Validating",
-        "validating": "Validating",
-        "restart": "Restarting",
-        "restarting": "Restarting",
-        "rollback": "Rolling back",
-        "rolling_back": "Rolling back",
-        "completed": "Completed",
-        "complete": "Completed",
-        "done": "Completed",
-        "success": "Completed",
-        "rollback_completed": "Previous version restored",
-        "rollback_failed": "Rollback failed",
-        "failed": "Failed",
-        "error": "Failed",
-        "cancelled": "Cancelled",
-        "canceled": "Cancelled",
-        "offline": "Offline",
-    }
-
-    return labels.get(
-        stage,
-        labels.get(
-            state,
-            stage.replace("_", " ").title(),
-        ),
-    )
-
 
 def _update_status_line(status: dict) -> str:
     return (
@@ -2605,12 +2445,6 @@ async def _monitor_update_message(
     node_id: int | None = None,
     node_name: str | None = None,
 ):
-    """
-    Keep one Telegram message synchronized with updater status.
-
-    The panel may be temporarily unreachable while its service restarts.
-    That is treated as progress, not as immediate failure.
-    """
     last_render = ""
     unreachable_polls = 0
     started_at = time.monotonic()
@@ -3109,7 +2943,17 @@ def subscription_portal_settings() -> dict:
 
 def render_bot_settings():
     tg = telegram_settings_data()
-    notify = tg.get("notify") or {}
+    if not isinstance(tg.get("notify"), dict):
+        rows = []
+        from urllib.parse import urlsplit
+        panel = urlsplit(PANEL)
+        if panel.scheme == 'https' and panel.hostname not in (None, 'localhost', '127.0.0.1', '::1'):
+            rows.append([InlineKeyboardButton("Open notification rules", url=PANEL.rstrip('/') + "/settings?tab=telegram")])
+        rows.append([InlineKeyboardButton("↻ Refresh", callback_data="home:settings"),
+                     InlineKeyboardButton("← Dashboard", callback_data="home:main")])
+        return ("<b>Notification settings</b>\nOpen Settings → Telegram → Notification rules in the panel. "
+                "Enable Plan purchase receipts to receive orders awaiting review.", InlineKeyboardMarkup(rows))
+    notify = tg["notify"]
     portal = subscription_portal_settings()
 
     notification_groups = (
@@ -3150,6 +2994,7 @@ def render_bot_settings():
                 ("traffic_apply_failed", "Rule application failed"),
             ),
         ),
+        ("Resellers", (("reseller_purchase", "Plan purchase receipts"),)),
         (
             "Backups and updates",
             (
@@ -3256,6 +3101,7 @@ def render_bot_settings():
         [
             InlineKeyboardButton(f"{mark('traffic_apply_failed')} Traffic failed", callback_data="settings:notify:traffic_apply_failed"),
         ],
+        [InlineKeyboardButton(f"{mark('reseller_purchase')} Plan purchase receipts", callback_data="settings:notify:reseller_purchase")],
         [
             InlineKeyboardButton(f"{mark('backup_success')} Backup success", callback_data="settings:notify:backup_success"),
             InlineKeyboardButton(f"{mark('backup_failed')} Backup failed", callback_data="settings:notify:backup_failed"),
@@ -3688,9 +3534,7 @@ def _classify_traffic_destinations(text: str):
     return domains, cidrs, countries
 
 
-
 def _traffic_policy_copy(policy: dict) -> dict:
-    """Return a safe mutable copy of one Traffic Control policy."""
     p = dict(policy or {})
     for key in ("domains", "cidrs", "countries"):
         p[key] = list(p.get(key) or [])
@@ -3698,7 +3542,6 @@ def _traffic_policy_copy(policy: dict) -> dict:
 
 
 def _traffic_apply_policy_update(current: dict, policy: dict) -> tuple[dict, dict]:
-    """Replace one policy by id, save the complete config, then apply it."""
     policy = _traffic_policy_copy(policy)
     pid = str(policy.get("id") or "").strip()
     policies = [_traffic_policy_copy(p) for p in (current.get("policies") or [])]
@@ -3758,7 +3601,6 @@ def render_traffic_edit_menu(pid: str, return_page: int = 1):
 
 
 def _traffic_edit_save_scope(state: dict) -> tuple[str, dict, dict]:
-    """Save a scope/location change after target + optional peer selection."""
     pid = str(state.get("policy_id") or "").strip()
     current = traffic_control_data()
     _, original = _traffic_policy_index(current, pid)
@@ -3813,7 +3655,7 @@ async def _handle_security_callback(update, context, data: str):
         if idx<0 or idx>=len(deny): await q.answer("Entry no longer exists.",show_alert=True); return True
         removed=deny.pop(idx); result=await asyncio.to_thread(security_control_save,{"deny_networks":deny})
         if result.get("ok") is False: await q.answer(_ctl_error(result),show_alert=True)
-        else: _log_admin_update(update,"security_deny_remove",f"network={removed}")
+        else: (await asyncio.to_thread(_log_admin_update, update,"security_deny_remove",f"network={removed}"))
         text,kb=await asyncio.to_thread(render_security_deny); await edit_send(update,text,kb); return True
     if data == "security:events":
         text,kb=await asyncio.to_thread(render_security_events); await edit_send(update,text,kb); return True
@@ -3862,7 +3704,7 @@ async def _handle_traffic_callback(update, context, data: str):
         if applied.get("ok") is False:
             await edit_send(update,f"◆ <b>Policy deleted, but live rule apply failed.</b>\n\n<code>{html(_ctl_error(applied))}</code>",KB.back("traffic:list:1"))
             return True
-        _log_admin_update(update,"traffic_policy_delete",f"policy_id={pid}")
+        (await asyncio.to_thread(_log_admin_update, update,"traffic_policy_delete",f"policy_id={pid}"))
         text,kb=await asyncio.to_thread(render_traffic_control,1); await edit_send(update,text,kb); return True
     if data.startswith("traffic:test:"):
         pid=data.split(":",2)[-1]; context.user_data[TG_TRAFFIC_TEST_STATE]={"policy_id":pid,"return_page":return_page}
@@ -4030,7 +3872,7 @@ async def _handle_traffic_callback(update, context, data: str):
             if applied.get("ok") is False:
                 await edit_send(update, f"◆ <b>Scope saved, but apply failed.</b>\n\n<code>{html(_ctl_error(applied))}</code>", KB.back(f"traffic:open:{pid}"))
                 return True
-            _log_admin_update(update, "traffic_policy_edit_scope", f"policy_id={pid}; scope=interface")
+            (await asyncio.to_thread(_log_admin_update, update, "traffic_policy_edit_scope", f"policy_id={pid}; scope=interface"))
             out,kb=await asyncio.to_thread(render_traffic_policy,pid,return_page)
             await edit_send(update,"● <b>Policy scope updated and applied.</b>\n\n"+out,kb)
             return True
@@ -4057,7 +3899,7 @@ async def _handle_traffic_callback(update, context, data: str):
             if applied.get("ok") is False:
                 await edit_send(update, f"◆ <b>Scope saved, but apply failed.</b>\n\n<code>{html(_ctl_error(applied))}</code>", KB.back(f"traffic:open:{pid}"))
                 return True
-            _log_admin_update(update, "traffic_policy_edit_scope", f"policy_id={pid}; scope=peer; source_ip={st.get('source_ip')}")
+            (await asyncio.to_thread(_log_admin_update, update, "traffic_policy_edit_scope", f"policy_id={pid}; scope=peer; source_ip={st.get('source_ip')}"))
             out,kb=await asyncio.to_thread(render_traffic_policy,pid,return_page)
             await edit_send(update,"● <b>Policy scope updated and applied.</b>\n\n"+out,kb)
             return True
@@ -4070,19 +3912,22 @@ async def _handle_traffic_callback(update, context, data: str):
 class KB:
     @staticmethod
     def home():
+        fa=_configured_bot_language()=='fa'
+        def item(en,persian,callback):
+            return InlineKeyboardButton(persian if fa else en, callback_data=callback)
         return InlineKeyboardMarkup([
-            [InlineKeyboardButton("◇ Peers", callback_data="peers:menu"), InlineKeyboardButton("⌘ Subscriptions", callback_data="client:list:1")],
-            [InlineKeyboardButton("✦ Profiles", callback_data="profiles:menu"), InlineKeyboardButton("▣ Backups", callback_data="backup:menu")],
-            [InlineKeyboardButton("⌘ Traffic Control", callback_data="traffic:menu"), InlineKeyboardButton("◆ Security", callback_data="security:menu")],
-            [InlineKeyboardButton("↥ Update center", callback_data="home:system"), InlineKeyboardButton("⚙ Settings", callback_data="home:settings")],
-            [InlineKeyboardButton("♙ Administrators", callback_data="home:admins"), InlineKeyboardButton("↻ Refresh", callback_data="home:refresh")],
+            [item("◇ Users", "◇ کاربران", "peers:menu"), item("⌘ Subscriptions", "⌘ اشتراک‌ها", "client:list:1")],
+            [item("✦ Profiles", "✦ الگوها", "profiles:menu"), item("▣ Backups", "▣ پشتیبان‌گیری", "backup:menu")],
+            [item("⌘ Traffic control", "⌘ کنترل ترافیک", "traffic:menu"), item("◆ Security", "◆ امنیت", "security:menu")],
+            [item("↥ Update Center", "↥ مرکز به‌روزرسانی", "home:system"), item("⚙ Settings", "⚙ تنظیمات", "home:settings")],
+            [item("♙ Administrators", "♙ مدیران", "home:admins"), item("↻ Refresh", "↻ تازه‌سازی", "home:refresh")],
         ])
 
 
     @staticmethod
     def back(to: str, label: str = "← Back"):
         return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=to)]])
-    
+
     @staticmethod
     def wizard(flow: str = "pnew", allow_skip: bool = False) -> InlineKeyboardMarkup:
 
@@ -4100,7 +3945,7 @@ class KB:
         return InlineKeyboardMarkup([
            [InlineKeyboardButton("＋ Create peer", callback_data="peers:create"),
             InlineKeyboardButton("▦ Bulk create", callback_data="peers:bulk")],
-           [InlineKeyboardButton("⌕ Find / peer status", callback_data="peers:status")],
+           [InlineKeyboardButton("⌕ Find a peer", callback_data="peers:status")],
            [InlineKeyboardButton("⌂ Main menu", callback_data="home:main")]
         ])
 
@@ -4224,11 +4069,9 @@ def _load_backup_state() -> dict:
 
 def _save_backup_state(st: dict) -> None:
     try:
-        os.makedirs(os.path.dirname(BACKUP_STATE_FILE), exist_ok=True)
-        with open(BACKUP_STATE_FILE, "w") as f:
-            json.dump(st, f)
-    except Exception:
-        pass
+        save_private_json(BACKUP_STATE_FILE, st)
+    except Exception as exc:
+        logging.getLogger(__name__).warning('Could not persist backup state (%s)', type(exc).__name__)
 
 def _auto_backupname(kind: str = "full", ts: datetime | None = None) -> str:
     parsed = _tg_parse_datetime(ts or datetime.now(timezone.utc))
@@ -4297,7 +4140,6 @@ def _store_backuppanel(url: str, dest_path: Path, session: str = "api", timeout:
             pass
 
 
-
 def _last_backup() -> int | None:
 
     try:
@@ -4325,7 +4167,7 @@ def _fmt_backup_datetime(value, *, fallback="—") -> str:
         relative=False,
         fallback=fallback,
     )
-    
+
 def _fmt_when(ts: int | None) -> str:
     if not ts:
         return "Never"
@@ -4349,7 +4191,7 @@ def _headers_filename(r):
     m = re.search(r'filename="?([^";]+)"?', cd, re.I)
     return m.group(1) if m else "backup.zip"
 
-# ____ State constants
+
 STATE = {
     "CREATE": "wizard:create",
     "BULK":   "wizard:bulk",
@@ -4411,17 +4253,32 @@ EDIT_FIELDS = [
     ("time_limit_hours", "Time limit hours (enter to skip)", None),
 ]
 
-# ____ /start
+
 @admin_only
 async def start(update, context):
-    await send_text(update, render_home(update), kb=KB.home())
+    await send_text(update, (await asyncio.to_thread(render_home, update)), kb=KB.home())
 
-# ____ callback 
+
 @admin_only
 async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    try:
+        await q.answer()
+    except BadRequest as exc:
+        logging.warning('Callback rejected (%s).',type(exc).__name__)
+        
+        await send_text(update,_bot_reliability_text('expired'))
+        return
+    except (NetworkError, RetryAfter) as exc:
+        logging.warning('Callback acknowledgement unavailable (%s).',type(exc).__name__)
     data = q.data
+    if data != "status:search":
+        context.user_data.pop("STATUS_SEARCH", None)
+        context.user_data.pop(STATE["SEARCH"], None)
+    if data in ("peers:menu", "peers:status", "peers:create", "peers:bulk"):
+        context.user_data.pop(STATE["CREATE"], None)
+        context.user_data.pop(STATE["BULK"], None)
+        context.user_data.pop("status_search_term", None)
 
     def _admin_ident():
         uid = str(update.effective_user.id) if update.effective_user else ""
@@ -4542,19 +4399,19 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     KB.back(f"subs:open:{sid}"),
                 )
                 return
-            _log_admin(f"subscription_{action}", f"sid={sid}")
+            (await asyncio.to_thread(_log_admin, f"subscription_{action}", f"sid={sid}"))
             text_out, keyboard = await asyncio.to_thread(render_subscription, sid)
             message = str(result.get("message") or "Action completed.")
             await edit_send(update, f"● {html(message)}\n\n{text_out}", keyboard)
             return
 
-    # Client applications
+
     if data == "home:clients":
-        text_out, keyboard = render_clients()
+        text_out, keyboard = (await asyncio.to_thread(render_clients))
         await edit_send(update, text_out, keyboard)
         return
 
-    # settings
+
     if data == "home:settings":
         text_out, keyboard = await asyncio.to_thread(render_bot_settings)
         await edit_send(update, text_out, keyboard)
@@ -4573,7 +4430,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "traffic_policy_change", "traffic_apply_success",
             "traffic_apply_failed",
             "backup_success", "backup_failed",
-            "update_success", "update_failed",
+            "update_success", "update_failed", "reseller_purchase",
         }
         critical_keys = {
             "app_down", "node_down", "iface_down",
@@ -4607,7 +4464,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        _log_admin("telegram_notification_preset", f"preset={preset}")
+        (await asyncio.to_thread(_log_admin, "telegram_notification_preset", f"preset={preset}"))
         text_out, keyboard = await asyncio.to_thread(render_bot_settings)
         await edit_send(update, text_out, keyboard)
         return
@@ -4622,7 +4479,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "traffic_policy_change", "traffic_apply_success",
             "traffic_apply_failed",
             "backup_success", "backup_failed",
-            "update_success", "update_failed",
+            "update_success", "update_failed", "reseller_purchase",
         }
         if key not in allowed:
             await q.answer("Unsupported setting.", show_alert=True)
@@ -4644,15 +4501,15 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        _log_admin(
+        (await asyncio.to_thread(_log_admin, 
             "telegram_notification_toggle",
             f"key={key}; enabled={int(bool(notify[key]))}",
-        )
+        ))
         text_out, keyboard = await asyncio.to_thread(render_bot_settings)
         await edit_send(update, text_out, keyboard)
         return
 
-    # Update Center
+
     if data in {"home:system", "system:refresh"}:
         text, keyboard = await asyncio.to_thread(render_update_center, fresh=(data == "system:refresh")); await edit_send(update, text, keyboard); return
     if data.startswith("system:update:confirm:"):
@@ -4730,10 +4587,10 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        _log_admin(
+        (await asyncio.to_thread(_log_admin, 
             "panel_update_start",
             "target=main",
-        )
+        ))
 
         queued_status = (
             result.get("status")
@@ -4848,10 +4705,10 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        _log_admin(
+        (await asyncio.to_thread(_log_admin, 
             "node_update_start",
             f"node_id={node_id}; target=main",
-        )
+        ))
 
         queued_status = (
             result.get("status")
@@ -4893,7 +4750,6 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-    #  __Profiles
     if data == "profiles:menu":
         await edit_send(
             update,
@@ -4902,9 +4758,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ); return
 
     if data == "profiles:restore":
-        profile_set("Default", dict(PANEL_DEFAULTS))
-        profile_set_default("Default")
-        _log_admin("profiles_restore", "restored default profile")
+        (await asyncio.to_thread(profile_set, "Default", dict(PANEL_DEFAULTS)))
+        (await asyncio.to_thread(profile_set_default, "Default"))
+        (await asyncio.to_thread(_log_admin, "profiles_restore", "restored default profile"))
         await edit_send(update, "↺ Restored the default profile.", KB.profiles_menu()); return
 
     if data == "profiles:new":
@@ -4914,7 +4770,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
            "＋ <b>New profile</b>\nSend a name for this profile (e.g. <code>work</code>, <code>family</code>).",
            KB.wizard(flow="pnew", allow_skip=False)
         ); return
-    
+
     if data.startswith("profiles:new:type:"):
         profile_type = data.rsplit(":", 1)[-1]
         if profile_type not in ("peer", "subscription"):
@@ -4926,7 +4782,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.callback_query.answer("Missing name.", show_alert=True)
             return
 
-        profile_set(pname, {
+        (await asyncio.to_thread(profile_set, pname, {
             "name": "",
             "allowed_ips": "0.0.0.0/0, ::/0",
             "endpoint": "",
@@ -4943,21 +4799,21 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "unlimited": False,
             "phone_number": "",
             "telegram_id": "",
-        })
+        }))
 
         context.user_data.pop(STATE["P_NEW"], None)
         await edit_send(update, profile_summary(pname), kb_profile_editor(pname))
         return
 
     if data == "wiz:pnew:cancel":
-       context.user_data.pop(STATE.get("P_NEW"), None) 
+       context.user_data.pop(STATE.get("P_NEW"), None)
        await edit_send(update, "⊘ Cancelled.", KB.back("profiles:menu"))
        return
 
 
     if data.startswith("profiles:open:") or data.startswith("profiles:edit:"):
         pname = data.split(":", 2)[-1]
-        p = profile_get(pname)
+        p = (await asyncio.to_thread(profile_get, pname))
         if not p:
             await edit_send(update, "Profile not found.", KB.profiles_menu()); return
         await edit_send(update, profile_summary(pname), kb_profile_editor(pname)); return
@@ -4973,15 +4829,15 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("profiles:delconfirm:"):
         name = data.split(":", 2)[-1]
-        profile_delete(name)
-        _log_admin("profile_delete", f"name={name}")
+        (await asyncio.to_thread(profile_delete, name))
+        (await asyncio.to_thread(_log_admin, "profile_delete", f"name={name}"))
         await edit_send(update, "⌫ Deleted.", KB.profiles_menu()); return
 
     if data.startswith("profiles:setdef:"):
         name = data.split(":", 2)[-1]
         try:
-            profile_set_default(name)
-            _log_admin("profile_set_default", f"name={name}")
+            (await asyncio.to_thread(profile_set_default, name))
+            (await asyncio.to_thread(_log_admin, "profile_set_default", f"name={name}"))
             await edit_send(update, f"☆ Default profile set to <b>{html(name)}</b>.", KB.profiles_menu()); return
         except KeyError:
             await edit_send(update, "Profile not found.", KB.profiles_menu()); return
@@ -4999,10 +4855,10 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _, _, pname, profile_type = data.split(":", 3)
         if profile_type not in ("peer", "subscription"):
             profile_type = "peer"
-        p = profile_get(pname) or {}
+        p = (await asyncio.to_thread(profile_get, pname)) or {}
         p["use_for"] = profile_type
-        profile_set(pname, p)
-        _log_admin("profile_set_type", f"name={pname}; type={profile_type}")
+        (await asyncio.to_thread(profile_set, pname, p))
+        (await asyncio.to_thread(_log_admin, "profile_set_type", f"name={pname}; type={profile_type}"))
         await edit_send(update, profile_summary(pname), kb_profile_editor(pname)); return
 
     if data.startswith("profiles:editkey:"):
@@ -5012,7 +4868,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await edit_send(update, "Unsupported field.", kb_profile_editor(pname)); return
         context.user_data[STATE["P_EDIT_ONE"]] = {"pname": pname, "key": key}
 
-        p = profile_get(pname) or {}
+        p = (await asyncio.to_thread(profile_get, pname)) or {}
         scope = str(p.get("use_for", "both")).lower()
 
         note = ""
@@ -5052,38 +4908,29 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("profiles:setunit:"):
         _, _, pname, unit = data.split(":", 3)
-        p = profile_get(pname) or {}
+        p = (await asyncio.to_thread(profile_get, pname)) or {}
         p["data_limit_unit"] = "Gi" if unit == "Gi" else "Mi"
-        profile_set(pname, {k: v for k, v in p.items() if k in PROFILE_KEYS})
-        _log_admin("profile_set_unit", f"name={pname}; unit={unit}")
+        (await asyncio.to_thread(profile_set, pname, {k: v for k, v in p.items() if k in PROFILE_KEYS}))
+        (await asyncio.to_thread(_log_admin, "profile_set_unit", f"name={pname}; unit={unit}"))
         await edit_send(update, f"● Unit set to <b>{unit}</b>.", kb_profile_editor(pname)); return
 
     if data.startswith("profiles:toggle:"):
         _, _, pname, key = data.split(":", 3)
         if key not in ("start_on_first_use", "unlimited", "include_internal_network"):
             await edit_send(update, "Unsupported toggle.", kb_profile_editor(pname)); return
-        p = profile_get(pname) or {}
+        p = (await asyncio.to_thread(profile_get, pname)) or {}
         p[key] = not bool(p.get(key, False))
-        profile_set(pname, {k: v for k, v in p.items() if k in PROFILE_KEYS})
-        _log_admin("profile_toggle", f"name={pname}; key={key}; value={p[key]}")
+        (await asyncio.to_thread(profile_set, pname, {k: v for k, v in p.items() if k in PROFILE_KEYS}))
+        (await asyncio.to_thread(_log_admin, "profile_toggle", f"name={pname}; key={key}; value={p[key]}"))
         state = "ON" if p[key] else "OFF"
         await edit_send(update, f"● <b>{key}</b> is now <b>{state}</b>.", kb_profile_editor(pname)); return
 
-    # ___ Peers index
+
     if data == "peers:menu":
         await edit_send(update, "◇ <b>Peers</b>", KB.peers_index()); return
 
-    # ___ (Local / Node)
-    if data == "peers:create":
-        for state_key in (
-            STATE.get("CREATE"),
-            STATE.get("BULK"),
-            "STATUS_SEARCH",
-            "status_search_term",
-        ):
-            if state_key:
-                context.user_data.pop(state_key, None)
 
+    if data == "peers:create":
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⌘ Local", callback_data="create:scope:local"),
              InlineKeyboardButton("⌁ Node",  callback_data="create:scope:node")],
@@ -5094,13 +4941,13 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("create:scope:"):
         scope = data.split(":")[-1]
         if scope == "local":
-            ifaces = peer_ifaces()
-            rows = [[InlineKeyboardButton(f"{i['name']} (id {i['id']})",
+            ifaces = (await asyncio.to_thread(peer_ifaces))
+            rows = [[InlineKeyboardButton(interface_choice_label(i, include_id=True),
                                           callback_data=f"create:iface:{i['id']}")] for i in ifaces]
             rows.append([InlineKeyboardButton("← Back", callback_data="peers:create")])
             await edit_send(update, "＋ <b>Create peer (local)</b>\nChoose interface:", InlineKeyboardMarkup(rows))
         else:
-            nodes = list_nodes()
+            nodes = (await asyncio.to_thread(list_nodes))
             if not nodes:
                 await edit_send(update, "No nodes found or offline.", KB.back("peers:create")); return
             rows = [[InlineKeyboardButton(f"{n.get('name','node')} (id {n.get('id')})",
@@ -5111,8 +4958,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("create:node:") and data.count(":") == 2:
         nid = int(data.split(":")[-1])
-        ifs = list_node_ifaces(nid)
-        rows = [[InlineKeyboardButton(i["name"], callback_data=f"create:node:{nid}:iface:{i['name']}")] for i in ifs]
+        ifs = (await asyncio.to_thread(list_node_ifaces, nid))
+        rows = [[InlineKeyboardButton(interface_choice_label(i), callback_data=f"create:node:{nid}:iface:{i['name']}")] for i in ifs]
         rows.append([InlineKeyboardButton("← Back", callback_data="peers:create")])
         await edit_send(update, "Select interface:", InlineKeyboardMarkup(rows)); return
 
@@ -5125,7 +4972,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("✦ Choose saved profile", callback_data=f"create:node:pickprof:{nid}:{iname}")],
             [InlineKeyboardButton("＋ Create a profile", callback_data="profiles:new")],
         ]
-        dname = default_profile("single")
+        dname = (await asyncio.to_thread(default_profile, "single"))
         if dname:
             rows.insert(1, [InlineKeyboardButton(f"☆ Use default: {dname}", callback_data=f"create:node:useprofdef:{nid}:{iname}")])
         rows.append([InlineKeyboardButton("← Back", callback_data=f"create:node:{nid}")])
@@ -5156,7 +5003,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _, _, _, nid_s, iname = data.split(":", 4)
         nid = int(nid_s)
 
-        prof_name, profvals = profile_scope("single")
+        prof_name, profvals = (await asyncio.to_thread(profile_scope, "single"))
         profvals = profvals or {}
 
         defaults = {}
@@ -5194,7 +5041,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("create:node:pickprof:"):
         _, _, _, nid_s, iname = data.split(":", 4)
         nid = int(nid_s)
-        names = profiles_list_for("single")
+        names = (await asyncio.to_thread(profiles_list_for, "single"))
         if not names:
             await edit_send(update, "No compatible profiles (Single/Both) found.", KB.back(f"create:node:{nid}")); return
         rows = [[InlineKeyboardButton(f"✦ {n}", callback_data=f"create:node:useprof:{nid}:{iname}:{n}")] for n in names]
@@ -5205,7 +5052,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _, _, _, nid_s, iname, name = data.split(":", 5)
         nid = int(nid_s)
 
-        profvals = profile_get(name) or {}
+        profvals = (await asyncio.to_thread(profile_get, name)) or {}
         defaults = _profile_defaults(profvals)
 
         st = {
@@ -5233,14 +5080,14 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "data": {},
             "defaults": {},
             "selected_profile": None, "skip_filled": False,
-            "ask_missing_profile": True, 
+            "ask_missing_profile": True,
         }
         rows = [
             [InlineKeyboardButton("◇ Enter peer details", callback_data="create:mode:manual")],
             [InlineKeyboardButton("✦ Use peer profile", callback_data=f"create:pickprof:{iface_id}")],
             [InlineKeyboardButton("＋ Create a profile", callback_data="profiles:new")],
         ]
-        dname = default_profile("single")
+        dname = (await asyncio.to_thread(default_profile, "single"))
         if dname:
             rows.insert(1, [InlineKeyboardButton(f"☆ Use default: {dname}", callback_data=f"create:useprofdef:{iface_id}")])
         rows.append([InlineKeyboardButton("← Back", callback_data="create:scope:local")])
@@ -5254,12 +5101,12 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await edit_send(update, "Please pick the interface again.", KB.back("peers:create"))
             return
 
-        dname = default_profile("single")
+        dname = (await asyncio.to_thread(default_profile, "single"))
         if not dname:
             await edit_send(update, "No compatible default profile (Single/Both).", KB.back(f"create:iface:{iface_id}"))
             return
 
-        profvals = profile_get(dname) or {}
+        profvals = (await asyncio.to_thread(profile_get, dname)) or {}
         defaults = _profile_defaults(profvals)
 
         st["defaults"] = defaults
@@ -5278,7 +5125,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("create:pickprof:"):
         iface_id = int(data.split(":")[-1])
-        names = profiles_list_for("single")
+        names = (await asyncio.to_thread(profiles_list_for, "single"))
         if not names:
             await edit_send(update, "No compatible profiles (Single/Both) found.", KB.back(f"create:iface:{iface_id}")); return
         rows = [[InlineKeyboardButton(f"✦ {n}", callback_data=f"create:useprof:{iface_id}:{n}")] for n in names]
@@ -5292,7 +5139,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await edit_send(update, "Please pick the interface again.", KB.back("peers:create"))
             return
 
-        profvals = profile_get(name) or {}
+        profvals = (await asyncio.to_thread(profile_get, name)) or {}
         defaults = _profile_defaults(profvals)
 
         st["defaults"] = defaults
@@ -5321,15 +5168,15 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await create_step(update, context)
         return
 
-    
+
     if data == "home:main" or data == "home:refresh":
-       await edit_send(update, render_home(update), KB.home())
+       await edit_send(update, (await asyncio.to_thread(render_home, update)), KB.home())
        return
-    
-    
+
+
     if data == "home:admins":
         try:
-            r = _get(f"{PANEL}/api/telegram/admins", session="api")
+            r = (await asyncio.to_thread(_get, f"{PANEL}/api/telegram/admins", session="api"))
             j = _json_txt(r) or {}
             admins = j.get("admins", []) or []
         except Exception:
@@ -5365,7 +5212,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await edit_send(update, "\n".join(lines), InlineKeyboardMarkup(rows))
         return
-    
+
     if data == "home:help":
         txt = (
         "◇ <b>Help & Overview</b>\n\n"
@@ -5391,7 +5238,6 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-    # ___ Bulk 
     if data == "peers:bulk":
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⌘ Local", callback_data="bulk:scope:local"),
@@ -5403,13 +5249,13 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("bulk:scope:"):
         scope = data.split(":")[-1]
         if scope == "local":
-            ifaces = peer_ifaces()
-            rows = [[InlineKeyboardButton(f"{i['name']} (id {i['id']})",
+            ifaces = (await asyncio.to_thread(peer_ifaces))
+            rows = [[InlineKeyboardButton(interface_choice_label(i, include_id=True),
                                           callback_data=f"bulk:iface:{i['id']}")] for i in ifaces]
             rows.append([InlineKeyboardButton("← Back", callback_data="peers:bulk")])
             await edit_send(update, "▦ <b>Bulk create (local)</b>\nChoose interface:", InlineKeyboardMarkup(rows))
         else:
-            nodes = list_nodes()
+            nodes = (await asyncio.to_thread(list_nodes))
             if not nodes:
                 await edit_send(update, "No nodes found or offline.", KB.back("peers:bulk")); return
             rows = [[InlineKeyboardButton(f"{n.get('name','node')} (id {n.get('id')})",
@@ -5420,8 +5266,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("bulk:node:") and data.count(":") == 2:
         nid = int(data.split(":")[-1])
-        ifs = list_node_ifaces(nid)
-        rows = [[InlineKeyboardButton(i["name"], callback_data=f"bulk:node:{nid}:iface:{i['name']}")] for i in ifs]
+        ifs = (await asyncio.to_thread(list_node_ifaces, nid))
+        rows = [[InlineKeyboardButton(interface_choice_label(i), callback_data=f"bulk:node:{nid}:iface:{i['name']}")] for i in ifs]
         rows.append([InlineKeyboardButton("← Back", callback_data="peers:bulk")])
         await edit_send(update, "Select interface:", InlineKeyboardMarkup(rows)); return
 
@@ -5436,7 +5282,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await edit_send(update, f"▦ <b>Bulk on node</b>\nInterface: <b>{html(iname)}</b>\nChoose manual input or a saved profile. A default button appears only when a default profile exists.", kb)
         return
-    
+
     if data.startswith("bulk:node:manual:"):
         _, _, _, nid_s, iname = data.split(":", 4)
         nid = int(nid_s)
@@ -5460,12 +5306,12 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await bulk_step(update, context)
         return
 
-    
+
     if data.startswith("bulk:node:pickprof:"):
         _, _, _, nid_s, iname = data.split(":", 4)
         nid = int(nid_s)
 
-        names = profiles_list_for("bulk")
+        names = (await asyncio.to_thread(profiles_list_for, "bulk"))
         if not names:
             await edit_send(
                 update,
@@ -5478,7 +5324,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for n in names
         ]
         rows.append([InlineKeyboardButton("← Back", callback_data=f"bulk:node:{nid}:iface:{iname}")])
-        
+
         await edit_send(update, "✦ <b>Select a profile</b>:", InlineKeyboardMarkup(rows))
         return
 
@@ -5486,13 +5332,13 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _, _, _, nid_s, iname = data.split(":", 4)
         nid = int(nid_s)
 
-        dname = default_profile("bulk")
+        dname = (await asyncio.to_thread(default_profile, "bulk"))
         if not dname:
             await edit_send(update, "No compatible default profile (Bulk/Both).",
                         KB.back(f"bulk:node:{nid}:iface:{iname}"))
             return
 
-        profvals = profile_get(dname) or {}
+        profvals = (await asyncio.to_thread(profile_get, dname)) or {}
         defaults_from_profile = _profile_defaults(profvals)
 
         context.user_data[STATE["BULK"]] = {
@@ -5517,7 +5363,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _, _, _, nid_s, iname, name = data.split(":", 5)
         nid = int(nid_s)
 
-        profvals = profile_get(name) or {}
+        profvals = (await asyncio.to_thread(profile_get, name)) or {}
         defaults_from_profile = _profile_defaults(profvals)
 
         context.user_data[STATE["BULK"]] = {
@@ -5562,12 +5408,12 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await edit_send(update, "Please pick the interface again.", KB.back("peers:bulk"))
             return
 
-        dname = default_profile("bulk")
+        dname = (await asyncio.to_thread(default_profile, "bulk"))
         if not dname:
             await edit_send(update, "No compatible default profile (Bulk/Both).", KB.back(f"bulk:iface:{iface_id}"))
             return
 
-        profvals = profile_get(dname) or {}
+        profvals = (await asyncio.to_thread(profile_get, dname)) or {}
         defaults = _profile_defaults(profvals)
 
         st["defaults"] = {**defaults, "count": st.get("defaults", {}).get("count", "5")}
@@ -5583,7 +5429,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("bulk:pickprof:"):
         iface_id = int(data.split(":")[-1])
-        names = profiles_list_for("bulk")
+        names = (await asyncio.to_thread(profiles_list_for, "bulk"))
         if not names:
             await edit_send(update, "No compatible profiles (Bulk/Both) found.", KB.back(f"bulk:iface:{iface_id}")); return
         rows = [[InlineKeyboardButton(f"✦ {n}", callback_data=f"bulk:useprof:{iface_id}:{n}")] for n in names]
@@ -5597,7 +5443,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await edit_send(update, "Please pick the interface again.", KB.back("peers:bulk"))
             return
 
-        profvals = profile_get(name) or {}
+        profvals = (await asyncio.to_thread(profile_get, name)) or {}
         defaults = _profile_defaults(profvals)
 
         st["defaults"] = {**defaults, "count": st.get("defaults", {}).get("count", "5")}
@@ -5610,14 +5456,14 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data[STATE["BULK"]] = st
         await bulk_step(update, context)
         return
- 
+
     if data == "bulk:mode:manual":
         st = context.user_data.get(STATE["BULK"], {})
         st.pop("selected_profile", None)
 
         st["skip_filled"] = False
         st["ask_missing_profile"] = True
-        st["defaults"] = {"count": st.get("defaults", {}).get("count", "5")} 
+        st["defaults"] = {"count": st.get("defaults", {}).get("count", "5")}
 
         st["step"] = 0
         st["data"] = {}
@@ -5626,7 +5472,6 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-    # ___ Status 
     if data == "peers:status":
         context.user_data.pop("status_iface", None)
         context.user_data.pop("status_scope", None)
@@ -5642,7 +5487,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "status:scope:local":
         context.user_data["status_scope"] = "local"
-        ifaces = peer_ifaces()
+        ifaces = (await asyncio.to_thread(peer_ifaces))
         rows = [[InlineKeyboardButton("All interfaces", callback_data="status:iface:all")]]
         rows += [[InlineKeyboardButton(f"{i['name']} (id {i['id']})",
                                     callback_data=f"status:iface:{i['id']}")] for i in ifaces]
@@ -5650,7 +5495,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await edit_send(update, "⌘ <b>Local</b>\nPick interface:", InlineKeyboardMarkup(rows)); return
 
     if data == "status:scope:node":
-        nodes = list_nodes()
+        nodes = (await asyncio.to_thread(list_nodes))
         if not nodes:
             await edit_send(update, "No nodes found or offline.", KB.back("peers:status")); return
         rows = [[InlineKeyboardButton("All nodes", callback_data="status:node:all")]]
@@ -5671,11 +5516,11 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["status_scope"] = "node"
         context.user_data["status_node"]  = nid
         try:
-            n = next((x for x in list_nodes() if int(x.get("id")) == nid), None)
+            n = next((x for x in (await asyncio.to_thread(list_nodes)) if int(x.get("id")) == nid), None)
             context.user_data["status_node_name"] = (n or {}).get("name") or f"Node {nid}"
         except Exception:
             context.user_data["status_node_name"] = f"Node {nid}"
-        ifs = list_node_ifaces(nid)
+        ifs = (await asyncio.to_thread(list_node_ifaces, nid))
         rows = [[InlineKeyboardButton("All interfaces (node)", callback_data="status:iface:all")]]
         rows += [[InlineKeyboardButton(i["name"], callback_data=f"status:iface:{i['name']}")] for i in ifs]
         rows.append([InlineKeyboardButton("← Back", callback_data="status:scope:node")])
@@ -5692,6 +5537,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _peer_page(update, context, page=page); return
 
     if data == "status:search":
+        context.user_data.pop(STATE["CREATE"], None)
+        context.user_data.pop(STATE["BULK"], None)
         context.user_data["STATUS_SEARCH"] = True
         await edit_send(update, "⌕ Send a search term (name/address/endpoint). Send '-' to clear.", KB.back("peers:status")); return
     if data == "status:clearsearch":
@@ -5699,7 +5546,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("STATUS_SEARCH", None)
         await _peer_page(update, context, page=1); return
 
-    # ___ Peer stuff
+
     if data.startswith("peer:open:"):
         pid = int(data.split(":")[-1])
         await _peer_detail_view(update, context, pid)
@@ -5711,29 +5558,29 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("peer:toggle:"):
         pid = int(data.split(":")[-1])
-        p_now = peer_by_id(pid) if 'peer_by_id' in globals() else get_peer(pid)
+        p_now = (await asyncio.to_thread(peer_by_id, pid)) if 'peer_by_id' in globals() else (await asyncio.to_thread(get_peer, pid))
         if not p_now:
             await edit_send(update, "Peer not found.", KB.peers_index()); return
         status_now = (p_now.get("status") or "").lower()
         try:
             if status_now != "online":
-                peer_enable(pid)
+                (await asyncio.to_thread(peer_enable, pid))
                 action = "peer_enable"
             else:
-                peer_disable(pid)
+                (await asyncio.to_thread(peer_disable, pid))
                 action = "peer_disable"
         except Exception as e:
             await edit_send(update, f"⊘ {html(str(e))}", KB.back(f"peer:open:{pid}")); return
 
-        _log_admin(action, f"pid={pid}; scope=local")
+        (await asyncio.to_thread(_log_admin, action, f"pid={pid}; scope=local"))
         await _peer_detail_view(update, context, pid)
         return
 
     if data.startswith("peer:resetdata:"):
         pid = int(data.split(":")[-1])
         try:
-            peer_reset_usage(pid)
-            _log_admin("peer_reset_data", f"pid={pid}; scope=local")
+            (await asyncio.to_thread(peer_reset_usage, pid))
+            (await asyncio.to_thread(_log_admin, "peer_reset_data", f"pid={pid}; scope=local"))
             await edit_send(update, "● Data usage reset.", KB.back(f"peer:open:{pid}"))
         except Exception as e:
             await edit_send(update, f"⊘ Reset data failed: <code>{html(str(e))}</code>", KB.back(f"peer:open:{pid}"))
@@ -5742,8 +5589,8 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("peer:resettimer:"):
         pid = int(data.split(":")[-1])
         try:
-            peer_reset_timer(pid)
-            _log_admin("peer_reset_timer", f"pid={pid}; scope=local")
+            (await asyncio.to_thread(peer_reset_timer, pid))
+            (await asyncio.to_thread(_log_admin, "peer_reset_timer", f"pid={pid}; scope=local"))
             await edit_send(update, "● Timer reset.", KB.back(f"peer:open:{pid}"))
         except Exception as e:
             await edit_send(update, f"⊘ Reset timer failed: <code>{html(str(e))}</code>", KB.back(f"peer:open:{pid}"))
@@ -5751,7 +5598,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("peer:more:"):
         pid = int(data.split(":")[-1])
-        p = peer_by_id(pid) if 'peer_by_id' in globals() else get_peer(pid)
+        p = (await asyncio.to_thread(peer_by_id, pid)) if 'peer_by_id' in globals() else (await asyncio.to_thread(get_peer, pid))
         if not p:
             await edit_send(update, "Peer not found.", KB.peers_index()); return
         await edit_send(update, _peer_more_info(p), KB.back(f"peer:open:{pid}")); return
@@ -5776,7 +5623,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     KB.back(f"peer:open:{pid}"),
                 )
             return
-        _log_admin("peer_delete", f"pid={pid}; scope=local")
+        (await asyncio.to_thread(_log_admin, "peer_delete", f"pid={pid}; scope=local"))
         await edit_send(update, "⌫ Peer deleted.", KB.peers_index())
         return
 
@@ -5797,7 +5644,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _, _, pid_s, key = data.split(":", 3)
         pid = int(pid_s)
         try:
-            p = peer_by_id(pid) if 'peer_by_id' in globals() else get_peer(pid)
+            p = (await asyncio.to_thread(peer_by_id, pid)) if 'peer_by_id' in globals() else (await asyncio.to_thread(get_peer, pid))
         except Exception:
             p = None
         cur = _current_value(p, key)
@@ -5812,7 +5659,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"◇ <b>Edit</b> — {html(_edit_label(key))}{hint}\n\nSend the new value.",
             kb
         ); return
-    
+
     if data.startswith("edit:cancel:"):
         pid = int(data.split(":")[-1])
         context.user_data.pop(STATE["EDIT_ONE"], None)
@@ -5830,14 +5677,14 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data[STATE[flow]] = st
                 await (create_step if flow == "CREATE" else bulk_step)(update, context)
         return
-    
+
     if data == "backup:menu":
         try:
-            prefs = _get(f"{PANEL}/api/backup/prefs", session="api").json()
+            prefs = (await asyncio.to_thread(_get, f"{PANEL}/api/backup/prefs", session="api")).json()
         except Exception:
             prefs = {}
-        last_ts = _last_backup()
-        sched = _backup_schedule()
+        last_ts = (await asyncio.to_thread(_last_backup))
+        sched = (await asyncio.to_thread(_backup_schedule))
         enabled = bool(sched.get("enabled"))
         when = str(sched.get("time") or "03:00")
         freq = str(sched.get("freq") or "daily")
@@ -5857,9 +5704,9 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         await edit_send(update, header, kb_backup_menu(prefs))
         return
-    
+
     if data == "backup:schedule":
-        s = _backup_schedule()
+        s = (await asyncio.to_thread(_backup_schedule))
 
         enabled = bool(
             s.get("enabled")
@@ -5927,11 +5774,11 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "backup:schedule:toggle":
-        s = _backup_schedule()
+        s = (await asyncio.to_thread(_backup_schedule))
         payload = dict(s)
         payload["enabled"] = not bool(s.get("enabled", False))
-        _set_backup_schedule(payload)
-        s2 = _backup_schedule()
+        (await asyncio.to_thread(_set_backup_schedule, payload))
+        s2 = (await asyncio.to_thread(_backup_schedule))
         await edit_send(
             update,
             (
@@ -5941,7 +5788,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb_backup_schedule(s2),
         )
         return
-    
+
     if data == "backup:schedule:test_2m":
         st = _load_backup_state()
         fire_at = int(time.time()) + 120
@@ -5961,7 +5808,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
     if data == "backup:schedule:run_now":
-        s = _backup_schedule()
+        s = (await asyncio.to_thread(_backup_schedule))
         wg = "1" if s.get("include_wg") else "0"
         tg = "1" if s.get("send_to_telegram") else "0"
         try:
@@ -5976,7 +5823,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dest = (AUTO_BACKUP_DIR / _auto_backupname("full"))
             ok, info = await asyncio.to_thread(_store_backuppanel, url, dest, "api", 900)
             if ok:
-                _p_autobackups("full", s.get("keep", 7))
+                (await asyncio.to_thread(_p_autobackups, "full", s.get("keep", 7)))
                 await edit_send(
                     update,
                     (
@@ -5996,7 +5843,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ),
                                 InlineKeyboardMarkup([[InlineKeyboardButton("← Back", callback_data="backup:schedule")]])
                 )
-        
+
         except Exception as e:
             await edit_send(
                 update,
@@ -6039,10 +5886,10 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    
+
     if data == "backup:prefs":
         try:
-            r = _get(f"{PANEL}/api/backup/prefs", session="sess")
+            r = (await asyncio.to_thread(_get, f"{PANEL}/api/backup/prefs", session="sess"))
             prefs = r.json()
         except Exception:
             prefs = {"include_wg": True, "send_to_telegram": False}
@@ -6051,12 +5898,12 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                f"• Send to Telegram: <b>{'ON' if prefs.get('send_to_telegram') else 'OFF'}</b>")
         await edit_send(update, msg, kb_backup_prefs(prefs))
         return
-    
+
     if data.startswith("backup:prefs:toggle:"):
         which = data.split(":")[-1]
         cur = {}
         try:
-            cur = _get(f"{PANEL}/api/backup/prefs", session="sess").json()
+            cur = (await asyncio.to_thread(_get, f"{PANEL}/api/backup/prefs", session="sess")).json()
         except Exception:
             cur = {"include_wg": True, "send_to_telegram": False}
         if which == "wg":
@@ -6064,7 +5911,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif which == "tg":
             cur["send_to_telegram"] = not bool(cur.get("send_to_telegram"))
         try:
-            _post(f"{PANEL}/api/backup/prefs", session="sess", json=cur)
+            (await asyncio.to_thread(_post, f"{PANEL}/api/backup/prefs", session="sess", json=cur))
         except Exception:
             pass
         await edit_send(
@@ -6075,12 +5922,12 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb_backup_prefs(cur)
         )
         return
-    
+
     if data == "backup:run:db":
         try:
-            r = _get(f"{PANEL}/api/backup/db", session="api")
+            r = (await asyncio.to_thread(_get, f"{PANEL}/api/backup/db", session="api"))
             if r.status_code == 404:
-               r2 = _get(f"{PANEL}/api/backup/settings", session="api")
+               r2 = (await asyncio.to_thread(_get, f"{PANEL}/api/backup/settings", session="api"))
                content = _safe_zip(r2, "Settings backup")
                await _send_zipfile(update, content, _backup_filename("settings"), kind="settings")
                await edit_send(update, "ℹ️ DB-only backup isn’t available on this setup; sent settings-only instead.", KB.back("backup:menu"))
@@ -6089,38 +5936,38 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _send_zipfile(update, content, _backup_filename("db"), kind="database")
             uid, uname = _admin_ident()
             fname = _headers_filename(r)
-            _log_admin("backup_db", f"file={fname} size={len(content)}B")
+            (await asyncio.to_thread(_log_admin, "backup_db", f"file={fname} size={len(content)}B"))
 
         except Exception as e:
             await edit_send(update, f"⊘ DB backup failed: <code>{html(str(e))}</code>", KB.back("backup:menu"))
         return
-    
+
     if data == "backup:run:settings":
         try:
-            r = _get(f"{PANEL}/api/backup/settings", session="api")
+            r = (await asyncio.to_thread(_get, f"{PANEL}/api/backup/settings", session="api"))
             content = _safe_zip(r, "Settings backup")
             await _send_zipfile(update, content, _backup_filename("settings"), kind="settings")
             uid, uname = _admin_ident()
             fname = _headers_filename(r)
-            _log_admin("backup_settings", f"file={fname} size={len(content)}B")
+            (await asyncio.to_thread(_log_admin, "backup_settings", f"file={fname} size={len(content)}B"))
         except Exception as e:
             await edit_send(update, f"⊘ Settings backup failed: <code>{html(str(e))}</code>", KB.back("backup:menu"))
         return
-    
+
     if data == "backup:run:full":
         try:
             prefs = {}
             try:
-                prefs = _get(f"{PANEL}/api/backup/prefs", session="api").json()
+                prefs = (await asyncio.to_thread(_get, f"{PANEL}/api/backup/prefs", session="api")).json()
             except Exception:
                 prefs = {"include_wg": True, "send_to_telegram": False}
 
             wg = "1" if prefs.get("include_wg") else "0"
 
-            r = _get(
+            r = (await asyncio.to_thread(_get, 
                 f"{PANEL}/api/backup/full?wg={wg}&tg=0",
                 session="api",
-            )
+            ))
             content = _safe_zip(r, "Full backup")
             fname = _headers_filename(r) or _backup_filename("full")
             await _send_zipfile(
@@ -6129,16 +5976,15 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 fname,
                 kind="full",
             )
-            _log_admin(
+            (await asyncio.to_thread(_log_admin, 
                 "backup_full",
                 f"file={fname} size={len(content)}B wg={int(wg=='1')} tg=0",
-            )
+            ))
 
         except Exception as e:
             await edit_send(update, f"⊘ Full backup failed: <code>{html(str(e))}</code>", KB.back("backup:menu"))
         return
 
-    
 
     if data in ("wiz:create:cancel", "wiz:bulk:cancel"):
         for k in list(STATE.values()):
@@ -6172,14 +6018,13 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 
-# ___ Peer list & pagi
 async def _peer_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int = 1):
 
     import math
 
-    scope     = str(context.user_data.get("status_scope") or "local").lower()  
-    iface_sel = context.user_data.get("status_iface", "all")                   
-    node_sel  = context.user_data.get("status_node")                           
+    scope     = str(context.user_data.get("status_scope") or "local").lower()
+    iface_sel = context.user_data.get("status_iface", "all")
+    node_sel  = context.user_data.get("status_node")
     search_q  = (context.user_data.get("status_search_term") or "").strip().lower()
 
     try:
@@ -6244,19 +6089,19 @@ async def _peer_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page: i
     peers: list[dict] = []
     if scope == "local":
         if iface_sel == "all":
-            peers = list_peers(None) or []
+            peers = (await asyncio.to_thread(list_peers, None)) or []
             iface_label = "all interfaces"
         else:
             try:
                 iid = int(iface_sel)
             except Exception:
                 iid = None
-            peers = list_peers(iid) or []
+            peers = (await asyncio.to_thread(list_peers, iid)) or []
             iface_label = _iface_id().get(iid, str(iface_sel))
         scope_label = "⌘ Local"
     else:
         if node_sel is None:
-            nodes = list_nodes()
+            nodes = (await asyncio.to_thread(list_nodes))
             if not nodes:
                 await edit_send(update, "No nodes found or offline.", KB.back("peers:menu")); return
             rows = [[InlineKeyboardButton(f"{n.get('name','node')} (id {n.get('id')})",
@@ -6265,7 +6110,7 @@ async def _peer_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page: i
             await edit_send(update, "⌁ <b>Select a node</b>:", InlineKeyboardMarkup(rows)); return
 
         iname = None if iface_sel == "all" else str(iface_sel)
-        peers = list_node_peers(int(node_sel), iname) or []
+        peers = (await asyncio.to_thread(list_node_peers, int(node_sel), iname)) or []
         node_name = context.user_data.get("status_node_name") or ""
         scope_label = f"⌁ {node_name or ('node ' + str(node_sel))}"
         iface_label = "all interfaces" if iface_sel == "all" else str(iface_sel)
@@ -6291,7 +6136,7 @@ async def _peer_page(update: Update, context: ContextTypes.DEFAULT_TYPE, page: i
     else:
         peer_rows.append([InlineKeyboardButton("No peers found", callback_data="noop")])
 
-    search_label = "⊘ Clear manual search" if search_q else "⌕ Search manually"
+    search_label = "× Clear filter" if search_q else "⌕ Filter peers"
     search_row   = [InlineKeyboardButton(
         search_label,
         callback_data=("status:clearsearch" if search_q else "status:search")
@@ -6341,7 +6186,7 @@ def kb_peer_detail(p: dict, back_cb: str) -> InlineKeyboardMarkup:
 
 
 async def _peer_detail_view(update: Update, context: ContextTypes.DEFAULT_TYPE, pid: int):
-    p = peer_by_id(pid) if 'peer_by_id' in globals() else get_peer(pid)
+    p = (await asyncio.to_thread(peer_by_id, pid)) if 'peer_by_id' in globals() else (await asyncio.to_thread(get_peer, pid))
     if not p:
         await edit_send(update, "Peer not found.", KB.peers_index())
         return
@@ -6352,12 +6197,12 @@ async def _peer_detail_view(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     else:
         back_cb = "peers:menu"
 
-    text = _peer_more_info(p)  
+    text = _peer_more_info(p)
     await edit_send(update, text, kb_peer_detail(p, back_cb))
 
 
 async def _edit_menu(update: Update, pid: int):
-    p = peer_by_id(pid) if 'peer_by_id' in globals() else get_peer(pid)
+    p = (await asyncio.to_thread(peer_by_id, pid)) if 'peer_by_id' in globals() else (await asyncio.to_thread(get_peer, pid))
     if not p:
         await edit_send(update, "Peer not found.", KB.peers_index()); return
 
@@ -6413,7 +6258,6 @@ def _profile_defaults(profvals: dict) -> dict:
     return defaults
 
 
-# ___ Wizards 
 async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     st = context.user_data.get(STATE["CREATE"])
     if not st:
@@ -6427,7 +6271,7 @@ async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     step     = int(st.get("step", 0))
     answers  = st.setdefault("data", {})
 
-    scope    = (st.get("scope") or "local").strip().lower()  
+    scope    = (st.get("scope") or "local").strip().lower()
     iface_id = st.get("iface_id")
     node_id  = st.get("node_id")
     iname    = st.get("iface_name")
@@ -6441,7 +6285,7 @@ async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ask_missing_profile:
         defaults = defaults or PANEL_DEFAULTS
     else:
-        defaults = defaults or {} 
+        defaults = defaults or {}
 
     def _prefill_for(key: str, def_base):
 
@@ -6486,9 +6330,9 @@ async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         merged = {k: v for k, v in answers.items() if v != ""}
         if ask_missing_profile:
-            base = {**defaults}  
+            base = {**defaults}
         else:
-            base = {**defaults}  
+            base = {**defaults}
 
         payload = _payload_api({**base, **merged})
 
@@ -6528,7 +6372,7 @@ async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         st["submitting"] = True
         context.user_data[STATE["CREATE"]] = st
 
-        r = _post_soft(f"{PANEL}/api/peers", session="api", json=body)
+        r = (await asyncio.to_thread(_post_soft, f"{PANEL}/api/peers", session="api", json=body))
         j = _json_txt(r)
         if not (200 <= r.status_code < 300 and isinstance(j, dict)):
             st["submitting"] = False
@@ -6559,7 +6403,7 @@ async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Peer %s was created but bundle delivery failed",
                 pid,
             )
-            short = get_shortlink(int(pid))
+            short = (await asyncio.to_thread(get_shortlink, int(pid)))
             await send_text(
                 update,
                 (
@@ -6586,8 +6430,8 @@ async def create_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     iface_label = str(iface_id)
                 details = _peer_details(pid=pid, name=nm, iface=iface_label, scope="local")
 
-            log_tg(uid, uname, "peer_create", details)
-            log_admin(uid, uname, "peer_create", details)
+            (await asyncio.to_thread(log_tg, uid, uname, "peer_create", details))
+            (await asyncio.to_thread(log_admin, uid, uname, "peer_create", details))
         except Exception:
             pass
 
@@ -6614,14 +6458,14 @@ async def bulk_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_text(update, "⊘ Bulk session expired. Start again from Peers → ▦ Bulk.", KB.peers_index())
         return
 
-    # Session + mode (local vs node)
+
     step     = int(st.get("step", 0))
     selected = st.get("selected_profile")
 
-    scope      = (st.get("scope") or "local").lower()  
-    iface_id   = st.get("iface_id")                    
-    node_id    = st.get("node_id")                     
-    iface_name = st.get("iface_name")                  
+    scope      = (st.get("scope") or "local").lower()
+    iface_id   = st.get("iface_id")
+    node_id    = st.get("node_id")
+    iface_name = st.get("iface_name")
 
     ask_missing_profile = bool(st.get("ask_missing_profile") or selected)
 
@@ -6721,12 +6565,12 @@ async def bulk_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 }
             )
 
-            r = _post(f"{PANEL}/api/peers/bulk", session="api", json=api_payload)
+            r = (await asyncio.to_thread(_post, f"{PANEL}/api/peers/bulk", session="api", json=api_payload))
             j = _json_txt(r)
 
             ok = bool(isinstance(j, dict) and (j.get("created") or j.get("success") or j.get("ok")))
             created = int((j.get("created") if isinstance(j, dict) else 0) or 0)
-            errors = 0  
+            errors = 0
         else:
             payload["iface_id"] = int(iface_id)
             res = bulk_create(iface_id, count, payload)
@@ -6774,8 +6618,8 @@ async def bulk_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 scope=scope,
                 base=base or None
             )
-            log_tg(uid, uname, "peer_bulk_create", details)
-            log_admin(uid, uname, "peer_bulk_create", details)
+            (await asyncio.to_thread(log_tg, uid, uname, "peer_bulk_create", details))
+            (await asyncio.to_thread(log_admin, uid, uname, "peer_bulk_create", details))
         except Exception:
             pass
 
@@ -6815,9 +6659,9 @@ async def edit_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if step >= len(EDIT_FIELDS):
         body_raw = st.get("data", {})
-        payload = _payload_api(body_raw)  
+        payload = _payload_api(body_raw)
         if payload:
-            update_peer(pid, payload)                   
+            (await asyncio.to_thread(update_peer, pid, payload))
         context.user_data.pop(STATE["EDIT"], None)
         await send_text(update, "● Saved.", KB.peers_index())
         return
@@ -6833,7 +6677,6 @@ async def edit_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ____ Profile editor
 PROFILE_FIELDS = [
     ("name",                 "Friendly name",                          ""),
     ("allowed_ips",          "Allowed IPs",                            ""),
@@ -6960,7 +6803,7 @@ async def profile_new_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     step = st["step"]
     if step >= len(PROFILE_FIELDS):
-        profile_set(st["name"], st["data"]) 
+        (await asyncio.to_thread(profile_set, st["name"], st["data"]))
         await send_text(update, f"● Saved profile <b>{html(st['name'])}</b>.", KB.profiles_menu())
         context.user_data.pop(STATE["P_NEW"], None)
         return
@@ -6976,13 +6819,13 @@ async def profile_new_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def profile_edit_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    st = context.user_data.get(STATE["P_EDIT"]) 
+    st = context.user_data.get(STATE["P_EDIT"])
     step = st["step"]
 
     if step >= len(PROFILE_FIELDS):
         current = st.get("defaults", {})
         newvals = {k: v for k,v in st["data"].items() if v != ""}
-        profile_set(st["name"], {**current, **newvals})
+        (await asyncio.to_thread(profile_set, st["name"], {**current, **newvals}))
         await send_text(update, f"● Updated profile <b>{html(st['name'])}</b>.", KB.profiles_menu())
         context.user_data.pop(STATE["P_EDIT"], None)
         return
@@ -6994,7 +6837,7 @@ async def profile_edit_process(update: Update, context: ContextTypes.DEFAULT_TYP
     await edit_send(update, f"{breadcrumb}\n{prompt}{hint}\n\nSend '-' to cancel.", KB.back(f"profiles:open:{st['name']}"))
 
 async def wizard_choose_node(update: Update):
-    nodes = list_nodes()
+    nodes = (await asyncio.to_thread(list_nodes))
     if not nodes:
         return await edit_send(update, "No nodes found or offline.", KB.peers_index())
     rows = [[InlineKeyboardButton(f"{n.get('name','node')} (id {n.get('id')})",
@@ -7003,7 +6846,7 @@ async def wizard_choose_node(update: Update):
     await edit_send(update, "Select node:", InlineKeyboardMarkup(rows))
 
 async def wizard_bulk_node(update: Update):
-    nodes = list_nodes()
+    nodes = (await asyncio.to_thread(list_nodes))
     if not nodes:
         return await edit_send(update, "No nodes found or offline.", KB.peers_index())
     rows = [[InlineKeyboardButton(f"{n.get('name','node')} (id {n.get('id')})",
@@ -7017,7 +6860,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
 
 
-    # Security control
     sec_state = context.user_data.get(TG_SECURITY_STATE)
     if sec_state:
         if text == "-":
@@ -7046,7 +6888,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await send_text(update, f"⊘ Could not block address: <code>{html(_ctl_error(result))}</code>", KB.back("security:deny"))
                 return
             context.user_data.pop(TG_SECURITY_STATE, None)
-            _log_admin_update(update, "security_deny_add", f"network={value}")
+            (await asyncio.to_thread(_log_admin_update, update, "security_deny_add", f"network={value}"))
             out, kb = await asyncio.to_thread(render_security_deny)
             await edit_send(update, "● <b>Permanent block added.</b>\n\n" + out, kb)
             return
@@ -7112,7 +6954,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if applied.get("ok") is False:
                 await send_text(update, f"◆ <b>Name saved, but apply failed.</b>\n<code>{html(_ctl_error(applied))}</code>", KB.back(f"traffic:open:{pid_for_edit}"))
                 return
-            _log_admin_update(update, "traffic_policy_edit_name", f"policy_id={pid_for_edit}; name={new_name}")
+            (await asyncio.to_thread(_log_admin_update, update, "traffic_policy_edit_name", f"policy_id={pid_for_edit}; name={new_name}"))
             out,kb=await asyncio.to_thread(render_traffic_policy,pid_for_edit,return_page)
             await edit_send(update,"● <b>Policy name updated and applied.</b>\n\n"+out,kb)
             return
@@ -7141,7 +6983,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if applied.get("ok") is False:
                 await send_text(update, f"◆ <b>Destinations saved, but apply failed.</b>\n<code>{html(_ctl_error(applied))}</code>", KB.back(f"traffic:open:{pid_for_edit}"))
                 return
-            _log_admin_update(update, "traffic_policy_edit_destinations", f"policy_id={pid_for_edit}; domains={len(domains)}; cidrs={len(cidrs)}; countries={len(countries)}")
+            (await asyncio.to_thread(_log_admin_update, update, "traffic_policy_edit_destinations", f"policy_id={pid_for_edit}; domains={len(domains)}; cidrs={len(cidrs)}; countries={len(countries)}"))
             out,kb=await asyncio.to_thread(render_traffic_policy,pid_for_edit,return_page)
             await edit_send(update,"● <b>Blocked destinations updated and applied.</b>\n\n"+out,kb)
             return
@@ -7187,7 +7029,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if applied.get("ok") is False:
                 await send_text(update, f"◆ <b>Policy saved, but apply failed.</b>\n<code>{html(_ctl_error(applied))}</code>", KB.back("traffic:list:1"))
                 return
-            _log_admin_update(update, "traffic_policy_create", f"policy_id={policy['id']}; name={policy['name']}")
+            (await asyncio.to_thread(_log_admin_update, update, "traffic_policy_create", f"policy_id={policy['id']}; name={policy['name']}"))
             out, kb = await asyncio.to_thread(render_traffic_policy, policy["id"])
             await edit_send(update, "● <b>Policy created and applied.</b>\n\n" + out, kb)
             return
@@ -7219,9 +7061,9 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await edit_send(update, "⊘ Invalid value type.", kb_profile_editor(pname))
             return
 
-        p = profile_get(pname) or {}
+        p = (await asyncio.to_thread(profile_get, pname)) or {}
         p[key] = val
-        profile_set(pname, {k: v for k, v in p.items() if k in PROFILE_KEYS})
+        (await asyncio.to_thread(profile_set, pname, {k: v for k, v in p.items() if k in PROFILE_KEYS}))
 
         context.user_data.pop(STATE["P_EDIT_ONE"], None)
         await edit_send(update, profile_summary(pname), kb_profile_editor(pname))
@@ -7238,7 +7080,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         payload = _payload_api({key: text})
         try:
-            update_peer(pid, payload)  
+            (await asyncio.to_thread(update_peer, pid, payload))
             await send_text(update, "● Saved.")
         except Exception as e:
             await send_text(update, f"⊘ {html(str(e))}")
@@ -7246,6 +7088,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _edit_menu(update, pid)
         return
 
+
+    filter_requested = context.user_data.pop("STATUS_SEARCH", False)
+    if context.user_data.pop(STATE["SEARCH"], False) or filter_requested:
+        context.user_data["status_search_term"] = "" if text == "-" else text[:128]
+        await _peer_page(update, context, page=1)
+        return
 
     if text == "-":
         for k in list(STATE.values()):
@@ -7259,7 +7107,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fields = stc.get("fields") or ADVANCED_CREATE_FIELDS
         if 0 <= step < len(fields):
             key, _prompt, _def = fields[step]
-            stc["data"][key] = text  
+            stc["data"][key] = text
             stc["step"] = step + 1
             context.user_data[STATE["CREATE"]] = stc
             await create_step(update, context)
@@ -7282,7 +7130,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not name:
             await send_text(update, "Please send a non-empty name or '-' to cancel.", KB.back("profiles:menu"))
             return
-        if profile_get(name):
+        if (await asyncio.to_thread(profile_get, name)):
             await send_text(update, "⊘ A profile with that name already exists. Send another name or '-' to cancel.",
                             KB.back("profiles:menu"))
             return
@@ -7303,7 +7151,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if stp:
         step = int(stp.get("step", 0))
         try:
-            fields_seq = PROFILE_FIELDS 
+            fields_seq = PROFILE_FIELDS
         except Exception:
             fields_seq = [f for f in CREATE_FIELDS if f[0] != "count"]
         if 0 <= step < len(fields_seq):
@@ -7312,30 +7160,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             stp["step"] = step + 1
             context.user_data[STATE["P_EDIT"]] = stp
         await profile_edit_process(update, context)
-        return
-
-    if context.user_data.get(STATE.get("SEARCH")):
-        term = text.lower()
-        try:
-            peers = list_peers(None)
-        except Exception:
-            peers = []
-        matches = []
-        for p in peers:
-            name = str(p.get("name") or "")
-            addr = str(p.get("address") or p.get("ip") or "")
-            pk   = str(p.get("public_key") or "")
-            if term in name.lower() or term in addr.lower() or term in pk.lower():
-                pid = int(p.get("id"))
-                label = f"{name or 'peer-'+str(pid)} (id {pid})"
-                matches.append([
-                    InlineKeyboardButton(label, callback_data=f"peer:open:{pid}"),
-                    InlineKeyboardButton("⌫",  callback_data=f"peer:delete:{pid}")
-                ])
-        if not matches:
-            matches = [[InlineKeyboardButton("No matches", callback_data="noop")]]
-        matches.append([InlineKeyboardButton("← Back", callback_data="peers:menu")])
-        await edit_send(update, f"⌕ Results for <b>{html(text)}</b>:", InlineKeyboardMarkup(matches))
         return
 
     await send_text(update, "◇ I didn't catch that. Use the buttons below.", KB.home())
@@ -7359,13 +7183,13 @@ async def on_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data_bytes = await tg_file.download_as_bytearray()
         data_bytes = bytes(data_bytes)
     except Exception as e:
-        _log_admin_update(update, "restore_download_failed", f"{type(e).__name__}: {e}")
+        (await asyncio.to_thread(_log_admin_update, update, "restore_download_failed", f"{type(e).__name__}: {e}"))
         await update.message.reply_html("⊘ Failed to download the file from Telegram.")
         return
 
     restore_wg = "0"
     try:
-        prefs_r = api.get(f"{PANEL}/api/backup/prefs", timeout=20)
+        prefs_r = api.get(f"{API_PANEL}/api/backup/prefs", timeout=20)
         prefs = prefs_r.json() if prefs_r.ok else {}
         restore_wg = "1" if prefs.get("include_wg") else "0"
     except Exception:
@@ -7377,9 +7201,9 @@ async def on_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         files = {"file": (filename, data_bytes, "application/zip")}
         form = {"kind": kind, "restore_wg": restore_wg}
 
-        r = api.post(f"{PANEL}/api/backup/restore_api", data=form, files=files, timeout=60)
+        r = api.post(f"{API_PANEL}/api/backup/restore_api", data=form, files=files, timeout=60)
         preview = (r.text or "")[:400].replace("\n", "\\n")
-        _log_admin_update(update, "restore_api_resp", f"status={r.status_code} ok={r.ok} body={preview}")
+        (await asyncio.to_thread(_log_admin_update, update, "restore_api_resp", f"status={r.status_code} ok={r.ok} body={preview}"))
 
         try:
             j = r.json()
@@ -7408,22 +7232,22 @@ async def on_doc(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_html(msg)
 
     except Exception as e:
-        _log_admin_update(update, "restore_api_error", f"{type(e).__name__}: {e}")
+        (await asyncio.to_thread(_log_admin_update, update, "restore_api_error", f"{type(e).__name__}: {e}"))
         await update.message.reply_html("⊘ Restore request failed. Check panel logs.")
     finally:
         context.user_data.pop(STATE["BACKUP_RESTORE_WAIT"], None)
 
 
 async def start_create_with_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, name: str):
-    ifaces = peer_ifaces()
-    rows = [[InlineKeyboardButton(f"{i['name']} (id {i['id']})", callback_data=f"create:iface:{i['id']}")] for i in ifaces]
+    ifaces = (await asyncio.to_thread(peer_ifaces))
+    rows = [[InlineKeyboardButton(interface_choice_label(i, include_id=True), callback_data=f"create:iface:{i['id']}")] for i in ifaces]
     rows.append([InlineKeyboardButton("← Back", callback_data="profiles:menu")])
     context.user_data["_pending_profile_create"] = name
     await edit_send(update, f"＋ <b>Create</b> using profile <b>{html(name)}</b>\nChoose interface:", InlineKeyboardMarkup(rows))
 
 async def start_bulk_with_profile(update: Update, context: ContextTypes.DEFAULT_TYPE, name: str):
-    ifaces = peer_ifaces()
-    rows = [[InlineKeyboardButton(f"{i['name']} (id {i['id']})", callback_data=f"bulk:iface:{i['id']}")] for i in ifaces]
+    ifaces = (await asyncio.to_thread(peer_ifaces))
+    rows = [[InlineKeyboardButton(interface_choice_label(i, include_id=True), callback_data=f"bulk:iface:{i['id']}")] for i in ifaces]
     rows.append([InlineKeyboardButton("← Back", callback_data="profiles:menu")])
     context.user_data["_pending_profile_bulk"] = name
     await edit_send(update, f"▦ <b>Bulk</b> using profile <b>{html(name)}</b>\nChoose interface:", InlineKeyboardMarkup(rows))
@@ -7445,13 +7269,6 @@ def _read_json(path: Path, default):
 def _notify_app(
     event_key: str,
 ) -> bool:
-    """
-    Return whether a panel availability notification is enabled.
-
-    Supported keys:
-        app_down
-        app_up
-    """
     settings = _read_json(
         TELEGRAM_SETTINGS_FILE,
         {},
@@ -7546,17 +7363,38 @@ def _probe_panel_health():
             _discard_panel_health_session()
             raise
 
-def _panel_connection_error(exc):
+def _probe_origin_health():
+
+    if API_PANEL == PANEL:
+        return False
+    with _new_panel_health_session() as session:
+        response = session.get(f"{API_PANEL}/api/healthz", timeout=(2, 3),
+                               allow_redirects=False)
+        if response.status_code != 200:
+            return False
+        _raise_if_login_html(response, f"{API_PANEL}/api/healthz")
+        return True
+
+
+def _panel_connection_error(exc, language="en"):
     if isinstance(exc, requests.exceptions.ConnectTimeout):
+        if language == "fa":return "زمان انتظار برای اتصال به پنل پایان یافت. نشانی و درگاه پنل، فایروال و مسیر پروکسی را بررسی کنید."
         return "Connection to the panel timed out. Check the configured panel host, port, firewall and proxy/CDN path. This does not confirm that the panel process stopped."
     if isinstance(exc, requests.exceptions.ReadTimeout):
+        if language == "fa":return "پاسخ کامل HTTPS در زمان تعیین‌شده دریافت نشد. ممکن است برقراری TLS متوقف شده باشد. اتصال محلی و عمومی را مقایسه و گزارش‌های پنل و پروکسی را بررسی کنید."
         return "No complete HTTPS response arrived before the deadline. This can include a stalled TLS handshake; compare local and public HTTPS checks, then review panel/proxy logs."
     if isinstance(exc, requests.exceptions.SSLError):
         if "CERTIFICATE_VERIFY_FAILED" in str(exc) or "certificate verify failed" in str(exc).lower():
+            if language == "fa":return "اعتبارسنجی گواهی TLS ناموفق بود. نام میزبان و زنجیره گواهی پنل را بررسی کنید."
             return "TLS certificate verification failed. Check the panel certificate, hostname and certificate chain."
+        if language == "fa":return "اتصال TLS برقرار نشد. درگاه HTTPS و مسیر پروکسی را بررسی کنید."
         return "The TLS connection failed. Check the HTTPS listener and proxy path; this is not necessarily a certificate verification error."
     if isinstance(exc, requests.exceptions.ConnectionError):
+        if language == "fa":return "اتصال به پنل برقرار نشد. DNS، نشانی سرویس و مسیر شبکه را بررسی کنید."
         return "Could not establish a panel connection. Check DNS, the listening address and network route."
+    if language == "fa" and str(exc).startswith("Health endpoint returned HTTP "):
+        code = str(exc).split("HTTP ", 1)[1].split(";", 1)[0]
+        return f"بررسی سلامت پنل با کد HTTP {code} پاسخ داد. نشانی پنل و کلید API را بررسی کنید."
     return str(exc)[:500]
 
 
@@ -7570,10 +7408,15 @@ async def _panel_watchdog(
     fails = 0
     was_down = False
     down_since = None
+    origin_up_when_down = False
     last_error = ""
 
+    def language_fa():
+        return _read_json(TELEGRAM_SETTINGS_FILE,{}).get('language')=='fa'
+
     def utc_now_text() -> str:
-        return tg_now()
+        zone = _tg_system_timezone()
+        return datetime.now(zone).strftime('%Y-%m-%d %H:%M:%S')+' '+str(zone)
 
     def duration_text(
         seconds: float,
@@ -7682,7 +7525,9 @@ async def _panel_watchdog(
     while not stop_event.is_set():
         ok = False
         error_text = ""
+        localized_error = ""
         status_code = None
+        origin_healthy = False
 
         try:
             response = await asyncio.to_thread(_probe_panel_health)
@@ -7702,6 +7547,15 @@ async def _panel_watchdog(
 
         except Exception as exc:
             error_text = _panel_connection_error(exc)
+            localized_error = _panel_connection_error(exc, "fa")
+            if API_PANEL != PANEL:
+                try:
+                    origin_healthy = await asyncio.to_thread(_probe_origin_health)
+                except Exception:
+                    origin_healthy = False
+                if origin_healthy:
+                    error_text = "Public proxy/CDN path is failing; loopback origin health is OK. " + error_text
+                    localized_error = "اتصال عمومی یا CDN قطع است، اما سرویس محلی پنل پاسخ می‌دهد. " + localized_error
 
             ok = False
 
@@ -7731,18 +7585,14 @@ async def _panel_watchdog(
                 )
 
                 if _notify_app("app_up"):
-                    await broadcast(
-                        "● <b>Panel is back online</b>\n\n"
-                        "◇ <b>Status</b>  Healthy\n"
-                        f"⌁ <b>Panel</b>  "
-                        f"<code>{html(PANEL)}</code>\n"
-                        f"◷ <b>Recovered</b>  "
-                        f"<code>{utc_now_text()}</code>\n"
-                        f"↥ <b>Outage</b>  "
-                        f"<code>{duration_text(outage)}</code>\n\n"
-                        "The authenticated health check is "
-                        "responding normally again."
-                    )
+                    from panel_core.telegram_notices import card
+                    fa=language_fa()
+                    if fa:
+                        recovery=card('دسترسی عمومی پنل برقرار شد' if origin_up_when_down else 'اتصال پنل برقرار شد',[('پنل',PANEL),('زمان بازیابی',utc_now_text()),('مدت قطعی',f'{int(outage)} ثانیه')], 'بررسی سلامت پنل با موفقیت انجام شد.', '●')
+                    else:
+                        recovery=card('Public panel access restored' if origin_up_when_down else 'Panel is back online', [('Panel', PANEL), ('Recovered', utc_now_text()),
+                              ('Outage', duration_text(outage))], 'The authenticated health check is responding again.', '●')
+                    await broadcast(recovery['text'])
 
                 else:
                     logging.warning(
@@ -7752,8 +7602,11 @@ async def _panel_watchdog(
 
                 was_down = False
                 down_since = None
+                origin_up_when_down = False
 
         else:
+            if origin_healthy:
+                origin_up_when_down = True
             fails += 1
 
             last_error = (
@@ -7788,21 +7641,16 @@ async def _panel_watchdog(
                 )
 
                 if _notify_app("app_down"):
-                    await broadcast(
-                        "⊘ <b>Panel availability alert</b>\n\n"
-                        "◇ <b>Status</b>  Unreachable\n"
-                        f"⌁ <b>Panel</b>  "
-                        f"<code>{html(PANEL)}</code>\n"
-                        f"◷ <b>Detected</b>  "
-                        f"<code>{utc_now_text()}</code>\n"
-                        f"↻ <b>Checks failed</b>  "
-                        f"<code>{fails}</code>\n"
-                        f"✦ <b>Last error</b>  "
-                        f"<code>{html(last_error[:500])}</code>\n\n"
-                        f"The bot will retry every "
-                        f"{interval_sec} seconds and report "
-                        "recovery automatically."
-                    )
+                    from panel_core.telegram_notices import card
+                    fa=language_fa()
+                    if fa:
+                        alert=card('دسترسی عمومی پنل قطع است' if origin_healthy else 'پنل در دسترس نیست',[('پنل',PANEL),('زمان تشخیص',utc_now_text()),('بررسی ناموفق',fails),('جزئیات فنی',(localized_error or last_error)[:500])],
+                                   f'وضعیت پنل هر {interval_sec} ثانیه بررسی می‌شود. بازیابی اتصال اطلاع‌رسانی خواهد شد.', '⊘')
+                    else:
+                        alert=card('Public panel access interrupted' if origin_healthy else 'Panel availability alert', [('Panel', PANEL), ('Detected', utc_now_text()),
+                              ('Checks failed', fails), ('Last error', last_error[:500])],
+                             f'The bot will retry every {interval_sec} seconds and report recovery automatically.', '⊘')
+                    await broadcast(alert['text'])
 
                 else:
                     logging.warning(
@@ -7838,7 +7686,6 @@ async def _panel_watchdog(
 HB_SEC = max(15, int(os.getenv("TG_HEARTBEAT_SEC", "60") or "60"))
 
 async def _heartbeat_loop(stop_event: asyncio.Event):
-    """Publish an immediate heartbeat, then continue at the configured interval."""
 
     if not API_KEY and not USE_PANEL_SESSION:
         logging.warning(
@@ -7854,7 +7701,7 @@ async def _heartbeat_loop(stop_event: asyncio.Event):
             if API_KEY:
                 response = await asyncio.to_thread(
                     api.post,
-                    f"{PANEL}/api/telegram/heartbeat",
+                    f"{API_PANEL}/api/telegram/heartbeat",
                     json={
                         "pid": os.getpid(),
                         "version": BOT_VERSION,
@@ -7883,24 +7730,9 @@ async def _heartbeat_loop(stop_event: asyncio.Event):
 
         except Exception as exc:
             consecutive_failures += 1
-            detail = ""
-            response_obj = getattr(exc, "response", None)
-            if response_obj is not None:
-                try:
-                    detail = (
-                        f" HTTP {response_obj.status_code}: "
-                        f"{(response_obj.text or '')[:300]}"
-                    )
-                except Exception:
-                    detail = ""
-
+            status=getattr(getattr(exc,'response',None),'status_code',None)
             log_fn = logging.warning if consecutive_failures <= 3 else logging.error
-            log_fn(
-                "Telegram heartbeat failed (%s consecutive): %s%s",
-                consecutive_failures,
-                exc,
-                detail,
-            )
+            log_fn('Telegram heartbeat failed (%s consecutive): %s HTTP=%s',consecutive_failures,type(exc).__name__,status)
 
         try:
             await asyncio.wait_for(
@@ -7912,7 +7744,24 @@ async def _heartbeat_loop(stop_event: asyncio.Event):
 
 
 async def on_error(update, context):
-    logging.exception("Unhandled bot error: %s", getattr(context, "error", None))
+    exc = getattr(context, "error", None)
+    if exc is None:
+        logging.error("Telegram update handler failed without an exception object")
+        return
+
+    import traceback
+    frames=traceback.extract_tb(exc.__traceback__)
+    origin=f'{Path(frames[-1].filename).name}:{frames[-1].lineno}' if frames else 'unknown'
+    logging.warning('Telegram update failed (%s), update=%s at=%s',type(exc).__name__,getattr(update,'update_id',None),origin)
+    chat=getattr(update,'effective_chat',None)
+    user=getattr(update,'effective_user',None)
+    if chat and chat.type=='private' and user and str(user.id) in _admin_cache['ids']:
+        message=getattr(update,'effective_message',None)
+        if message:
+            try:
+                await message.reply_text(_bot_reliability_text('uncertain'))
+            except (BadRequest,NetworkError,RetryAfter):
+                pass
 
 def _spawn(name: str, coro):
     task = asyncio.create_task(
@@ -7958,7 +7807,7 @@ def _spawn(name: str, coro):
     return task
 
 TG_BACKUP_TICK_SEC = 30
-TG_BACKUP_SCHEDULER_ENABLED = os.getenv("TG_BACKUP_SCHEDULER_ENABLED", "0") == "1"  
+TG_BACKUP_SCHEDULER_ENABLED = os.getenv("TG_BACKUP_SCHEDULER_ENABLED", "0") == "1"
 
 def _bot_tz_schedule(sched: dict):
     return _tg_system_timezone()
@@ -7972,7 +7821,7 @@ def _hhmm(s: str):
             return h, m
     except Exception:
         pass
-    return 3, 0  
+    return 3, 0
 
 
 def _days_month(y: int, m: int) -> int:
@@ -8015,7 +7864,7 @@ async def _run_storebackup(sched: dict, *, reason: str | None = None) -> tuple[b
     reason_str = reason or "unspecified"
 
     try:
-        r = _get(url, session="api", timeout=900, stream=True)
+        r = (await asyncio.to_thread(_get, url, session="api", timeout=900, stream=True))
         try:
             info = "ok"
 
@@ -8057,12 +7906,6 @@ async def _run_storebackup(sched: dict, *, reason: str | None = None) -> tuple[b
 
 
 def _schedule_due(sched: dict, now_ts: int) -> tuple[str | None, str | None]:
-    """
-    Returns (slot_id, due_local_iso) for the most recent scheduled occurrence <= now,
-    but only if it's within a reasonable catch-up window (so you don't fire ancient missed runs).
-
-    slot_id is stable per slot, so you can do once-per-slot with st["last_slot_id"].
-    """
     try:
         from datetime import datetime, timedelta, timezone
         from calendar import monthrange
@@ -8079,7 +7922,7 @@ def _schedule_due(sched: dict, now_ts: int) -> tuple[str | None, str | None]:
         except Exception:
             dows = []
 
-        CATCHUP_MAX_SEC = 36 * 3600  
+        CATCHUP_MAX_SEC = 36 * 3600
 
         def parse_hhmm(s: str) -> tuple[int, int]:
             try:
@@ -8106,7 +7949,7 @@ def _schedule_due(sched: dict, now_ts: int) -> tuple[str | None, str | None]:
 
         elif freq == "weekly":
             if not dows:
-                dows = [1]  
+                dows = [1]
 
             base_today = at_local(now_local)
             for back in range(0, 8):
@@ -8152,7 +7995,7 @@ async def _backup_scheduler(stop_event: asyncio.Event, reason: str = "tick") -> 
     if stop_event.is_set():
         return
 
-    sched = _backup_schedule()
+    sched = (await asyncio.to_thread(_backup_schedule))
     st    = _load_backup_state()
     now_ts = int(time.time())
 
@@ -8190,7 +8033,6 @@ async def _backup_scheduler(stop_event: asyncio.Event, reason: str = "tick") -> 
     _save_backup_state(st)
 
 
-
 async def _backup_scheduler_loop(stop_event: asyncio.Event):
     while not stop_event.is_set():
         try:
@@ -8213,11 +8055,46 @@ async def _admin_refresh_loop(stop_event: asyncio.Event):
         try: await asyncio.wait_for(stop_event.wait(), timeout=90)
         except asyncio.TimeoutError: pass
 
+def _configured_bot_language():
+    values=_read_json(TELEGRAM_SETTINGS_FILE,{})
+    return 'fa' if isinstance(values,dict) and values.get('language')=='fa' else 'en'
+
+
+async def _publish_admin_menu(bot, language):
+    from telegram import BotCommand, MenuButtonCommands
+    from panel_core.telegram_commands import ADMIN, commands
+    success=True
+    for locale,lang in (('',language),('en','en'),('fa','fa')):
+        try:
+            await bot.set_my_commands([BotCommand(**entry) for entry in commands(ADMIN,lang)],language_code=locale,connect_timeout=3,read_timeout=6)
+        except Exception as exc:
+            success=False
+            logging.warning('Admin command menu registration deferred (%s).',type(exc).__name__)
+    try:
+        await bot.set_chat_menu_button(menu_button=MenuButtonCommands(),connect_timeout=3,read_timeout=6)
+    except Exception as exc:
+        success=False
+        logging.warning('Admin menu button registration deferred (%s).',type(exc).__name__)
+    return success
+
+
+async def _admin_menu_loop(stop_event,bot):
+    previous=None;refresh=0
+    while not stop_event.is_set():
+        language=await asyncio.to_thread(_configured_bot_language)
+        if previous!=language or time.monotonic()>=refresh:
+            if await _publish_admin_menu(bot,language):
+                previous=language;refresh=time.monotonic()+21600
+        try:await asyncio.wait_for(stop_event.wait(),timeout=60)
+        except asyncio.TimeoutError:pass
+
+
 async def _on_startup(application):
     stop_event=application.bot_data.get("stop_event") or asyncio.Event(); application.bot_data["stop_event"]=stop_event
     tasks=[_spawn("admin_refresh",_admin_refresh_loop(stop_event)),_spawn("heartbeat",_heartbeat_loop(stop_event)),_spawn("panel_watchdog",_panel_watchdog(stop_event,application.bot))]
     if TG_BACKUP_SCHEDULER_ENABLED: tasks.append(_spawn("backup_scheduler",_backup_scheduler_loop(stop_event)))
     else: logging.info("Telegram backup scheduler disabled; the panel app scheduler is authoritative.")
+    tasks.append(_spawn("command_menu",_admin_menu_loop(stop_event,application.bot)))
     application.bot_data["background_tasks"]=tasks
 
 async def _on_shutdown(application):
@@ -8390,7 +8267,8 @@ def main():
     )
 
     logging.info(
-        "Panel API target: %s",
+        "Panel API target: %s (public panel: %s)",
+        API_PANEL,
         PANEL,
     )
 

@@ -2,12 +2,13 @@
 
 FROM python:3.12-slim-bookworm AS wheels
 WORKDIR /build
-COPY requirements.txt /build/requirements.txt
+COPY requirements.txt requirements-postgres.txt /build/
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
        build-essential gcc libffi-dev libssl-dev \
     && python -m pip install --no-cache-dir --upgrade pip setuptools wheel \
     && python -m pip wheel --no-cache-dir --wheel-dir /wheels -r /build/requirements.txt \
+    && python -m pip wheel --no-cache-dir --wheel-dir /wheels -r /build/requirements-postgres.txt \
     && rm -rf /var/lib/apt/lists/*
 
 FROM python:3.12-slim-bookworm AS runtime
@@ -20,7 +21,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
        ca-certificates curl git iproute2 iptables iputils-ping jq kmod nftables \
-       openssl procps rsync tzdata unzip wireguard-tools \
+       openssl postgresql-client procps rsync tzdata unzip wireguard-tools \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=wheels /wheels /wheels
