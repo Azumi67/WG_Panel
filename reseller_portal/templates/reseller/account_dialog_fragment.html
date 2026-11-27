@@ -1,0 +1,5 @@
+
+{% from 'reseller/permissions.html' import permissions_editor %}
+{% from 'reseller/components.html' import csrf with context %}
+{% set a=row.account %}
+{% include 'reseller/account_dialog.html' %}

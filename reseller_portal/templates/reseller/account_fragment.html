@@ -1,0 +1,4 @@
+{% from 'reseller/permissions.html' import permissions_editor %}
+{% from 'reseller/components.html' import csrf with context %}
+<div class="rp-desk">{% for category,msg in get_flashed_messages(with_categories=true) %}<div class="rp-alert">{{msg}}</div>{% endfor %}
+{% include 'reseller/account_row.html' %}{% set a=row.account %}{% include 'reseller/account_dialog.html' %}</div>

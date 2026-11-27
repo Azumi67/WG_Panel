@@ -1,0 +1,12 @@
+    {% if tenant %}<meta name="csrf-token" content="{{ csrf_token() }}">
+    <link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-shell.css')}}">
+    <style>
+    {% if 'network_options' not in account.spec.permissions or (reseller_network_policy and not reseller_network_policy.allow_fixed) %}
+    [data-reseller-workspace] .peerx-fixed-endpoint-field,[data-reseller-workspace] .fixed-endpoint-card{display:none!important}
+    {% endif %}
+    {% if 'network_options' not in account.spec.permissions or (reseller_network_policy and not reseller_network_policy.allow_internal) %}
+    [data-reseller-workspace] .auto-network-toggle,[data-reseller-workspace] .peerx-internal-switch,[data-reseller-workspace] .advanced-routing-auto-inline{display:none!important}
+    {% endif %}
+    </style>
+    <script>window.RESELLER_NETWORK_POLICY={{reseller_network_policy|tojson}};window.RESELLER_TIMEZONE={{reseller_timezone|tojson}};window.RESELLER_ACCOUNT_ID={{account.id|tojson}};window.RESELLER_PERMISSIONS={{ account.spec.permissions|tojson }};window.RESELLER_SECTION={{ section|tojson }};window.RESELLER_REMAINING_MS={{reseller_remaining_ms|default(0)|tojson}};</script>
+    <script src="{{ url_for('reseller.static',filename='js/reseller-shared.js') }}"></script>{% endif %}

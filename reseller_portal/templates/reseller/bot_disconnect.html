@@ -1,0 +1,14 @@
+<div class="rp-disconnect" data-disconnect-area {{'hidden' if not connected}}>
+  <span><strong>Disconnect this bot</strong><small>{{disconnect_hint}}</small></span>
+  <button type="button" class="rp-btn rp-unlink" data-disconnect-open><i class="fas fa-link-slash" aria-hidden="true"></i> Disconnect…</button>
+  <dialog class="rp-confirm-bot" aria-labelledby="disconnect-title">
+    <h2 id="disconnect-title">Disconnect {{role_name}}?</h2>
+    <p>{{disconnect_detail}}</p>
+    <form method="post" action="{{disconnect_url}}">
+      <input type="hidden" name="csrf_token" value="{{csrf_token()}}">
+      <input type="hidden" name="{{disconnect_field}}" value="disconnect">
+      <div class="rp-confirm-actions"><button type="button" class="rp-btn" data-disconnect-cancel autofocus>Keep connected</button><button type="submit" class="rp-btn danger"><i class="fas fa-link-slash" aria-hidden="true"></i> Disconnect bot</button></div>
+    </form>
+  </dialog>
+  <noscript><form method="post" action="{{disconnect_url}}"><input type="hidden" name="csrf_token" value="{{csrf_token()}}"><input type="hidden" name="{{disconnect_field}}" value="disconnect"><label><input type="checkbox" required> Confirm disconnection</label><button class="rp-btn danger" type="submit">Disconnect bot</button></form></noscript>
+</div>

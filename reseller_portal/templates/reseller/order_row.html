@@ -1,0 +1,12 @@
+<article class="rp-order rp-inbox-order" id="order-{{o.id}}" data-state="{{o.state}}" {% if o.state=='pending' and o.payment_ref %}data-reviewable="{{o.id}}"{% endif %}>
+  <div class="rp-purchase-summary">
+    <div class="rp-purchase-identity"><span class="rp-avatar"><i class="fas fa-receipt" aria-hidden="true"></i></span>
+      <div><h2>{{buyer.username if buyer else 'Telegram customer'}}</h2><small>Order #{{o.id}}{% if o.telegram_id %} · Telegram {{o.telegram_id}}{% endif %}</small></div>
+    </div>
+    <div><small>Plan</small><strong>{{o.spec.get('plan_name') or ('Plan #' ~ o.plan_id)}}</strong><span>{{o.spec.traffic_gib}} GiB · {{o.spec.days}} days</span></div>
+    <div><small>Amount due</small><strong>{{o.spec.price}} {{o.spec.currency}}</strong></div>
+    <div><small>Ordered</small>{{o.created_at|rp_time}}</div>
+    <span class="rp-review-badge" data-state="{{('review' if o.payment_ref else 'unpaid') if o.state=='pending' else o.state}}">{{('Awaiting review' if o.payment_ref else 'Awaiting receipt') if o.state=='pending' else o.state|title}}</span>
+  </div>
+  {% include 'reseller/order_review.html' %}
+</article>

@@ -1,0 +1,8 @@
+{% from 'workspace_tabs.html' import tabs %}
+{% set items = [] %}
+{% for key,label,icon in [('connection','Connection','fa-plug'),('notifications','Notifications','fa-bell'),('access','Access & tools','fa-shield-halved'),('logs','Bot activity','fa-clock-rotate-left'),('applications','Applications','fa-code')] %}
+{% if key=='applications' or (bot_available and (key in ('connection','access') or key in telegram_grants)) %}
+{% set href = url_for('reseller.workspace_app_key') if key=='applications' else url_for('reseller.management_bot_settings',view=key) if tab_links else none %}
+{% set _ = items.append((key,label,icon,href)) %}
+{% endif %}{% endfor %}
+{{tabs(items, active, 'tg-section-tabs rp-subtabs', 'Telegram sections', 'data-rp-tab', 'aria-selected')}}

@@ -1,0 +1,77 @@
+{% extends 'base.html' %}
+{% from 'reseller/components.html' import csrf with context %}
+{% macro identity() %}{{ csrf() }}<input type="hidden" name="rp_expected_account" value="{{account.id}}">{% endmacro %}
+{% macro status(o) %}{{('Under review' if o.payment_ref else 'Awaiting receipt') if o.state=='pending' else o.state|title}}{% endmacro %}
+{% block title %}My plan · WG Panel{% endblock %}
+{% block final_styles %}<link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller.css')}}"><link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-billing.css')}}">{% endblock %}
+{% block content %}
+<div class="rp-billing" data-billing-url="{{url_for('reseller.billing')}}"{% if order and order.state=='pending' and order.payment_ref %} data-review-url="{{url_for('reseller.billing_status',order=order.id)}}" data-generation="{{account.generation}}"{% endif %}>
+  <header class="bill-heading"><h1>My plan</h1>{% if pending and not pending.payment_ref %}<a class="bill-open-order" href="{{url_for('reseller.billing',order=pending.id,_anchor='current-order')}}">Finish order #{{pending.id}} <span aria-hidden="true">↓</span></a>{% endif %}</header>
+  {% for category,message in get_flashed_messages(with_categories=true) %}<p class="bill-feedback" role="{{'alert' if category=='error' else 'status'}}">{{message}}</p>{% endfor %}
+  <section class="bill-card bill-current" aria-label="Current plan">
+    <header><div>{% if current_name != 'Current plan' %}<span class="bill-caption">Current plan</span>{% endif %}<h2><bdi>{{current_name}}</bdi></h2></div>
+      <span class="bill-status bill-access" data-state="{{'expired' if expired else 'active' if usable else 'exhausted'}}"><i aria-hidden="true"></i>{{'Plan expired' if expired else 'Active' if usable else 'Traffic exhausted'}}</span></header>
+    <div class="bill-summary"><div class="bill-traffic"><div><span>Traffic used</span><strong>{{'%.2f'|format(account.used_bytes/1073741824)}} <small>of {{account.spec.traffic_gib}} GiB</small></strong></div><progress value="{{percent}}" max="100" aria-label="Traffic allowance used">{{percent}}%</progress></div>
+      <dl class="bill-metrics"><div><dt>{{'Expired on' if expired else 'Valid until'}}</dt><dd>{{account.expires_at|rp_time}}</dd></div><div><dt>Peer slots</dt><dd>{{slots[0]}} <small>of {{account.spec.peers}}</small></dd></div><div><dt>Subscription slots</dt><dd>{{slots[1]}} <small>of {{account.spec.subscriptions}}</small></dd></div></dl></div>
+    {% if not usable %}<p class="bill-note"><b>Customer access is paused.</b> {% if pending and pending.payment_ref %}Your receipt is under review. Access resumes when your renewal is approved.{% else %}Choose a plan below to renew access.{% endif %}</p>{% endif %}
+  </section>
+  {% if order %}
+  <section class="bill-card bill-order" aria-labelledby="bill-order-title" id="current-order" data-order-url="{{url_for('reseller.billing',order=order.id,_anchor='current-order')}}">
+    <header><div><h2 id="bill-order-title">Order #{{order.id}} · {{plan_name(order)}}</h2><small>{{order.spec.price}} {{order.spec.currency}} · {{order.spec.days}} days · {{order.spec.traffic_gib}} GiB</small></div><span class="bill-status">{{status(order)}}</span></header>
+    {% if order.state=='pending' and not order.payment_ref %}
+    <div class="bill-checkout">
+      <section class="bill-payment-note"><h3>Payment instructions</h3><p class="bill-instructions" dir="auto">{{order.spec.payment_instructions}}</p></section>
+      <form class="bill-proof-form" data-order-action method="post" enctype="multipart/form-data" action="{{url_for('reseller.billing_action',oid=order.id,action='receipt')}}">{{identity()}}
+        <h3>Submit payment proof</h3>
+        <fieldset class="bill-proof-choice" hidden><legend>How would you like to submit your receipt?</legend>
+          <label><input type="radio" name="proof_method" value="photo" checked> Receipt photo</label>
+          <label><input type="radio" name="proof_method" value="reference"> Transaction reference</label>
+        </fieldset>
+        <label class="bill-upload" data-proof-field="photo"><span><i class="fas fa-image" aria-hidden="true"></i> Choose receipt photo</span>
+          <small>PNG or JPEG, up to 5 MB</small><input type="file" name="photo" accept="image/jpeg,image/png"><output aria-live="polite"></output></label>
+        <label data-proof-field="reference">Transaction reference<input type="text" name="reference" maxlength="160" autocomplete="off"></label>
+        <p class="bill-action-status" role="status" aria-live="polite" hidden></p>
+        <button class="bill-primary" type="submit"><i class="fas fa-arrow-up-from-bracket" aria-hidden="true"></i> Submit receipt</button>
+      </form>
+    </div>
+    <div class="bill-order-footer">
+      <details class="bill-cancel"><summary><i class="fas fa-xmark" aria-hidden="true"></i> Cancel unpaid order</summary>
+        <form data-order-action method="post" action="{{url_for('reseller.billing_action',oid=order.id,action='cancel')}}">{{identity()}}
+          <p>Cancel order #{{order.id}}? You can choose another plan afterward.</p>
+          <button type="submit" class="bill-danger">Confirm cancellation</button>
+          <button type="button" data-keep-order hidden>Keep order</button>
+          <p class="bill-action-status" role="status" hidden></p>
+        </form>
+      </details>
+    </div>
+    {% else %}
+    <div class="bill-result">{% if order.state=='pending' %}<p>Your receipt is with the administrator. Your new term starts on approval.</p>{% elif order.state=='approved' %}<p>Activated {{order.reviewed_at|rp_time}}.</p>{% elif order.state=='rejected' %}<p>Declined {{order.reviewed_at|rp_time}}.{% if order.note %} <bdi>{{order.note}}</bdi>{% endif %}</p>{% else %}<p>This order was cancelled before review.</p>{% endif %}
+    {% if photo %}<a href="{{url_for('reseller.billing_photo',oid=order.id)}}" target="_blank" rel="noopener noreferrer">View submitted photo</a>{% elif order.payment_ref %}<span>Reference <bdi>{{order.payment_ref}}</bdi></span>{% endif %}</div>
+    {% if order.state != 'pending' %}<form class="bill-order-footer" method="post" data-order-action action="{{url_for('reseller.billing_action',oid=order.id,action='unhide' if order_hidden else 'hide')}}">{{identity()}}
+      <button type="submit">{{'Return to order history' if order_hidden else 'Remove from my history'}}</button>
+      <p class="bill-action-status" role="status" hidden></p></form>{% endif %}
+    {% endif %}
+  </section>{% endif %}
+  {% if pending and order and pending.id != order.id %}<p class="bill-feedback"><a href="{{url_for('reseller.billing',order=pending.id)}}">Open current order #{{pending.id}}</a> · {{status(pending)}}</p>{% endif %}
+  <div class="bill-columns">
+  <section class="bill-card" aria-labelledby="bill-plans">
+    <header><h2 id="bill-plans">Choose a plan</h2></header>
+    {% for plan in plan_page.items %}<article class="bill-plan">
+      <div><h3>{{plan.name}}</h3><small>{{plan.spec.days}} days · {{plan.spec.traffic_gib}} GiB · {{plan.spec.peers}} peers · {{plan.spec.subscriptions}} subscriptions{% if not plan.spec.panel_access %} · Telegram only{% endif %}</small></div>
+      <strong class="bill-price">{{plan.spec.price}} <small>{{plan.spec.currency}}</small></strong>
+      {% if not pending and valid_payment(plan.spec) and (plan.spec.panel_access or account.telegram_id) %}<form method="post" data-order-action action="{{url_for('reseller.billing_order')}}">{{identity()}}<input type="hidden" name="plan_id" value="{{plan.id}}"><input type="hidden" name="terms" value="{{terms_key(plan)}}"><button type="submit" class="bill-primary">Choose plan</button><p class="bill-action-status" role="status" hidden></p></form>
+      {% elif pending and pending.plan_id==plan.id %}<a href="{{url_for('reseller.billing',order=pending.id)}}#current-order">View order</a>{% elif not pending and not plan.spec.panel_access and not account.telegram_id %}<small>Linked Telegram account required</small>{% endif %}
+    </article>{% else %}<p class="bill-empty">Your administrator hasn’t published a plan yet.</p>{% endfor %}
+    {% if plan_page.pages>1 %}<nav aria-label="Plan pages">{% if plan_page.has_prev %}<a href="{{url_for('reseller.billing',plans=plan_page.prev_num,page=history.page)}}">Previous plans</a>{% endif %}{% if plan_page.has_next %}<a href="{{url_for('reseller.billing',plans=plan_page.next_num,page=history.page)}}">More plans</a>{% endif %}</nav>{% endif %}
+    {% if not pending and plan_page.items %}<p class="bill-note">Your new billing period starts when your payment is approved.</p>{% endif %}
+  </section>
+  <section class="bill-card" aria-labelledby="bill-history"><header><h2 id="bill-history">{{'Hidden orders' if show_hidden else 'Order history'}}</h2>
+      {% if has_hidden %}<a href="{{url_for('reseller.billing',history=none if show_hidden else 'hidden',_anchor='bill-history')}}">{{'Show history' if show_hidden else 'View hidden'}}</a>{% endif %}</header>
+    {% for o in history.items %}<a class="bill-history" href="{{url_for('reseller.billing',order=o.id,page=history.page,plans=plan_page.page,history="hidden" if show_hidden else none)}}#current-order"><span><b>Order #{{o.id}}</b> · {{plan_name(o)}}<small>{{o.created_at|rp_time}}</small></span><span class="bill-order-state" data-state="{{o.state}}">{{status(o)}} <i class="fas fa-angle-right" aria-hidden="true"></i></span></a>
+    {% else %}<p class="bill-empty">Your orders will appear here.</p>{% endfor %}
+    {% if history.pages>1 %}<nav aria-label="Order pages">{% if history.has_prev %}<a href="{{url_for('reseller.billing',page=history.prev_num,plans=plan_page.page,history="hidden" if show_hidden else none)}}">Newer orders</a>{% endif %}{% if history.has_next %}<a href="{{url_for('reseller.billing',page=history.next_num,plans=plan_page.page,history="hidden" if show_hidden else none)}}">Older orders</a>{% endif %}</nav>{% endif %}
+  </section>
+  </div>
+</div>
+<script defer src="{{url_for('reseller.static',filename='js/reseller-billing.js')}}"></script>
+{% endblock %}

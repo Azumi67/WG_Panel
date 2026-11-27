@@ -1,0 +1,96 @@
+{% extends 'base.html' %}
+{% block title %}Security &amp; 2FA · WG Panel{% endblock %}
+{% block head_extras %}
+<link rel="stylesheet" href="{{ url_for('reseller.static', filename='css/reseller.css') }}">
+<link rel="stylesheet" href="{{ url_for('reseller.static', filename='css/reseller-security.css') }}">
+{% if pending %}
+<script defer src="{{ url_for('static', filename='js/qrcode.min.js') }}"></script>
+<script defer src="{{ url_for('reseller.static', filename='js/reseller-security.js') }}"></script>
+{% endif %}
+{% endblock %}
+{% block content %}
+<div class="rp-security-page" id="reseller-security">
+  <header class="rp-security-heading">
+    <div class="rp-security-heading-icon"><i class="fas fa-shield-halved" aria-hidden="true"></i></div>
+    <div><h1>Security &amp; 2FA</h1><p>Secure your account with a one-time code from your authenticator.</p></div>
+  </header>
+  {% for category, message in get_flashed_messages(with_categories=true) %}
+  <div class="rp-security-flash" role="{{ 'alert' if category == 'error' else 'status' }}">{{message}}</div>
+  {% endfor %}
+  {% if recovery_codes %}
+  <section class="rp-security-panel rp-security-recovery" aria-labelledby="recovery-title">
+    <h2 id="recovery-title"><i class="fas fa-key" aria-hidden="true"></i> Save these recovery codes now</h2>
+    <p>Each recovery code can be used once. Keep them offline. They are not displayed again.</p>
+    <ul class="rp-security-codes">{% for code in recovery_codes %}<li>{{code}}</li>{% endfor %}</ul>
+    <p>Other sessions have been revoked. Your current session remains active.</p>
+  </section>
+  {% endif %}
+  <section class="rp-security-panel" aria-labelledby="auth-title">
+    <div class="rp-security-panel-heading">
+      <div><h2 id="auth-title">Two-factor authentication</h2><p>Protects sign-in even when your password or private workspace link is exposed.</p></div>
+      <span class="rp-security-state {{ 'is-enabled' if security and security.totp_secret_enc else 'is-pending' if pending else '' }}">
+        <i class="fas {{ 'fa-circle-check' if security and security.totp_secret_enc else 'fa-clock' if pending else 'fa-shield-halved' }}" aria-hidden="true"></i>
+        {{ 'Enabled' if security and security.totp_secret_enc else 'Setup pending' if pending else 'Not enabled' }}
+      </span>
+    </div>
+    {% if security and security.totp_secret_enc %}
+      <div class="rp-security-confirmed"><i class="fas fa-check-circle" aria-hidden="true"></i><div><strong>Authenticator is active</strong><p>Your next sign-in requires a one-time code. Keep your recovery codes in a safe place.</p></div></div>
+      <div class="rp-security-settings">
+        <details class="rp-security-setting"><summary><i class="fas fa-rotate" aria-hidden="true"></i><span>Replace recovery codes</span><i class="fas fa-chevron-down" aria-hidden="true"></i></summary>
+          <form method="post" action="{{ url_for('reseller.reseller_security_action', action='regenerate') }}" class="rp-security-setting-form">
+            <input type="hidden" name="csrf_token" value="{{csrf_token()}}">
+            <label>Current password<input type="password" name="password" autocomplete="current-password" required></label>
+            <label>Authenticator or recovery code<input name="twofa_code" autocomplete="one-time-code" maxlength="64" required></label>
+            <button type="submit" class="rp-security-button primary">Generate new recovery codes</button>
+          </form>
+        </details>
+        <details class="rp-security-setting danger"><summary><i class="fas fa-lock-open" aria-hidden="true"></i><span>Disable two-factor authentication</span><i class="fas fa-chevron-down" aria-hidden="true"></i></summary>
+          <form method="post" action="{{ url_for('reseller.reseller_security_action', action='disable') }}" class="rp-security-setting-form">
+            <input type="hidden" name="csrf_token" value="{{csrf_token()}}">
+            <p>Disabling 2FA reduces account security and revokes other sessions.</p>
+            <label>Current password<input type="password" name="password" autocomplete="current-password" required></label>
+            <label>Authenticator or recovery code<input name="twofa_code" autocomplete="one-time-code" maxlength="64" required></label>
+            <button type="submit" class="rp-security-button danger">Disable 2FA</button>
+          </form>
+        </details>
+      </div>
+    {% elif pending %}
+      <div class="rp-security-steps"><span><b>1</b> Scan the QR code</span><span><b>2</b> Enter the six-digit code</span><span><b>3</b> Save your recovery codes</span></div>
+      <div class="rp-security-setup">
+        <div class="rp-security-qr-area">
+          <div class="rp-security-qr" id="rp-totp-qr" data-uri="{{provisioning_uri}}" role="img" aria-label="Authenticator enrollment QR code"></div>
+          <small>Scan using Aegis, 2FAS, Google Authenticator or another TOTP app.</small>
+        </div>
+        <div class="rp-security-setup-info">
+          <h3>Confirm authenticator</h3>
+          <p>Enter your current password and the six-digit code shown in your authenticator app.</p>
+          <form id="rp-security-enrollment" method="post" action="{{ url_for('reseller.reseller_security_action', action='enable') }}">
+            <input type="hidden" name="csrf_token" value="{{csrf_token()}}">
+            <label>Current password<input name="password" type="password" autocomplete="current-password" required></label>
+            <label>Six-digit authenticator code<input name="twofa_code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="000000" required></label>
+            <div class="rp-security-actions">
+              <button type="submit" class="rp-security-button primary">Enable 2FA</button>
+              <button type="submit" class="rp-security-button secondary" formaction="{{ url_for('reseller.reseller_security_action', action='cancel') }}" formnovalidate data-security-cancel>Cancel setup</button>
+            </div>
+          </form>
+          <details class="rp-security-manual"><summary>Can't scan? Show manual setup key</summary>
+            <label>Authenticator setup key<input value="{{ pending }}" readonly spellcheck="false" autocomplete="off" aria-label="Authenticator setup key"></label>
+            <p>Keep this key private. If it was exposed, cancel setup and enroll again.</p>
+          </details>
+        </div>
+      </div>
+    {% else %}
+      <div class="rp-security-start">
+        <div class="rp-security-start-icon"><i class="fas fa-mobile-screen-button" aria-hidden="true"></i></div>
+        <div><h3>Connect an authenticator</h3><p>You'll scan a QR code, enter one code, and receive one-time recovery codes.</p></div>
+      </div>
+      <form class="rp-security-start-form" method="post" action="{{ url_for('reseller.reseller_security_action', action='prepare') }}">
+        <input type="hidden" name="csrf_token" value="{{csrf_token()}}">
+        <label>Confirm current password<input type="password" name="password" autocomplete="current-password" required></label>
+        <button type="submit" class="rp-security-button primary">Set up authenticator</button>
+      </form>
+    {% endif %}
+  </section>
+  <p class="rp-security-footnote"><i class="fas fa-lock" aria-hidden="true"></i> For your security, authentication secrets and recovery codes are not included in Telegram messages.</p>
+</div>
+{% endblock %}

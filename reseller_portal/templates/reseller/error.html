@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en" data-design="modern" data-design-lock="modern">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>{{title}} · WG Panel</title>
+<script>(function(){let mode='auto';try{mode=localStorage.getItem('wg-theme')||'auto';}catch(_){}const dark=mode==='dark'||(mode!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches);document.documentElement.dataset.theme=dark?'dark':'light';document.documentElement.style.colorScheme=dark?'dark':'light';})();</script>
+<style>
+:root{--bg:#f4f5fb;--surface:#fff;--text:#192d4b;--muted:#637089;--line:#dce2ef;--accent:#6950eb}
+@media(prefers-color-scheme:dark){:root{--bg:#111624;--surface:#1b2333;--text:#edf1fc;--muted:#acb7cc;--line:#354056;--accent:#7454df}}
+html[data-theme=dark]{--bg:#111624;--surface:#1b2333;--text:#edf1fc;--muted:#acb7cc;--line:#354056;--accent:#7454df}
+html[data-theme=light]{--bg:#f4f5fb;--surface:#fff;--text:#192d4b;--muted:#637089;--line:#dce2ef;--accent:#6950eb}
+*{box-sizing:border-box}
+body{margin:0;min-height:100dvh;display:grid;align-content:center;justify-items:center;padding:20px;background:var(--bg);color:var(--text);font:15px/1.55 system-ui,sans-serif}
+main{width:min(100%,29rem);padding:clamp(20px,4vw,32px);border:1px solid var(--line);border-radius:16px;background:var(--surface)}
+header{display:flex;align-items:center;gap:9px;font-weight:650;font-size:14px;margin-bottom:22px}
+header img{width:26px;height:26px}
+h1{font-size:clamp(22px,4vw,28px);line-height:1.22;margin:0 0 9px;letter-spacing:-.025em}
+p{color:var(--muted);margin:0 0 18px;overflow-wrap:anywhere}
+footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:22px}
+a{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:9px 15px;border-radius:8px;background:var(--accent);color:white;font-weight:650;text-decoration:none}
+a:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+small{color:var(--muted)}
+</style></head><body><main aria-labelledby="error-title"><header><img src="{{url_for('static',filename='img/workspace-mark.svg')}}" alt="">WG Panel</header>
+<h1 id="error-title">{{'Reconnecting to your workspace…' if retry_read|default(false) else title}}</h1>
+<p role="status">{{'We’ll try loading this page again shortly.' if retry_read|default(false) else message}}</p>
+<footer>{% if recovery_url %}<a href="{{recovery_url}}">{{recovery_label}}</a>{% endif %}{% if reference %}<small>Support reference <code>{{reference}}</code></small>{% endif %}</footer></main>{% if retry_read|default(false) %}<script>
+(function(){'use strict';
+  const url={{recovery_url|tojson}},now=Date.now(),key='rp-busy-read-retries:'+{{endpoint|tojson}};
+  let previous={count:0,at:now};
+  try{previous=JSON.parse(sessionStorage.getItem(key)||'null')||previous;}catch(_){}
+  const count=now-Number(previous.at||0)>60000?0:Number(previous.count||0);
+  if(count<3){try{sessionStorage.setItem(key,JSON.stringify({count:count+1,at:now}));}catch(_){return;}
+    setTimeout(()=>location.replace(url),2500+count*1500);
+  }else{document.querySelector('#error-title').textContent='Unable to load this page';document.querySelector('[role=status]').textContent='Try again when your connection is ready.';}
+})();</script>{% endif %}</body></html>
