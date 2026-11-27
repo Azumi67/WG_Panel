@@ -291,6 +291,7 @@
   }
 
   async function loadProfile(name = null, force = false) {
+    if(window.RESELLER_PERMISSIONS && !window.RESELLER_PERMISSIONS.includes("profiles"))return {};
     if (
       !force &&
       __profileCache &&
@@ -357,7 +358,7 @@
     if (on) {
       if (!__profileSnapshot) __profileSnapshot = snapForm();
       const name = q(pick(SEL.profile_select))?.value || "Default";
-      const p = await loadProfile(name, /*force*/ true);
+      const p = await loadProfile(name,           true);
       applyProfile(p);
     } else {
       if (__profileSnapshot) {
@@ -407,6 +408,7 @@
   }
 
   async function populateProfile(preselect = null) {
+    if(window.RESELLER_PERMISSIONS && !window.RESELLER_PERMISSIONS.includes("profiles"))return;
     const sel = q("#profile-select");
     if (!sel) return;
     try {
@@ -422,11 +424,11 @@
       sel.innerHTML = names
         .map((n) => {
           const star = n === active ? " ★" : "";
-          return `<option value="${n}" ${n === chosen ? "selected" : ""}>${n}${star}</option>`;
+          return `<option value="${peerEsc(n)}" ${n === chosen ? "selected" : ""}>${peerEsc(n)}${star}</option>`;
         })
         .join("");
 
-      await loadProfile(sel.value, /*force*/ true);
+      await loadProfile(sel.value,           true);
     } catch (_) {
       sel.innerHTML = `<option value="Default" selected>Default</option>`;
     }
@@ -552,7 +554,7 @@
     if (sel && !sel.__wired) {
       sel.addEventListener("change", async () => {
         const name = sel.value || "Default";
-        const prof = await loadProfile(name, /*force*/ true);
+        const prof = await loadProfile(name,           true);
         if (q(togSel)?.checked) {
           applyProfile(prof);
         }
@@ -844,7 +846,11 @@
 
       const refresh = () => {
         const custom = String(input.value || "").trim();
-        if (custom) {
+        if (custom && inherited && custom === inherited) {
+          box.dataset.state = "inherited";
+          box.querySelector("span").textContent = input.readOnly ? "Assigned server endpoint:" : "Using interface default:";
+          value.textContent = inherited;
+        } else if (custom) {
           box.dataset.state = "override";
           box.querySelector("span").textContent = "Custom override:";
           value.textContent = custom;
@@ -1470,6 +1476,7 @@
   let endpointPresets = [];
 
   async function getPresets() {
+    if(window.RESELLER_PERMISSIONS && !window.RESELLER_PERMISSIONS.includes("network_options"))return;
     try {
       const r = await fetch(api("/api/endpoint_presets"), {
         credentials: "same-origin",
@@ -1575,7 +1582,7 @@
       const opts = (endpointPresets || [])
         .map(
           (p, idx) =>
-            `<option value="${idx}">${p.label || `${p.host}:${p.port}`} (${p.host}:${p.port})</option>`,
+            `<option value="${idx}">${peerEsc(p.label || `${p.host}:${p.port}`)} (${peerEsc(p.host)}:${peerEsc(p.port)})</option>`,
         )
         .join("");
       sel.innerHTML = `<option value="">No override — use interface default</option>${opts}`;
@@ -1828,9 +1835,10 @@
        data-panel-status="${pStatus}"
        data-blocked="${blocked ? "1" : "0"}"
        data-depleting="${depleted ? "1" : "0"}"
-       data-name="${(p.name || "").toLowerCase()}"
-       data-phone="${(p.phone_number || "").toLowerCase()}"
-       data-tg="${(p.telegram_id || "").toLowerCase()}"
+       data-owner-type="${p.reseller_owner ? "reseller" : "admin"}" data-owner-name="${peerEsc(p.reseller_owner?.username || "Administrator")}"
+       data-name="${peerEsc((p.name || "").toLowerCase())}"
+       data-phone="${peerEsc((p.phone_number || "").toLowerCase())}"
+       data-tg="${peerEsc((p.telegram_id || "").toLowerCase())}"
        data-address="${peerEsc((p.address || "").toLowerCase())}"
        data-endpoint="${peerEsc((epStr || "").toLowerCase())}"
        data-iface="${p.iface || ""}"
@@ -1845,8 +1853,9 @@
       <div class="peer-identity-block peer-row-identity">
         <span class="peer-avatar ${avatar.tone}" aria-hidden="true">${peerEsc(avatar.letter)}</span>
         <div class="peer-identity-copy">
-          <span class="peer-name" title="${peerEsc(p.name || "")}">${p.name || ""}</span>
-          <span class="peer-iface-line"><i class="fas fa-network-wired"></i>${p.iface || "—"}</span>
+          <span class="peer-name" title="${peerEsc(p.name || "")}">${peerEsc(p.name || "")}</span>
+          <span class="peer-owner-label">${p.reseller_owner ? "Reseller · " + peerEsc(p.reseller_owner.username) : "Administrator"}</span>
+          <span class="peer-iface-line"><i class="fas fa-network-wired"></i>${peerEsc(p.iface || "—")}</span>
         </div>
         <div class="peer-row-status">${peerTagsHTML(p)}</div>
       </div>
@@ -1896,10 +1905,10 @@
       <div class="peer-network-block peer-row-network">
         <span class="peer-row-label">Network</span>
         <div class="peer-address-line" title="${peerEsc(p.address || "")}">
-          <i class="fas fa-network-wired"></i><span class="address">${p.address || "—"}</span>
+          <i class="fas fa-network-wired"></i><span class="address">${peerEsc(p.address || "—")}</span>
         </div>
         <div class="endpoint-wrap"${epStr ? "" : ' style="display:none"'} title="${peerEsc(epStr)}">
-          <i class="fas fa-globe"></i><span class="endpoint">${epStr}</span>
+          <i class="fas fa-globe"></i><span class="endpoint">${peerEsc(epStr)}</span>
         </div>
       </div>
 
@@ -1936,9 +1945,9 @@
         ${peerDetailItem("mi-created", "calendar-plus", "Created", created)}
         ${peerDetailItem("mi-exp", "calendar-times", "Expires", exp)}
         ${peerDetailItem("mi-total", "exchange-alt", "Total usage", totalStr)}
-        ${peerDetailItem("mi-phone", "phone", "Phone", p.phone_number || "–")}
-        ${peerDetailItem("mi-tg", "paper-plane", "Telegram", p.telegram_id || "–")}
-        ${peerDetailItem("mi-iface", "network-wired", "Interface", `<span class="mi-iface-name">${p.iface || "–"}</span>`)}
+        ${peerDetailItem("mi-phone", "phone", "Phone", peerEsc(p.phone_number || "–"))}
+        ${peerDetailItem("mi-tg", "paper-plane", "Telegram", peerEsc(p.telegram_id || "–"))}
+        ${peerDetailItem("mi-iface", "network-wired", "Interface", `<span class="mi-iface-name">${peerEsc(p.iface || "–")}</span>`)}
       </div>
     </div>
 
@@ -2124,11 +2133,9 @@
     const style = document.createElement("style");
     style.id = "peer-action-dock-stable-style";
     style.textContent = `
-    /*
-     * Keep a permanent geometry slot for the peer action dock.
-     * Only visibility changes. The card height never changes on hover,
-     * preventing pointerleave/pointerenter oscillation.
-     */
+    .peer-owner-label{display:block;font-size:10px;color:var(--pf-muted,var(--muted));overflow-wrap:anywhere}
+    @media(min-width:1100px){html[data-design][data-theme] body.peers-page .peer-filter-row{grid-template-columns:minmax(200px,1.7fr) repeat(3,minmax(120px,.7fr)) auto!important}}
+    
     .peer-card {
       position: relative !important;
     }
@@ -2371,10 +2378,10 @@
         keepOpen();
         card.classList.add("peer-actions-locked");
 
-        /*
-         * Do not unlock immediately after click. Some actions open a modal
-         * asynchronously and some refresh the peer list.
-         */
+
+
+
+
         setTimeout(() => {
           const modalOpen = !!document.querySelector(
             '.modal.open, .peer-confirm-overlay.open, .peer-confirm-overlay[style*="display: flex"]',
@@ -2407,22 +2414,25 @@
     card.dataset.blocked = blocked ? "1" : "0";
     card.dataset.depleting = depleted ? "1" : "0";
     card.dataset.name = (p.name || "").toLowerCase();
+    card.dataset.ownerType = p.reseller_owner ? "reseller" : "admin";
+    card.dataset.ownerName = p.reseller_owner?.username || "Administrator";
     card.dataset.phone = (p.phone_number || "").toLowerCase();
     card.dataset.tg = (p.telegram_id || "").toLowerCase();
     card.dataset.iface = p.iface || "";
 
     const set = (sel, txt) => {
       const el = card.querySelector(sel);
-      if (el) el.textContent = txt;
+      if (el && el.textContent !== String(txt ?? "")) el.textContent = txt;
     };
     const setHTML = (sel, html) => {
       const el = card.querySelector(sel);
-      if (el) el.innerHTML = html;
+      if (el) { if(window.WGWorkspace) window.WGWorkspace.html(el,html); else el.innerHTML=html; }
     };
     const started = !p.start_on_first_use || !!p.first_used_at_ts;
 
     set(".peer-index", `${i + 1})`);
     set(".peer-name", p.name || "");
+    set(".peer-owner-label", p.reseller_owner ? "Reseller · " + p.reseller_owner.username : "Administrator");
     const avatar = peerAvatarMeta(p);
     const avatarEl = card.querySelector(".peer-avatar");
     if (avatarEl) {
@@ -2430,15 +2440,15 @@
       avatarEl.className = `peer-avatar ${avatar.tone}`;
     }
 
-    const tagsEl = card.querySelector(".peer-tags");
-    if (tagsEl) tagsEl.innerHTML = peerTagsHTML(p);
+    const tagsEl = card.querySelector(".peer-row-status, .peer-tags");
+    if (tagsEl) { const markup=peerTagsHTML(p); if(window.WGWorkspace) window.WGWorkspace.html(tagsEl,markup); else tagsEl.innerHTML=markup; }
 
     set(".peer-traffic .rx", String(p.rx || "0"));
     set(".peer-traffic .tx", String(p.tx || "0"));
     set(".peer-address-line .address", p.address || "");
 
     const epStr = endpointDisplay(p);
-    const wrap = card.querySelector(".peer-network-block .endpoint-wrap");
+    const wrap = card.querySelector(".peer-row-network .endpoint-wrap, .peer-network-block .endpoint-wrap");
     if (wrap) {
       if (epStr) {
         wrap.style.removeProperty("display");
@@ -2469,11 +2479,12 @@
     if (usageMeter) {
       usageMeter.classList.remove('usage-unlimited', 'usage-danger', 'usage-warning', 'usage-empty', 'usage-normal');
       usageMeter.classList.add(p.unlimited ? 'usage-unlimited' : currentUsedPct >= 90 ? 'usage-danger' : currentUsedPct >= 75 ? 'usage-warning' : currentUsedPct <= 0 ? 'usage-empty' : 'usage-normal');
-      usageMeter.dataset.usagePct = currentUsedPct.toFixed(1);
+      usageMeter.dataset.remainingPct = currentRemainPct.toFixed(1);
+      usageMeter.title = `${currentRemainPct.toFixed(0)}% remaining · ${currentUsedPct.toFixed(0)}% used`;
     }
-    if (usageTrack) usageTrack.setAttribute('aria-valuenow', currentUsedPct.toFixed(0));
-    if (usageFill) usageFill.style.width = `${currentUsedPct.toFixed(1)}%`;
-    if (usageText) usageText.textContent = p.unlimited ? 'No cap' : `${currentUsedPct.toFixed(0)}%`;
+    if (usageTrack) usageTrack.setAttribute('aria-valuenow', currentRemainPct.toFixed(0));
+    if (usageFill) usageFill.style.width = `${currentRemainPct.toFixed(1)}%`;
+    if (usageText) usageText.textContent = p.unlimited ? 'Unlimited' : `${currentRemainPct.toFixed(0)}%`;
 
     const en = card.querySelector('[data-peer-action="enable"]');
     const di = card.querySelector('[data-peer-action="disable"]');
@@ -2529,8 +2540,8 @@
       : `${capDays != null ? fmtDaysOrHours(capDays) : "–"}${capTail}`;
 
     setHTML(".mi-limit", peerDetailInner("database", "Limit", fmtLimit(p)));
-    setHTML(".mi-days", peerDetailInner("play-circle", "Started", first));
-    setHTML(".mi-first", peerDetailInner("calendar-alt", "Time limit", capStr));
+    setHTML(".mi-days", peerDetailInner("calendar-alt", "Time limit", capStr));
+    setHTML(".mi-first", peerDetailInner("play-circle", "First used", first));
     setHTML(
       ".mi-created",
       peerDetailInner("calendar-plus", "Created", created),
@@ -2546,18 +2557,18 @@
     );
     setHTML(
       ".mi-phone",
-      peerDetailInner("phone", "Phone", p.phone_number || "–"),
+      peerDetailInner("phone", "Phone", peerEsc(p.phone_number || "–")),
     );
     setHTML(
       ".mi-tg",
-      peerDetailInner("paper-plane", "Telegram", p.telegram_id || "–"),
+      peerDetailInner("paper-plane", "Telegram", peerEsc(p.telegram_id || "–")),
     );
     setHTML(
       ".mi-iface",
       peerDetailInner(
         "network-wired",
         "Interface",
-        `<span class="mi-iface-name">${p.iface || "–"}</span>`,
+        `<span class="mi-iface-name">${peerEsc(p.iface || "–")}</span>`,
       ),
     );
 
@@ -2703,7 +2714,7 @@
     const pct = (value, total) => total > 0 ? Math.round((value / total) * 100) : 0;
     const set = (id, val) => {
       const el = document.getElementById(id);
-      if (el) el.textContent = String(val ?? 0);
+      if (el && el.textContent !== String(val ?? 0)) el.textContent = String(val ?? 0);
     };
 
     set("sum-total", c.total);
@@ -2786,6 +2797,7 @@
   }
 
   function buildFilters() {
+    ensureStablePeerActionDockStyle();
     let host = $(".peer-filters");
     if (!host) {
       host = document.createElement("div");
@@ -2794,7 +2806,7 @@
       <div class="peer-filter-row">
         <label class="peer-search-field" for="peer-filter-q">
           <i class="fas fa-magnifying-glass" aria-hidden="true"></i>
-          <input id="peer-filter-q" class="input" placeholder="Search peers by name, IP, or endpoint…">
+          <input id="peer-filter-q" class="input" placeholder="Search name, reseller, IP, or endpoint…">
         </label>
 
         <select id="peer-filter-status" class="input" aria-label="Filter peers by status">
@@ -2912,7 +2924,7 @@
     const endpoint = card.dataset.endpoint || "";
     const iface = String(card.dataset.iface || "").toLowerCase();
 
-    return name.includes(q) || phone.includes(q) || tg.includes(q)
+    return String(card.dataset.ownerName || "").toLowerCase().includes(q) || name.includes(q) || phone.includes(q) || tg.includes(q)
       || address.includes(q) || endpoint.includes(q) || iface.includes(q);
   }
 
@@ -3033,7 +3045,7 @@
       )
       .join("");
 
-    bar.innerHTML = `
+    const markup = `
     <div class="subx-page-info">${from}-${to} of ${matched} peers</div>
     <div class="subx-page-controls" aria-label="Peer pagination">
       <button type="button" data-nav="first" ${cur <= 1 ? "disabled" : ""} title="First page" aria-label="First page"><i class="fas fa-angles-left"></i></button>
@@ -3044,12 +3056,13 @@
       <select id="peer-page-size-pager" class="input" aria-label="Peers per page">${sizeOptions}</select>
     </div>
   `;
+    if(window.WGWorkspace) window.WGWorkspace.html(bar,markup); else bar.innerHTML=markup;
   }
 
   let refreshTimer = null,
     isRefreshing = false,
     firstLoad = false,
-    refreshDelay = 5000,
+    refreshDelay = document.documentElement.hasAttribute("data-reseller-workspace") ? 20000 : 5000,
     lastErrorAt = 0,
     peersFetchCtrl = null,
     peersLoadingSeq = 0,
@@ -3062,7 +3075,7 @@
   function nextSchedule(ms) {
     if (refreshTimer) clearTimeout(refreshTimer);
 
-    refreshTimer = setTimeout(() => refreshPeers({ quiet: true }), ms);
+    if(!document.hidden)refreshTimer = setTimeout(() => refreshPeers({ quiet: true }), ms);
   }
 
   function findPeer(id) {
@@ -3080,6 +3093,7 @@
     if (!el) return;
 
     if (!el.dataset.enhanced) {
+      document.body.appendChild(el);
       el.dataset.enhanced = "1";
       el.innerHTML = `
       <div class="peers-loading-card" role="status" aria-live="polite">
@@ -3182,12 +3196,10 @@
   }
 
   async function refreshPeers(opts = {}) {
-    try {
-      await (window.WG_PANEL_TIMEZONE_READY || Promise.resolve());
-    } catch (_) {}
-    if (opts.quiet && (document.hidden || document.querySelector('.peerx-form-modal[aria-hidden="false"], #iface-create-modal[aria-hidden="false"], dialog[open]'))) { nextSchedule(refreshDelay); return; }
+
+    if (opts.quiet && (document.hidden || document.querySelector('.peerx-form-modal[aria-hidden="false"], #iface-create-modal[aria-hidden="false"], dialog[open], .peer-action-busy, .peer-actions-locked, .iface-picker.is-open, .peer-scope-picker [aria-expanded="true"]') || document.activeElement?.matches('.peers-container input, .peers-container select, .peers-container textarea, #peer-pagination select'))) { window.WGWorkspace?.live(document.querySelector(".peer-hero-live"),"paused","Refresh paused"); nextSchedule(refreshDelay); return; }
     const ifaceId = opts.ifaceId ?? SELECTED_IFACE_ID;
-    const abortPrev = !!opts.abortPrev;
+    const abortPrev = !!opts.abortPrev || !opts.quiet;
     const quiet = !!opts.quiet;
     if (isRefreshing && !abortPrev) return;
     if (abortPrev && peersFetchCtrl) {
@@ -3233,6 +3245,7 @@
     }
 
     isRefreshing = true;
+    if(!quiet)window.WGWorkspace?.live(document.querySelector(".peer-hero-live"),"loading","Fetching status");
 
     const timeoutMs = scopeId
       ? REFRESH_TIMEOUT_MS_NODE
@@ -3243,12 +3256,13 @@
       } catch {}
     }, timeoutMs);
 
+    let url = null;
     try {
       const base = scopeId
         ? `/api/nodes/${encodeURIComponent(scopeId)}/peers`
         : "/api/peers";
 
-      const url = new URL(base, window.location.origin);
+      url = new URL(base, window.location.origin);
 
       if (scopeId) {
         if (typeof SELECTED_IFACE_NAME === "string" && SELECTED_IFACE_NAME) {
@@ -3268,7 +3282,10 @@
       if (!res.ok) throw new Error("HTTP " + res.status);
 
       const data = await res.json();
-      const peers = data?.peers || [];
+      if(signal.aborted || peersFetchCtrl !== ctrl || getScopeId() !== scopeId || String(SELECTED_IFACE_ID??'') !== String(ifaceId??''))return;
+      if(!Array.isArray(data?.peers))throw new Error("Invalid peer response");
+      if(quiet && (document.hidden || document.querySelector('.peerx-form-modal[aria-hidden="false"], #iface-create-modal[aria-hidden="false"], dialog[open], .peer-action-busy, .peer-actions-locked')))return;
+      const peers = data.peers;
       if (
         peers[0]?.display_timezone &&
         typeof window.wgPanelApplyTimezone === "function"
@@ -3297,7 +3314,7 @@
       );
 
       if (peers.length === 0) {
-        container.innerHTML = `
+        if(!container.querySelector(".empty-peers"))container.innerHTML = `
         <div class="empty-peers empty-peers-pro">
           <span class="empty-peers-icon"><i class="fas fa-user-plus" aria-hidden="true"></i></span>
           <div class="empty-peers-copy">
@@ -3351,8 +3368,10 @@
       } else {
         applyPagi?.();
       }
-      refreshDelay = 5000;
+      if(!document.hidden)window.WGWorkspace?.live(document.querySelector(".peer-hero-live"),"ready","Updated "+new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit",timeZone:window.WG_PANEL_TIMEZONE||"UTC"}));
+      refreshDelay = document.documentElement.hasAttribute("data-reseller-workspace") ? 20000 : 5000;
     } catch (err) {
+      if(peersFetchCtrl !== ctrl)return;
       const msg = String(err?.message || err || "");
       const abortMsg = msg.toLowerCase();
       const isRefreshTimeout =
@@ -3365,6 +3384,7 @@
         abortMsg.includes("superseded-by-newer-poll");
 
       if (benignAbort && !isRefreshTimeout) return;
+      window.WGWorkspace?.live(document.querySelector(".peer-hero-live"),"stale","Retrying automatically");
 
       if (isRefreshTimeout) {
         const now = Date.now();
@@ -3373,7 +3393,7 @@
           console.warn(`Peers refresh timed out after ${timeoutMs}ms`, {
             ifaceId,
             scopeId,
-            url: typeof url !== "undefined" ? url.toString() : "",
+            url: url?.toString() || "",
           });
 
           toastSafe?.(
@@ -3411,6 +3431,7 @@
       clearTimeout(killer);
 
       if (showTimer) clearTimeout(showTimer);
+      if(peersFetchCtrl !== ctrl)return;
       peersLoading(false);
       if (container) {
         clearPeers(container);
@@ -3444,7 +3465,13 @@
     const target=(window._peers||[]).find(p=>peer.remote ? !!peer.public_key && p.public_key===peer.public_key : String(p.id)===String(peer.id));
     if(!target)return false;openPeerDiagnosisEditor(target,stage);return true;
   };
+  document.addEventListener('visibilitychange',()=>{
+    clearTimeout(refreshTimer);
+    if(!document.hidden){if(!isRefreshing)void refreshPeers({quiet:true});}
+    else window.WGWorkspace?.live(document.querySelector('.peer-hero-live'),'paused','Refresh paused');
+  });
   window.addEventListener('wgpanel:diagnosis-changed',()=>refreshPeers({abortPrev:true}));
+  window.addEventListener('rp-operation-completed',()=>{interfaceListCache.at=0;const editing=!!document.querySelector('.peerx-form-modal[aria-hidden="false"], dialog[open]');void refreshInterfacesUI({keepSelection:true,updateCreate:!editing,updateBulk:!editing});void refreshPeers({abortPrev:true});});
   async function postEdit(path, okMsg, failMsg) {
     const pathId = (String(path).match(/\/peer\/([^/]+)/) || [])[1];
 
@@ -3740,20 +3767,20 @@
         body: JSON.stringify(data),
       });
 
-      /*
-       * Always try to read the backend response.
-       *
-       * This is important because app.py can return useful
-       * errors such as:
-       *
-       *   invalid_fixed_endpoint
-       *   invalid_endpoint
-       *   duplicate_address
-       *   ...
-       *
-       * Previously the UI discarded this information and only
-       * displayed "HTTP 400".
-       */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
       const result = await r.json().catch(() => ({}));
 
       if (!r.ok) {
@@ -3783,10 +3810,10 @@
 
       let message = err?.message || "Unknown error";
 
-      /*
-       * Give the most common peer-edit validation errors
-       * clearer wording.
-       */
+
+
+
+
       const code = err?.payload?.error;
 
       if (code === "invalid_fixed_endpoint") {
@@ -3814,7 +3841,7 @@
     }
   }
 
-  // QR & logs
+
   let qrModal;
   let qrObjectUrl = null;
 
@@ -4059,10 +4086,10 @@
     const peer = findPeer(id) || {};
     const epStr = endpointDisplay(peer);
     $in("#logs-overview", logsModal).innerHTML = `
-    <div class="logs-pill"><i class="fas fa-user"></i><strong>Name:</strong>&nbsp;${peer.name ?? "–"}</div>
-    <div class="logs-pill"><i class="fas fa-network-wired"></i><strong>Address:</strong>&nbsp;${peer.address ?? "–"}</div>
+    <div class="logs-pill"><i class="fas fa-user"></i><strong>Name:</strong>&nbsp;${peerEsc(peer.name ?? "–")}</div>
+    <div class="logs-pill"><i class="fas fa-network-wired"></i><strong>Address:</strong>&nbsp;${peerEsc(peer.address ?? "–")}</div>
     <div class="logs-pill"><i class="fas fa-globe"></i><strong>Endpoint:</strong>&nbsp;${epStr || "–"}</div>
-    <div class="logs-pill"><i class="fas fa-shield-halved"></i><strong>Interface:</strong>&nbsp;${peer.iface ?? "–"}</div>
+    <div class="logs-pill"><i class="fas fa-shield-halved"></i><strong>Interface:</strong>&nbsp;${peerEsc(peer.iface ?? "–")}</div>
     <div class="logs-pill"><i class="fas fa-clock"></i><strong>Status:</strong>&nbsp;${cap(peer.status ?? "–")}</div>
   `;
 
@@ -4606,7 +4633,7 @@
           );
 
     if (selected) {
-      label.textContent = selected.name || "Interface";
+      label.textContent = [selected.name || "Interface", window.WGResellerAssignment?.label(selected)].filter(Boolean).join(" · ");
 
       if (selectedDot) {
         selectedDot.className = [
@@ -4630,6 +4657,9 @@
       }
     }
 
+    const signature=JSON.stringify([SELECTED_IFACE_ID,interfaces.map(i=>[i.id,i.name,i.is_up,i.address,i.listen_port,i.reseller_assignments])]);
+    if(menu._wgInterfaceSignature===signature)return;
+    menu._wgInterfaceSignature=signature;
     menu.replaceChildren();
 
     if (!interfaces.length) {
@@ -4671,10 +4701,10 @@
 
       const stateLabel =
         iface.is_up === true
-          ? "Online"
+          ? "Running"
           : iface.is_up === false
-            ? "Offline"
-            : "Unknown";
+            ? "Stopped"
+            : "Unavailable";
 
       const main = document.createElement("span");
       main.className = "iface-picker-option-main";
@@ -4717,6 +4747,13 @@
         : "WireGuard interface";
 
       copy.append(top, meta);
+      const assignment = window.WGResellerAssignment?.label(iface);
+      if (assignment) {
+        const owner = document.createElement('small');
+        owner.className = 'iface-reseller-assignment';
+        owner.textContent = assignment;
+        copy.append(owner);
+      }
       main.append(dot, copy);
       option.appendChild(main);
 
@@ -4832,12 +4869,14 @@
     data: null,
   };
 
+  let interfaceRefreshSequence = 0;
   async function refreshInterfacesUI({
     keepSelection = true,
     updateCreate = true,
     updateBulk = true,
     force = false,
   } = {}) {
+    const sequence=++interfaceRefreshSequence;
     const prevScope = window._lastScopeId ?? "";
     const scopeId = getScopeId();
 
@@ -4871,7 +4910,9 @@
 
         const j = await r.json();
 
-        raw = Array.isArray(j.interfaces) ? j.interfaces : [];
+        if(sequence!==interfaceRefreshSequence || getScopeId()!==scopeId)return;
+        if(!Array.isArray(j.interfaces))throw new Error("Invalid interface response");
+        raw = j.interfaces;
 
         interfaceListCache = {
           scope: scopeId,
@@ -4904,6 +4945,7 @@
       return;
     }
 
+    if(sequence!==interfaceRefreshSequence || getScopeId()!==scopeId)return;
     let diagnosisSelectedNow=false;
     const diagnosisParams = new URLSearchParams(location.search);
     if(diagnosisParams.has('diagnosis_peer') && !window.__diagnosisInterfaceSelected){
@@ -4920,10 +4962,14 @@
     const newSel = stillThere ? keepId : (IFACES[0]?.id ?? null);
 
     if (newSel != null) {
-      SELECTED_IFACE_ID = String(newSel);
-      if (typeof setIfaceById === "function") {
-        setIfaceById(SELECTED_IFACE_ID);
+      if (scopeChanged || String(SELECTED_IFACE_ID??'') !== String(newSel)) {
+        setIfaceById(String(newSel));
+      } else {
+        SELECTED_IFACE_NAME=findIfaceById(newSel)?.name||null;
+        updateActiveInterface();
       }
+    } else {
+      SELECTED_IFACE_ID=null;SELECTED_IFACE_NAME=null;updateActiveInterface();
     }
 
     window._lastScopeId = scopeId;
@@ -4946,9 +4992,9 @@
           if (addrSel) {
             const prevAddr = addrSel.value;
             const options = (iface.available_ips || [])
-              .map((ip) => `<option value="${ip}">${ip}</option>`)
+              .map((ip) => `<option value="${peerEsc(ip)}">${peerEsc(ip)}</option>`)
               .join("");
-            addrSel.innerHTML = options;
+            addrSel.innerHTML = (window.RESELLER_SECTION === "peers" ? '<option value="">Automatic allocation</option>' : '') + options;
 
             if (
               prevAddr &&
@@ -4984,9 +5030,8 @@
           bulkIfaceSel.value ||
           (SELECTED_IFACE_ID != null ? String(SELECTED_IFACE_ID) : null);
 
-        bulkIfaceSel.innerHTML = IFACES.map(
-          (i) => `<option value="${i.id}">${i.name ?? i.id}</option>`,
-        ).join("");
+        if(window.WGWorkspace) window.WGWorkspace.options(bulkIfaceSel,IFACES.map(i=>({value:i.id,label:i.name??i.id})));
+        else bulkIfaceSel.replaceChildren(...IFACES.map(i=>new Option(i.name??i.id,i.id)));
 
         const chosen =
           prev &&
@@ -4998,12 +5043,11 @@
 
         if (chosen) bulkIfaceSel.value = chosen;
 
-        bulkIfaceSel.addEventListener("change", () => {
+
+        bulkIfaceSel.onchange = () => {
           const iface = getIfaceById(bulkIfaceSel.value);
-          if (iface && typeof refreshBulkIface === "function") {
-            refreshBulkIface(iface);
-          }
-        });
+          if (iface && typeof refreshBulkIface === "function") refreshBulkIface(iface);
+        };
 
         const iface0 = getIfaceById(bulkIfaceSel.value);
         if (iface0 && typeof refreshBulkIface === "function") {
@@ -5016,11 +5060,11 @@
       }
     }
 
-    /*
-     * Render once, after selection and modal helpers are synchronized.
-     * This avoids the old startup sequence rendering the same interface
-     * controls several times.
-     */
+
+
+
+
+
     if (typeof renderInterfaceDropdown === "function") {
       renderInterfaceDropdown();
     }
@@ -5122,23 +5166,23 @@
       applyPagi?.();
     }
 
-    /*
-     * Synchronize the visible custom dropdown
-     * with SELECTED_IFACE_ID / SELECTED_IFACE_NAME.
-     */
+
+
+
+
     if (typeof renderInterfaceDropdown === "function") {
       renderInterfaceDropdown();
     }
   }
 
   function makeIfaceBar() {
-    /*
-     * Legacy compatibility hook.
-     *
-     * The visible interface selector is now #iface-picker.
-     * Keep #iface-bar in the DOM for older helper code, but do not build a
-     * second set of interface buttons or call setIfaceById() from here.
-     */
+
+
+
+
+
+
+
     const host = document.getElementById("iface-bar");
 
     if (host && host.childNodes.length) {
@@ -5162,7 +5206,7 @@
         isUp != null
           ? `<span class="iface-dot ${isUp ? "up" : "down"}" title="${isUp ? "Interface up" : "Interface down"}"></span>`
           : `<span class="iface-dot" title="Interface status unknown"></span>`;
-      const state = isUp == null ? "Unknown" : isUp ? "Up" : "Down";
+      const state = isUp == null ? ("Unavailable") : isUp ? "Up" : "Down";
       const port = iface.listen_port ?? "–";
 
       chip.innerHTML = `
@@ -5215,7 +5259,7 @@
 
     const createBtn = $("#create-peer-btn");
     if (createBtn && iface) {
-      createBtn.innerHTML = `<i class="fas fa-plus"></i> Create peer <span class="btn-mini-on">${iface.name}</span>`;
+      createBtn.innerHTML = `<svg class="peer-create-plus" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg> Create peer <span class="btn-mini-on">${peerEsc(iface.name)}</span>`;
     }
   }
   async function ifaceToggle(e) {
@@ -5319,12 +5363,12 @@
     }
 
     try {
-      /*
-       * First request is intentionally non-destructive.
-       *
-       * If peers are attached, the server returns HTTP 409
-       * with interface_has_peers.
-       */
+
+
+
+
+
+
       const check = await sendDelete(false);
 
       if (
@@ -5370,10 +5414,10 @@
           );
         }
       } else if (check.response.ok) {
-        /*
-         * An interface with zero peers was already deleted
-         * by the first DELETE request.
-         */
+
+
+
+
       } else {
         throw new Error(
           check.payload?.detail ||
@@ -5422,7 +5466,7 @@
       btn.disabled = false;
     }
   }
-  //  BULK
+
   let bulkModal = null,
     bulkForm = null;
 
@@ -5616,6 +5660,7 @@
       return;
     }
 
+    if (window.WGResellerAssignment?.confirm([iface]) === false) return;
     const ifaceId = scopeId ? rawIfaceId : Number(rawIfaceId);
 
     if (!scopeId && !ifaceId) {
@@ -5811,14 +5856,15 @@
 
     const ips = Array.isArray(list) ? list : [];
 
-    addrSel.innerHTML = ips
+    const automatic = window.RESELLER_SECTION === "peers";
+    addrSel.innerHTML = (automatic ? '<option value="">Automatic allocation</option>' : '') + ips
       .map((ip) => {
         const safe = peerEsc(ip);
         return `<option value="${safe}">${safe}</option>`;
       })
       .join("");
 
-    addrSel.selectedIndex = ips.length ? 0 : -1;
+    addrSel.selectedIndex = automatic || ips.length ? 0 : -1;
 
     const hiddenAddr = document.getElementById("create-address");
     if (hiddenAddr) hiddenAddr.value = addrSel.value || "";
@@ -5930,9 +5976,9 @@
     const actionBtn = e.target.closest("button[data-peer-action]");
     if (!actionBtn) return;
 
-    /* Handle peer actions as one isolated command. This prevents any legacy
-     bubbling listener or visually overlapping old action geometry from
-     turning an Edit tap into a reset/enable/etc. */
+
+
+
     e.preventDefault();
     e.stopPropagation();
     e.stopImmediatePropagation();
@@ -6241,10 +6287,17 @@
     try {
       if (window.peerScopeReady) await window.peerScopeReady;
     } catch (_) {}
-    await getPresets();
+    void getPresets();
     (function wireCreateFormSubmit() {
       const form = document.querySelector("#create-peer-form");
       if (!form) return;
+
+    form.addEventListener('submit', event => {
+      if (window.WGResellerAssignment?.confirm([findIfaceById(SELECTED_IFACE_ID)]) === false) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    }, true);
 
       const selectEl = document.querySelector("#create-address-select");
       const hiddenAddr = document.querySelector("#create-address");
@@ -6277,7 +6330,8 @@
 
           const scopeId = getScopeId();
 
-          if (!scopeId) {
+          const reseller = window.RESELLER_SECTION === "peers";
+          if (!scopeId && !reseller) {
             return;
           }
 
@@ -6292,18 +6346,56 @@
             'button[type="submit"], .btn[type="submit"]',
           );
           if (submitBtn) submitBtn.disabled = true;
+          const formError = document.getElementById("rp-create-peer-error");
+          if (formError) { formError.hidden = true; formError.textContent = ""; }
 
           const iface = findIfaceById(SELECTED_IFACE_ID);
-          if (!iface) {
-            toastSafe("No interface selected", "error");
-            return;
-          }
-
-          const fd = new FormData(form);
-
-          const loader = toastSafe("Creating peer on node…", "info", true);
-
+          const loader = toastSafe(reseller ? "Creating peer…" : "Creating peer on node…", "info", true);
           try {
+            if (!iface) throw new Error("No interface selected");
+            const fd = new FormData(form);
+            if (reseller) {
+                                                                                  
+                                                                              
+              const data = Object.fromEntries(fd.entries());
+              delete data.csrf_token;
+              delete data.rp_request_id;
+              delete data.rp_expected_account;
+              delete data.iface;
+              data.iface_id = iface.id;
+              data.name = String(data.name || "").trim();
+              data.start_on_first_use = fd.has("start_on_first_use");
+              data.include_internal_network = !!document.getElementById("peer-include-internal-network")?.checked && (window.RESELLER_PERMISSIONS || []).includes("network_options");
+              const mayChoose = (window.RESELLER_PERMISSIONS || []).includes("choose_address");
+              const selection = document.getElementById("create-address-select");
+              if (mayChoose && selection?.value) data.address = selection.value;
+              else delete data.address;
+              const r = await fetch(api("/api/peers"), {
+                method: "POST", credentials: "same-origin",
+                headers: { "Content-Type": "application/json", "Accept": "application/json",
+                  "X-CSRFToken": fd.get("csrf_token") || document.querySelector('meta[name="csrf-token"]')?.content || "" },
+                body: JSON.stringify(data),
+              });
+              const result = await r.json().catch(() => ({}));
+              if (!r.ok || result.ok !== true) {
+                const message = result.error || "Peer creation could not be confirmed. Check the peer list before retrying.";
+                                                                                                    
+                if (r.status === 409 && message.startsWith("The selected IP address is already in use.")) {
+                  if (selection) { selection.value = ""; selection.dispatchEvent(new Event("change", { bubbles: true })); }
+                  interfaceListCache.at = 0;
+                  void refreshAddressOptions().catch(() => {});
+                }
+                throw new Error(message);
+              }
+              toastSafe("Peer created", "success");
+              closeModal?.(document.getElementById("peer-modal"));
+              interfaceListCache.at = 0;
+              try {
+                await refreshInterfacesUI({ keepSelection: true, updateCreate: true, updateBulk: true });
+                await refreshPeers({ abortPrev: true });
+              } catch (refreshError) { toastSafe("Peer created. Refresh the list to see it.", "info"); }
+              return;
+            }
             const addrSel = document.querySelector(
               '#create-address-select, #peer-modal select[name="address"]',
             );
@@ -6356,6 +6448,7 @@
           } catch (err) {
             console.error(err);
             toastSafe("Create failed: " + (err.message || err), "error");
+            if (formError) { formError.textContent = err.message || String(err); formError.hidden = false; }
           } finally {
             form.dataset.nodeSubmitting = "0";
             const submitBtn = form.querySelector(
@@ -6484,11 +6577,10 @@
 
       const openTicket = beginModalOpenRequest();
 
-      await refreshInterfacesUI({
-        keepSelection: true,
-        updateCreate: false,
-        updateBulk: true,
-      });
+      if (!IFACES.length || window._lastScopeId !== getScopeId()) {
+        openModal(bulkModal);
+        await refreshInterfacesUI({keepSelection:true,updateCreate:false,updateBulk:true});
+      }
 
       if (!modalOpenRequestIsCurrent(openTicket)) return;
 
@@ -6509,11 +6601,10 @@
 
         const openTicket = beginModalOpenRequest();
 
-        await refreshInterfacesUI({
-          keepSelection: true,
-          updateCreate: true,
-          updateBulk: false,
-        });
+        openModal(createModal);
+        if (!IFACES.length || window._lastScopeId !== getScopeId()) {
+          await refreshInterfacesUI({keepSelection:true,updateCreate:true,updateBulk:false});
+        }
 
         if (!modalOpenRequestIsCurrent(openTicket)) return;
 
@@ -6529,7 +6620,7 @@
         if (!modalOpenRequestIsCurrent(openTicket)) return;
         openModal(createModal);
         wireContainedPickers();
-        window.createPeerModal?.();
+        window.createPeerModal?.()?.catch(error => toastSafe(error.message || "Profiles could not load. Try reopening the editor.", "warn"));
         attachEndpoint(createModal);
       };
     }
@@ -6586,9 +6677,9 @@
         return;
       }
 
-      /*
-       * Prevent duplicate submits.
-       */
+
+
+
       if (form.dataset.ifaceSubmitting === "1") {
         return;
       }
@@ -6609,18 +6700,18 @@
 
         auto_up: !!fd.get("auto_up"),
 
-        /*
-         * Honor the checkbox when present.
-         * Default to enabled when the form does not contain it.
-         */
+
+
+
+
         auto_firewall: form.querySelector('[name="auto_firewall"]')
           ? !!fd.get("auto_firewall")
           : true,
       };
 
-      /*
-       * Basic validation.
-       */
+
+
+
       if (!payload.name || !payload.address || !payload.listen_port) {
         toastSafe(
           "Name, server address, and listen port are required",
@@ -6660,9 +6751,9 @@
         ? `/api/nodes/${encodeURIComponent(String(scopeId))}/interfaces`
         : "/api/interfaces";
 
-      /*
-       * Serialize once so the exact body can be inspected.
-       */
+
+
+
       let requestBody;
 
       try {
@@ -6698,12 +6789,12 @@
         true,
       );
 
-      /*
-       * Use XMLHttpRequest deliberately.
-       *
-       * This bypasses the global window.fetch wrappers
-       * from users.js and csrf.js.
-       */
+
+
+
+
+
+
       function postJson(targetUrl, jsonBody) {
         return new Promise((resolve, reject) => {
           const xhr = new XMLHttpRequest();
@@ -6720,9 +6811,9 @@
 
           xhr.setRequestHeader("Accept", "application/json");
 
-          /*
-           * Include CSRF header when available.
-           */
+
+
+
           try {
             const csrfToken =
               typeof getCookie === "function" ? getCookie("csrf_token") : "";
@@ -6817,18 +6908,18 @@
 
         closeIfaceCreateModal();
 
-        /*
-         * Refresh the interface dropdown/state.
-         */
+
+
+
         await refreshInterfacesUI({
           keepSelection: false,
           updateCreate: true,
           updateBulk: true,
         });
 
-        /*
-         * Handle both local and node response formats.
-         */
+
+
+
         const createdName = j.interface?.name || j.name || payload.name;
 
         if (createdName && Array.isArray(window.IFACES)) {
@@ -6844,10 +6935,10 @@
           }
         }
 
-        /*
-         * A peer refresh failure must not be reported
-         * as an interface creation failure.
-         */
+
+
+
+
         try {
           await refreshPeers?.({
             abortPrev: true,
@@ -6910,18 +7001,18 @@
       ifaceCreateBtn.onclick = openIfaceCreateModal;
     }
 
-    /*
-     * Avoid installing this global handler twice.
-     */
+
+
+
     if (!document.documentElement.dataset.ifaceDeleteWired) {
       document.addEventListener("click", ifaceDelete);
 
       document.documentElement.dataset.ifaceDeleteWired = "1";
     }
 
-    /*
-     * Prevent duplicate submit listeners.
-     */
+
+
+
     if (ifaceCreateForm && ifaceCreateForm.dataset.ifaceCreateWired !== "1") {
       ifaceCreateForm.addEventListener("submit", submitIfaceCreate);
 
@@ -6967,9 +7058,9 @@
     const peersCont = $(".peers-container");
 
     if (peersCont) {
-      /*
-       * Guard against duplicate listener wiring.
-       */
+
+
+
       if (peersCont.dataset.peerActionClickWired !== "1") {
         peersCont.addEventListener("click", clickList, true);
 
@@ -7121,15 +7212,15 @@
         "#peer-scope, #create-address-select, #bulk-iface",
       )
     ) {
-      setTimeout(updateEndpointInheritanceUI, 0);
+      setTimeout(() => window.updateEndpointInheritanceUI?.(), 0);
     }
   });
   document.addEventListener("peer-scope-ready", () =>
-    setTimeout(updateEndpointInheritanceUI, 0),
+    setTimeout(() => window.updateEndpointInheritanceUI?.(), 0),
   );
 })();
 
-/* Peer create state + endpoint help fix */
+
 (() => {
   const modal = document.getElementById("peer-modal");
   const form = document.getElementById("create-peer-form");
@@ -7137,6 +7228,8 @@
 
   function resetCreatePeerState() {
     form.reset();
+    const formError = document.getElementById("rp-create-peer-error");
+    if (formError) { formError.hidden = true; formError.textContent = ""; }
     form.dataset.nodeSubmitting = "0";
     const allowed = document.getElementById("peer-allowed-ips");
     if (allowed) {
@@ -7189,7 +7282,7 @@
   });
 })();
 
-/* PEER_DROPDOWN_SUMMARY_POLISH_START */
+
 (() => {
   "use strict";
 
@@ -7258,16 +7351,17 @@
     const count = menu.querySelector(".peer-ip-menu-count");
 
     function options() {
-      return Array.from(select.options).filter((option) => option.value);
+      return Array.from(select.options).filter((option) => option.value || window.RESELLER_SECTION === "peers");
     }
 
     function syncTrigger() {
       const selected = select.options[select.selectedIndex];
       currentText.textContent =
         selected?.textContent?.trim() || selected?.value || "Choose an address";
-      currentSub.textContent = options().length
-        ? `${options().length} free address${options().length === 1 ? "" : "es"}`
-        : "No free addresses available";
+      const free = options().filter(option => option.value).length;
+      currentSub.textContent = window.RESELLER_SECTION === "peers" && !select.value
+        ? "Choose a free IP at creation time"
+        : free ? `${free} free address${free === 1 ? "" : "es"}` : "No free addresses available";
     }
 
     function render(query = "") {
@@ -7292,7 +7386,7 @@
           const label = escapeHtml(option.textContent?.trim() || option.value);
           return `<button type="button" class="peer-ip-option${selected ? " selected" : ""}" data-value="${value}" role="option" aria-selected="${selected ? "true" : "false"}">
           <span class="peer-ip-option-icon"><i class="fas fa-network-wired" aria-hidden="true"></i></span>
-          <span class="peer-ip-option-copy"><b>${label}</b><small>Free address</small></span>
+          <span class="peer-ip-option-copy"><b>${label}</b><small>${option.value ? "Available address" : "Assigned by the server"}</small></span>
           <span class="peer-ip-option-check"><i class="fas fa-check" aria-hidden="true"></i></span>
         </button>`;
         })
@@ -7434,8 +7528,8 @@
     subtree: true,
   });
 })();
-/* PEER_DROPDOWN_SUMMARY_POLISH_END */
-/* Allowed IP chip editors for Create / Edit / Bulk */
+
+
 (() => {
   "use strict";
   const esc = (s) =>

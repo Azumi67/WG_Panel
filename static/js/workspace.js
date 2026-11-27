@@ -12,10 +12,13 @@
     document.querySelectorAll('.ws-tg-tabs button').forEach(button => button.addEventListener('click', () => {
       if (!groups) return;
       groups.dataset.tgView = button.dataset.tgView;
+      const url = new URL(location.href); url.searchParams.set('sub',button.dataset.tgView); history.replaceState(null,'',url);
       document.querySelectorAll('.ws-tg-tabs button').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
       const detail = document.getElementById(button.dataset.tgView === 'notifications' ? 'tg-acc-notify' : 'tg-acc-token');
       if (detail) detail.open = true;
     }));
+    const sub = new URLSearchParams(location.search).get('sub');
+    if (sub === 'notifications') document.querySelector('.ws-tg-tabs button[data-tg-view="notifications"]')?.click();
     const token = document.getElementById('tg-acc-token');
     if (token && document.documentElement.dataset.design === 'modern') token.open = true;
   });

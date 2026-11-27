@@ -1,6 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
   const page = ({
     query: '',
+    selectedGroup: '',
     allOpen: false,
     noResults: false,
     baseCopied: false,
@@ -9,6 +10,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     init() {
       this.$nextTick(() => {
+        this.$root.querySelectorAll('#apiSide a').forEach(link=>{
+          const section=document.getElementById(link.hash.slice(1));
+          const count=section?.querySelectorAll('.route-row,tbody tr').length;
+          if(count && link.querySelector('b'))link.querySelector('b').textContent=count;
+        });
+        this.selectGroup(location.hash, false);
         this.filter();
         this.setupActiveSectionObserver();
         this.ensureCopyToast();
@@ -50,13 +57,42 @@ document.addEventListener('DOMContentLoaded', () => {
         const visibleInside = Array.from(section.querySelectorAll('.route-row, tbody tr'))
           .some(item => !item.classList.contains('hidden-by-search'));
         section.classList.toggle('hidden-by-search', Boolean(term && !visibleInside));
+        section.classList.toggle('hidden-by-group', !term && section.id !== this.selectedGroup);
       });
 
-      this.noResults = Boolean(term && visibleRows === 0);
+      this.noResults = Boolean(term && visibleRows === 0 && !indexRows.some(row => !row.classList.contains('hidden-by-search')));
+      this.syncExamples();
+    },
+
+    selectGroup(hash, clearSearch = true) {
+      const sections = [...this.$root.querySelectorAll('.doc-section')];
+      const id = (hash || '').slice(1);
+      const target = document.getElementById(id);
+      this.selectedGroup = target?.closest('.doc-section')?.id || sections.find(s=>s.id==='sec-custom-bot-api')?.id || sections[0]?.id || '';
+      if (clearSearch) { this.query=''; const search=document.getElementById('apiSearch'); if(search)search.value=''; }
+      this.$root.querySelectorAll('#apiSide a').forEach(link=>{
+        const active=link.hash==='#'+this.selectedGroup;
+        link.classList.toggle('active',active);
+        if(active)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
+      });
+      this.filter();
+      const no=document.getElementById('noResults');if(no)no.hidden=!this.noResults;
     },
 
     handleClick(event) {
-      const copyButton = event.target.closest('[data-copy]');
+      const lang=event.target.closest('[data-example-language]');
+      if(lang){
+        const card=lang.closest('.wg-multilang');
+        const example=card?.querySelector('template[data-example-code="'+lang.dataset.exampleLanguage+'"]');
+        if(example){card.querySelector('pre code').textContent=example.content.textContent;card.querySelectorAll('[data-example-language]').forEach(b=>b.setAttribute('aria-pressed',String(b===lang)));}
+        return;
+      }
+      const jump=event.target.closest('a[href^="#"]');
+      if(jump && this.$root.classList.contains('api-docs') && document.getElementById(jump.hash.slice(1))?.closest('.doc-section')){
+        this.selectGroup(jump.hash);
+      }
+
+      const copyButton = event.target.closest('[data-copy], [data-copy-visible]');
       if (copyButton && this.$root.contains(copyButton)) {
         event.preventDefault();
         event.stopPropagation();
@@ -76,34 +112,40 @@ document.addEventListener('DOMContentLoaded', () => {
       const willOpen = !row.classList.contains('open');
       row.classList.toggle('open', willOpen);
       button.setAttribute('aria-expanded', String(willOpen));
+      this.syncExamples();
+    },
+
+    visibleExamples() {
+      return Array.from(this.$root.querySelectorAll('.doc-section:not(.hidden-by-group):not(.hidden-by-search) .route-row:not(.hidden-by-search)'))
+        .filter(row => row.querySelector('.route-detail'));
+    },
+
+    syncExamples() {
+      const rows = this.visibleExamples();
+      const control = document.getElementById('expandExamples');
+      this.allOpen = rows.length > 0 && rows.every(row => row.classList.contains('open'));
+      control.disabled = rows.length === 0;
+      control.setAttribute('aria-expanded', String(this.allOpen));
+      control.querySelector('span').textContent = this.allOpen ? 'Close examples' : 'Open examples';
     },
 
     toggleExamples() {
-      this.allOpen = !this.allOpen;
-      const rows = Array.from(this.$root.querySelectorAll('.route-row'));
-      rows.forEach(row => {
-        if (!row.classList.contains('hidden-by-search')) {
-          row.classList.toggle('open', this.allOpen);
-          const button = row.querySelector('.route-main');
-          if (button) button.setAttribute('aria-expanded', String(this.allOpen));
-        }
+      const open = !this.allOpen;
+      this.visibleExamples().forEach(row => {
+        row.classList.toggle('open', open);
+        row.querySelector('.route-main')?.setAttribute('aria-expanded', String(open));
       });
-      this.showCopyToast(this.allOpen ? 'Examples opened' : 'Examples closed', this.allOpen ? 'fa-layer-group' : 'fa-compress');
-    },
-
-    decodeText(text) {
-      const box = document.createElement('textarea');
-      box.innerHTML = text || '';
-      return box.value;
+      this.syncExamples();
     },
 
     async copyText(text) {
-      const decoded = this.decodeText(text);
+      const decoded = text;
       if (!decoded) return false;
       try {
         await navigator.clipboard.writeText(decoded);
         return true;
       } catch (_) {
+        const previousFocus = document.activeElement;
         const ta = document.createElement('textarea');
         ta.value = decoded;
         ta.style.position = 'fixed';
@@ -115,6 +157,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let ok = false;
         try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
         ta.remove();
+        previousFocus?.focus({preventScroll:true});
         return ok;
       }
     },
@@ -122,7 +165,10 @@ document.addEventListener('DOMContentLoaded', () => {
     async copyCommand(button) {
       const oldHTML = button.dataset.originalHtml || button.innerHTML;
       button.dataset.originalHtml = oldHTML;
-      const ok = await this.copyText(button.dataset.copy || '');
+      const command = button.hasAttribute('data-copy-visible')
+        ? button.closest('.command-card')?.querySelector('pre code')?.textContent
+        : button.dataset.copy;
+      const ok = await this.copyText(command);
       if (!ok) {
         this.showCopyToast('Copy failed', 'fa-triangle-exclamation');
         return;
@@ -153,7 +199,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
       this.baseCopied = true;
-      this.showCopyToast('Base command copied', 'fa-check');
+      this.showCopyToast('One health-check example copied. Nothing was executed.', 'fa-check');
       setTimeout(() => { this.baseCopied = false; }, 1100);
     },
 
@@ -166,7 +212,7 @@ document.addEventListener('DOMContentLoaded', () => {
     },
 
     showCopyToast(message, icon = 'fa-check') {
-      if(document.documentElement.dataset.design==='modern' && window.toast) return window.toast(message,icon==='fa-check'?'success':'error');
+      if(document.documentElement.dataset.design==='modern' && window.toast) return window.toast(message,icon==='fa-triangle-exclamation'?'error':'success');
       this.ensureCopyToast();
       const toast = document.querySelector('.api-copy-toast');
       if (!toast) return;
@@ -177,60 +223,19 @@ document.addEventListener('DOMContentLoaded', () => {
     },
 
     setupActiveSectionObserver() {
-      const sections = Array.from(this.$root.querySelectorAll('.doc-section'));
-      const sideLinks = Array.from(this.$root.querySelectorAll('#apiSide a'));
-      if (!sections.length || !sideLinks.length || !('IntersectionObserver' in window)) return;
-
-      if (this.sideObserver) this.sideObserver.disconnect();
-      this.sideObserver = new IntersectionObserver((items) => {
-        items.forEach(item => {
-          if (!item.isIntersecting) return;
-          sideLinks.forEach(link => {
-            const active = link.getAttribute('href') === `#${item.target.id}`;
-            link.classList.toggle('active', active);
-
-            if (active) {
-              const rail = link.closest('.api-side-links');
-              if (rail) {
-                const railRect = rail.getBoundingClientRect();
-                const linkRect = link.getBoundingClientRect();
-                const horizontal = rail.scrollWidth > rail.clientWidth + 2;
-
-                if (horizontal) {
-                  const leftLimit = railRect.left + 8;
-                  const rightLimit = railRect.right - 8;
-
-                  if (linkRect.left < leftLimit) {
-                    rail.scrollLeft -= leftLimit - linkRect.left;
-                  } else if (linkRect.right > rightLimit) {
-                    rail.scrollLeft += linkRect.right - rightLimit;
-                  }
-                } else {
-                  const topLimit = railRect.top + 8;
-                  const bottomLimit = railRect.bottom - 8;
-
-                  if (linkRect.top < topLimit) {
-                    rail.scrollTop -= topLimit - linkRect.top;
-                  } else if (linkRect.bottom > bottomLimit) {
-                    rail.scrollTop += linkRect.bottom - bottomLimit;
-                  }
-                }
-              }
-            }
-          });
-        });
-      }, { rootMargin: '-25% 0px -65% 0px', threshold: 0 });
-
-      sections.forEach(section => this.sideObserver.observe(section));
+      return;
     }
+
   });
-  page.$root = document.querySelector('.api-docs');
+  page.$root = document.querySelector('.api-docs, [data-api-examples]');
   if(!page.$root) return;
   page.$nextTick = callback => callback();
   page.$root.addEventListener('click', event => page.handleClick(event));
+  if (page.$root.hasAttribute('data-api-examples')) return;
   document.getElementById('apiSearch').addEventListener('input', event => {page.query = event.target.value; page.filter(); document.getElementById('noResults').hidden = !page.noResults;});
-  document.getElementById('expandExamples').addEventListener('click', () => {page.toggleExamples(); document.querySelector('#expandExamples span').textContent = page.allOpen ? 'Close examples' : 'Open examples';});
+  document.getElementById('expandExamples').addEventListener('click', () => page.toggleExamples());
   document.getElementById('copyBase').addEventListener('click', () => page.copyBase());
   document.getElementById('noResults').hidden = true;
+  window.addEventListener('hashchange',()=>page.selectGroup(location.hash));
   page.init();
 });

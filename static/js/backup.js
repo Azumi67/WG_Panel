@@ -295,6 +295,7 @@
     const hasNodeEnv = !!(j.has_node_env || contains.remote_node_env || counts.node_env_files);
     const nodeEnvNodes = counts.node_env_nodes || Object.keys(j.node_env_nodes || {}).length || 0;
     const html = [
+      card("Archive integrity", j.integrity === "sha256-checked" ? "SHA-256 checked" : j.integrity === "legacy-crc-checked" ? "Legacy ZIP checked" : "Not verified", "Checksums detect corruption, not authenticity", j.integrity ? "ok" : "warn", "fa-shield-halved"),
       card("Backup type", (j.kind || "unknown").toUpperCase(), j.created ? `Created ${j.created}` : "Detected from ZIP", j.kind === "unknown" ? "warn" : "ok", "fa-file-zipper"),
       card("Database", j.has_db || contains.database ? "Included" : "Missing", `${counts.db_files || 0} DB file(s)`, j.has_db || contains.database ? "ok" : "bad", "fa-database"),
       card("Settings", j.has_settings || contains.settings ? "Included" : "Missing", `${counts.instance_files || 0} setting file(s)`, j.has_settings || contains.settings ? "ok" : "warn", "fa-sliders"),
@@ -476,10 +477,6 @@
     return appendQuery(url, "_download", Date.now());
   }
 
-  function withDirectAuth(url) {
-    const apiKey = document.querySelector('meta[name="api-key"]')?.content?.trim();
-    return apiKey ? appendQuery(url, "api_key", apiKey) : url;
-  }
 
   function isIDMIntercept(resp, preview = "") {
     const text = `${resp?.status || ""} ${resp?.statusText || ""} ${preview || ""}`.toLowerCase();
@@ -488,7 +485,12 @@
 
   function directBrowserDownload(url, filename) {
     const a = document.createElement("a");
-    a.href = withCacheBuster(withDirectAuth(url));
+    const target = new URL(url, location.origin);
+    if (target.pathname === '/api/backup/full') {
+      target.searchParams.set('tg', '0');
+      target.searchParams.set('auto', '0');
+    }
+    a.href = withCacheBuster(target.pathname + target.search);
     a.download = filename || "backup.zip";
     a.rel = "noopener";
     a.style.display = "none";
@@ -516,7 +518,7 @@
           </div>
           <div style="min-width:0;flex:1 1 auto;">
             <div style="font-weight:950;font-size:13.5px;line-height:1.25;white-space:normal;overflow-wrap:normal;word-break:normal;">${safe(label)} backup download started</div>
-            <div style="margin-top:4px;color:#64748b;font-size:12.5px;line-height:1.45;white-space:normal;overflow-wrap:normal;word-break:normal;">IDM Advanced Integration intercepted the background ZIP check, so the panel used a direct browser download instead.</div>
+            <div style="margin-top:4px;color:#64748b;font-size:12.5px;line-height:1.45;white-space:normal;overflow-wrap:normal;word-break:normal;">IDM intercepted the background ZIP check. A direct download was started without repeating Telegram delivery or scheduled storage.</div>
             <button type="button" class="bk-btn" id="bk-direct-pick" style="margin-top:10px;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;">
               <i class="fas fa-file-zipper"></i> Inspect saved ZIP
             </button>
@@ -1504,11 +1506,15 @@
     appendServerSettings(fd);
     const headers = csrfHeaders();
     delete headers["Content-Type"];
+    window.panelOperationProgress?.show('Restoring backup…');
+    try {
     const r = await fetch("/api/backup/restore", { method: "POST", headers, body: fd });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) throw new Error(j.message || "Restore failed.");
     renderRestoreResult(j);
     return j;
+    } finally { window.panelOperationProgress?.hide(); }
+
   }
 
   async function restoreAutoBackup(filename) {
@@ -1524,7 +1530,7 @@
       if (!resp.ok) throw new Error("Could not download auto backup file from server.");
       const blob = await resp.blob();
       const j = await doRestoreFromBlob(blob, filename, "auto");
-      toast.success(j.message || "Restore completed.");
+      if(j.partial) toast.warn("Restore was partial. Review node results before restarting."); else toast.success(j.message || "Restore completed.");
       await loadAll();
     } catch (e) {
       console.error(e);
@@ -1605,12 +1611,13 @@
     if (restoreName) restoreName.textContent = file.name;
     if (restoreHint) restoreHint.textContent = "Inspecting backup contents…";
     await inspectSelectedBackup(file);
-    if (restoreHint) restoreHint.textContent = "Backup inspected. Review the summary, then restore.";
+    if (restoreHint && lastInspect?.ok) restoreHint.textContent = "Backup inspected. Review the summary, then restore.";
   });
 
   restoreBtn?.addEventListener("click", async () => {
     const file = restoreFile?.files && restoreFile.files[0];
     if (!file) return toast.error("Choose a backup .zip file first.");
+    if(!lastInspect?.ok) return toast.error("Inspect a valid backup before restoring.");
     const kind = $('input[name="restore-kind"]:checked')?.value || "auto";
     const mode = currentServerMode();
     const warning = mode === "saved"
@@ -1623,7 +1630,7 @@
     setBusy(restoreBtn, true, "Restoring");
     try {
       const j = await doRestoreFromBlob(file, file.name, kind);
-      toast.success(j.message || "Restore completed.");
+      if(j.partial) toast.warn("Restore was partial. Review node results before restarting."); else toast.success(j.message || "Restore completed.");
       if (j.needs_restart) toast.info("Restart the panel service to apply restored data.");
       await loadAll();
     } catch (e) {

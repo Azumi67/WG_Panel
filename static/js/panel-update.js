@@ -15,7 +15,10 @@
     lastStatus: null,
     lastTerminalNotice: '',
     localVersion: null,
-    targets: [],
+    refreshId: 0,
+    opener: null,
+    batchRunning: false,
+    checkingNodes: false,
   };
 
   const BUSY = new Set([
@@ -499,6 +502,7 @@
     titleEl.textContent = title;
     messageEl.textContent = message;
     accept.textContent = acceptLabel;
+    const opener = document.activeElement;
     overlay.hidden = false;
 
     return new Promise((resolve) => {
@@ -512,6 +516,7 @@
         cancel.removeEventListener('click', no);
         overlay.removeEventListener('click', backdrop);
         document.removeEventListener('keydown', keydown);
+        opener?.focus({preventScroll:true});
         resolve(answer);
       };
 
@@ -521,7 +526,8 @@
         if (event.target === overlay) finish(false);
       };
       const keydown = (event) => {
-        if (event.key === 'Escape') finish(false);
+        if (event.key === 'Escape') { event.preventDefault(); finish(false); }
+        if (event.key === 'Tab') trapFocus(event, overlay);
       };
 
       accept.addEventListener('click', yes);
@@ -529,7 +535,7 @@
       overlay.addEventListener('click', backdrop);
       document.addEventListener('keydown', keydown);
 
-      setTimeout(() => accept.focus(), 0);
+      cancel.focus();
     });
   }
 
@@ -587,7 +593,7 @@
     const localButton = $('pu-update-local');
 
     if (localButton) {
-      localButton.disabled = isBusy(status) || state.reconnecting;
+      localButton.disabled = !localReady();
     }
 
     if (
@@ -621,17 +627,14 @@
         toast(
           name === 'rollback_completed'
             ? 'Update was not installed. Previous code was restored safely.'
-            : 'Panel update completed successfully.',
+            : (status?.message || 'Panel update completed successfully.'),
           name === 'rollback_completed' ? 'warn' : 'success',
           false,
         );
+        if (state.opened) setTimeout(() => refreshCenter(), 900);
       }
 
       setDisabled('pu-refresh', false);
-
-      setTimeout(() => {
-        refreshCenter().catch(() => {});
-      }, 900);
     }
 
     if (TERMINAL_BAD.has(name)) {
@@ -835,7 +838,7 @@
 
         const localButton = $('pu-update-local');
         if (localButton) {
-          localButton.disabled = isBusy(state.lastStatus) || state.reconnecting;
+          localButton.disabled = !localReady();
         }
 
         return;
@@ -961,25 +964,25 @@
     const button = $('pu-update-local');
 
     if (button) {
-      // Updating is also useful when the panel is already current: it can
-      // re-apply the tracked main revision, repair local files/dependencies,
-      // and run the normal validation/rollback path. Only an active update
-      // should lock this control.
-      button.disabled = isBusy(state.lastStatus) || state.reconnecting;
+
+
+
+
+      button.disabled = !localReady();
       button.dataset.target = String(
         version?.target
         || version?.latest
         || 'main',
       );
-      button.dataset.reapply = available ? '0' : '1';
+      button.dataset.reapply = available ? '0' : comparisonComplete ? '1' : 'unknown';
 
       const label = button.querySelector('span');
       if (label) {
-        label.textContent = available ? 'Update local' : 'Reapply local';
+        label.textContent = available ? 'Update local' : comparisonComplete ? 'Reapply local' : 'Install from main';
       }
 
-      button.title = available
-        ? 'Install the newest tracked main revision.'
+      button.title = available || !comparisonComplete
+        ? 'Install the tracked main revision after confirmation.'
         : 'Reapply the current main revision and run validation/repair again.';
     }
   }
@@ -1003,11 +1006,11 @@
       ? payload.nodes
       : [];
 
-    state.targets = nodes;
     setText('pu-node-count', String(nodes.length));
 
     if (!list) return;
 
+    setDisabled('pu-update-all', true);
     if (!nodes.length) {
       list.innerHTML = `
         <div class="pu-empty">
@@ -1017,107 +1020,217 @@
       return;
     }
 
-    list.innerHTML = nodes.map((node) => {
-      const online = !!node.online;
-      const version = node.version || {};
-      const current = version.current
-        ? `v${String(version.current).replace(/^v/i, '')}`
-        : '—';
-      const latestRevision = String(
-        version.latest_revision_short
-        || version.latest_revision
-        || ''
-      ).slice(0, 8);
-
-      const latestVersion = version.latest
-        ? `v${String(version.latest).replace(/^v/i, '')}`
-        : '';
-
-      const latest = latestRevision
-        ? `main · ${latestRevision}`
-        : (latestVersion || 'main');
-
-      const available = (
-        online
-        && !!version.update_available
-      );
-      const nodeBusy = isBusy(node.update || {});
-      const canUpdate = online && !nodeBusy;
-      const actionLabel = available ? 'Update' : 'Reapply';
-      const actionTitle = available
-        ? 'Install the newest tracked main revision on this node.'
-        : 'Reapply the current main revision on this node.';
-      const detail = String(
-        node.error
-        || node.detail
-        || version.detail
-        || '',
-      );
-
-      return `
-        <section class="pu-target pu-node" data-node-id="${escapeHtml(node.id)}">
-          <div class="pu-target-main">
-            <span class="pu-target-icon">
-              <i class="fas fa-server"></i>
-            </span>
-            <div class="pu-target-copy">
-              <div class="pu-target-title">
-                <strong>${escapeHtml(node.name || `Node ${node.id}`)}</strong>
-                <span class="pu-pill">${online ? 'Online' : 'Offline'}</span>
-              </div>
-              <div class="pu-versions">
-                <span>Current <b>${escapeHtml(current)}</b></span>
-                <i class="fas fa-arrow-right"></i>
-                <span>Latest <b>${escapeHtml(latest)}</b></span>
-                ${node.base_url ? `<span>· ${escapeHtml(node.base_url)}</span>` : ''}
-              </div>
-              ${detail ? `<div class="pu-node-error">${escapeHtml(detail)}</div>` : ''}
-            </div>
-            <button class="pu-update-btn pu-node-update"
-                    type="button"
-                    data-node-id="${escapeHtml(node.id)}"
-                    data-target="${escapeHtml(version.target || version.latest || 'main')}"
-                    data-reapply="${available ? '0' : '1'}"
-                    title="${escapeHtml(actionTitle)}"
-                    ${canUpdate ? '' : 'disabled'}>
-              <i class="fas fa-download"></i><span>${actionLabel}</span>
-            </button>
-          </div>
-          <div class="pu-progress" hidden>
-            <div class="pu-progress-top">
-              <span>Waiting…</span><b>0%</b>
-            </div>
-            <div class="pu-track"><i style="width:0%"></i></div>
-          </div>
-        </section>
-      `;
-    }).join('');
+    list.innerHTML = nodes.map(nodeMarkup).join('');
   }
 
-  async function refreshCenter() {
-    if (state.reconnecting) return;
+  function nodeMarkup(node) {
+    const online = !!node.online;
+    const checking = node.update?.status === 'checking';
+    const version = node.version || {};
+    const current = version.current
+      ? `v${String(version.current).replace(/^v/i, '')}`
+      : '—';
+    const latestRevision = String(
+      version.latest_revision_short
+      || version.latest_revision
+      || ''
+    ).slice(0, 8);
 
-    setDisabled('pu-refresh', true);
+    const latestVersion = version.latest
+      ? `v${String(version.latest).replace(/^v/i, '')}`
+      : '';
 
-    try {
-      const [version, targets, status] = await Promise.all([
-        api('/api/panel/version?fresh=1'),
-        api('/api/panel/update/targets'),
-        api('/api/panel/update/status'),
-      ]);
+    const latest = latestRevision
+      ? `main · ${latestRevision}`
+      : (latestVersion || 'main');
 
-      renderLocalVersion(version);
-      renderNodes(targets);
-      updateProgress(status);
-    } catch (error) {
-      toast(
-        `Could not refresh Update Center: ${error.message}`,
-        'error',
-      );
-    } finally {
-      if (!state.reconnecting) {
-        setDisabled('pu-refresh', false);
+    const available = (
+      online
+      && !!version.update_available
+    );
+    const nodeBusy = isBusy(node.update || {});
+    const canUpdate = online && !nodeBusy && !!version.current;
+    const actionLabel = available ? 'Update' : 'Reapply';
+    const actionTitle = available
+      ? 'Install the newest tracked main revision on this node.'
+      : 'Reapply the current main revision on this node.';
+    const detail = String(
+      node.error
+      || node.detail
+      || (node.update?.status === 'unavailable' ? 'Use Refresh to check this node again.' : '')
+      || version.detail
+      || '',
+    );
+
+    return `
+      <section class="pu-target pu-node" data-node-id="${escapeHtml(node.id)}">
+        <div class="pu-target-main">
+          <span class="pu-target-icon">
+            <i class="fas fa-server"></i>
+          </span>
+          <div class="pu-target-copy">
+            <div class="pu-target-title">
+              <strong>${escapeHtml(node.name || `Node ${node.id}`)}</strong>
+              <span class="pu-pill">${online ? 'Online' : checking ? 'Checking…' : node.update?.status === 'disabled' ? 'Disabled' : node.update?.status === 'unavailable' ? 'Unavailable' : 'Offline'}</span>
+            </div>
+            <div class="pu-versions">
+              <span>Current <b>${escapeHtml(current)}</b></span>
+              <i class="fas fa-arrow-right"></i>
+              <span>Latest <b>${escapeHtml(latest)}</b></span>
+              ${node.base_url ? `<span>· ${escapeHtml(node.base_url)}</span>` : ''}
+            </div>
+            ${detail ? `<div class="pu-node-error">${escapeHtml(detail)}</div>` : ''}
+          </div>
+          <button class="pu-update-btn pu-node-update"
+                  type="button"
+                  data-node-id="${escapeHtml(node.id)}"
+                  data-target="${escapeHtml(version.target || version.latest || 'main')}"
+                  data-reapply="${available ? '0' : '1'}"
+                  title="${escapeHtml(actionTitle)}"
+                  ${canUpdate ? '' : 'disabled'}>
+            <i class="fas fa-download"></i><span>${actionLabel}</span>
+          </button>
+        </div>
+        <div class="pu-progress" hidden>
+          <div class="pu-progress-top">
+            <span>Waiting…</span><b>0%</b>
+          </div>
+          <div class="pu-track"><i style="width:0%"></i></div>
+        </div>
+      </section>
+    `;
+  }
+
+  async function checkNodes(nodes, current) {
+    const queue = nodes.filter(node => node.update?.status === 'checking');
+    state.checkingNodes = queue.length > 0;
+    async function next() {
+      while (current() && queue.length) {
+        const node = queue.shift();
+        let result;
+        try {
+          const data = await api('/api/panel/update/targets?node_id=' + encodeURIComponent(node.id), {timeout:18000});
+          result = data.nodes?.find(item => item.id === node.id);
+        } catch (_) {}
+        if (!current()) return;
+        const row = $('pu-node-list').querySelector('[data-node-id="' + Number(node.id) + '"]');
+        if (row) row.outerHTML = nodeMarkup(result || {...node, update:{status:'unavailable'}});
       }
+    }
+    await Promise.all(Array.from({length:Math.min(2,queue.length)},next));
+    if (current()) {
+      state.checkingNodes = false;
+      setDisabled('pu-update-all', !eligibleNodes().length);
+    }
+  }
+
+  function localReady() {
+    const version = state.localVersion;
+    return Boolean(version?.current && state.lastStatus
+      && !isBusy(state.lastStatus) && !state.reconnecting);
+  }
+
+  function eligibleNodes() {
+    return Array.from($('pu-node-list').querySelectorAll('.pu-node-update[data-reapply="0"]:enabled'));
+  }
+
+  function showStatus(id, message) {
+    const el = $(id);
+    el.textContent = message;
+    el.hidden = !message;
+  }
+
+  async function refreshCenter(fresh = false) {
+    if (!state.opened || state.reconnecting || state.batchRunning) return;
+    const id = ++state.refreshId;
+    const current = () => state.opened && id === state.refreshId;
+    const errors = [];
+    state.localVersion = null;
+    state.lastStatus = null;
+    state.checkingNodes = false;
+    setDisabled('pu-update-local', true);
+    setDisabled('pu-update-all', true);
+    $('pu-node-list').querySelectorAll('button').forEach(button => { button.disabled = true; });
+    setDisabled('pu-refresh', true);
+    showStatus('pu-check-status', '');
+
+    async function check(url, render, failed) {
+      try {
+        const data = await api(url);
+        if (current()) render(data);
+      } catch (error) {
+        if (!current()) return;
+        errors.push(failed());
+        showStatus('pu-check-status', errors.join(' ') + ' Use Refresh to retry.');
+      }
+    }
+
+    await Promise.all([
+      check('/api/panel/version' + (fresh ? '?fresh=1' : ''), renderLocalVersion, () => {
+        setText('pu-local-state', 'Check unavailable');
+        setText('pu-local-summary', 'Unavailable');
+        setText('pu-local-current', '—');
+        setText('pu-local-latest', '—');
+        return 'The release check failed.';
+      }),
+      check('/api/panel/update/targets?inventory=1', data => {
+        renderNodes(data);
+        checkNodes(data.nodes || [], current);
+      }, () => {
+        setText('pu-node-count', '—');
+        setText('pu-node-list', 'Remote node status is unavailable.');
+        return 'The node list could not load.';
+      }),
+      check('/api/panel/update/status', status => {
+        updateProgress(status);
+        if (isBusy(status) && !state.polling && !state.reconnecting) {
+          window.WG_PANEL_UPDATING = true;
+          startPoll();
+        }
+      }, () => 'Local update progress is unavailable.'),
+    ]);
+    if (current() && !state.reconnecting) setDisabled('pu-refresh', false);
+  }
+
+  async function queueNode(button) {
+    button.disabled = true;
+    await api('/api/nodes/' + encodeURIComponent(button.dataset.nodeId) + '/update', {
+      method: 'POST',
+      body: { target: button.dataset.target || 'main' },
+      timeout: 16000,
+    });
+  }
+
+  async function updateAvailableNodes() {
+    const buttons = eligibleNodes();
+    if (state.batchRunning || state.checkingNodes || !buttons.length) return;
+    const accepted = await askConfirmation({
+      title: 'Update available nodes?',
+      message: 'Queue an update on ' + buttons.length + ' online node(s). Each agent will restart after installing its update.',
+      acceptLabel: 'Queue updates',
+    });
+    if (!accepted) return;
+    state.batchRunning = true;
+    setDisabled('pu-update-all', true);
+    setDisabled('pu-refresh', true);
+    buttons.forEach(button => { button.disabled = true; });
+    const uncertain = [];
+    let queued = 0;
+    try {
+      for (const button of buttons) {
+        showStatus('pu-batch-status', 'Queuing node ' + (queued + uncertain.length + 1) + ' of ' + buttons.length + '…');
+        try {
+          await queueNode(button);
+          queued++;
+        } catch (error) {
+          uncertain.push(button.closest('.pu-node').querySelector('strong').textContent);
+        }
+      }
+    } finally {
+      state.batchRunning = false;
+      showStatus('pu-batch-status', 'Queued ' + queued + ' of ' + buttons.length + ' updates.'
+        + (uncertain.length ? ' Check status before retrying: ' + uncertain.join(', ') + '.' : ''));
+      await refreshCenter();
     }
   }
 
@@ -1127,7 +1240,7 @@
 
     const reapply = button.dataset.reapply === '1';
     const accepted = await askConfirmation({
-      title: reapply ? 'Reapply local panel?' : 'Update local panel?',
+      title: button.dataset.reapply === 'unknown' ? 'Install from main?' : reapply ? 'Reapply local panel?' : 'Update local panel?',
       message: reapply
         ? 'No newer revision is currently detected. The panel will re-apply the tracked main revision, create a rollback backup, validate the code and dependencies, then restart safely.'
         : 'A rollback backup will be created, the new code will be validated, and the panel service will restart automatically.',
@@ -1181,9 +1294,6 @@
   async function startNodeUpdate(button) {
     if (!button || button.disabled) return;
 
-    const nodeId = button.dataset.nodeId;
-    const target = button.dataset.target || 'main';
-
     const reapply = button.dataset.reapply === '1';
     const accepted = await askConfirmation({
       title: reapply ? 'Reapply remote node?' : 'Update remote node?',
@@ -1195,18 +1305,9 @@
 
     if (!accepted) return;
 
-    button.disabled = true;
-
     try {
-      await api(
-        `/api/nodes/${encodeURIComponent(nodeId)}/update`,
-        {
-          method: 'POST',
-          body: { target },
-          timeout: 16000,
-        },
-      );
-
+      await queueNode(button);
+      setDisabled('pu-update-all', state.checkingNodes || !eligibleNodes().length);
       toast('Node update queued.', 'info');
       setTimeout(refreshCenter, 1200);
     } catch (error) {
@@ -1219,19 +1320,36 @@
     }
   }
 
+  function trapFocus(event, container) {
+    const items = Array.from(container.querySelectorAll('button:enabled, a[href], select:enabled, [tabindex="0"]'))
+      .filter(el => el.getClientRects().length);
+    const first = items[0], last = items[items.length - 1];
+    if (first && event.shiftKey && document.activeElement === first) {
+      event.preventDefault(); last.focus();
+    } else if (last && !event.shiftKey && document.activeElement === last) {
+      event.preventDefault(); first.focus();
+    }
+  }
+
   function openCenter() {
     const modal = $('panel-update-modal');
     if (!modal) return;
 
+    if (state.opened) return;
+    state.opener = document.activeElement;
     modal.hidden = false;
     modal.setAttribute('aria-hidden', 'false');
     document.body.classList.add('modal-open');
     state.opened = true;
+    $('pu-log-drawer').hidden = true;
+    $('pu-log-toggle').setAttribute('aria-expanded', 'false');
+    modal.querySelector('.pu-content').scrollTop = 0;
+    modal.querySelector('.pu-close').focus();
     refreshCenter();
   }
 
   function closeCenter() {
-    if (state.reconnecting || window.WG_PANEL_UPDATING) {
+    if (state.reconnecting || window.WG_PANEL_UPDATING || state.batchRunning) {
       toast(
         'The update is still running. Keep this page open while the panel restarts.',
         'warn',
@@ -1246,14 +1364,29 @@
     modal.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('modal-open');
     state.opened = false;
+    state.refreshId++;
     stopPoll();
+    queueMicrotask(() => {
+      const mobile = window.matchMedia('(max-width:760px)').matches;
+      let opener = state.opener;
+      if (mobile && (!opener || opener === document.body || opener.closest('#panel-sidebar'))) {
+        opener = $('wg-mobile-menu-btn');
+      }
+      if (!opener?.getClientRects().length) opener = $('sb2-update-open');
+      opener?.focus({preventScroll:true});
+    });
   }
 
   function bind() {
     ensureConfirmDialog();
 
     $('sb2-update-open')?.addEventListener('click', openCenter);
-    $('pu-refresh')?.addEventListener('click', refreshCenter);
+    $('pu-refresh')?.addEventListener('click', () => refreshCenter(true));
+    $('pu-update-all')?.addEventListener('click', updateAvailableNodes);
+    document.addEventListener('panel-code-operation', () => {
+      state.panelReachableAfterRestart = false;
+      startPoll();
+    });
     $('pu-update-local')?.addEventListener('click', startLocalUpdate);
 
     document.addEventListener('click', (event) => {
@@ -1271,14 +1404,19 @@
     });
 
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && state.opened) {
+      if (!state.opened || !$('pu-confirm-overlay').hidden) return;
+      if (event.key === 'Tab') trapFocus(event, $('panel-update-modal'));
+      if (event.key === 'Escape') {
         closeCenter();
       }
     });
 
     $('pu-log-toggle')?.addEventListener('click', () => {
       const drawer = $('pu-log-drawer');
-      if (drawer) drawer.hidden = !drawer.hidden;
+      if (!drawer) return;
+      drawer.hidden = !drawer.hidden;
+      $('pu-log-toggle').setAttribute('aria-expanded', String(!drawer.hidden));
+      if (!drawer.hidden) $('pu-log-heading').focus();
     });
 
     $('pu-log-clear')?.addEventListener('click', () => {

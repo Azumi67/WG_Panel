@@ -52,23 +52,28 @@
 
     async function populate() {
         try {
-            const r = await fetch('/api/nodes', {
-                credentials: 'same-origin',
-                cache: 'no-store'
-            });
+            let nodes;
+            if (document.documentElement.hasAttribute('data-reseller-workspace') &&
+                Array.isArray(window.RESELLER_BOOTSTRAP_NODES)) {
 
-            if (r.ok) {
-                const payload = await r.json();
-                const nodes = Array.isArray(payload) ? payload : (payload.nodes || []);
 
-                for (const n of nodes) {
-                    if ([...sel.options].some(o => String(o.value) === String(n.id))) continue;
-
-                    const opt = document.createElement('option');
-                    opt.value = n.id;
-                    opt.textContent = n.name || `Node ${n.id}`;
-                    sel.appendChild(opt);
+                nodes = window.RESELLER_BOOTSTRAP_NODES;
+            } else {
+                const r = await fetch('/api/nodes', {
+                    credentials: 'same-origin',
+                    cache: 'no-store'
+                });
+                if (r.ok) {
+                    const payload = await r.json();
+                    nodes = Array.isArray(payload) ? payload : (payload.nodes || []);
                 }
+            }
+            for (const n of (nodes || [])) {
+                if ([...sel.options].some(o => String(o.value) === String(n.id))) continue;
+                const opt = document.createElement('option');
+                opt.value = n.id;
+                opt.textContent = n.name || `Node ${n.id}`;
+                sel.appendChild(opt);
             }
         } catch (_) {}
 

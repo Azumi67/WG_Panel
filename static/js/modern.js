@@ -2,6 +2,7 @@
   'use strict';
   const root=document.documentElement;
   function choose(mode,reload=true){
+    if(root.dataset.designLock==='modern'){root.dataset.design='modern';return;}
     mode=mode==='legacy'?'legacy':'modern';
     root.dataset.design=mode;
     try{localStorage.setItem('wg-design',mode);}catch(_){}

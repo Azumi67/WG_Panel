@@ -197,7 +197,7 @@ async function loadAppStat() {
 async function loadTgStatus() {
   const r = await fetch('/api/telegram/status', { credentials: 'same-origin', cache: 'no-store' });
   const j = await r.json();
-  const online = !!j?.bot_online;  
+  const online = !!j?.bot_online;
   statusBadge('tg-status', online);
   setText('tg-last', fmtIso(j?.last_seen));
 }
@@ -423,7 +423,7 @@ function hideModal() {
 }
 function toEpoch(v){
   if (v == null) return null;
-  if (typeof v === 'number') return v > 1e12 ? Math.floor(v/1000) : v; // ms->s
+  if (typeof v === 'number') return v > 1e12 ? Math.floor(v/1000) : v;
   const d = new Date(v); return isNaN(d) ? null : Math.floor(d.getTime()/1000);
 }
 function fmtLocal(ts){
@@ -488,7 +488,7 @@ document.addEventListener('DOMContentLoaded', () => {
       radios.forEach(x => x.nextElementSibling?.setAttribute('aria-selected', x.checked ? 'true' : 'false'));
       window.CURRENT_PEER_SCOPE = r.value;
       peerCounts(window.CURRENT_PEER_SCOPE);
-      // updateStats();
+
     });
   });
   initCharts();
@@ -500,9 +500,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   rowRO.observe(document.body, { subtree:true, childList:true, characterData:true });
 
-  updateStats();           
-  loadAppStat();        
-  loadTgStatus();    
+  updateStats();
+  loadAppStat();
+  loadTgStatus();
 
   $('open-logs')?.addEventListener('click', (e) => {
     e.preventDefault();
@@ -610,8 +610,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const placeholder = document.createComment('popover-home');
-    wrap.replaceChild(placeholder, pop);         
-    document.body.appendChild(pop);             
+    wrap.replaceChild(placeholder, pop);
+    document.body.appendChild(pop);
     pop.style.position = 'fixed';
     pop.style.zIndex   = 10050;
 
@@ -627,10 +627,10 @@ document.addEventListener('DOMContentLoaded', () => {
       let top;
       if (above > below && above > 140) {
         top = Math.max(r.top - pop.offsetHeight - 10, SAFE);
-        pop.style.setProperty('--arrowTop', (pop.offsetHeight - 4) + 'px');  
+        pop.style.setProperty('--arrowTop', (pop.offsetHeight - 4) + 'px');
       } else {
         top = Math.max(r.bottom + 8, SAFE);
-        pop.style.setProperty('--arrowTop', '-6px');                          
+        pop.style.setProperty('--arrowTop', '-6px');
       }
       pop.style.left = left + 'px';
       pop.style.top  = top  + 'px';

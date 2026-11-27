@@ -277,24 +277,25 @@
     renderTags('dns-list', j.dns, 'System DNS');
     setText('peer-mtu', j.mtu || 'Auto');
 
-    const started = firstTs(j, ['first_used_at_ts', 'first_used_at', 'first_used', 'started_at', 'start_at']);
+    const started = firstTs(j, ['first_used_at_ts', 'first_used_at', 'first_used']);
+    const timerStarted = firstTs(j, ['timer_started_at_ts', 'timer_started_at']);
     const created = firstTs(j, ['created_at_ts', 'created_at', 'added_at']);
     const unlimited = Boolean(j.unlimited);
     if (started) {
       setText('active-since', formatDate(started));
-      setText('activation-label', 'Active since');
-    } else if (unlimited && created) {
-      setText('active-since', formatDate(created));
-      setText('activation-label', 'Active since');
-    } else if (j.start_on_first_use) {
+      setText('activation-label', 'First connected');
+    } else if (j.start_on_first_use && !timerStarted) {
       setText('active-since', 'Waiting for first connection');
       setText('activation-label', 'Activation');
+    } else if (timerStarted && !unlimited) {
+      setText('active-since', formatDate(timerStarted));
+      setText('activation-label', 'Timer started');
     } else if (created) {
       setText('active-since', formatDate(created));
       setText('activation-label', 'Created');
     } else {
-      setText('active-since', 'Not active yet');
-      setText('activation-label', 'Activation');
+      setText('active-since', 'No first connection recorded');
+      setText('activation-label', 'First connection');
     }
 
 
@@ -311,15 +312,22 @@
     setMeter('data-bar', dataPct, unlimited ? 'infinite' : toneFor(dataPct));
 
     const expires = firstTs(j, ['expires_at_ts', 'expires_at']);
-    let ttl = Number(j.ttl_seconds);
-    if (!Number.isFinite(ttl)) ttl = expires ? Math.max(0, expires - nowSec()) : null;
+    let ttl = j.ttl_seconds == null || j.ttl_seconds === '' ? null : Number(j.ttl_seconds);
+    if (ttl !== null && !Number.isFinite(ttl)) ttl = null;
+    if (ttl === null && expires) ttl = Math.max(0, expires - nowSec());
     let cap = Number(j.time_limit_seconds || j.duration_seconds || 0);
     if (!cap) cap = Number(j.time_limit_days || 0) * 86400;
     if (!cap && expires && started && expires > started) cap = expires - started;
     state.ttl = ttl;
     state.cap = cap || (ttl || 1);
 
-    if (unlimited || ttl == null) {
+    const waitingForFirstUse = Boolean(j.start_on_first_use) && !started && !timerStarted && Number(j.time_limit_days || 0) > 0;
+    if (!unlimited && waitingForFirstUse && ttl == null) {
+      setText('time-left', 'Not started');
+      setText('time-expiry', 'Countdown starts on first connection');
+      setText('time-pct', '100%');
+      setMeter('time-bar', 1, 'healthy');
+    } else if (unlimited || ttl == null) {
       setText('time-left', unlimited ? 'Unlimited' : 'No expiry');
       setText('time-expiry', unlimited ? 'No time limit' : 'No expiration date');
       setText('time-pct', '∞');

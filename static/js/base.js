@@ -26,16 +26,30 @@
     return timezone;
   }
 
-  async function wgPanelRefreshTimezone() {
-    const response = await fetch("/api/timezone?_=" + Date.now(), {
-      credentials: "same-origin",
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok)
-      throw new Error("timezone endpoint returned " + response.status);
-    const payload = await response.json();
-    return wgPanelApplyTimezone(payload && payload.timezone);
+  let timezonePending = null, timezoneNextCheck = 0, timezoneFailures = 0;
+  function wgPanelRefreshTimezone() {
+    if (timezonePending) return timezonePending;
+    if (Date.now() < timezoneNextCheck) return Promise.resolve(wgPanelTimezone());
+    timezonePending = (async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch("/api/timezone?_=" + Date.now(), {
+          credentials: "same-origin", cache: "no-store", signal: controller.signal,
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) throw new Error("Timezone refresh unavailable");
+        const payload = await response.json();
+        timezoneFailures = 0;
+        timezoneNextCheck = Date.now() + 30000;
+        return wgPanelApplyTimezone(payload && payload.timezone);
+      } catch (_) {
+        timezoneFailures = Math.min(timezoneFailures + 1, 4);
+        timezoneNextCheck = Date.now() + Math.min(300000, 15000 * 2 ** timezoneFailures);
+        return wgPanelTimezone();
+      } finally { clearTimeout(timeout); timezonePending = null; }
+    })();
+    return timezonePending;
   }
 
   function wgPanelDate(value) {
@@ -151,15 +165,20 @@
     .then((timezone) => wgPanelApplyTimezone(timezone, false))
     .catch(() => wgPanelTimezone());
 
-  window.addEventListener("focus", () => {
-    wgPanelRefreshTimezone().catch(() => {});
-  });
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) wgPanelRefreshTimezone().catch(() => {});
-  });
-  window.setInterval(() => {
-    wgPanelRefreshTimezone().catch(() => {});
-  }, 30000);
+
+
+
+  if (document.documentElement.dataset.resellerWorkspace !== 'true') {
+    window.addEventListener("focus", () => {
+      wgPanelRefreshTimezone().catch(() => {});
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) wgPanelRefreshTimezone().catch(() => {});
+    });
+    window.setInterval(() => {
+      wgPanelRefreshTimezone().catch(() => {});
+    }, 30000);
+  }
 
   window.toastSafe =
     window.toastSafe ||
@@ -372,17 +391,6 @@
         attributes: true,
         attributeFilter: ["hidden", "aria-hidden", "class"],
       });
-      updateModal.addEventListener(
-        "click",
-        (event) => {
-          if (event.target.closest("[data-pu-close]")) {
-            queueMicrotask(() =>
-              document.body.classList.remove("mobile-panel-update-open"),
-            );
-          }
-        },
-        true,
-      );
       syncUpdateState();
     }
 
