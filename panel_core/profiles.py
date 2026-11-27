@@ -1,4 +1,4 @@
-"""Peer and subscription profile persistence + API routes"""
+
 from __future__ import annotations
 import json
 import os
@@ -94,7 +94,7 @@ def _set_active_profile(name: str):
 def _panel_default_dns():
     return (_get_profile(None).get('dns') or '1.1.1.1, 1.0.0.1').strip()
 
-# ___ API (multi)___
+
 @login_required
 def delete_apipeer_profile():
     name = (request.args.get('name') or '').strip()
@@ -260,7 +260,6 @@ def activate_apipeer_profile():
         active=name,
     )
 
-# Subscription profiles
 
 SUBSCRIPTION_PROFILES_FILE = ''
 
@@ -361,9 +360,6 @@ def _load_subscription_profiles():
 
 
 def _save_subscription_profiles(data):
-    """
-    Save subscription profiles atomically.
-    """
     os.makedirs(
         _instance_path(),
         exist_ok=True,
@@ -427,9 +423,6 @@ def _save_subscription_profiles(data):
 
 
 def _subscription_profile_rows(data=None):
-    """
-    Return profile metadata for the profile dropdown.
-    """
     data = (
         data
         or _load_subscription_profiles()
@@ -888,7 +881,6 @@ def panel_default_dns():
 
 
 def register_profile_routes(app):
-    """Register profile APIs while preserving the legacy endpoint names."""
     global _CONFIGURED_INSTANCE_PATH, PEER_PROFILE_FILE, PEER_PROFILES_FILE, SUBSCRIPTION_PROFILES_FILE
     _CONFIGURED_INSTANCE_PATH = app.instance_path
     PEER_PROFILE_FILE = os.path.join(app.instance_path, 'peer_profile.json')
