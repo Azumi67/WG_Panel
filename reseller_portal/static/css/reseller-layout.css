@@ -1,0 +1,207 @@
+
+html[data-design][data-theme] body .rp-manage-dialog{width:min(1480px,calc(100vw - 32px))!important;max-width:none!important;max-height:calc(100dvh - 32px)!important}
+html[data-design][data-theme] body .rp-manage-dialog .rp-dialog-body{display:block!important;padding:20px 24px!important}
+html[data-design][data-theme] body .rp-manage-dialog .rp-manage-nav{display:flex!important;flex-direction:row!important;flex-wrap:wrap!important;gap:6px!important;width:100%!important;margin:0 0 20px!important;border-bottom:1px solid var(--rp-line);padding-bottom:14px}
+html[data-design][data-theme] body .rp-manage-dialog .rp-manage-nav button{width:auto!important;flex:0 0 auto!important;padding:9px 12px!important}
+html[data-design][data-theme] body .rp-manage-dialog .rp-resource-search{display:grid!important;grid-template-columns:minmax(160px,1fr) 190px auto auto!important;align-items:center!important;gap:10px!important}
+html[data-design][data-theme] body .rp-resource-search :is(input,select){width:100%!important;max-width:none!important;margin:0!important}
+html[data-design][data-theme] body .rp-resource-search [role=status]{grid-column:1/-1;margin:0}
+.rp-inventory-reason{max-width:260px;font-size:11px;line-height:1.45;color:var(--rp-muted)}
+html[data-design=legacy][data-theme] body .rp-desk{max-width:1440px;margin:0 auto;padding:20px!important}
+html[data-design=legacy][data-theme] body .rp-desk .rp-tabs{padding:5px!important;border:1px solid var(--rp-line)!important;border-radius:8px!important;background:var(--rp-card)!important;gap:4px!important}
+html[data-design=legacy][data-theme] body .rp-desk .rp-tabs a{border:0!important;border-radius:5px!important;padding:9px 14px!important;font-size:13px!important}
+html[data-design=legacy][data-theme] body .rp-desk .rp-tabs a.active{background:var(--desk-soft)!important;box-shadow:inset 3px 0 var(--desk-accent)!important}
+html[data-design=legacy][data-theme] body .rp-desk :is(.rp-card,.rp-record,.rp-order){border-radius:7px!important;box-shadow:none!important}
+html[data-design=legacy][data-theme] body .rp-desk .rp-record{padding:13px 16px!important;gap:14px!important}
+html[data-design=legacy][data-theme] body .rp-desk .rp-page-title h1{font-size:26px!important;margin:0!important}
+html[data-design=legacy][data-theme] body .rp-desk .rp-summary-strip{padding:10px 0!important;margin:12px 0!important}
+html[data-design=modern][data-theme] body :is(#peer-modal,#bulk-modal) .peerx-profile-row{display:grid!important;grid-template-columns:minmax(170px,max-content) minmax(0,1fr)!important;gap:16px!important;padding:12px!important;align-items:center!important}
+html[data-reseller-workspace][data-design=modern][data-theme] body :is(#peer-modal,#bulk-modal) .peerx-profile-row>label{display:flex!important;min-width:170px!important;max-width:none!important;width:auto!important;gap:8px!important;white-space:nowrap!important}
+html[data-reseller-workspace][data-design=modern][data-theme] body :is(#peer-modal,#bulk-modal) .peerx-profile-row .label{display:inline!important;white-space:nowrap!important;overflow:visible!important}
+html[data-reseller-workspace][data-design=modern][data-theme] body :is(#peer-modal,#bulk-modal) .profile-picker{display:grid!important;grid-template-columns:minmax(0,1fr) 36px 36px!important;gap:8px!important;padding:0!important;border:0!important;background:transparent!important;min-width:0!important;width:100%!important}
+html[data-reseller-workspace][data-design=modern][data-theme] body :is(#peer-modal,#bulk-modal) .profile-picker>i{display:none!important}
+html[data-reseller-workspace][data-design=modern][data-theme] body :is(#peer-modal,#bulk-modal) .profile-picker select{width:100%!important;min-width:0!important;margin:0!important;padding:10px 12px!important}
+html[data-reseller-workspace][data-design=modern][data-theme] body :is(#peer-modal,#bulk-modal) .profile-picker .icon-btn{position:static!important;width:36px!important;min-width:36px!important;height:40px!important}
+.rp-bulk-preset{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.rp-bulk-preset select{flex:1;min-width:140px}.rp-bulk-preset [role=status]{flex-basis:100%;font-size:12px;color:var(--text-muted)}
+
+@media(max-width:700px){html[data-design][data-theme] body .rp-manage-dialog{width:calc(100vw - 16px)!important;max-height:calc(100dvh - 16px)!important}html[data-design][data-theme] body .rp-manage-dialog .rp-dialog-body{padding:14px!important}html[data-design][data-theme] body .rp-manage-dialog .rp-resource-search{grid-template-columns:minmax(0,1fr) auto!important}.rp-resource-search input{grid-column:1/-1}html[data-reseller-workspace][data-design=modern][data-theme] body :is(#peer-modal,#bulk-modal) .peerx-profile-row{grid-template-columns:1fr!important}}
+html[data-design][data-theme] body .rp-plan-dialog{width:min(1100px,calc(100vw - 32px))!important;max-height:calc(100dvh - 32px)!important}
+html[data-design][data-theme] body .rp-plan-editor{padding:0!important;border:0!important;background:transparent!important;box-shadow:none!important}
+html[data-design][data-theme] body .rp-plan-editor .rp-form-section{border:1px solid var(--rp-line)!important;border-radius:10px!important;padding:18px!important;margin:0 0 16px!important;min-width:0}
+.rp-plan-advanced{border:1px solid var(--rp-line);border-radius:10px;padding:16px;margin-bottom:16px}.rp-plan-advanced summary{cursor:pointer;font-weight:600;margin-bottom:12px}.rp-plan-features{grid-column:1/-1;display:flex;gap:8px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--rp-line)}
+html[data-design=legacy][data-theme] body .rp-plan-editor .rp-form-section,html[data-design=legacy][data-theme] body .rp-plan-advanced{border-radius:5px!important}
+html[data-design][data-theme] body .rp-plan-dialog .rp-pricing{grid-template-columns:2fr 1fr 1fr!important}
+@media(max-width:700px){html[data-design][data-theme] body .rp-plan-dialog .rp-pricing{grid-template-columns:1fr!important}}
+
+
+
+html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog form.rp-plan-editor {
+  box-sizing:border-box!important; width:100%!important; max-width:100%!important;
+  padding:22px 26px 0!important; overflow-x:clip;
+}
+html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog .rp-plan-extras {
+  box-sizing:border-box!important; width:100%!important; max-width:100%!important;
+  margin:12px 0 20px!important; padding:0!important;
+}
+html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog .rp-plan-extras-heading {
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;
+  padding:14px 8px 14px!important;margin:0!important;gap:8px 18px;
+}
+html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog .rp-plan-extras-heading > span {
+  text-align:start!important;line-height:1.5;
+}
+html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog details.rp-plan-advanced {
+  margin:0 0 10px!important;max-width:100%;
+}
+html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog details.rp-plan-advanced > summary {
+  box-sizing:border-box!important;padding:16px 20px!important;min-height:56px!important;
+}
+html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog .rp-plan-advanced .rp-advanced-inner {
+  padding:18px 20px!important;
+}
+
+html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog .rp-form-section,
+html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog fieldset,
+html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog .rp-fields {min-width:0!important;box-sizing:border-box;}
+
+html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog .rp-plan-editor > .rp-plan-footer {
+  box-sizing:border-box!important;margin:16px -26px 0!important;
+  width:calc(100% + 52px)!important;max-width:none!important;
+}
+
+
+html[data-reseller-workspace][data-design=modern][data-theme=light] body .rp-telegram-page {
+  --desk-accent:#6647de;--desk-soft:#f4f0ff;
+}
+html[data-reseller-workspace][data-design=modern][data-theme=dark] body .rp-telegram-page {
+  --desk-accent:#ac9bff;--desk-soft:#29243f;
+}
+html[data-reseller-workspace][data-design=modern][data-theme] body .rp-telegram-page .rp-bot-master {
+  background:var(--desk-soft)!important;border:1px solid var(--rp-line)!important;
+  color:var(--rp-text)!important;box-shadow:none!important;
+}
+html[data-reseller-workspace][data-design=modern][data-theme] body .rp-telegram-page .rp-bot-master :is(b,p) {
+  color:var(--rp-text)!important;opacity:1!important;
+}
+html[data-reseller-workspace][data-design=modern][data-theme] body .rp-telegram-page .rp-bot-master p {
+  color:var(--rp-muted)!important;
+}
+html[data-reseller-workspace][data-design=modern][data-theme] body .rp-telegram-page :is(.rp-btn.primary, button.primary) {
+  background:#694be7!important;border-color:#694be7!important;
+  color:white!important;box-shadow:none!important;
+}
+html[data-reseller-workspace][data-design=modern][data-theme] body .rp-telegram-page :is(.rp-btn.primary, button.primary):hover {
+  background:#5937d0!important;border-color:#5937d0!important;
+}
+html[data-reseller-workspace][data-design=modern][data-theme] body .rp-telegram-page .rp-subtabs [aria-selected=true] {
+  background:var(--desk-soft)!important;color:var(--desk-accent)!important;
+  border-radius:8px!important;box-shadow:none!important;
+}
+html[data-reseller-workspace][data-design=modern][data-theme] body .rp-telegram-page .rp-status.ready {
+  color:var(--rp-text)!important;
+}
+html[data-reseller-workspace][data-design=modern][data-theme] body .rp-telegram-page input[type=checkbox][role=switch] {
+  accent-color:#694be7;
+}
+html[data-reseller-workspace][data-design=modern][data-theme] body .rp-telegram-page input[type=checkbox][role=switch]:checked {
+  background:#694be7!important;border-color:#694be7!important;
+}
+html[data-reseller-workspace][data-design=modern][data-theme=light] body .rp-telegram-page .rp-event-preferences > label {
+  color:#142039!important;background:#fff!important;border-color:#d9deec!important;
+}
+html[data-reseller-workspace][data-design=modern][data-theme=dark] body .rp-telegram-page .rp-event-preferences > label {
+  background:var(--rp-card)!important;color:var(--rp-text)!important;
+}
+html[data-reseller-workspace][data-design=modern][data-theme] body .rp-telegram-page .rp-event-preferences > label b {
+  color:inherit!important;
+}
+@media(max-width:700px){
+  html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog form.rp-plan-editor {padding:16px 16px 0!important;}
+  html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog .rp-plan-extras-heading {padding:12px 4px!important;}
+  html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog details.rp-plan-advanced > summary {padding:13px 15px!important;}
+  html[data-design][data-theme] body .rp-desk dialog.rp-plan-dialog .rp-plan-editor > .rp-plan-footer {margin:12px -16px 0!important;width:calc(100% + 32px)!important;}
+}
+
+
+html[data-design=legacy][data-theme] body .rp-desk{
+  --desk-accent:var(--rp-accent,#2778ae);
+  --desk-soft:color-mix(in srgb,var(--desk-accent) 9%,var(--rp-card,#fff));
+}
+html[data-design=legacy][data-theme] body .rp-desk>.rp-header,
+html[data-design=legacy][data-theme] body .rp-desk .rp-summary-strip{padding-left:2px;padding-right:2px}
+html[data-design=legacy][data-theme] body .rp-desk :is(.rp-btn.primary,.rp-dialog .rp-btn.primary){background:var(--desk-accent)!important;border-color:var(--desk-accent)!important;color:#fff!important}
+html[data-design=legacy][data-theme] body .rp-desk :is(.rp-card,.rp-record,.rp-order,.rp-access-card,.rp-account-policy,.rp-visibility-setting,.rp-dialog,.rp-plan-dialog .rp-form-section){border-radius:7px!important;box-shadow:none!important}
+html[data-design=legacy][data-theme] body .rp-desk .rp-record{border-left:3px solid transparent}
+html[data-design=legacy][data-theme] body .rp-desk .rp-record:hover{border-left-color:var(--desk-accent)}
+html[data-design=legacy][data-theme] body .rp-desk .rp-tabs a.active{color:var(--desk-accent)!important;background:var(--desk-soft)!important;box-shadow:inset 3px 0 var(--desk-accent)!important}
+html[data-design=legacy][data-theme] body .rp-desk .rp-avatar,
+html[data-design=legacy][data-theme] body .rp-desk .rp-account-policy-icon{background:var(--desk-soft)!important;color:var(--desk-accent)!important}
+html[data-design=legacy][data-theme] body .rp-desk .rp-account-stats>div,
+html[data-design=legacy][data-theme] body .rp-desk .rp-checks label{background:color-mix(in srgb,var(--desk-accent) 7%,var(--rp-card,#fff))!important}
+html[data-design=legacy][data-theme] body .rp-desk .rp-event{background:var(--desk-soft)!important;color:var(--desk-accent)!important}
+html[data-design=legacy][data-theme] body .rp-desk .rp-dialog-head{border-bottom-color:var(--rp-line)!important}
+html[data-design=legacy][data-theme] body .rp-desk .rp-plan-dialog .rp-plan-footer{box-shadow:none!important}
+
+
+
+
+html[data-design=legacy][data-theme=light] body.rp-admin-page .main{background:#f2f5f9!important;color:#1e2e42!important;min-width:0}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk,
+html[data-design=legacy][data-theme=light] body.rp-tenant-page .rp-desk,
+html[data-design=legacy][data-theme=light] body.rp-tenant-page #tenant-workspace{
+  --rp-card:#ffffff;--rp-bg:#f2f5f9;--rp-soft:#eef3f7;--rp-text:#1c2c40;--rp-muted:#62738b;--rp-line:#dae2ed;
+  --rp-accent:#187e79;--rp-accent-soft:#e2f1ed;--desk-accent:#187e79;
+  --desk-soft:#eaf5f2;--m-surface:#ffffff;--m-bg:#f2f5f9;--m-text:#1c2c40;--m-muted:#62738b;--m-line:#dae2ed;
+  background:transparent!important;color:#1c2c40!important;
+}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-page-title{border-bottom:2px solid #d9e2ec!important;min-height:0;padding:4px 0 16px!important;margin:0 0 16px!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-page-title h1{color:#1c2c40!important;font-size:27px!important;letter-spacing:-.35px!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk :is(h2,h3,strong,label,.rp-record-stat strong,.rp-account-policy strong){color:#1c2c40}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk :is(.rp-muted,small,.rp-record-stat small,.rp-record-expiry small){color:#68788d!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-tabs{background:#fff!important;border:1px solid #d9e2ec!important;padding:3px!important;border-radius:7px!important;margin:16px 0 20px!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-tabs a{color:#55677f!important;box-shadow:none!important;border:0!important;border-radius:5px!important;padding:10px 14px!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-tabs a.active{background:#e3f2ed!important;color:#177b76!important;box-shadow:inset 3px 0 #177b76!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk :is(.rp-record,.rp-order,.rp-account-policy,.rp-card,.rp-visibility-setting,.rp-dialog,.rp-searchbar){background:#fff!important;border:1px solid #dae2ed!important;box-shadow:none!important;border-radius:7px!important;color:#1c2c40!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-record{padding:14px 18px!important;gap:12px!important;border-left:3px solid transparent!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-record:hover{border-left-color:#187e79!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-summary-strip{margin:12px 0 18px!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-account-policy{margin:0 0 18px!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk :is(.rp-btn.primary,.rp-plan-dialog .rp-btn.primary){color:#fff!important;background:#197e79!important;border-color:#197e79!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk :is(.rp-btn,.rp-input,.rp-fields input,.rp-fields select,.rp-fields textarea){border-radius:5px!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk :is(.rp-input,.rp-fields input,.rp-fields select,.rp-fields textarea){background:#fff!important;color:#1c2c40!important;border-color:#d2dce7!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk :is(.rp-avatar,.rp-account-policy-icon,.rp-dialog-icon,.rp-account-action>i:first-child){background:#e1f1eb!important;color:#168076!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk input[type=checkbox]:checked{background:#197e79!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk input[type=checkbox]:focus-visible{outline-color:#197e79!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-account-stats>div{background:#f4f8fb!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-plan-features{border-color:#d9e2ec!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-dialog-head{background:#fff!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-dialog-body{background:#fff!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-dialog :is(.rp-plan-advanced,.rp-form-section){background:#fff!important;border-radius:6px!important}
+html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-dialog .rp-plan-footer{background:#fff!important}
+
+html[data-design=legacy][data-theme=light] body.rp-tenant-page .main{background:#f2f5f9!important;color:#1c2c40!important}
+html[data-design=legacy][data-theme=light] body.rp-tenant-page .rp-telegram-page :is(.rp-card,.rp-bot-master,.rp-event-preferences>label){background:#fff!important;color:#1c2c40!important;border-color:#d9e2ec!important;box-shadow:none!important;border-radius:6px!important}
+html[data-design=legacy][data-theme=light] body.rp-tenant-page .rp-telegram-page .rp-bot-master b{color:#1c2c40!important}
+html[data-design=legacy][data-theme=light] body.rp-tenant-page .rp-telegram-page :is(.rp-btn.primary,.rp-subtabs [aria-selected=true]){background:#187e79!important;color:#fff!important;border-color:#187e79!important}
+html[data-design=legacy][data-theme=light] body.rp-tenant-page .rp-telegram-page :is(.rp-input,.rp-fields input,select){background:#fff!important;color:#1c2c40!important;border-color:#d9e2ec!important}
+@media(max-width:760px){html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk{padding:15px 12px!important}html[data-design=legacy][data-theme=light] body.rp-admin-page .rp-desk .rp-tabs{overflow-x:auto!important}}
+
+
+
+html[data-design=legacy][data-theme=dark] body.rp-admin-page .main,html[data-design=legacy][data-theme=dark] body.rp-tenant-page .main{background:#101a24!important;color:#eaf2f7!important}
+html[data-design=legacy][data-theme=dark] body :is(.rp-desk,.rp-security-page,.rp-telegram-page){--rp-card:#1b2a38;--rp-bg:#101a24;--rp-soft:#223543;--rp-text:#e7f0f6;--rp-muted:#afc2cf;--rp-line:#425465;--rp-accent:#71d9c6;--desk-accent:#71d9c6;--desk-soft:#203a40;max-width:100%;color:var(--rp-text)}
+html[data-design=legacy][data-theme=dark] body.rp-admin-page .rp-desk :is(.rp-record,.rp-card,.rp-account-policy,.rp-tabs,.rp-order,.rp-visibility-setting,.rp-dialog,.rp-plan-dialog .rp-form-section,.rp-form-section,.rp-searchbar){background:#1b2a38!important;color:#e7f0f6!important;border-color:#425465!important;box-shadow:none!important}
+html[data-design=legacy][data-theme=dark] body.rp-admin-page .rp-desk :is(h1,h2,h3,strong,label,small,.rp-record-stat strong,.rp-record-expiry,.rp-account-policy strong){color:#e8f2f7!important}
+html[data-design=legacy][data-theme=dark] body.rp-admin-page .rp-desk :is(.rp-muted,.rp-record-stat small,.rp-record-expiry small){color:#b1c4d0!important}
+html[data-design=legacy][data-theme=dark] body.rp-admin-page .rp-desk :is(.rp-input,input:not([type=checkbox]),select,textarea){background:#14232f!important;color:#f0f7fa!important;border-color:#486172!important}
+html[data-design=legacy][data-theme=dark] body.rp-admin-page .rp-desk :is(.rp-btn.primary,.rp-plan-footer .rp-btn.primary){background:#187f76!important;border-color:#187f76!important;color:#fff!important}
+html[data-design=legacy][data-theme=dark] body.rp-admin-page .rp-desk .rp-tabs a.active{background:#254740!important;color:#9be8dc!important;box-shadow:inset 3px 0 #63c6b3!important}
+html[data-design=legacy][data-theme=dark] body.rp-admin-page .rp-desk .rp-dialog :is(.rp-dialog-head,.rp-dialog-body,.rp-plan-footer,.rp-advanced-inner){background:#1b2a38!important;color:#e7f0f6!important;border-color:#425465!important}
+html[data-design=legacy][data-theme=dark] body.rp-admin-page .rp-desk .rp-record :is(.rp-avatar,.rp-account-policy-icon){background:#24463e!important;color:#8ce0d0!important}
+html[data-design=legacy][data-theme=dark] body.rp-admin-page .rp-desk .rp-record :is(.rp-record-person,.rp-record-stat,.rp-record-usage,.rp-record-expiry){min-width:0;overflow-wrap:anywhere}
+html[data-design=legacy][data-theme=dark] body.rp-tenant-page .rp-telegram-page :is(.rp-card,.rp-bot-master,.rp-event-preferences>label){background:#1b2a38!important;color:#e7f0f6!important;border-color:#425465!important}
+html[data-design=legacy][data-theme=dark] body.rp-tenant-page .rp-telegram-page :is(input,select,textarea){background:#14232f!important;color:#f0f7fa!important;border-color:#486172!important}
+html[data-design=legacy][data-theme=dark] body.rp-tenant-page .rp-telegram-page :is(.rp-btn.primary,.rp-subtabs [aria-selected=true]){background:#187f76!important;color:#fff!important}
+html[data-design][data-theme] body .rp-desk .rp-record,html[data-design][data-theme] body .rp-desk .rp-record-list{min-width:0;max-width:100%;overflow-wrap:anywhere}
+html[data-design][data-theme] body .rp-desk .rp-record :is(strong,span,small){min-width:0;overflow-wrap:anywhere}
+@media(max-width:760px){html[data-design][data-theme] body .rp-desk .rp-record{grid-template-columns:minmax(0,1fr)!important}.rp-desk .rp-tabs{max-width:100%;overflow-x:auto}}

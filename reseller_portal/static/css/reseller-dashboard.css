@@ -1,0 +1,70 @@
+#nx-dashboard.rd-dashboard{max-width:1480px;margin:0 auto;--rd-radius:14px;color:var(--m-text)}
+#nx-dashboard.rd-dashboard .tenant-page-head{background:transparent;border:0;border-radius:0;padding:0;margin:0 0 20px;min-height:0;box-shadow:none}
+#nx-dashboard .rd-eyebrow{display:block;color:var(--m-accent);font-size:10px;letter-spacing:.14em;font-weight:700;margin-bottom:8px}
+html[data-design=modern] #nx-dashboard.rd-dashboard h1{font-size:28px!important;letter-spacing:-.035em;line-height:1.2}
+#nx-dashboard.rd-dashboard .nx-page-head p{margin-top:7px;font-size:13px}
+#nx-dashboard.rd-dashboard .nx-page-actions{gap:8px}
+#nx-dashboard.rd-dashboard .nx-button{border-radius:9px;min-height:40px;padding:9px 14px;font-size:12px;box-shadow:none}
+#nx-dashboard.rd-dashboard .nx-health-strip{border:1px solid var(--m-line);border-radius:10px;background:var(--m-surface);padding:11px 14px;margin:0 0 16px;gap:16px;font-size:11px;flex-wrap:wrap}
+#nx-dashboard.rd-dashboard .nx-health-state{font-weight:500;gap:8px}
+#nx-dashboard.rd-dashboard .nx-health-state b{font-weight:600}
+#nx-dashboard.rd-dashboard .nx-node-summary{font-size:11px;white-space:normal;flex:1;min-width:150px}
+#nx-dashboard.rd-dashboard .nx-health-link{font-size:10px;color:var(--m-muted);white-space:normal}
+#nx-dashboard.rd-dashboard .nx-metrics{gap:12px;margin-bottom:16px}
+#nx-dashboard.rd-dashboard .nx-metric{display:flex;flex-direction:row-reverse;justify-content:space-between;align-items:flex-start;gap:10px;min-height:132px;padding:18px;background:var(--m-surface);border:1px solid var(--m-line);border-radius:var(--rd-radius);box-shadow:none}
+#nx-dashboard.rd-dashboard .nx-metric:first-child{background:linear-gradient(125deg,var(--m-tint),var(--m-surface));border-color:var(--m-line)}
+#nx-dashboard.rd-dashboard .nx-metric-icon{width:34px;height:34px;font-size:14px;border-radius:10px;background:var(--m-tint);color:var(--m-accent);margin:0}
+#nx-dashboard.rd-dashboard .nx-metric>div>span{font-size:11px;line-height:1.5;margin:0 0 10px;color:var(--m-muted)}
+#nx-dashboard.rd-dashboard .nx-metric strong{font-size:29px;font-weight:650;letter-spacing:-.04em;line-height:1.1;white-space:normal;overflow-wrap:anywhere}
+#nx-dashboard.rd-dashboard .nx-metric small{position:static;display:block;max-width:none;margin-top:10px;font-size:10px;line-height:1.5;color:var(--m-muted)}
+#nx-dashboard.rd-dashboard .nx-dashboard-grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}
+#nx-dashboard.rd-dashboard .nx-surface{border:1px solid var(--m-line);border-radius:var(--rd-radius);background:var(--m-surface);overflow:hidden;box-shadow:none;min-width:0}
+#nx-dashboard.rd-dashboard .nx-card-head{padding:17px 18px;border-bottom:1px solid var(--m-line);display:flex;align-items:center;justify-content:space-between;gap:12px}
+#nx-dashboard.rd-dashboard h2{font-size:14px;font-weight:650;margin:0;line-height:1.5;letter-spacing:-.015em}
+#nx-dashboard.rd-dashboard .nx-card-head p{font-size:11px;margin:4px 0 0;color:var(--m-muted);line-height:1.5}
+#nx-dashboard.rd-dashboard .nx-traffic-controls{width:auto;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+#nx-dashboard.rd-dashboard #traffic-rate{font-size:12px;font-variant-numeric:tabular-nums}
+#nx-dashboard.rd-dashboard .nx-segmented{border-radius:8px;padding:3px}
+#nx-dashboard.rd-dashboard .nx-segmented button{font-size:10px;padding:5px 8px;border-radius:5px;min-width:30px}
+#nx-dashboard.rd-dashboard .nx-chart-wrap{height:235px;padding:15px 18px 0;position:relative}
+#nx-dashboard.rd-dashboard .nx-chart-foot{padding:10px 18px 14px}
+#nx-dashboard.rd-dashboard .nx-chart-foot small{font-size:10px;color:var(--m-muted)}
+#nx-dashboard.rd-dashboard .nx-status-column{grid-column:2;grid-row:1 / span 3;display:grid;gap:12px;min-width:0}
+#nx-dashboard.rd-dashboard .tenant-allowances{padding:16px 18px;display:grid;gap:18px}
+#nx-dashboard.rd-dashboard .tenant-allowances>div{display:grid;grid-template-columns:1fr auto;gap:8px;font-size:12px}
+#nx-dashboard.rd-dashboard .tenant-allowances small{grid-column:2;grid-row:1;font-size:11px;color:var(--m-muted)}
+#nx-dashboard.rd-dashboard .tenant-allowances progress{grid-column:1/-1;grid-row:2;width:100%;height:5px;border:0;border-radius:5px;appearance:none;overflow:hidden;background:var(--m-soft)}
+#nx-dashboard.rd-dashboard progress::-webkit-progress-bar{background:var(--m-soft)}
+#nx-dashboard.rd-dashboard progress::-webkit-progress-value{background:var(--m-accent);border-radius:5px}
+#nx-dashboard.rd-dashboard progress::-moz-progress-bar{background:var(--m-accent)}
+#nx-dashboard.rd-dashboard .nx-attention{padding:16px 18px;background:var(--m-surface)}
+#nx-dashboard.rd-dashboard .nx-attention h2 i{color:var(--m-accent);margin-right:7px;font-size:12px}
+#nx-dashboard.rd-dashboard .nx-attention p{font-size:12px;line-height:1.7;color:var(--m-muted);margin:8px 0 0}
+#nx-dashboard.rd-dashboard .ws-shortcuts{grid-column:1;margin:0;display:flex;gap:10px;flex-wrap:wrap}
+#nx-dashboard.rd-dashboard .ws-shortcuts a{flex:1;display:flex;align-items:center;gap:10px;padding:12px 16px;min-width:150px;border:1px solid var(--m-line);border-radius:10px;background:var(--m-surface);font-size:12px;font-weight:550;color:var(--m-text);text-decoration:none}
+#nx-dashboard.rd-dashboard .ws-shortcuts a>i{color:var(--m-accent);font-size:12px}
+#nx-dashboard.rd-dashboard .ws-shortcuts a>i:last-child{margin-left:auto}
+#nx-dashboard.rd-dashboard .nx-connections{grid-column:1;grid-row:auto}
+#nx-dashboard.rd-dashboard .rd-text-link{font-size:11px;color:var(--m-accent);white-space:nowrap;text-decoration:none}
+#nx-dashboard.rd-dashboard .rd-text-link i{margin-left:5px;font-size:10px}
+#nx-dashboard.rd-dashboard .nx-connections table{width:100%;min-width:500px;border-collapse:collapse;font-size:12px}
+#nx-dashboard.rd-dashboard .nx-connections th{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--m-muted);padding:11px 16px;background:var(--m-soft);font-weight:600}
+#nx-dashboard.rd-dashboard .nx-connections td{padding:13px 16px;border-top:1px solid var(--m-line);font-size:12px}
+#nx-dashboard.rd-dashboard .nx-connections td small{display:block;margin-top:4px;font-size:10px;color:var(--m-muted)}
+#nx-dashboard.rd-dashboard .nx-status-pill{font-size:10px;padding:4px 8px;border-radius:6px;white-space:nowrap;background:var(--m-soft);color:var(--m-muted)}
+#nx-dashboard.rd-dashboard .nx-status-pill.online{color:#168b64;background:#168b6417}
+#nx-dashboard.rd-dashboard .nx-status-pill.rd-blocked{color:#d57249;background:#d5724915}
+#nx-dashboard.rd-dashboard .rd-empty{height:94px;text-align:center;color:var(--m-muted)}
+#nx-dashboard.rd-dashboard a:focus-visible,#nx-dashboard.rd-dashboard button:focus-visible,#nx-dashboard.rd-dashboard summary:focus-visible{outline:2px solid var(--m-accent);outline-offset:3px}
+@media(max-width:1150px){#nx-dashboard.rd-dashboard .nx-dashboard-grid{grid-template-columns:minmax(0,1fr) 250px}#nx-dashboard.rd-dashboard .nx-metric{padding:15px;gap:8px}#nx-dashboard.rd-dashboard .nx-metric strong{font-size:25px}#nx-dashboard.rd-dashboard .nx-metric-icon{width:28px;height:28px}}
+@media(max-width:950px){#nx-dashboard.rd-dashboard .nx-dashboard-grid{grid-template-columns:1fr}#nx-dashboard.rd-dashboard .nx-status-column{grid-column:1;grid-row:auto;display:grid;grid-template-columns:1fr 1fr}#nx-dashboard.rd-dashboard .nx-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}#nx-dashboard.rd-dashboard .nx-attention{grid-column:auto}#nx-dashboard.rd-dashboard .nx-node-summary{display:block}}
+@media(max-width:560px){#nx-dashboard.rd-dashboard .tenant-page-head{display:block;margin-bottom:16px}html[data-design=modern] #nx-dashboard.rd-dashboard h1{font-size:25px!important}#nx-dashboard.rd-dashboard .nx-page-actions{margin-top:14px;display:flex;justify-content:flex-start}#nx-dashboard.rd-dashboard .nx-page-actions .nx-button{flex:1;justify-content:center}#nx-dashboard.rd-dashboard .nx-health-strip{gap:8px 12px;padding:10px 12px}#nx-dashboard.rd-dashboard .nx-node-summary{display:none}#nx-dashboard.rd-dashboard .nx-health-link{margin-left:auto;font-size:10px}#nx-dashboard.rd-dashboard .nx-metrics{gap:10px}#nx-dashboard.rd-dashboard .nx-metric{padding:13px;min-height:133px;position:relative;display:block}#nx-dashboard.rd-dashboard .nx-metric-icon{position:absolute;top:13px;right:12px;width:24px;height:24px;font-size:11px}#nx-dashboard.rd-dashboard .nx-metric>div>span{padding-right:26px;min-height:32px;font-size:10px}#nx-dashboard.rd-dashboard .nx-metric strong{font-size:24px}#nx-dashboard.rd-dashboard .nx-metric small{font-size:9px;margin-top:8px}#nx-dashboard.rd-dashboard .nx-card-head{padding:14px;align-items:flex-start}#nx-dashboard.rd-dashboard .nx-card-head p{font-size:10px}#nx-dashboard.rd-dashboard .nx-traffic-controls{margin:0;flex-shrink:0}#nx-dashboard.rd-dashboard .nx-chart-wrap{height:190px;padding:12px 10px 0}#nx-dashboard.rd-dashboard .nx-status-column{grid-template-columns:1fr}#nx-dashboard.rd-dashboard .ws-shortcuts a{padding:12px;min-width:120px}#nx-dashboard.rd-dashboard .nx-chart-foot small{font-size:9px}#nx-dashboard.rd-dashboard .nx-chart-foot{padding:10px 14px}#nx-dashboard.rd-dashboard .rd-text-link{font-size:10px}}
+html[data-design=modern] #nx-dashboard.rd-dashboard .nx-metric{background:var(--m-surface)!important;border-color:var(--m-line)!important}
+html[data-design=modern] #nx-dashboard.rd-dashboard .nx-metric:first-child{background:linear-gradient(125deg,var(--m-tint),var(--m-surface))!important}
+html[data-design=modern] #nx-dashboard.rd-dashboard .tenant-page-head{background:transparent!important;padding:0!important}
+html[data-design=modern] #nx-dashboard.rd-dashboard .nx-traffic .nx-card-head{background:transparent!important;flex-wrap:nowrap!important;flex-direction:row!important}
+html[data-design=modern] #nx-dashboard.rd-dashboard .ws-shortcuts{margin:0!important;display:flex!important;gap:10px!important}
+html[data-design=modern] #nx-dashboard.rd-dashboard .ws-shortcuts a{background:var(--m-surface)!important;border-color:var(--m-line)!important;min-width:120px!important}
+@media(max-width:560px){#nx-dashboard.rd-dashboard .nx-traffic .nx-card-head{display:flex!important}#nx-dashboard.rd-dashboard .nx-traffic-controls{width:auto!important}#nx-dashboard.rd-dashboard .nx-metric-icon{display:grid}#nx-dashboard.rd-dashboard .nx-connections th:nth-child(2),#nx-dashboard.rd-dashboard .nx-connections td:nth-child(2){display:none}#nx-dashboard.rd-dashboard .nx-connections table{min-width:0;table-layout:fixed}#nx-dashboard.rd-dashboard .nx-connections th,#nx-dashboard.rd-dashboard .nx-connections td{padding:11px 7px;font-size:10px;overflow-wrap:anywhere}#nx-dashboard.rd-dashboard .nx-connections th:first-child{width:31%}#nx-dashboard.rd-dashboard .nx-status-pill{padding:3px 4px;font-size:9px}}
+
+@media(max-width:560px){#nx-dashboard.rd-dashboard .nx-connections th{font-size:9px;letter-spacing:0;text-transform:none}#nx-dashboard.rd-dashboard .nx-connections th:nth-child(3){width:18%}}
