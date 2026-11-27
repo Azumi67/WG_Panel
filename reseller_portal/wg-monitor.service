@@ -1,0 +1,24 @@
+[Unit]
+Description=WG Panel reseller usage monitoring and history maintenance
+After=network-online.target wg-panel.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/local/bin/WG_Panel
+EnvironmentFile=/usr/local/bin/WG_Panel/.env
+ExecStart=/usr/local/bin/WG_Panel/venv/bin/python -m reseller_portal.worker --role monitor
+Restart=on-failure
+RestartSec=5
+User=root
+Group=root
+UMask=0077
+CPUAccounting=yes
+MemoryAccounting=yes
+TasksAccounting=yes
+IOAccounting=yes
+TimeoutStopSec=60
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
