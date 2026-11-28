@@ -1,4 +1,4 @@
-"""Read-only peer-specific connection diagnosis for WG Panel."""
+
 from __future__ import annotations
 import ipaddress
 import json
@@ -77,7 +77,6 @@ def _summarize(stages):
 
 
 def _local_runtime(context, device, public_key):
-    """Read kernel state once"""
     result = {"interface_state": "unknown", "peer_present": None}
     run = context.get("_run_capture")
     if not callable(run) or not device:
@@ -114,7 +113,6 @@ def _local_runtime(context, device, public_key):
 
 
 def diagnose_peer(context: dict[str, Any], peer, *, remote_runtime: dict | None = None, remote_path: list | None = None) -> dict[str, Any]:
-    """Compose a read-only diagnosis for a local or node-backed DB peer."""
     iface = getattr(peer, "iface", None)
     iface_name = str(getattr(iface, "name", "") or "")
     dev_name = iface_name.split(":")[-1] if iface_name else ""

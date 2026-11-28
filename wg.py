@@ -4,6 +4,7 @@
 import base64
 import os
 import re
+import textwrap
 import sys
 import json
 import time
@@ -12,6 +13,7 @@ import getpass
 import base64
 import secrets
 import shutil
+import shlex
 import signal
 import subprocess
 import socket
@@ -50,26 +52,38 @@ def ansi(code: str) -> str:
 def _ansi(s: str) -> str:
     return ANSI_RE.sub("", s)
 
-RESET = ansi("0")
-BOLD  = ansi("1")
-DIM   = ansi("2")
+def _tone(rgb: str, indexed: int, basic: str = "37", background: bool = False) -> str:
+    if NO_COLOR:
+        return ""
+    channel = "48" if background else "38"
+    if os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit"):
+        return ansi(f"{channel};2;{rgb}")
+    if any(value in os.environ.get("TERM", "").lower() for value in ("256", "xterm", "screen", "tmux")):
+        return ansi(f"{channel};5;{indexed}")
+    return ansi("40" if background else basic)
 
-BR_RED = ansi("91")
-BR_GRN = ansi("92")
-BR_YEL = ansi("93")
-BR_BLU = ansi("94")
-BR_CYN = ansi("96")
-BR_WHT = ansi("97")
+RESET = ansi("0")
+BOLD = ansi("1")
+DIM = _tone("139;151;172", 246)
+BR_RED = _tone("239;146;154", 210, "31")
+BR_GRN = _tone("126;199;173", 115, "32")
+BR_YEL = _tone("223;190;132", 180, "33")
+BR_BLU = _tone("151;182;224", 110, "34")
+BR_CYN = _tone("183;168;239", 147)
+BR_WHT = _tone("226;231;240", 255)
+UI_LINE = _tone("57;67;86", 238)
+UI_SURFACE = _tone("24;29;40", 235, background=True)
+UI_KEY = _tone("53;45;77", 237, background=True)
 
 def c(text: str, color: str) -> str:
     if NO_COLOR:
         return text
     return f"{color}{text}{RESET}"
 
-TAG_INFO = "[INFO]"
-TAG_OK   = "[SUCCESS]"
-TAG_WARN = "[WARN]"
-TAG_ERR  = "[ERROR]"
+TAG_INFO = "•"
+TAG_OK   = "✓"
+TAG_WARN = "!"
+TAG_ERR  = "×"
 TAG_RUN  = "[RUN]"
 
 
@@ -77,8 +91,7 @@ REPO_URL = "https://github.com/Azumi67/WG_Panel"
 REPO_DIRNAME_DEFAULT = "WG_Panel"
 
 
-UI_MAX_WIDTH = 92
-UI_MIN_WIDTH = 64
+UI_MAX_WIDTH = 78
 
 def term(default: int = 96) -> int:
     try:
@@ -87,8 +100,7 @@ def term(default: int = 96) -> int:
         return default
 
 def ui() -> int:
-    w = term()
-    return max(UI_MIN_WIDTH, min(UI_MAX_WIDTH, w))
+    return max(12, min(UI_MAX_WIDTH, term() - 1))
 
 def left_margin() -> str:
     return ""  
@@ -97,65 +109,62 @@ def hr(char: str = "─", color: str = DIM) -> str:
     return left_margin() + c(char * ui(), color)
 
 def clear():
-    if NO_COLOR:
-        print("\n" * 2)
-        return
-    os.system("clear")
+    if _isatty() and os.environ.get("TERM", "") != "dumb":
+        print("\033[2J\033[H", end="", flush=True)
+    else:
+        print()
 
 def _paths(s: str) -> str:
-    if NO_COLOR:
-        return s
-    return s.replace("/", c("/", BR_YEL))
+    return s
 
 def _wrap(s: str, width: int) -> List[str]:
-    s = str(s).replace("\t", "    ")
-    raw = _ansi(s)
+    width = max(1, width)
+    raw = _ansi(str(s)).expandtabs(4)
     if len(raw) <= width:
-        return [s]
-    out: List[str] = []
-    buf = s
-    while buf:
-        r = _ansi(buf)
-        if len(r) <= width:
-            out.append(buf)
-            break
-        chunk_raw = r[:width]
-        sp = chunk_raw.rfind(" ")
-        cut = sp if sp >= max(10, width // 3) else width
-        out.append(buf[:cut].rstrip())
-        buf = buf[cut:].lstrip()
-    return out or [""]
+        return [str(s).expandtabs(4)]
+    return textwrap.wrap(raw, width=width, break_long_words=True,
+                         break_on_hyphens=False, replace_whitespace=True) or [""]
 
 def box(title: str, lines: List[str], border_color: str = BR_CYN) -> str:
-    w = ui()
-    inner = w - 2
-    lm = left_margin()
-
-    t = f" {_ansi(title)} "
-    if len(t) > inner - 6:
-        t = t[: inner - 9] + "… "
-
-    left_pad = 2
-    top_fill = inner - left_pad - len(t)
-    top = "┌" + ("─" * left_pad) + t + ("─" * max(0, top_fill)) + "┐"
-
-    out = [lm + c(top, border_color)]
+    width = ui()
+    inner = width - 6
+    out = []
+    def row(value: str = ""):
+        pad = " " * max(0, inner - len(_ansi(value)))
+        styled = value.replace(RESET, RESET + UI_SURFACE) if RESET else value
+        out.append(c("│", UI_LINE) + UI_SURFACE + "  " + styled + pad + "  " + RESET + c("│", UI_LINE))
+    out.append(c("╭" + "─" * (width - 2) + "╮", UI_LINE))
+    for part in _wrap(_ansi(title), inner):
+        row(c(part, BOLD + BR_WHT))
+    row()
     for line in lines:
         for part in str(line).splitlines() or [""]:
-            for wpart in _wrap(part, inner):
-                vis = len(_ansi(wpart))
-                pad = " " * max(0, inner - vis)
-                out.append(lm + c("│", border_color) + wpart + pad + c("│", border_color))
-    out.append(lm + c("└" + "─" * inner + "┘", border_color))
+            plain = _ansi(part)
+            match = re.match(r"^\s*(\d+)\)\s*(.*)", plain)
+            if match:
+                key = match.group(1)
+                wrapped = _wrap(match.group(2), max(1, inner - 6))
+                row(c(f" {key:>2} ", UI_KEY + BR_CYN + BOLD) + "  " + c(wrapped[0], BR_WHT))
+                for continuation in wrapped[1:]:
+                    row("      " + c(continuation, DIM))
+            else:
+                for wrapped in _wrap(part, inner):
+                    row(wrapped)
+    row()
+    out.append(c("╰" + "─" * (width - 2) + "╯", UI_LINE))
     return "\n".join(out)
 
 def box_text(title: str, text: str, border_color: str = BR_CYN) -> str:
     return box(title, (text.rstrip("\n").splitlines() or [""]), border_color)
 
 def header(title_left: str, title_right: str = ""):
-    lm = left_margin()
-    print(lm + c(title_left, BR_YEL + BOLD) + (("  " + c(title_right, DIM)) if title_right else ""))
-    print(hr("═", DIM))
+    print()
+    for line in _wrap(title_left, ui() - 4):
+        print("  " + c("▍ ", BR_CYN) + c(line, BOLD + BR_WHT))
+    if title_right:
+        for line in _wrap(title_right, ui() - 4):
+            print("    " + c(line, DIM))
+    print()
 
 
 def info(msg: str):
@@ -178,11 +187,12 @@ def pause(msg: str = "Press Enter to continue..."):
 
 
 def _prompt(prefix: str, default: Optional[str] = None, show_default: bool = True) -> str:
-    lm = left_margin()
-    d = ""
-    if show_default and default not in (None, ""):
-        d = " " + c(f"[{default}]", BR_YEL)
-    return f"{lm}{c(prefix, BR_CYN)}{d}{c(': ', BR_YEL)}{BR_WHT}"
+    label = _ansi(prefix)
+    lines = _wrap(label, ui() - 4)
+    for line in lines[:-1]:
+        print("  " + c(line, BR_WHT))
+    suffix = f" [{default}]" if show_default and default not in (None, "") else ""
+    return "  " + c(lines[-1], BR_WHT) + c(suffix, DIM) + c("  › ", BR_CYN)
 
 
 def ask(label: str, default: Optional[str] = None, show_default: bool = True) -> str:
@@ -227,123 +237,64 @@ def isitroot() -> bool:
         return False
 
 def _live(cmd: List[str], title: str, timeout: Optional[int] = None, env: Optional[Dict[str, str]] = None) -> int:
-    lm = left_margin()
-    print(hr("═", DIM))
-    print(lm + c(f"{TAG_RUN} {title}", BR_CYN))
-    print(lm + c(f"$ {' '.join(cmd)}", DIM))
-    print(hr("─", DIM))
-
-    noisy = cmd and cmd[0] in {"apt", "apt-get", "pip", "pip3"}
-    if noisy and _isatty():
-        try:
-            rc = subprocess.run(cmd, env=env, timeout=timeout).returncode
-            if rc == 0:
-                ok("Done.")
-            else:
-                err(f"Failed (rc={rc}).")
-            return int(rc)
-        except FileNotFoundError:
-            err(f"Command not found: {cmd[0]}")
-            return 127
-        except subprocess.TimeoutExpired:
-            err("Timeout.")
-            return 124
-        except KeyboardInterrupt:
-            _exit()
-
+    if title:
+        info(title)
+    child_env = env
+    stdin = None
+    process = None
     try:
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+        process = subprocess.Popen(cmd, stderr=subprocess.STDOUT, env=child_env,
+                                   stdin=stdin, start_new_session=True)
+        rc = process.wait(timeout=timeout)
+        if rc:
+            err(f"Command failed (exit {rc}).")
+        else:
+            ok("Done.")
+        return rc
+    except subprocess.TimeoutExpired:
+        err("Command timed out; stopped its process group.")
+        return 124
     except FileNotFoundError:
         err(f"Command not found: {cmd[0]}")
         return 127
-
-    start = time.time()
-    try:
-        while True:
-            if timeout is not None and (time.time() - start) > timeout:
-                try:
-                    p.terminate()
-                    time.sleep(0.2)
-                    p.kill()
-                except Exception:
-                    pass
-                err("Timeout.")
-                return 124
-
-            chunk = p.stdout.readline() if p.stdout else ""
-            if chunk:
-                chunk = chunk.replace("\r", "\n")
-                for line in chunk.splitlines():
-                    if line.strip() == "":
-                        continue
-                    print(lm + c(line, BR_WHT))
-
-            if not chunk and p.poll() is not None:
-                break
-
-        rc = int(p.wait())
-        if rc == 0:
-            ok("Done.")
-        else:
-            err(f"Failed (rc={rc}).")
-        return rc
-
     except KeyboardInterrupt:
         _exit()
+    finally:
+        if process is not None and process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
 
-def _quick_bar(cmd: List[str], title: str, width: int = 18) -> Tuple[int, str]:
-
-    lm = left_margin()
+def _quick_bar(cmd: List[str], title: str, width: int = 18, timeout: float = 90) -> Tuple[int, str]:
+    info(title)
+    process = None
     try:
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   text=True, start_new_session=True)
+        output, _ = process.communicate(timeout=timeout)
+        return process.returncode, output.strip()
     except FileNotFoundError:
         err(f"{title}: command not found: {cmd[0]}")
         return 127, ""
-
-    pos = 0
-    direction = 1
-    out: List[str] = []
-
-    try:
-        while True:
-            if p.stdout:
-                line = p.stdout.readline()
-                if line:
-                    out.append(line.rstrip("\n"))
-
-            if p.poll() is not None:
-                break
-
-            bar = [" "] * width
-            bar[pos] = "█"
-            bar[max(0, pos - 1)] = "▓"
-            bar[min(width - 1, pos + 1)] = "▓"
-
-            sys.stdout.write(
-                "\r" + lm +
-                c(f"{TAG_RUN} {title} ", BR_CYN) +
-                c("[", DIM) + c("".join(bar), BR_CYN) + c("]", DIM)
-            )
-            sys.stdout.flush()
-
-            pos += direction
-            if pos <= 0:
-                pos = 0
-                direction = 1
-            elif pos >= width - 1:
-                pos = width - 1
-                direction = -1
-
-            time.sleep(0.015)
-
-        sys.stdout.write("\r" + lm + " " * (width + len(title) + 14) + "\r")
-        sys.stdout.flush()
-
-        rc = int(p.wait())
-        return rc, "\n".join(out).strip()
-
+    except subprocess.TimeoutExpired:
+        err(f"{title}: command timed out.")
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate()
+        return 124, ""
     except KeyboardInterrupt:
         _exit()
+    finally:
+        if process is not None and process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
 
 
 ROOT_MARKER = Path.home() / ".wg_panel_root.json"
@@ -387,6 +338,51 @@ def _write(path: Path, content: str):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(content, encoding="utf-8")
     tmp.replace(path)
+
+def _write_env_private(path: Path, content: str):
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise ValueError('Refusing to replace a symlinked .env; edit its target securely.')
+    old = path.stat() if path.exists() else None
+    fd, name = tempfile.mkstemp(prefix='.env-', dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        if old is not None and os.geteuid() == 0:
+            os.fchown(fd, old.st_uid, old.st_gid)
+        with os.fdopen(fd, 'w', encoding='utf-8') as output:
+            fd = -1
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(name, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def _env_preview(content: str) -> str:
+    visible = {'LOG_LEVEL', 'SECURE_COOKIES', 'WIREGUARD_CONF_PATH',
+               'WG_ONLINE_PROBE_FIRST', 'WG_ONLINE_HANDSHAKE_FALLBACK',
+               'WG_ONLINE_HANDSHAKE_WINDOW', 'TG_HEARTBEAT_SEC',
+               'PG_POOL_SIZE', 'PG_MAX_OVERFLOW', 'PG_POOL_TIMEOUT',
+               'WG_TRUSTED_PROXY_NETWORKS', 'WG_TRUSTED_HOSTS'}
+    output = []
+    for line in content.splitlines():
+        if '=' in line and not line.startswith('#'):
+            key, value = line.split('=', 1)
+            if key not in visible:
+                line = key + ('=[hidden]' if value else '=(not set)')
+        output.append(line)
+    return '\n'.join(output)
+
+
+def _ask_secret(label, default):
+
+    return getpass.getpass(label + ' (Enter to keep current value): ') or default
+
 
 def _writejson(path: Path, obj):
     _write(path, json.dumps(obj, indent=2, ensure_ascii=False) + "\n")
@@ -454,16 +450,29 @@ def git_status(root: Path) -> str:
 
 def _svc_active(name: str) -> str:
     if not _cmd("systemctl"):
-        return "unknown"
-    r = subprocess.run(["systemctl", "is-active", name], text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    return (r.stdout or "").strip()
+        return "unavailable"
+    try:
+        result = subprocess.run(["systemctl", "show", "-p", "LoadState", "-p", "ActiveState", name],
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=2)
+        properties = dict(line.split("=", 1) for line in (result.stdout or "").splitlines() if "=" in line)
+        load = properties.get("LoadState")
+        if load == "not-found":
+            return "not installed"
+        if load in ("masked", "error", "bad-setting"):
+            return load
+        state = properties.get("ActiveState", "unknown")
+        return state if state in {"active", "inactive", "failed", "activating", "deactivating", "reloading", "unknown"} else "unknown"
+    except subprocess.TimeoutExpired:
+        return "unreachable"
+    except OSError:
+        return "unavailable"
 
 def service_state(name: str) -> str:
     st = _svc_active(name)
     if st == "active":
         return c("active", BR_GRN)
-    if st == "inactive":
-        return c("inactive", BR_YEL)
+    if st in ("inactive", "not installed", "masked"):
+        return c(st, BR_YEL)
     if st == "failed":
         return c("failed", BR_RED)
     if st:
@@ -492,53 +501,20 @@ def telegram_mode(root: Path) -> str:
     return c("Telegram disabled", BR_RED)
 
 def render_status(root: Path) -> str:
-    venv_dir = root / "venv"
-    req_file = root / "requirements.txt"
-    app_py = root / "app.py"
-    bot_py = root / "telegram_bot.py"
-
-    env_path = root / ".env"
-    panel_json_path = root / "instance" / "panel_settings.json"
-    tg_json_path = root / "instance" / "telegram_settings.json"
-    rt_json_path = root / "instance" / "runtime.json"
-
-    rows: List[str] = []
-    rows.append(f"{TAG_INFO} Time:   {c(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), BR_WHT)}")
-    rows.append(f"{TAG_INFO} Root:   {c(_paths(str(root)), BR_CYN)}")
-    rows.append(f"{TAG_INFO} Python: {c(python_version(), BR_WHT)}")
-    rows.append(f"{TAG_INFO} Git:    {git_status(root)}")
-
-    rows.append("")
-    rows.append(f"{('✓' if req_file.exists() else '✗')} requirements.txt: " +
-                (c("found", BR_GRN) if req_file.exists() else c("missing", BR_RED)))
-    rows.append(f"{('✓' if app_py.exists() else '✗')} app.py: " +
-                (c("found", BR_GRN) if app_py.exists() else c("missing", BR_RED)))
-    rows.append(f"{('✓' if bot_py.exists() else '!')} telegram_bot.py: " +
-                (c("found", BR_GRN) if bot_py.exists() else c("missing", BR_YEL)))
-    rows.append(f"{('✓' if venv_dir.exists() else '!')} venv: " +
-                (c("exists", BR_GRN) if venv_dir.exists() else c("not created", BR_YEL)))
-
-    rows.append("")
-    rows.append(f"{('✓' if env_path.exists() else '!')} .env: " +
-                (c("exists", BR_GRN) if env_path.exists() else c("not created", BR_YEL)))
-    rows.append(f"{('✓' if panel_json_path.exists() else '!')} panel_settings.json: " +
-                (c("exists", BR_GRN) if panel_json_path.exists() else c("not created", BR_YEL)))
-    rows.append(f"{('✓' if rt_json_path.exists() else '!')} runtime.json: " +
-                (c("exists", BR_GRN) if rt_json_path.exists() else c("not created", BR_YEL)))
-    rows.append(f"{('✓' if tg_json_path.exists() else '!')} telegram_settings.json: " +
-                (c("exists", BR_GRN) if tg_json_path.exists() else c("not created", BR_YEL)))
-    
-    urls = _panel_urls(root)
-    rows.append("")
-    rows.append(f"{TAG_INFO} Panel:  {c(str(urls.get('base') or 'unknown'), BR_WHT)}")
-    rows.append("")
-    rows.append(f"{TAG_INFO} Modes:  {panel_mode(root)}  |  {telegram_mode(root)}")
-    rows.append("")
-    rows.append(f"{TAG_INFO} Services:")
-    rows.append(f"  - wg-panel.service:     {service_state('wg-panel.service')}")
-    rows.append(f"  - wg-panel-bot.service: {service_state('wg-panel-bot.service')}")
-
-    return box("Project Status", rows, border_color=BR_CYN)
+    ready = (root / "app.py").is_file()
+    runtime = (root / "venv/bin/python").is_file()
+    rows = [
+        f"Directory  {root}",
+        "Install    " + ("Present" if ready else "Not installed")
+        + "  /  Python environment " + ("ready" if runtime else "missing"),
+        f"{'Panel':<19}{service_state('wg-panel.service')}",
+        f"{'Admin bot':<19}{service_state('wg-panel-bot.service')}",
+        f"{'Workspace bots':<19}{service_state('wg-reseller-worker.service')}",
+        f"{'Plan shop':<19}{service_state('wg-plan-shop.service')}",
+        f"{'Provisioning':<19}{service_state('wg-provision.service')}",
+        f"{'Usage monitor':<19}{service_state('wg-monitor.service')}",
+    ]
+    return box("Services", rows)
 
 
 APT_PACKAGES = [
@@ -620,28 +596,31 @@ def install_requirements():
     pause()
 
 
-def _bootstrap_only_directory(target: Path) -> bool:
-    """Recognize only the two directories written by older wg.sh launchers.
+def _cache_only_instance(path: Path) -> bool:
+    if path.name != "instance" or path.is_symlink() or not path.is_dir():
+        return False
+    try:
+        return all(item.name == "last_public_ipv4.txt" and item.is_file()
+                   and not item.is_symlink() for item in path.iterdir())
+    except OSError:
+        return False
 
-    Do not treat real installations, unknown files, or symlinks as disposable.
-    """
+
+def _bootstrap_only_directory(target: Path) -> bool:
     if not target.is_dir() or target.is_symlink():
         return False
     try:
         children = list(target.iterdir())
         return bool(children) and all(
-            entry.name in ("venv", ".cache")
-            and entry.is_dir()
-            and not entry.is_symlink()
+            (entry.name in ("venv", ".cache") and entry.is_dir() and not entry.is_symlink())
+            or _cache_only_instance(entry)
             for entry in children
         )
     except OSError:
         return False
 
 
-
 def _only_empty_instance(target: Path) -> bool:
-    """Recognize a pre-install status directory without risking user data."""
     if not target.is_dir() or target.is_symlink():
         return False
     try:
@@ -696,9 +675,7 @@ def clone_repo() -> bool:
         set_project(target)
         ok("Existing installation selected; no application data was changed.")
         if (target / ".git").is_dir():
-            info("Use the Update menu for a backed-up update, or optionally git pull.")
-            if confirm("Run git pull --ff-only now?", default_yes=False):
-                _live(["git", "-C", str(target), "pull", "--ff-only"], "git pull --ff-only")
+            info("Use the Update menu for coordinated deployment; direct git pull is not offered on a running installation.")
             pause()
             return True
         info("This installation has no .git directory. The Update menu supports it.")
@@ -726,7 +703,7 @@ def clone_repo() -> bool:
             info("It will be removed using rmdir (which refuses non-empty directories).")
             empty_instance = True
         elif nonempty and _bootstrap_only_directory(target):
-            warn("Found only venv/.cache left by the old launcher; no panel files detected.")
+            warn("Found only launcher files or a cached public IP; no panel files detected.")
             if not confirm("Move this bootstrap-only directory aside and clone here?", default_yes=True):
                 warn("Canceled. No files changed.")
                 pause()
@@ -858,8 +835,14 @@ def _venv_requirements(root: Path):
         return
 
     _live([str(vpy), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], "Upgrade pip tooling")
-    _live([str(vpy), "-m", "pip", "install", "-r", str(req)], "pip install -r requirements.txt")
-    ok("Python dependencies finished.")
+    primary_ok = _live([str(vpy), "-m", "pip", "install", "-r", str(req)], "pip install -r requirements.txt") == 0
+    postgres_req = root / 'requirements-postgres.txt'
+    driver_ok = (not postgres_req.exists() or _live([str(vpy), '-m', 'pip', 'install', '-r', str(postgres_req)],
+              'Install PostgreSQL driver') == 0)
+    if primary_ok and driver_ok:
+        ok("Python dependencies finished.")
+    else:
+        err("Dependency installation incomplete: correct the error before starting services.")
     pause()
 
 
@@ -948,7 +931,6 @@ def _wg_keypair() -> Tuple[str, str]:
     return priv, pub_from_priv(priv)
     
 def _wireguard_ipv4_network(address: str) -> str:
-    """Return the first private IPv4 network from a WireGuard Address value."""
     for raw in re.split(r"[\s,]+", str(address or "").strip()):
         if not raw or "/" not in raw:
             continue
@@ -1400,7 +1382,7 @@ def _env_text(values: Dict[str, str]) -> str:
     lines.append(f"FLASK_SECRET_KEY={g('FLASK_SECRET_KEY','')}")
     lines.append(f"FERNET_KEY={g('FERNET_KEY','')}")
     lines.append(f"API_KEY={g('API_KEY','')}")
-    lines.append(f"DATABASE_URL={g('DATABASE_URL','sqlite:///instance/wg_panel.db')}")
+    lines.append(f"DATABASE_URL={g('DATABASE_URL','postgresql+psycopg://wgpanel:CHANGE_ME@127.0.0.1:5432/wgpanel')}")
     lines.append("")
 
     lines.append(f"LOG_LEVEL={g('LOG_LEVEL','INFO')}")
@@ -1408,7 +1390,6 @@ def _env_text(values: Dict[str, str]) -> str:
     lines.append(f"WIREGUARD_CONF_PATH={g('WIREGUARD_CONF_PATH','/etc/wireguard')}")
     lines.append("")
 
-    lines.append("# Live peer detection")
     lines.append(f"WG_ONLINE_PROBE_FIRST={g('WG_ONLINE_PROBE_FIRST','1')}")
     lines.append(f"WG_ONLINE_HANDSHAKE_FALLBACK={g('WG_ONLINE_HANDSHAKE_FALLBACK','0')}")
     lines.append(f"WG_ONLINE_HANDSHAKE_WINDOW={g('WG_ONLINE_HANDSHAKE_WINDOW','45')}")
@@ -1417,17 +1398,22 @@ def _env_text(values: Dict[str, str]) -> str:
     lines.append(f"SETUP_TOKEN={g('SETUP_TOKEN','')}")
     lines.append(f"TG_HEARTBEAT_SEC={g('TG_HEARTBEAT_SEC','60')}")
 
+
+    written = {line.split('=', 1)[0] for line in lines if '=' in line and not line.startswith('#')}
+    lines.extend(f'{key}={value}' for key, value in values.items()
+                 if key not in written and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key)
+                 and '\n' not in str(value) and '\r' not in str(value))
     return "\n".join(lines) + "\n"
 
 def env_setup(root: Path):
     env_path = root / ".env"
     existing = parse_env(readtext(env_path))
 
-    vals: Dict[str, str] = {}
+    vals: Dict[str, str] = dict(existing)
     vals["FLASK_SECRET_KEY"] = existing.get("FLASK_SECRET_KEY") or _gen_flask_secret()
     vals["FERNET_KEY"] = existing.get("FERNET_KEY") or _gen_fernet_key()
     vals["API_KEY"] = existing.get("API_KEY") or _gen_api_key()
-    vals["DATABASE_URL"] = existing.get("DATABASE_URL") or "sqlite:///instance/wg_panel.db"
+    vals["DATABASE_URL"] = existing.get("DATABASE_URL") or "postgresql+psycopg://wgpanel:CHANGE_ME@127.0.0.1:5432/wgpanel"
     vals["LOG_LEVEL"] = (existing.get("LOG_LEVEL") or "INFO").upper()
     vals["SECURE_COOKIES"] = existing.get("SECURE_COOKIES") or "1"
     vals["WIREGUARD_CONF_PATH"] = existing.get("WIREGUARD_CONF_PATH") or "/etc/wireguard"
@@ -1456,10 +1442,10 @@ def env_setup(root: Path):
         c("TG_HEARTBEAT_SEC", BR_CYN) + c(" → ", DIM) + c("bot heartbeat window seconds", BR_WHT),
     ], border_color=BR_CYN))
 
-    vals["FLASK_SECRET_KEY"] = ask("FLASK_SECRET_KEY", default=vals["FLASK_SECRET_KEY"], show_default=True)
-    vals["FERNET_KEY"] = ask("FERNET_KEY", default=vals["FERNET_KEY"], show_default=True)
-    vals["API_KEY"] = ask("API_KEY", default=vals["API_KEY"], show_default=True)
-    vals["DATABASE_URL"] = ask("DATABASE_URL", default=vals["DATABASE_URL"], show_default=True)
+    vals["FLASK_SECRET_KEY"] = _ask_secret("FLASK_SECRET_KEY", vals["FLASK_SECRET_KEY"])
+    vals["FERNET_KEY"] = _ask_secret("FERNET_KEY", vals["FERNET_KEY"])
+    vals["API_KEY"] = _ask_secret("API_KEY", vals["API_KEY"])
+    vals["DATABASE_URL"] = _ask_secret("DATABASE_URL", vals["DATABASE_URL"])
     vals["LOG_LEVEL"] = ask("LOG_LEVEL", default=vals["LOG_LEVEL"], show_default=True).upper()
     vals["SECURE_COOKIES"] = ask("SECURE_COOKIES", default=vals["SECURE_COOKIES"], show_default=True)
     vals["WIREGUARD_CONF_PATH"] = ask("WIREGUARD_CONF_PATH", default=vals["WIREGUARD_CONF_PATH"], show_default=True)
@@ -1468,17 +1454,17 @@ def env_setup(root: Path):
     vals["WG_ONLINE_HANDSHAKE_FALLBACK"] = ask("WG_ONLINE_HANDSHAKE_FALLBACK", default=vals["WG_ONLINE_HANDSHAKE_FALLBACK"], show_default=True)
     vals["WG_ONLINE_HANDSHAKE_WINDOW"] = ask("WG_ONLINE_HANDSHAKE_WINDOW", default=vals["WG_ONLINE_HANDSHAKE_WINDOW"], show_default=True)
 
-    vals["SETUP_TOKEN"] = ask("SETUP_TOKEN", default=vals["SETUP_TOKEN"], show_default=True)
+    vals["SETUP_TOKEN"] = _ask_secret("SETUP_TOKEN", vals["SETUP_TOKEN"])
     vals["TG_HEARTBEAT_SEC"] = ask("TG_HEARTBEAT_SEC", default=vals["TG_HEARTBEAT_SEC"], show_default=True)
 
     env_text = _env_text(vals)
 
     clear()
     header("Preview .env", "Review before saving")
-    print(box_text(".env Preview", c(env_text.rstrip("\n"), BR_WHT), border_color=BR_CYN))
+    print(box_text(".env Preview", c(_env_preview(env_text), BR_WHT), border_color=BR_CYN))
 
     if confirm("Save .env now?", default_yes=True):
-        _write(env_path, env_text)
+        _write_env_private(env_path, env_text)
         ok(f"Saved: {_paths(str(env_path))}")
     else:
         warn("Skipped saving .env.")
@@ -1627,17 +1613,6 @@ def panel_settings(root: Path):
     pause()
 
 def _split_host_port_input(raw: str, default_host: str = "0.0.0.0") -> tuple[str, int | None]:
-    """
-    Accepts:
-      - 0.0.0.0
-      - 127.0.0.1
-      - 0.0.0.0:9000
-      - :9000
-      - [::]:9000
-
-    Returns clean host + optional port.
-    Never appends a default port by itself.
-    """
     s = (raw or "").strip()
 
     if not s:
@@ -1759,7 +1734,7 @@ def runtime(root: Path):
         "bind": bind_out,
         "port": int(port),
         "workers": int(max(0, min(workers, 64))),
-        "threads": int(max(1, min(threads, 64))),
+        "threads": int(max(1, min(threads, 8))),
         "timeout": int(max(10, min(timeout, 600))),
         "graceful_timeout": int(max(5, min(gtimeout, 600))),
         "loglevel": loglevel,
@@ -2006,6 +1981,13 @@ def _project_ready(root: Path) -> bool:
     return True
 
 def _panel_service(root: Path) -> bool:
+    database_url = _pg_panel_url(root)
+    if not database_url:
+        err("PostgreSQL is required. Existing SQLite installations: run sudo bash migrate.sh before starting the panel.")
+        return False
+    if "CHANGE_ME" in database_url:
+        err("Set a valid PostgreSQL DATABASE_URL before starting the panel.")
+        return False
     panel_settings_path = root / "instance" / "panel_settings.json"
     runtime_path = root / "instance" / "runtime.json"
     if not panel_settings_path.exists():
@@ -2030,10 +2012,16 @@ WorkingDirectory={root}
 EnvironmentFile={root}/.env
 ExecStart={vpy} {root}/app.py
 Restart=always
-RestartSec=2
+RestartSec=5
+TimeoutStopSec=60
 User={svc_user}
 Group={svc_group}
 LimitNOFILE=1048576
+UMask=0077
+CPUAccounting=yes
+MemoryAccounting=yes
+TasksAccounting=yes
+IOAccounting=yes
 
 [Install]
 WantedBy=multi-user.target
@@ -2044,12 +2032,6 @@ WantedBy=multi-user.target
     return True
 
 def _ensure_local_panel_hostname(host: str) -> bool:
-    """Resolve the panel's own TLS hostname to loopback on this server.
-
-    The Telegram bot must reach the local panel directly, not hairpin through a
-    public IP/CDN. Keeping the real hostname preserves TLS SNI and certificate
-    verification while /etc/hosts makes the transport local.
-    """
     host = str(host or "").strip().rstrip(".")
     if not host:
         return False
@@ -2106,10 +2088,16 @@ WorkingDirectory={root}
 EnvironmentFile={root}/.env
 ExecStart={vpy} {root}/telegram_bot.py
 Restart=always
-RestartSec=2
+RestartSec=5
+TimeoutStopSec=60
 User={svc_user}
 Group={svc_group}
 LimitNOFILE=1048576
+UMask=0077
+CPUAccounting=yes
+MemoryAccounting=yes
+TasksAccounting=yes
+IOAccounting=yes
 
 [Install]
 WantedBy=multi-user.target
@@ -2222,6 +2210,132 @@ def _service_option(root: Path):
         info("Logs: journalctl -u wg-panel --no-pager -n 160")
     pause()
 
+def setup_background_services(root: Path) -> bool:
+    if not isitroot():
+        err("Background service setup requires sudo.")
+        return False
+    installer = root / "reseller_portal" / "install_worker.py"
+    python = root / "venv" / "bin" / "python"
+    if not _project_ready(root) or not installer.is_file() or not python.is_file():
+        err("Install the panel and complete its environment first.")
+        return False
+    if _svc_active("wg-panel.service") != "active":
+        err("Start and verify the web panel before installing its background services.")
+        return False
+    info("Provisioning and usage monitoring are required for reseller operations; bot tokens are optional.")
+    if not confirm("Install/update and enable all four background services?", default_yes=True):
+        return False
+    rc = _live([str(python), str(installer), "--install", "--python", str(python)],
+               "Install background services", timeout=600)
+    if rc:
+        err("Setup did not finish. Check the service journals.")
+        return False
+    units = ("wg-reseller-worker.service", "wg-plan-shop.service", "wg-provision.service", "wg-monitor.service")
+    inactive = [unit for unit in units if _svc_active(unit) != "active"]
+    if inactive:
+        warn("Not active: " + ", ".join(inactive))
+        return False
+    ok("All four services are active. Check worker progress in Resellers or use the service logs.")
+    return True
+
+
+def restart_all_panel_services():
+    if not isitroot():
+        err("Service restart requires sudo.")
+        return False
+    if not _cmd("systemctl"):
+        err("systemctl not available.")
+        return False
+    units=("wg-panel.service", "wg-panel-bot.service", "wg-reseller-worker.service",
+           "wg-plan-shop.service", "wg-provision.service", "wg-monitor.service")
+    states={unit:_svc_active(unit) for unit in units}
+    eligible=[unit for unit,state in states.items() if state in ("active","inactive","failed","activating","deactivating","reloading")]
+    skipped=[unit+" ("+state+")" for unit,state in states.items() if unit not in eligible]
+    if skipped:warn("Skipped: "+", ".join(skipped))
+    if not eligible:
+        err("No installed, available panel services to restart.")
+        return False
+    if not confirm("Restart all installed WG Panel services (including stopped services)?",default_yes=False):
+        return False
+    rc,out=_quick_bar(["systemctl","restart",*eligible],"Restart all panel services",timeout=240)
+    if rc and out:warn(out)
+    failed=[]
+    for unit in eligible:
+        state=_svc_active(unit)
+        print(unit+": "+state)
+        if state!="active":failed.append(unit)
+    if rc or failed:
+        err("Restart incomplete. Check service status and recent logs.")
+        return False
+    ok("All selected panel services restarted.")
+    return True
+
+
+def reseller_bot_option(root: Path):
+    if not isitroot():
+        err("Reseller service management requires sudo."); pause(); return
+    services = {"1":("Panel admin", "wg-panel-bot.service"), "2":("Plan shop", "wg-plan-shop.service"),
+                "3":("Reseller workspace", "wg-reseller-worker.service"),
+                "4":("Provisioning", "wg-provision.service"), "5":("Usage monitor", "wg-monitor.service")}
+    while True:
+        clear()
+        header("Background services", "Provisioning, usage monitoring and Telegram")
+        print(box("Services", [label.ljust(20) + service_state(unit) for label,unit in services.values()]))
+        print(box("Setup and maintenance", [
+            "1  Install or update all four background services",
+            "2  Configure Panel admin bot",
+            "3  Configure Plan shop bot",
+            "4  Configure Reseller workspace bots",
+            "5  Service status",
+            "6  Recent logs",
+            "7  Restart a service",
+            "8  Restart all panel services",
+            "0  Back",
+        ]))
+        choice = _menu_input()
+        if choice == "0":return
+        required = ("wg-provision.service", "wg-monitor.service")
+        install_needed = choice == "1" or (choice in ("3", "4") and any(
+            _svc_active(unit) != "active" for unit in (*required, services["2" if choice == "3" else "3"][1])))
+        if install_needed and not setup_background_services(root):
+            pause(); continue
+        if choice == "1":
+            pause();continue
+        if choice == "2":
+            telegram_option(root)
+            continue
+        elif choice == "3":
+            print(box("Plan shop", ["Connect a dedicated BotFather token in Resellers > Plan shop bot.",
+                "Set the public panel URL, enable the shop and publish a plan.",
+                "Buyers can now send /start. Review receipts in Resellers > Purchases."]))
+        elif choice == "4":
+            print(box("Reseller workspace", ["One service runs all reseller workspace bots.",
+                "Allow Telegram in Resellers > Manage account > Telegram features.",
+                "Each reseller connects their own bot under Workspace > Telegram.",
+                "Send /start from the linked Telegram account."]))
+        elif choice == "8":
+            restart_all_panel_services()
+        elif choice in ("5","6","7"):
+            print(box("Choose a service", [key+"  "+label for key,(label,_) in services.items()]+["0  Back"]))
+            selected=services.get(_menu_input())
+            if not selected:continue
+            label,unit=selected
+            if choice == "7":
+                if confirm("Restart "+label+"?", default_yes=False):
+                    rc,out=_quick_bar(["systemctl","restart",unit],"Restart "+label)
+                    if rc:err("Restart failed. Open Recent logs for "+label+".")
+                    else:ok(label+" restarted.")
+            else:
+                cmd=(["systemctl","status",unit,"--no-pager","--full"] if choice=="5"
+                     else ["journalctl","-u",unit,"-n","80","--no-pager","--output=short-iso"])
+                rc,out=_quick_bar(cmd,label+(" status" if choice=="5" else " logs"))
+                clean=re.sub(r'(?i)(?:bot)?[0-9]{5,20}:[A-Za-z0-9_-]{20,}', '[bot credential]', out)
+                clean=re.sub(r'(/r/(?:setup/)?)[A-Za-z0-9_-]{32,}', r'\1[private link]',clean)
+                print(clean or "No entries available for "+unit+".")
+        else:warn("Choose a listed option.")
+        pause()
+
+
 def telegram_option(root: Path):
     if not isitroot():
         err("Telegram service setup requires sudo.")
@@ -2296,6 +2410,7 @@ def _quick_setup():
         c("3) panel_settings wizard", BR_WHT),
         c("4) runtime wizard", BR_WHT),
         c("5) Create/restart PANEL service + verify", BR_GRN),
+        c("6) Offer background worker installation", BR_GRN),
     ], border_color=BR_YEL))
 
     if not confirm("Continue?", True):
@@ -2316,6 +2431,9 @@ def _quick_setup():
     panel_settings(root)
     runtime(root)
     _service_option(root)
+    if _svc_active("wg-panel.service") == "active":
+        setup_background_services(root)
+        pause()
 
 def telegram_setup():
     root = get_project()
@@ -2383,7 +2501,13 @@ def install_everything():
         if confirm("Optional: Create/Restart TELEGRAM service + verify?", True):
             telegram_option(root)
 
-    ok("Install Everything flow completed.")
+    if _svc_active("wg-panel.service") == "active":
+        if setup_background_services(root):
+            ok("Install Everything flow completed; verify service health before use.")
+        else:
+            warn("Background workers not confirmed active. Use Install & setup → Background workers (option 14) to finish setup.")
+    else:
+        warn("Web panel is not active. Finish service setup before using the panel.")
     pause()
 
 
@@ -2404,7 +2528,7 @@ def edit_env(root: Path):
     values.setdefault("FLASK_SECRET_KEY", _gen_flask_secret())
     values.setdefault("FERNET_KEY", _gen_fernet_key())
     values.setdefault("API_KEY", _gen_api_key())
-    values.setdefault("DATABASE_URL", "sqlite:///instance/wg_panel.db")
+    values.setdefault("DATABASE_URL", "postgresql+psycopg://wgpanel:CHANGE_ME@127.0.0.1:5432/wgpanel")
     values.setdefault("LOG_LEVEL", "INFO")
     values.setdefault("SECURE_COOKIES", "1")
     values.setdefault("WIREGUARD_CONF_PATH", "/etc/wireguard")
@@ -2417,7 +2541,7 @@ def edit_env(root: Path):
     while True:
         clear()
         header("Edit .env", _paths(str(env_path)))
-        print(box_text("Live Preview", c(preview().rstrip("\n"), BR_WHT), border_color=BR_CYN))
+        print(box_text("Live Preview", c(_env_preview(preview()), BR_WHT), border_color=BR_CYN))
 
         items = [
             c("Choose a field:", BR_WHT),
@@ -2445,7 +2569,7 @@ def edit_env(root: Path):
             return
 
         if ch in ("s", "w"):
-            _write(env_path, preview())
+            _write_env_private(env_path, preview())
             ok(f"Saved: {_paths(str(env_path))}")
             if ch == "s":
                 pause()
@@ -2459,8 +2583,10 @@ def edit_env(root: Path):
                 values["FLASK_SECRET_KEY"] = _gen_flask_secret()
                 ok("Regenerated FLASK_SECRET_KEY.")
             elif which == "2":
-                values["FERNET_KEY"] = _gen_fernet_key()
-                ok("Regenerated FERNET_KEY.")
+                warn("Changing FERNET_KEY can make saved credentials and reseller recovery archives unreadable.")
+                if confirm("Generate a new key ONLY for a fresh installation with no encrypted data?", default_yes=False):
+                    values["FERNET_KEY"] = _gen_fernet_key()
+                    ok("Regenerated FERNET_KEY.")
             elif which == "3":
                 values["API_KEY"] = _gen_api_key()
                 ok("Regenerated API_KEY.")
@@ -2482,7 +2608,12 @@ def edit_env(root: Path):
         }
         if ch in mapping:
             k = mapping[ch]
-            values[k] = ask(f"Set {k}", default=values.get(k, ""), show_default=True)
+            if k in {"FLASK_SECRET_KEY", "FERNET_KEY", "API_KEY", "DATABASE_URL", "SETUP_TOKEN"}:
+                if k == "FERNET_KEY" and not confirm("Replace encryption key only on a fresh installation?", default_yes=False):
+                    continue
+                values[k] = _ask_secret(f"Set {k}", values.get(k, ""))
+            else:
+                values[k] = ask(f"Set {k}", default=values.get(k, ""), show_default=True)
         else:
             warn("Invalid option.")
             time.sleep(0.25)
@@ -2643,34 +2774,28 @@ def install_menu():
         print(render_status(root))
         print()
 
-        print(box("Tips", [
-            c("Recommended path:", BR_WHT) + " " + c("/usr/local/bin/WG_Panel", BR_CYN),
-            c("Fastest start:", BR_WHT) + " " + c("Panel Quick Setup", BR_GRN),
-            c("Telegram:", BR_WHT) + " " + c("do later with Telegram Quick Setup", BR_GRN),
-        ], border_color=BR_CYN))
-        print()
-
         items = [
-            c("GUIDED (recommended)", BR_GRN),
-            c("  1) Install Everything (full guided)", BR_GRN),
-            c("  2) Panel Quick Setup (configure + service)", BR_GRN),
-            c("  3) Telegram Quick Setup (optional)", BR_GRN),
+            c("QUICK SETUP", BR_GRN),
+            c("  1) Full installation", BR_GRN),
+            c("  2) Set up panel", BR_GRN),
+            c("  3) Set up Panel admin bot", BR_GRN),
             "",
-            c("BASICS", BR_CYN),
-            c("  4) Git clone + set project directory", BR_CYN),
-            c("  5) Install system requirements (apt)", BR_CYN),
-            c("  6) Create venv + pip install requirements.txt", BR_CYN),
-            c("  7)  WireGuard: create/update .conf ", BR_CYN),
+            c("COMPONENTS", BR_CYN),
+            c("  4) Repository & install directory", BR_CYN),
+            c("  5) System dependencies", BR_CYN),
+            c("  6) Python environment & pinned dependencies", BR_CYN),
+            c("  7) WireGuard interfaces", BR_CYN),
             "",
-            c("CONFIG", BR_BLU),
-            c("  8) Create/Update .env", BR_BLU),
-            c("  9) Create/Update panel_settings.json", BR_BLU),
-            c(" 10) Create/Update runtime.json", BR_BLU),
-            c(" 11) Create/Update telegram_settings.json", BR_BLU),
+            c("CONFIGURATION", BR_BLU),
+            c("  8) Environment settings", BR_BLU),
+            c("  9) Panel settings", BR_BLU),
+            c(" 10) Runtime & workers", BR_BLU),
+            c(" 11) Telegram settings", BR_BLU),
             "",
             c("SERVICES", BR_YEL),
-            c(" 12) PANEL service: create/restart + verify", BR_YEL),
-            c(" 13) TELEGRAM service: create/restart + verify", BR_YEL),
+            c(" 12) Install / restart panel service", BR_YEL),
+            c(" 13) Install / restart Panel admin bot", BR_YEL),
+            c(" 14) Background workers (provisioning, monitor & bots)", BR_YEL),
             "",
             c("  0) Back", DIM),
         ]
@@ -2703,6 +2828,8 @@ def install_menu():
             _service_option(root)
         elif ch == "13":
             telegram_option(root)
+        elif ch == "14":
+            reseller_bot_option(root)
         elif ch == "0":
             return
         else:
@@ -2775,15 +2902,6 @@ def _tls(root: Path) -> bool:
     return Path(cert).is_file() and Path(key).is_file()
 
 def _public_ipv4(root: Optional[Path] = None) -> str:
-    """
-    Best-effort public IPv4 detection.
-
-    Priority:
-      1) PANEL_PUBLIC_HOST / PUBLIC_IPV4 from .env
-      2) cached instance/last_public_ipv4.txt
-      3) external HTTPS lookups
-      4) local route IP
-    """
     def valid_ipv4(x: str) -> str:
         x = (x or "").strip()
         if not x:
@@ -2930,7 +3048,33 @@ def _panel_urls(root: Path) -> dict:
         "settings": f"{base}/settings",
     }
 
+def _pg_panel_url(root: Path):
+    values = parse_env(readtext(root / '.env'))
+    raw = (values.get('DATABASE_URL') or values.get('export DATABASE_URL') or '').strip().strip('\"\'')
+    if raw.startswith('postgres://'):
+        return 'postgresql+psycopg://' + raw[len('postgres://'):]
+    if raw.startswith('postgresql://'):
+        return 'postgresql+psycopg://' + raw[len('postgresql://'):]
+    return raw if raw.startswith('postgresql+psycopg://') else None
+
+
+def _pg_query(root: Path, sql: str, params: dict | None = None):
+    from sqlalchemy import create_engine, text
+    engine = create_engine(_pg_panel_url(root), pool_pre_ping=True,
+                           connect_args={'connect_timeout':3}, hide_parameters=True)
+    try:
+        with engine.connect() as connection:
+            return connection.execute(text(sql), params or {}).fetchall()
+    finally:
+        engine.dispose()
+
+
 def _admin_usernames(root: Path) -> list[str]:
+    if _pg_panel_url(root):
+        try:
+            return [str(row[0]) for row in _pg_query(root, 'SELECT username FROM admin_account ORDER BY id')]
+        except Exception:
+            return []
 
     db = root / "instance" / "wg_panel.db"
     if not db.exists():
@@ -2982,11 +3126,7 @@ def _svc_logs(name: str, lines: int = 160):
 def _sys_status(name: str) -> str:
     if not _cmd("systemctl"):
         return "systemctl not available"
-    try:
-        out = subprocess.check_output(["systemctl", "is-active", name], text=True).strip()
-        return out
-    except Exception:
-        return "unknown"
+    return _svc_active(name)
 
 
 def _svc_detail(svc: str):
@@ -3001,7 +3141,7 @@ def _svc_detail(svc: str):
             f"{TAG_INFO} Status: {c(state, st_color)}",
             "",
             c("Actions", BR_YEL),
-            c("  1) Restart", BR_YEL),
+            c("  1) Start / restart", BR_YEL),
             c("  2) Stop", BR_YEL),
             "",
             c("Logs", BR_CYN),
@@ -3037,33 +3177,31 @@ def _svc_detail(svc: str):
 
 
 def services_status(root: Path):
+    services = {
+        "1": ("Panel web service", "wg-panel.service"),
+        "2": ("Panel admin bot", "wg-panel-bot.service"),
+        "3": ("Plan shop bot", "wg-plan-shop.service"),
+        "4": ("Reseller workspace bots", "wg-reseller-worker.service"),
+        "5": ("Provisioning", "wg-provision.service"),
+        "6": ("Usage monitor", "wg-monitor.service"),
+    }
     while True:
         clear()
-        header("Status", "choose service")
-        print(render_status(root))
-        print()
-
-        s1 = _sys_status("wg-panel.service")
-        s2 = _sys_status("wg-panel-bot.service")
-
-        items = [
-            c("1) wg-panel.service", BR_YEL) + "  " + c(f"[{s1}]", BR_GRN if s1=="active" else BR_RED),
-            c("2) wg-panel-bot.service", BR_YEL) + "  " + c(f"[{s2}]", BR_GRN if s2=="active" else BR_RED),
-            "",
-            c("0) Back", DIM),
-        ]
-        print(box("Status Menu", items, border_color=BR_YEL))
-
-        ch = _menu_input()
-        if ch == "1":
-            _svc_detail("wg-panel.service")
-        elif ch == "2":
-            _svc_detail("wg-panel-bot.service")
-        elif ch == "0":
+        header("Service status", "Choose a service to view details or logs")
+        items = [key + "  " + label.ljust(23) + service_state(unit)
+                 for key, (label, unit) in services.items()]
+        print(box("Services", items + ["7  Restart all panel services", c("0  Back", DIM)]))
+        choice = _menu_input()
+        if choice == "0":
             return
+        if choice == "7":
+            restart_all_panel_services()
+            pause()
+        elif choice in services:
+            _svc_detail(services[choice][1])
         else:
-            warn("Invalid option.")
-            time.sleep(0.25)
+            warn("Choose a listed service.")
+
 
 def _admin_table(cur) -> str | None:
 
@@ -3086,6 +3224,8 @@ def _admin_table(cur) -> str | None:
 
 
 def _list_usernames(root: Path) -> list[str]:
+    if _pg_panel_url(root):
+        return _admin_usernames(root)
     db = root / "instance" / "wg_panel.db"
     if not db.exists():
         return []
@@ -3109,15 +3249,16 @@ def _list_usernames(root: Path) -> list[str]:
 
 def reset_password(root: Path):
 
+    postgres = bool(_pg_panel_url(root))
     db = root / "instance" / "wg_panel.db"
-    if not db.exists():
+    if not postgres and not db.exists():
         err(f"Database not found: {_paths(str(db))}")
         warn("Start the panel once to initialize the DB, or verify DATABASE_URL points to this file.")
         pause()
         return
 
     clear()
-    header("Reset Admin Password", _paths(str(db)))
+    header("Reset Admin Password", "PostgreSQL" if postgres else _paths(str(db)))
 
     admins = _list_usernames(root)
 
@@ -3156,6 +3297,31 @@ def reset_password(root: Path):
     except Exception as e:
         err(f"Hashing failed: {e}")
         pause()
+        return
+
+    if postgres:
+        try:
+            from sqlalchemy import create_engine, text
+            engine = create_engine(_pg_panel_url(root),pool_pre_ping=True,
+                hide_parameters=True,connect_args={'connect_timeout':3})
+            try:
+                with engine.begin() as connection:
+                    result = connection.execute(text(
+                        'UPDATE admin_account SET password_hash=:hash WHERE username=:username RETURNING id'),
+                        {'hash':new_hash,'username':username}).first()
+                    if result is None:
+                        raise ValueError('Admin username not found')
+            finally:
+                engine.dispose()
+            ok(f"Password reset for: {c(username, BR_WHT)}")
+            if confirm("Restart panel services now?", default_yes=True):
+                if _cmd('systemctl'):
+                    _quick_bar(['systemctl','restart','wg-panel.service'],'Restart wg-panel.service')
+                    _quick_bar(['systemctl','restart','wg-panel-bot.service'],'Restart wg-panel-bot.service')
+            pause()
+        except Exception as e:
+            err('PostgreSQL admin password update failed: ' + type(e).__name__)
+            pause()
         return
 
     try:
@@ -3318,234 +3484,15 @@ def _related_panel_services() -> List[str]:
         for name in (
             "wg-panel.service",
             "wg-panel-bot.service",
+            "wg-reseller-worker.service",
+            "wg-plan-shop.service",
+            "wg-provision.service",
+            "wg-monitor.service",
         )
         if _service_exists(name)
     ]
 
 
-def _restart_related_panel_services() -> bool:
-    services = _related_panel_services()
-
-    if not services:
-        warn("No WG Panel systemd services were found. Restart skipped.")
-        return True
-
-    all_ok = True
-
-    for service in services:
-        rc = _live(
-            ["systemctl", "restart", service],
-            f"Restart {service}",
-            timeout=90,
-        )
-
-        if rc != 0:
-            all_ok = False
-            continue
-
-        time.sleep(1)
-
-        state = _svc_active(service)
-
-        if state == "active":
-            ok(f"{service} is active.")
-            continue
-
-        all_ok = False
-        err(
-            f"{service} did not become active after restart "
-            f"(state={state or 'unknown'})."
-        )
-
-        if _cmd("journalctl"):
-            subprocess.run(
-                [
-                    "journalctl",
-                    "-u",
-                    service,
-                    "-n",
-                    "80",
-                    "--no-pager",
-                ],
-                check=False,
-            )
-
-    return all_ok
-
-
-def _update_preserve_patterns() -> List[str]:
-    return [
-        ".git/",
-        ".env",
-        "venv/",
-        "instance/",
-        "backups/",
-        "db/",
-        "*.db",
-        "__pycache__/",
-        "agent/.env",
-        "agent/venv/",
-    ]
-
-
-def _sync_project_code(source: Path, destination: Path) -> bool:
-    if not _cmd("rsync"):
-        err("rsync is required for update and downgrade.")
-        return False
-
-    cmd = ["rsync", "-a", "--delete"]
-
-    for pattern in _update_preserve_patterns():
-        cmd += ["--exclude", pattern]
-
-    cmd += [
-        str(source).rstrip("/") + "/",
-        str(destination).rstrip("/") + "/",
-    ]
-
-    return (
-        _live(
-            cmd,
-            "Apply project code",
-            timeout=600,
-        )
-        == 0
-    )
-
-
-def _create_code_snapshot(root: Path) -> Path:
-    backup_dir = root / "backups"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    snapshot = backup_dir / f"code-rollback-{stamp}"
-    snapshot.mkdir(parents=True, exist_ok=False)
-
-    cmd = ["rsync", "-a"]
-
-    for pattern in _update_preserve_patterns():
-        cmd += ["--exclude", pattern]
-
-    cmd += [
-        str(root).rstrip("/") + "/",
-        str(snapshot).rstrip("/") + "/",
-    ]
-
-    rc = _live(
-        cmd,
-        "Create rollback snapshot",
-        timeout=600,
-    )
-
-    if rc != 0:
-        shutil.rmtree(snapshot, ignore_errors=True)
-        raise RuntimeError("Could not create the rollback snapshot.")
-
-    return snapshot
-
-
-def _restore_code_snapshot(root: Path, snapshot: Path) -> bool:
-    if not snapshot.is_dir():
-        err("Rollback snapshot is missing.")
-        return False
-
-    warn("Restoring the previous panel code...")
-
-    if not _sync_project_code(snapshot, root):
-        err("Automatic rollback failed.")
-        return False
-
-    _refresh_project_requirements(root)
-    _restart_related_panel_services()
-
-    ok("Previous panel code restored.")
-    return True
-
-
-def _refresh_project_requirements(root: Path) -> bool:
-    requirements = root / "requirements.txt"
-    venv_python = root / "venv" / "bin" / "python"
-
-    if not requirements.is_file():
-        warn("requirements.txt is missing. Dependency refresh skipped.")
-        return True
-
-    if not venv_python.is_file():
-        warn("Panel virtual environment is missing. Dependency refresh skipped.")
-        return True
-
-    rc = _live(
-        [
-            str(venv_python),
-            "-m",
-            "pip",
-            "install",
-            "-r",
-            str(requirements),
-        ],
-        "Install panel requirements",
-        timeout=1200,
-    )
-
-    return rc == 0
-
-
-def _validate_project_python(root: Path) -> bool:
-    venv_python = root / "venv" / "bin" / "python"
-    python_bin = str(venv_python) if venv_python.is_file() else sys.executable
-
-    candidates = [
-        root / "app.py",
-        root / "telegram_bot.py",
-        root / "wg.py",
-    ]
-
-    files = [str(path) for path in candidates if path.is_file()]
-
-    if not files:
-        err("No panel Python entry files were found after the code change.")
-        return False
-
-    rc = _live(
-        [
-            python_bin,
-            "-m",
-            "py_compile",
-            *files,
-        ],
-        "Validate panel Python files",
-        timeout=180,
-    )
-
-    return rc == 0
-
-
-def _finish_project_change(
-    root: Path,
-    snapshot: Path,
-    action_name: str,
-) -> bool:
-    if not _refresh_project_requirements(root):
-        err(f"{action_name} failed while installing requirements.")
-        _restore_code_snapshot(root, snapshot)
-        return False
-
-    if not _validate_project_python(root):
-        err(f"{action_name} failed Python validation.")
-        _restore_code_snapshot(root, snapshot)
-        return False
-
-    if not _restart_related_panel_services():
-        err(
-            f"{action_name} was applied, but a related service "
-            "failed to restart."
-        )
-        _restore_code_snapshot(root, snapshot)
-        return False
-
-    ok(f"{action_name} completed successfully.")
-    ok(f"Rollback snapshot: {_paths(str(snapshot))}")
-    return True
 
 
 def _github_json(url: str, timeout: int = 20):
@@ -3698,10 +3645,13 @@ def _download_file(url: str, target: Path) -> None:
                 )
 
             with target.open("wb") as output:
-                shutil.copyfileobj(
-                    response,
-                    output,
-                )
+                total=0; deadline=time.monotonic()+180
+                while True:
+                    chunk=response.read(1024*1024)
+                    if not chunk:break
+                    total+=len(chunk)
+                    if total>500*1024*1024 or time.monotonic()>deadline:raise RuntimeError('Release archive download exceeded limit.')
+                    output.write(chunk)
 
     except urllib.error.HTTPError as exc:
         raise RuntimeError(
@@ -3805,116 +3755,30 @@ def _extract_release_zip(
     )
 
 
+def _run_coordinated_update(root, archive=None, tag='main'):
+    root=Path(root).resolve()
+    helper=root/'scripts'/'panel_update.py'
+    if not helper.is_file():
+        err('Coordinated update helper is missing. Install Phase 7 manually first.')
+        return False
+    python=root/'venv'/'bin'/'python'
+    cmd=[str(python if python.is_file() else Path(sys.executable)),str(helper),'--root',str(root),
+         '--repo','Azumi67/WG_Panel','--scope','panel','--status',str(root/'instance'/'update_status.json'),'--target',tag]
+    if archive:cmd.extend(['--archive',str(archive)])
+    rc=_live(cmd,'Coordinated code-only deployment')
+    if rc:err('Deployment failed or requires manual migration. Check instance/update_status.json and service journals.')
+    else:ok('Code deployment and service startup checks completed.')
+    return rc==0
+
+
 def update_project(root: Path):
-    """
-    Update WG Panel to the latest main-branch version.
-
-    Update never shows a release/version list.
-    """
-    if not isitroot():
-        err("Update requires sudo/root.")
-        pause()
-        return
-
-    if not _cmd("git"):
-        err("git is not installed.")
-        pause()
-        return
-
-    if not _cmd("rsync"):
-        err("rsync is not installed. Run: apt-get install -y rsync")
-        pause()
-        return
-
-    root = root.resolve()
-
-    if not root.is_dir() or not (root / "app.py").is_file():
-        err("The active WG Panel project root is invalid.")
-        pause()
-        return
-
-    clear()
-    header("Update", "latest main branch")
-
-    print(
-        box(
-            "Update Plan",
-            [
-                "• Download the latest main branch.",
-                "• Preserve .env, instance, database, backups and venv.",
-                "• Refresh Python requirements.",
-                "• Validate app.py, telegram_bot.py and wg.py.",
-                "• Restart the panel and Telegram services when installed.",
-                "• Restore the previous code automatically on failure.",
-            ],
-            border_color=BR_GRN,
-        )
-    )
-
-    if not confirm(
-        "Update to the latest version now?",
-        default_yes=True,
-    ):
-        warn("Canceled.")
-        pause()
-        return
-
-    temp_root = Path(
-        tempfile.mkdtemp(prefix="wg-panel-update-")
-    )
-    snapshot: Optional[Path] = None
-
-    try:
-        snapshot = _create_code_snapshot(root)
-        source = temp_root / "source"
-
-        rc = _live(
-            [
-                "git",
-                "clone",
-                "--depth",
-                "1",
-                "--branch",
-                "main",
-                REPO_URL,
-                str(source),
-            ],
-            "Download latest WG Panel",
-            timeout=600,
-        )
-
-        if rc != 0:
-            raise RuntimeError(
-                "Could not download the latest main branch."
-            )
-
-        if not _sync_project_code(source, root):
-            raise RuntimeError(
-                "Could not apply the latest panel code."
-            )
-
-        _finish_project_change(
-            root,
-            snapshot,
-            "Update",
-        )
-
-    except Exception as exc:
-        err(f"Update failed: {exc}")
-
-        if snapshot is not None:
-            _restore_code_snapshot(root, snapshot)
-
-    finally:
-        shutil.rmtree(temp_root, ignore_errors=True)
-
+    if not isitroot():err('Update requires sudo/root.');pause();return
+    if confirm('Install compatible main-branch code and restart previously active services?',default_yes=False):
+        _run_coordinated_update(root)
     pause()
 
 
 def downgrade_project(root: Path):
-    """
-    Downgrade WG Panel to a selected published GitHub release.
-    """
     if not isitroot():
         err("Downgrade requires sudo/root.")
         pause()
@@ -3969,47 +3833,13 @@ def downgrade_project(root: Path):
         pause()
         return
 
-    temp_root = Path(
-        tempfile.mkdtemp(prefix="wg-panel-downgrade-")
-    )
-    snapshot: Optional[Path] = None
-
     try:
-        snapshot = _create_code_snapshot(root)
-
-        zip_path = temp_root / "release.zip"
-        extract_dir = temp_root / "release"
-
-        info(f"Downloading release {release['tag']}...")
-        _download_file(
-            release["zipball_url"],
-            zip_path,
-        )
-
-        source = _extract_release_zip(
-            zip_path,
-            extract_dir,
-        )
-
-        if not _sync_project_code(source, root):
-            raise RuntimeError(
-                "Could not apply the selected release."
-            )
-
-        _finish_project_change(
-            root,
-            snapshot,
-            f"Downgrade to {release['tag']}",
-        )
-
+        with tempfile.TemporaryDirectory(prefix='wg-panel-release-') as tmp:
+            archive=Path(tmp)/'release.zip'
+            _download_file(release['zipball_url'],archive)
+            _run_coordinated_update(root,archive,release['tag'])
     except Exception as exc:
-        err(f"Downgrade failed: {exc}")
-
-        if snapshot is not None:
-            _restore_code_snapshot(root, snapshot)
-
-    finally:
-        shutil.rmtree(temp_root, ignore_errors=True)
+        err(f'Release deployment failed: {exc}')
 
     pause()
 
@@ -4020,16 +3850,16 @@ def update_menu():
 
         clear()
         header(
-            "Update / Downgrade",
+            "Updates & releases",
             "latest update or selected release",
         )
         print(render_status(root))
         print()
 
         items = [
-            c("1) Update to latest version", BR_GRN),
+            c("1) Update from GitHub", BR_GRN),
             c(
-                "2) Downgrade (choose a published release)",
+                "2) Switch to a published release",
                 BR_YEL,
             ),
             c("3) Show git status", BR_CYN),
@@ -4080,8 +3910,6 @@ def update_menu():
         else:
             warn("Invalid option.")
             time.sleep(0.25)
-
-
 
 
 def _disable_remove_service(name: str):
@@ -4218,9 +4046,9 @@ def uninstall_menu():
                 err("Service removal requires sudo.")
                 pause()
                 continue
-            if confirm("Remove wg-panel.service and wg-panel-bot.service?", default_yes=True):
-                _disable_remove_service("wg-panel.service")
-                _disable_remove_service("wg-panel-bot.service")
+            if confirm("Remove panel, Telegram and background worker services?", default_yes=True):
+                for name in ("wg-reseller-watchdog.timer", "wg-reseller-watchdog.service", *reversed(_related_panel_services())):
+                    if _service_exists(name):_disable_remove_service(name)
                 ok("Services removed.")
             pause()
             continue
@@ -4243,9 +4071,9 @@ def uninstall_menu():
                 pause()
                 continue
 
-            if confirm("Remove wg-panel.service and wg-panel-bot.service?", default_yes=True):
-                _disable_remove_service("wg-panel.service")
-                _disable_remove_service("wg-panel-bot.service")
+            if confirm("Remove panel, Telegram and background worker services?", default_yes=True):
+                for name in ("wg-reseller-watchdog.timer", "wg-reseller-watchdog.service", *reversed(_related_panel_services())):
+                    if _service_exists(name):_disable_remove_service(name)
 
             if confirm("Also clean WireGuard (bring down interfaces + disable units)?", False):
                 delete_confs = confirm("Also delete /etc/wireguard/*.conf files?", False)
@@ -4324,8 +4152,8 @@ def _wgpanel_command(root: Path):
     wrapper = f"""#!/usr/bin/env bash
 set -euo pipefail
 
-VENV_PY="{vpy}"
-SCRIPT="{script_path}"
+VENV_PY={shlex.quote(str(vpy))}
+SCRIPT={shlex.quote(str(script_path))}
 
 if [ -x "$VENV_PY" ]; then
   exec "$VENV_PY" "$SCRIPT" "$@"
@@ -4347,24 +4175,67 @@ exit 127
         return
 
 
+def action_menu(items: List[Tuple[str, str, str]]) -> str:
+    width = ui()
+    columns = 2 if width >= 70 else 1
+    gap = 2
+    cell = (width - gap) // 2 if columns == 2 else width
+    def tile(item):
+        key, title, description = item
+        inner = cell - 4
+        rows = [c("╭" + "─" * (cell - 2) + "╮", UI_LINE)]
+        def row(value):
+            pad = " " * max(0, inner - len(_ansi(value)))
+            value = value.replace(RESET, RESET + UI_SURFACE) if RESET else value
+            return c("│", UI_LINE) + UI_SURFACE + " " + value + pad + " " + RESET + c("│", UI_LINE)
+        titles = _wrap(title, inner - 5)
+        rows.append(row(c(f" {key} ", UI_KEY + BR_CYN + BOLD) + "  " + c(titles[0], BR_WHT + BOLD)))
+        for continuation in titles[1:]:
+            rows.append(row("     " + c(continuation, BR_WHT)))
+        for line in _wrap(description, inner):
+            rows.append(row(c(line, DIM)))
+        rows.append(c("╰" + "─" * (cell - 2) + "╯", UI_LINE))
+        return rows
+    out = []
+    for start in range(0, len(items), columns):
+        cells = [tile(item) for item in items[start:start + columns]]
+        height = max(map(len, cells))
+        for index in range(height):
+            out.append((" " * gap).join(rows[index] if index < len(rows) else " " * cell for rows in cells))
+    out.append("  " + c(" 0 ", UI_KEY + BR_CYN) + c("  Exit", DIM))
+    return "\n".join(out)
+
+
+def postgres_manager_menu():
+    manager = get_project() / 'wg-postgres.py'
+    if not manager.is_file():
+        err('PostgreSQL Manager script is missing. Update your WG Panel files first.')
+        pause()
+        return
+    try:
+        subprocess.run([sys.executable, str(manager)], cwd=str(manager.parent), check=False)
+    except OSError as exc:
+        err(f'Could not launch PostgreSQL Manager: {type(exc).__name__}')
+        pause()
+
+
 def main_menu():
     while True:
         root = get_project()
         clear()
-        print(c("WG Panel Control", BR_WHT + BOLD) + "  " + c("Azumi67/WG_Panel", BR_CYN))
-        print(hr("═", BR_CYN))
+        header("WG Panel", "Server management")
         print(render_status(root))
         print()
 
-        items = [
-        c("1) Status & Information", BR_BLU),
-        c("2) Install / Setup", BR_GRN),
-        c("3) Edit", BR_CYN),
-        c("4) Update", BR_YEL),
-        c("5) Uninstall", BR_RED),
-        c("0) Exit", DIM),
-        ]
-        print(box("Main Menu", items, border_color=BR_YEL))
+        print(action_menu([
+            ("1", "Status & diagnostics", "Services, network and logs"),
+            ("2", "Install & setup", "Guided server installation"),
+            ("3", "Configuration", "Panel, runtime and Telegram"),
+            ("4", "Updates & releases", "GitHub updates and recovery"),
+            ("5", "Uninstall", "Remove panel components"),
+            ("6", "PostgreSQL Manager", "Install, migrate, status and logs"),
+        ]))
+        print()
 
         ch = _menu_input()
         if ch == "1":
@@ -4377,6 +4248,8 @@ def main_menu():
             update_menu()
         elif ch == "5":
             uninstall_menu()
+        elif ch == "6":
+            postgres_manager_menu()
         elif ch == "0":
             clear()
             info("Exiting..")
@@ -4384,7 +4257,6 @@ def main_menu():
         else:
             warn("Wrong option")
             time.sleep(0.25)
-
 
 
 if __name__ == "__main__":

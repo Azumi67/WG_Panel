@@ -1,0 +1,20 @@
+<dialog class="rp-dialog rp-plan-dialog" id="create-plan" aria-labelledby="create-plan-title" {% if request.endpoint=='reseller.plan_save' %}data-auto-open{% endif %}>
+  <header class="rp-dialog-head">
+    <span class="rp-dialog-icon"><i class="fas fa-layer-group" aria-hidden="true"></i></span>
+    <div><h2 id="create-plan-title">Create a plan</h2><p>Pricing, allowances and reseller capabilities</p></div>
+    <button type="button" class="rp-btn rp-icon" data-dialog-close aria-label="Close">×</button>
+  </header>
+  <div class="rp-dialog-body">
+    <form id="new-plan-form" class="rp-plan-editor" method="post" action="{{url_for('reseller.plan_save')}}">
+      {{csrf()}}
+      {% include 'reseller/plan_fields.html' %}
+    </form>
+  </div>
+  <div class="rp-plan-footer">
+        <div data-plan-status role="status" aria-live="polite" class="rp-plan-status"></div>
+        <div class="rp-plan-footer-actions">
+          <button type="button" class="rp-btn" data-dialog-close>Cancel</button>
+          <button type="submit" form="new-plan-form" class="rp-btn primary" {{'disabled' if not interfaces else ''}}><i class="fas fa-plus" aria-hidden="true"></i> Create plan</button>
+        </div>
+      </div>
+</dialog>

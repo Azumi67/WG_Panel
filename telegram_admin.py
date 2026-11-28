@@ -79,15 +79,14 @@ def _api(g, method, path, payload=None, timeout=25):
 
 def _clear_client_input_state(context):
     for key in (
-        "v58_client_search",
-        "v58_client_create",
-        "v58_client_edit",
+        "client_workflow_search",
+        "client_workflow_create",
+        "client_workflow_edit",
     ):
         context.user_data.pop(key, None)
 
 
 def _subscription_profiles(g):
-    """Load the same subscription profiles used by the web panel"""
     try:
         listing = _api(g, "GET", "/api/subscription_profiles", timeout=15)
         if not isinstance(listing, dict) or listing.get("ok") is False:
@@ -203,14 +202,13 @@ def _get_response(g, url, timeout=30):
 
 
 async def _send_subscription_bundle(g, update, sid, link_id):
-    """Send config and QR as two complete cards, each with content and short link."""
-    row = client(g, sid)
+    row = (await asyncio.to_thread(client, g, sid))
     loc = next((item for item in (row.get("locations") or [])
                 if int(item.get("link_id") or 0) == int(link_id)), None)
     if not loc:
         raise RuntimeError("Config is not attached to this client")
 
-    urls = _public_location_urls(g, sid, link_id)
+    urls = (await asyncio.to_thread(_public_location_urls, g, sid, link_id))
     if not urls.get("config"):
         raise RuntimeError("Subscription public token is unavailable")
 
@@ -387,7 +385,6 @@ def time_text(g, row):
 
 
 def absolute_time(g, value, fallback="—"):
-    """Format an API UTC instant through Telegram's panel-timezone helper."""
     formatter = g.get("tg_time")
     if not callable(formatter):
         return fallback if value in (None, "", "—") else str(value)
@@ -395,7 +392,6 @@ def absolute_time(g, value, fallback="—"):
 
 
 def _limit_bytes(row):
-    """Accept both current and legacy subscription API field names."""
     raw = row.get("limit_bytes")
     if raw in (None, ""):
         raw = row.get("data_limit_bytes")
@@ -727,7 +723,6 @@ def render_catalog(g,sid,page=1):
     return "\n".join(lines),InlineKeyboardMarkup(rows)
 
 
-
 def _subscription_create_locations(g):
     data = _api(g, "GET", "/api/subscriptions/locations", timeout=30)
     rows = []
@@ -780,10 +775,10 @@ def _target_payload(item, kind, index):
 
 
 async def _show_subscription_source_menu(g, update, context):
-    create = context.user_data.get("v58_client_create") or {}
+    create = context.user_data.get("client_workflow_create") or {}
     create["stage"] = "source"
     create.setdefault("selected_targets", [])
-    context.user_data["v58_client_create"] = create
+    context.user_data["client_workflow_create"] = create
     await g["edit_send"](
         update,
         "⌘ <b>Configs for this client</b>\n\nChoose where the client should work. Optional WireGuard values can be changed before selecting configs.",
@@ -798,7 +793,7 @@ async def _show_subscription_source_menu(g, update, context):
 
 
 async def _show_subscription_target_picker(g, update, context, kind):
-    create = context.user_data.get("v58_client_create") or {}
+    create = context.user_data.get("client_workflow_create") or {}
     items = await asyncio.to_thread(
         _subscription_create_locations if kind == "new" else _subscription_existing_configs,
         g,
@@ -807,7 +802,7 @@ async def _show_subscription_target_picker(g, update, context, kind):
     create["target_items"] = items
     create.setdefault("selected_indexes", [])
     create["selected_indexes"] = []
-    context.user_data["v58_client_create"] = create
+    context.user_data["client_workflow_create"] = create
     rows = []
     for idx, item in enumerate(items[:70]):
         rows.append([InlineKeyboardButton(
@@ -824,7 +819,7 @@ async def _show_subscription_target_picker(g, update, context, kind):
 
 
 async def _refresh_subscription_target_picker(g, update, context):
-    create = context.user_data.get("v58_client_create") or {}
+    create = context.user_data.get("client_workflow_create") or {}
     kind = create.get("target_kind") or "new"
     items = create.get("target_items") or []
     chosen = {int(x) for x in (create.get("selected_indexes") or [])}
@@ -1038,7 +1033,7 @@ async def handle_callback(g, update, context):
         return True
     if data == "client:search":
         _clear_client_input_state(context)
-        context.user_data["v58_client_search"] = True
+        context.user_data["client_workflow_search"] = True
         await edit(
             update,
             (
@@ -1057,7 +1052,7 @@ async def handle_callback(g, update, context):
 
     if data == "client:new":
         _clear_client_input_state(context)
-        profiles = _subscription_profiles(g)
+        profiles = (await asyncio.to_thread(_subscription_profiles, g))
         rows = [[InlineKeyboardButton("⊕ Enter client information", callback_data="client:new:start")]]
         if profiles:
             rows.append([InlineKeyboardButton("⌘ Use subscription profile", callback_data="client:new:profile")])
@@ -1071,7 +1066,7 @@ async def handle_callback(g, update, context):
 
     if data == "client:new:start":
         fields = CLIENT_INFO_FIELDS
-        context.user_data["v58_client_create"] = {
+        context.user_data["client_workflow_create"] = {
             "step": 0,
             "data": {
                 "start_on_first_use": True,
@@ -1097,7 +1092,7 @@ async def handle_callback(g, update, context):
         return True
 
     if data == "client:new:profile":
-        profiles = _subscription_profiles(g)
+        profiles = (await asyncio.to_thread(_subscription_profiles, g))
         if not profiles:
             await edit(update, "No subscription-compatible profiles were found.", InlineKeyboardMarkup([[InlineKeyboardButton("◀ Back", callback_data="client:new")]]))
             return True
@@ -1108,7 +1103,7 @@ async def handle_callback(g, update, context):
 
     if data.startswith("client:new:useprofile:"):
         name = data.split(":", 3)[-1]
-        values = dict(dict(_subscription_profiles(g)).get(name) or {})
+        values = dict(dict((await asyncio.to_thread(_subscription_profiles, g))).get(name) or {})
         if not values:
             await edit(update, "Profile not found.", InlineKeyboardMarkup([[InlineKeyboardButton("◀ Back", callback_data="client:new")]]))
             return True
@@ -1120,7 +1115,7 @@ async def handle_callback(g, update, context):
         if not missing:
             missing = [("name", "Client name", "")]
             prepared.pop("name", None)
-        context.user_data["v58_client_create"] = {
+        context.user_data["client_workflow_create"] = {
             "step": 0,
             "data": prepared,
             "mode": "profile",
@@ -1137,7 +1132,7 @@ async def handle_callback(g, update, context):
         return True
 
     if data.startswith("client:create:set:") or data == "client:create:default":
-        create = context.user_data.get("v58_client_create")
+        create = context.user_data.get("client_workflow_create")
         if not create:
             await edit(update, "Creation session expired.", InlineKeyboardMarkup([[InlineKeyboardButton("◀ Clients", callback_data="client:list:1")]]))
             return True
@@ -1158,7 +1153,7 @@ async def handle_callback(g, update, context):
             await edit(update, f"⚠️ Invalid value: <code>{_html(g, exc)}</code>", _client_create_keyboard(key, default))
             return True
         create["step"] = step + 1
-        context.user_data["v58_client_create"] = create
+        context.user_data["client_workflow_create"] = create
         if create["step"] >= len(fields):
             await _show_subscription_source_menu(g, update, context)
             return True
@@ -1189,14 +1184,14 @@ async def handle_callback(g, update, context):
         return True
 
     if data == "client:create:advanced":
-        create = context.user_data.get("v58_client_create")
+        create = context.user_data.get("client_workflow_create")
         if not create:
             await edit(update, "Creation session expired.", InlineKeyboardMarkup([[InlineKeyboardButton("◀ Clients", callback_data="client:list:1")]]))
             return True
         create["step"] = 0
         create["fields"] = ADVANCED_WG_FIELDS
         create["stage"] = "advanced"
-        context.user_data["v58_client_create"] = create
+        context.user_data["client_workflow_create"] = create
         key, prompt, default = ADVANCED_WG_FIELDS[0]
         await edit(
             update,
@@ -1216,7 +1211,7 @@ async def handle_callback(g, update, context):
 
     if data.startswith("client:create:target:"):
         _, _, _, kind, idx_s = data.split(":", 4)
-        create = context.user_data.get("v58_client_create") or {}
+        create = context.user_data.get("client_workflow_create") or {}
         idx = int(idx_s)
         selected = {int(x) for x in (create.get("selected_indexes") or [])}
         if idx in selected:
@@ -1225,12 +1220,12 @@ async def handle_callback(g, update, context):
             selected.add(idx)
         create["selected_indexes"] = sorted(selected)
         create["target_kind"] = kind
-        context.user_data["v58_client_create"] = create
+        context.user_data["client_workflow_create"] = create
         await _refresh_subscription_target_picker(g, update, context)
         return True
 
     if data == "client:create:targets:done":
-        create = context.user_data.get("v58_client_create") or {}
+        create = context.user_data.get("client_workflow_create") or {}
         items = create.get("target_items") or []
         kind = create.get("target_kind") or "new"
         selected = [int(x) for x in (create.get("selected_indexes") or [])]
@@ -1242,15 +1237,15 @@ async def handle_callback(g, update, context):
             for pos, idx in enumerate(selected)
             if 0 <= idx < len(items)
         ]
-        context.user_data["v58_client_create"] = create
+        context.user_data["client_workflow_create"] = create
         await _submit_client_create(g, update, context)
         return True
 
     if data == "client:create:retry":
-        create = context.user_data.get("v58_client_create")
+        create = context.user_data.get("client_workflow_create")
         if create:
             create["submitting"] = False
-            context.user_data["v58_client_create"] = create
+            context.user_data["client_workflow_create"] = create
             await _submit_client_create(g, update, context)
         return True
 
@@ -1267,8 +1262,8 @@ async def handle_callback(g, update, context):
     if data.startswith("client:edit:"):
         text,kb=await asyncio.to_thread(render_edit,g,int(data.rsplit(":",1)[-1])); await edit(update,text,kb); return True
     if data.startswith("client:field:"):
-        _,_,sid,key=data.split(":",3); context.user_data["v58_client_edit"]={"sid":int(sid),"key":key}; label = next((lbl for k, lbl in EDIT_FIELDS if k == key), key.replace("_", " ").title())
-        current = client(g, int(sid)).get(key)
+        _,_,sid,key=data.split(":",3); context.user_data["client_workflow_edit"]={"sid":int(sid),"key":key}; label = next((lbl for k, lbl in EDIT_FIELDS if k == key), key.replace("_", " ").title())
+        current = (await asyncio.to_thread(client, g, int(sid))).get(key)
         if key == "time_limit_days":
             current = _duration_text(current)
         await edit(update, f"✦ <b>Edit {_html(g, label)}</b>\n\nCurrent: <code>{_html(g, current if current not in (None, '') else '—')}</code>\n\nSend the new value. For active time, decimal days are accepted (for example <code>1.5</code> = 1 day 12 hours). Use <code>-</code> to clear optional text.", InlineKeyboardMarkup([[InlineKeyboardButton("◀ Cancel", callback_data=f"client:edit:{sid}")]])); return True
@@ -1373,11 +1368,11 @@ async def handle_callback(g, update, context):
 
 
 async def _submit_client_create(g, update, context):
-    create = context.user_data.get("v58_client_create")
+    create = context.user_data.get("client_workflow_create")
     if not create or create.get("submitting"):
         return True
     create["submitting"] = True
-    context.user_data["v58_client_create"] = create
+    context.user_data["client_workflow_create"] = create
     payload = dict(create.get("data") or {})
     payload["targets"] = list(create.get("selected_targets") or [])
     days = float(payload.pop("time_limit_days", 0) or 0)
@@ -1387,7 +1382,7 @@ async def _submit_client_create(g, update, context):
     result = await asyncio.to_thread(_api, g, "POST", "/api/subscriptions", payload, 45)
     if not result.get("ok"):
         create["submitting"] = False
-        context.user_data["v58_client_create"] = create
+        context.user_data["client_workflow_create"] = create
         await g["send_text"](
             update,
             "❌ <b>Create failed</b>\n\n<code>" + _html(g, _err(result)) + "</code>",
@@ -1397,7 +1392,7 @@ async def _submit_client_create(g, update, context):
             ]),
         )
         return True
-    context.user_data.pop("v58_client_create", None)
+    context.user_data.pop("client_workflow_create", None)
     sid = int((result.get("subscription") or {}).get("id") or result.get("id") or 0)
     if not sid:
         await g["send_text"](update, "❌ Client was created but the API did not return its ID.", kb=InlineKeyboardMarkup([[InlineKeyboardButton("◀ Clients", callback_data="client:list:1")]]))
@@ -1415,17 +1410,17 @@ async def _submit_client_create(g, update, context):
 
 async def handle_text(g, update, context):
     text=(update.message.text or "").strip()
-    if context.user_data.get("v58_client_search"):
-        context.user_data.pop("v58_client_search",None); query="" if text=="-" else text; out,kb=await asyncio.to_thread(render_list,g,1,query); await g["send_text"](update,out,kb=kb); return True
-    edit_state=context.user_data.get("v58_client_edit")
+    if context.user_data.get("client_workflow_search"):
+        context.user_data.pop("client_workflow_search",None); query="" if text=="-" else text; out,kb=await asyncio.to_thread(render_list,g,1,query); await g["send_text"](update,out,kb=kb); return True
+    edit_state=context.user_data.get("client_workflow_edit")
     if edit_state:
         sid=int(edit_state["sid"]);key=edit_state["key"]
         try: value=_value(key,text)
         except Exception as exc: await g["send_text"](update,f"⚠️ Invalid value: {_html(g,exc)}",kb=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Edit",callback_data=f"client:edit:{sid}")]])); return True
         result=await asyncio.to_thread(_api,g,"PUT",f"/api/subscriptions/{sid}",{key:value},35)
         if not result.get("ok"): await g["send_text"](update,f"❌ Save failed.\n<code>{_html(g,_err(result))}</code>",kb=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Edit",callback_data=f"client:edit:{sid}")]])); return True
-        context.user_data.pop("v58_client_edit",None); out,kb=await asyncio.to_thread(render_edit,g,sid); await g["send_text"](update,"✅ Saved.\n\n"+out,kb=kb); return True
-    create = context.user_data.get("v58_client_create")
+        context.user_data.pop("client_workflow_edit",None); out,kb=await asyncio.to_thread(render_edit,g,sid); await g["send_text"](update,"✅ Saved.\n\n"+out,kb=kb); return True
+    create = context.user_data.get("client_workflow_create")
 
     if create:
         if create.get("submitting"):
@@ -1439,7 +1434,7 @@ async def handle_text(g, update, context):
         step = int(create.get("step") or 0)
 
         if step < 0 or step >= len(fields):
-            context.user_data.pop("v58_client_create", None)
+            context.user_data.pop("client_workflow_create", None)
             await g["send_text"](
                 update,
                 "⚠️ The create session was invalid and has been reset.",
@@ -1474,7 +1469,7 @@ async def handle_text(g, update, context):
 
         step += 1
         create["step"] = step
-        context.user_data["v58_client_create"] = create
+        context.user_data["client_workflow_create"] = create
 
         if step < len(fields):
             key, prompt, default = fields[step]

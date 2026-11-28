@@ -62,7 +62,7 @@ html[data-design][data-theme] .api-docs .hero-grid{display:block!important;paddi
 html[data-design][data-theme] .api-docs .api-layout{grid-template-columns:210px minmax(0,1fr)!important;gap:24px!important}
 html[data-design][data-theme] .api-docs .api-side{display:block!important;top:82px!important;padding:8px!important;max-height:calc(100dvh - 100px)!important;border-radius:10px!important}
 html[data-design][data-theme] .api-docs .api-side-links{display:block!important;max-height:calc(100dvh - 190px)!important}
-html[data-design][data-theme] .api-docs .api-side a{display:grid!important;grid-template-columns:22px minmax(0,1fr) auto!important;gap:8px!important;font-size:11px!important;padding:8px!important;transform:none!important}
+html[data-design][data-theme] .api-docs .api-side a{display:flex!important;align-items:center!important;gap:8px!important;font-size:12px!important;padding:8px!important;transform:none!important}
 html[data-design][data-theme] .api-docs .api-nav-text{overflow:visible!important;white-space:normal!important;min-width:0}.api-docs .api-nav-icon{background:transparent!important;width:22px!important;height:22px!important;box-shadow:none!important}
 html[data-design][data-theme] .api-docs .api-side b{width:auto!important;min-width:24px!important;background:var(--ws-raised)!important;color:var(--ws-text)!important;border-color:var(--ws-line)!important}
 html[data-design][data-theme] .api-docs .api-side a.active{background:var(--ws-soft)!important;color:var(--ws-accent)!important}

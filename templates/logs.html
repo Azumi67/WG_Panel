@@ -76,8 +76,7 @@
         <div>
           <span class="logs-section-label">Streams</span>
           <p>
-            Switch between panel activity, bot runtime, admin actions, and
-            interface events.
+            Filter application logs by service, or inspect Telegram and interface events.
           </p>
         </div>
         <div
@@ -90,7 +89,13 @@
             <i class="fas fa-cubes"></i><span>Application</span>
           </button>
           <button class="tab" data-source="tg_app" type="button">
-            <i class="fab fa-telegram"></i><span>Telegram bot</span>
+            <i class="fab fa-telegram"></i><span>Admin bot</span>
+          </button>
+          <button class="tab" data-source="tg_reseller" type="button">
+            <i class="fas fa-robot"></i><span>Reseller bots</span>
+          </button>
+          <button class="tab" data-source="tg_shop" type="button">
+            <i class="fas fa-store"></i><span>Plan Shop bot</span>
           </button>
           <button class="tab" data-source="tg_admin" type="button">
             <i class="fas fa-user-shield"></i><span>Admin actions</span>
@@ -123,6 +128,7 @@
       </div>
 
       <div class="logs-querybar">
+        <label id="app-service-picker" class="logs-filter-select" for="app-service"><i class="fas fa-server"></i><select id="app-service" class="input sm" aria-label="Application service"><option value="">All services</option><option value="panel">Web panel</option><option value="workspace">Reseller worker</option><option value="shop">Plan Shop worker</option><option value="provision">Provisioning</option><option value="monitor">Usage monitor</option><option value="combined">Legacy combined worker</option></select></label>
         <label class="logs-filter-select" for="level"
           ><i class="fas fa-signal"></i
           ><select id="level" class="input sm">
@@ -146,30 +152,33 @@
           <button
             class="btn secondary btn-icon"
             id="refresh"
+            aria-label="Refresh log entries"
             type="button"
             title="Refresh"
           >
-            <i class="fas fa-rotate-right"></i>
+            <i class="fas fa-rotate-right" aria-hidden="true"></i>
           </button>
           <button
             class="btn danger btn-icon"
             id="clear"
+            aria-label="Clear current log"
             type="button"
             title="Clear current log"
           >
-            <i class="fas fa-trash-can"></i>
+            <i class="fas fa-trash-can" aria-hidden="true"></i>
           </button>
           <div class="logs-export">
             <button
               class="btn secondary btn-icon"
               type="button"
               id="logs-export-btn"
+              aria-label="Export logs"
               aria-haspopup="true"
               aria-expanded="false"
               title="Export"
             >
-              <i class="fas fa-download"></i
-              ><i class="fas fa-angle-down caret"></i>
+              <i class="fas fa-download" aria-hidden="true"></i
+              ><i class="fas fa-angle-down caret" aria-hidden="true"></i>
             </button>
             <div class="logs-export-menu" id="logs-export-menu" hidden>
               <button type="button" data-format="csv">
@@ -497,11 +506,11 @@
 </div>
 
 <script>
-  window.showToast = (m, t = "info", s = false) => toastSafe(m, t, s);
-  window.toastInfo = (m, s = false) => toastSafe(m, "info", s);
-  window.toastWarn = (m, s = false) => toastSafe(m, "warn", s);
-  window.toastError = (m, s = false) => toastSafe(m, "error", s);
-  window.toastSuccess = (m, s = false) => toastSafe(m, "success", s);
+  window.showToast = (m, t = "info", s = false) => window.toastSafe(m, t, s);
+  window.toastInfo = (m, s = false) => window.toastSafe(m, "info", s);
+  window.toastWarn = (m, s = false) => window.toastSafe(m, "warn", s);
+  window.toastError = (m, s = false) => window.toastSafe(m, "error", s);
+  window.toastSuccess = (m, s = false) => window.toastSafe(m, "success", s);
 </script>
 <script defer src="{{ url_for('static', filename='js/logs.js') }}"></script>
 {% endblock %}

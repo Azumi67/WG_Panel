@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block title %}Telegram · WG Panel{% endblock %}
+{% block head_extras %}<script defer src="{{url_for('static',filename='js/workspace-features.js')}}"></script><script defer src="{{url_for('static',filename='js/api_docs.js')}}"></script>{% if role=='workspace' and not administrator %}<link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller.css')}}"><link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-desk.css')}}">{% endif %}{% endblock %}
+{% block content %}
+<div class="{% if role=='workspace' and not administrator %}rp-wrap rp-desk rp-telegram-page{% else %}wg-feature-page{% endif %} tg-workspace">
+<header class="tg-page-heading"><div><h1>Telegram</h1><p>Manage bot connections and external applications.</p></div><span class="tg-app-status">{{'Access disabled' if role=='workspace' and not (policy|default({})).get('enabled',false) else ('Key active' if connected or named_connected|default(false) else 'No key issued')}}</span></header>
+{% if role=='workspace' and not administrator %}{% with active='applications', tab_links=true, telegram_grants=bot_tab_grants|default([]), bot_available=bot_tab_available|default(false) %}{% include 'reseller/telegram_tabs.html' %}{% endwith %}{% elif role=='shop' %}<nav class="tg-section-tabs" aria-label="Telegram sections"><a href="{{url_for('reseller.admin_page',tab='bot')}}"><i class="fas fa-robot"></i> Bot settings</a><span aria-current="page"><i class="fas fa-code"></i> Applications</span></nav>{% else %}{% with active='applications', tab_links=true %}{% include 'telegram_tabs.html' %}{% endwith %}{% endif %}
+{% include 'reseller/application_content.html' %}
+</div>
+{% endblock %}

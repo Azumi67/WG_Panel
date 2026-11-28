@@ -1,0 +1,9 @@
+{% set a=row.account %}
+<article class="rp-account rp-record" data-desk-row>
+<div class="rp-record-person"><span class="rp-avatar" aria-hidden="true">{{a.username[:2]|upper}}</span><div><h2>{{a.username}} <span class="rp-status {{'ready' if a.state=='active' else 'stale'}}">{{a.state|title}}</span></h2><small>#{{a.id}}{% if a.telegram_id %} · <i class="fab fa-telegram" aria-hidden="true"></i> {{a.telegram_id}}{% endif %}</small></div></div>
+<div class="rp-record-usage"><small>Traffic</small><strong>{{'%.2f'|format(a.used_bytes/1073741824)}} <span>/ {{a.spec.traffic_gib}} GiB</span></strong><progress value="{{a.used_bytes}}" max="{{a.spec.traffic_gib*1073741824}}" aria-label="Traffic used"></progress></div>
+<div class="rp-record-stat"><small>Peers</small><strong>{{row.peers}} <span>/ {{a.spec.peers}}</span></strong></div>
+<div class="rp-record-stat"><small>Subscriptions</small><strong>{{row.subscriptions}} <span>/ {{a.spec.subscriptions}}</span></strong></div>
+<div class="rp-record-expiry"><small>Expires</small>{{a.expires_at|rp_time}}</div>
+<div class="rp-record-actions"><button type="button" class="rp-btn" data-dialog="account-{{a.id}}"><i class="fas fa-sliders"></i><span>Manage</span></button></div>
+</article>

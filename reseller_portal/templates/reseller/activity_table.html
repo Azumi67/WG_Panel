@@ -1,0 +1,1 @@
+<div class="rp-table-wrap"><table class="rp-table"><thead><tr><th>When</th><th>Action</th><th>Customer / details</th></tr></thead><tbody>{% for event in events %}<tr><td>{{event.at|rp_time}}</td><td>{{event.action|replace('_',' ')|title}}</td><td>{{event.details}}</td></tr>{% else %}<tr><td colspan="3" class="rp-empty">No activity yet.</td></tr>{% endfor %}</tbody></table></div>

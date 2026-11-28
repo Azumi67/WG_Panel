@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% from 'reseller/permissions.html' import permissions_editor %}
+{% from 'reseller/components.html' import csrf,search,pagination with context %}
+{% block title %}Resellers · WG Panel{% endblock %}
+{% block head_extras %}<link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller.css')}}"><link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-desk.css')}}">{% endblock %}
+{% block content %}<div class="rp-wrap rp-desk" data-desk-tab="{{tab}}">
+<header class="rp-header rp-page-title"><div><h1>Resellers</h1><p class="rp-muted">Accounts, plans & activity</p></div>{% if tab in ('accounts','plans') %}<button type="button" class="rp-btn primary" data-dialog="{{'create-account' if tab=='accounts' else 'create-plan'}}"><i class="fas fa-plus"></i> {{'New reseller' if tab=='accounts' else 'New plan'}}</button>{% endif %}</header>
+{% for category,msg in get_flashed_messages(with_categories=true) %}<div class="rp-alert" role="status">{{msg}}</div>{% endfor %}
+{% if not configured and tab!='bot' %}<div class="rp-setup-banner"><b>Complete reseller setup</b><a class="rp-btn" href="{{url_for('reseller.admin_page',tab='bot')}}">Open settings</a></div>{% endif %}
+<nav class="rp-tabs" aria-label="Reseller sections">{% for key,label,icon in [('accounts','Accounts','users'),('plans','Plans','layer-group'),('orders','Purchases','receipt'),('bot','Plan shop bot','paper-plane'),('audit','Audit trail','clock-rotate-left')] %}<a class="{{'active' if tab==key}}" {% if tab==key %}aria-current="page"{% endif %} href="{{url_for('reseller.admin_page',tab=key)}}"><i class="fas fa-{{icon}}"></i>{{label}}</a>{% endfor %}</nav>
+{% if tab=='accounts' %}
+<div class="rp-summary-strip" data-rp-health-url="{{url_for('reseller.health_status')}}"><span><b>{{account_count}}</b> resellers</span><a href="{{url_for('reseller.admin_page',tab='orders',status='review')}}"><b>{{pending_count}}</b> awaiting review</a>{% for key,label in [('monitor','Monitor'),('provision','Provisioning'),('worker','Workspace bots')] %}<span class="rp-status {{health[key].state}}" title="{{health[key].at or 'No heartbeat'}}" data-rp-health="{{key}}" data-label="{{label}}">{{label}} · {{health[key].label}}</span>{% endfor %}<div data-reseller-visibility></div></div>
+{% if settings.enforcement_error %}<div class="rp-alert" role="alert"><i class="fas fa-triangle-exclamation" aria-hidden="true"></i> <strong>Quota enforcement warning:</strong> {{settings.enforcement_error}} Check the usage monitor and node connectivity before approving new capacity.</div>{% endif %}
+<details class="rp-account-policy"><summary><span class="rp-account-policy-icon"><i class="fas fa-lock" aria-hidden="true"></i></span><span><strong>Account password policy</strong><small>Minimum password length for new and reset reseller credentials</small></span><span class="rp-policy-current">{{reseller_password_min}} characters minimum</span><i class="fas fa-chevron-down rp-policy-chevron" aria-hidden="true"></i></summary><div class="rp-account-policy-body"><form method="post" action="{{url_for('reseller.password_policy')}}">{{csrf()}}<label class="rp-field" for="rp-password-policy-value">Minimum password length<input id="rp-password-policy-value" class="rp-input" type="number" name="password_min_length" value="{{reseller_password_min}}" min="8" max="64" required></label><p class="rp-muted">Applies to newly created passwords and password resets. Existing passwords are not altered.</p><button class="rp-btn primary">Save password policy</button></form></div></details>
+{{search(tab,q,status,pager)}}
+<div class="rp-record-list">{% for row in accounts %}{% include 'reseller/account_row.html' %}{% else %}<div class="rp-empty">{{'No matching accounts.' if q or status else 'No reseller accounts yet.'}}</div>{% endfor %}</div>
+{{pagination(pager,tab,q,status)}}{% include 'reseller/create_account.html' %}
+{% elif tab=='plans' %}
+{{search(tab,q,status,pager)}}
+<div class="rp-record-list">{% for p in plans %}{% include 'reseller/plan_row.html' %}
+{% else %}<div class="rp-empty">{{'No matching plans.' if q or status else 'No plans yet.'}}</div>{% endfor %}</div>
+{{pagination(pager,tab,q,status)}}{% include 'reseller/create_plan.html' %}
+{% elif tab=='orders' %}
+{% if (request.args.get('order')|int) %}<a class="rp-btn" href="{{url_for('reseller.admin_page',tab='orders',status='review')}}"><i class="fas fa-arrow-left" aria-hidden="true"></i> All receipts awaiting review</a>{% endif %}
+{{search(tab,q,status,pager)}}
+<div class="rp-record-list">{% for o in orders %}{% set buyer=order_accounts.get(o.account_id) if o.account_id else telegram_accounts.get(o.telegram_id) %}{% include 'reseller/order_row.html' %}{% else %}<div class="rp-empty">No purchases found.</div>{% endfor %}</div>
+{{pagination(pager,tab,q,status)}}
+{% elif tab=='bot' %}{% include 'reseller/sales_bot.html' %}
+{% elif tab=='audit' %}
+<div class="rp-summary-strip"><a class="rp-btn" href="{{url_for('reseller.admin_operations')}}"><i class="fas fa-list-check" aria-hidden="true"></i> Operation history &amp; recovery</a></div>
+{{search(tab,q,status,pager)}}<div class="rp-table-wrap rp-audit"><table class="rp-table"><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Details</th></tr></thead><tbody>{% for e in audit %}<tr data-desk-row><td>{{e.at|rp_time}}</td><td>{{e.actor|rp_actor}}</td><td><span class="rp-event">{{e.action|replace('_',' ')|title}}</span></td><td>{{e|rp_audit_details}}</td></tr>{% else %}<tr><td colspan="4" class="rp-empty">No activity found.</td></tr>{% endfor %}</tbody></table></div>{{pagination(pager,tab,q,status)}}
+{% endif %}</div>{% endblock %}
+{% block body_extras %}{% if tab=='bot' %}<script defer src="{{url_for('reseller.static',filename='js/bot-disconnect.js')}}"></script>{% endif %}<script defer src="{{url_for('reseller.static',filename='js/reseller-password.js')}}"></script><script defer src="{{url_for('reseller.static',filename='js/reseller.js')}}"></script><script defer src="{{url_for('reseller.static',filename='js/reseller-desk.js',v='20261127b')}}"></script>{% endblock %}

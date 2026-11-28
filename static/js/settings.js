@@ -2300,7 +2300,7 @@ document.getElementById('rt-restart')
 
   (function telegram() {
     function fmtLocal(iso) {
-      return _fmtLocal(iso);
+      return window.rpHumanDate ? window.rpHumanDate(iso) : _fmtLocal(iso);
     }
 
     function updateChips(state) {
@@ -2322,6 +2322,12 @@ document.getElementById('rt-restart')
       try {
         const s = await jfetch('/api/telegram/settings');
         $('#tg-enabled').checked = !!s.enabled;
+        if ($('#tg-notice-language')) {
+          const languageSelect = $('#tg-notice-language');
+          languageSelect.value = s.language === 'fa' ? 'fa' : 'en';
+          languageSelect.dataset.savedLanguage = languageSelect.value;
+          languageSelect.dispatchEvent(new Event('tg-language-render'));
+        }
         $('#tg-token').value = '';
         $('#tg-token').placeholder = s.has_token ? '•••••• (token already set)' : '123456:ABC-DEF...';
         const n = s.notify || {};
@@ -2338,6 +2344,7 @@ document.getElementById('rt-restart')
         setChecked('tg-n-iface-up',       n.iface_up);
         setChecked('tg-n-peer-expired',   n.peer_expired);
         setChecked('tg-n-peer-limit',     n.peer_limit);
+        setChecked('tg-n-reseller-purchase', n.reseller_purchase !== false);
         setChecked('tg-n-backup-success', n.backup_success);
         setChecked('tg-n-backup-failed',  n.backup_failed);
         setChecked('tg-n-update-success', n.update_success);
@@ -2357,6 +2364,7 @@ document.getElementById('rt-restart')
           iface_up:       !!$('#tg-n-iface-up')?.checked,
           peer_expired:   !!$('#tg-n-peer-expired')?.checked,
           peer_limit:     !!$('#tg-n-peer-limit')?.checked,
+          reseller_purchase: !!$('#tg-n-reseller-purchase')?.checked,
           backup_success: !!$('#tg-n-backup-success')?.checked,
           backup_failed:  !!$('#tg-n-backup-failed')?.checked,
           update_success: !!$('#tg-n-update-success')?.checked,
@@ -2383,9 +2391,10 @@ document.getElementById('rt-restart')
     async function clearToken() {
       if (!await confirmDialog({ title:'Clear bot token?', body:'Notifications will stop until you set a new token.', okText:'Clear' })) return;
       try {
-        await jfetch('/api/telegram/token', { method:'DELETE' });
+        const result=await jfetch('/api/telegram/token', { method:'DELETE' });
         $('#tg-token').placeholder = '123456:ABC-DEF...';
-        toast('Bot token cleared', 'success');
+        toast(result.warning||'Bot token cleared', result.warning?'warning':'success');
+        if(result.warning){const status=$('#tg-delivery-status');if(status)status.textContent=result.warning;}
         updateChips({ enabled: $('#tg-enabled').checked, has_token: false, admins: [] });
       } catch (e) { toast('Clear failed: ' + e.message, 'error'); }
     }
@@ -2546,6 +2555,56 @@ document.getElementById('rt-restart')
       toast('Failed to send test message: ' + (lastErr?.message || lastErr || 'error'), 'error');
     }
 
+    const languageSelect = $('#tg-notice-language');
+    const languageButtons = $$('.tg-language-options [data-tg-lang]');
+    const renderLanguage = () => {
+      const current = languageSelect?.value === 'fa' ? 'fa' : 'en';
+      languageButtons.forEach(button => {
+        button.setAttribute('aria-pressed', String(button.dataset.tgLang === current));
+        button.disabled = Boolean(languageSelect?.disabled);
+      });
+    };
+    languageSelect?.addEventListener('tg-language-render', renderLanguage);
+    languageButtons.forEach(button => button.addEventListener('click', () => {
+      if (!languageSelect || languageSelect.disabled || languageSelect.value === button.dataset.tgLang) return;
+      languageSelect.value = button.dataset.tgLang;
+      languageSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    }));
+    languageSelect?.addEventListener('change', async event => {
+      const select = event.currentTarget;
+      const previous = select.dataset.savedLanguage || 'en';
+      const chosen = select.value;
+      select.disabled = true;
+      renderLanguage();
+      try {
+        await jfetch('/api/telegram/settings', { method: 'POST', body: { language: chosen } });
+        select.dataset.savedLanguage = chosen;
+        toast('Notification language saved', 'success');
+      } catch (err) {
+        select.value = previous;
+        toast(err.message, 'error');
+      } finally {
+        select.disabled = false;
+        renderLanguage();
+      }
+    });
+    renderLanguage();
+    $('#tg-enabled')?.addEventListener('change', async event => {
+      const toggle=event.target, desired=toggle.checked, status=$('#tg-delivery-status');
+      toggle.disabled=true;
+      if(status)status.textContent='Saving…';
+      try {
+        await jfetch('/api/telegram/settings',{method:'POST',body:{enabled:desired}});
+        const chip=$('#tg-chip-enabled');
+        if(chip){chip.textContent='Notifications: '+(desired?'On':'Off');chip.className='chip '+(desired?'green':'gray');}
+        if(status)status.textContent='Saved';
+        toast('Telegram delivery '+(desired?'enabled':'disabled'),'success');
+      } catch(error) {
+        toggle.checked=!desired;
+        if(status)status.textContent='Could not confirm save. Refresh to check the current state.';
+        toast('Save failed: '+error.message,'error');
+      } finally {toggle.disabled=false;}
+    });
     $('#tg-save')?.addEventListener('click',   saveSettings);
     $('#tg-update-token')?.addEventListener('click', updateToken);
     $('#tg-clear-token')?.addEventListener('click',  clearToken);
@@ -2652,7 +2711,11 @@ document.getElementById('rt-restart')
         secSetup.style.display = ''; secSetup.classList.add('open');
         secret.value = '';
         qrBox.innerHTML = '<div class="muted">Generating…</div>';
-        const out = await jfetch('/api/admin/twofa_begin', { method:'POST' });
+        const field = $('#twofa-enable-password');
+        const password = field?.value || '';
+        if (!password) throw new Error('Enter your current password');
+        const out = await jfetch('/api/admin/twofa_begin', { method:'POST', body:{password} });
+        field.value = '';
         secret.value = out.secret || '';
         qrBox.innerHTML = '';
         if (window.QRCode && out.otp_uri) {
@@ -2673,8 +2736,10 @@ document.getElementById('rt-restart')
         if (!otp) throw new Error('Enter the 6-digit code');
         const out = await jfetch('/api/admin/twofa_confirm', { method:'POST', body:{ otp } });
         if (out.recovery_codes?.length) {
-
+          $('#twofa-recovery-codes').value = out.recovery_codes.join('\n');
+          $('#twofa-recovery-reveal').hidden = false;
         }
+        secret.value = ''; otpIn.value = ''; qrBox.textContent = '';
         await refreshAdmin();
         toast('Two-factor authentication enabled.', 'success');
       } catch (e2) {
@@ -2686,12 +2751,21 @@ document.getElementById('rt-restart')
     disableBtn?.addEventListener('click', async () => {
       if (!await confirmDialog({ title:'Disable 2FA', body:'Are you sure you want to disable two-factor authentication?', okText:'Disable' })) return;
       try {
-        await jfetch('/api/admin/twofa_disable', { method:'POST' });
+        const passwordField = $('#twofa-disable-password');
+        const otpField = $('#twofa-disable-code');
+        const password = passwordField?.value || '';
+        const otp = otpField?.value || '';
+        if (!password || !otp) throw new Error('Enter your password and authenticator or recovery code');
+        await jfetch('/api/admin/twofa_disable', { method:'POST', body:{password,otp} });
+        passwordField.value = ''; otpField.value = '';
         await refreshAdmin();
         toast('Two-factor authentication disabled.', 'success');
       } catch (e2) { toast(e2.message || 'Disable failed', 'error'); }
     });
 
+    $('#twofa-recovery-close')?.addEventListener('click', () => {
+      $('#twofa-recovery-codes').value = ''; $('#twofa-recovery-reveal').hidden = true;
+    });
     document.addEventListener('DOMContentLoaded', () => { refreshAdmin().catch(()=>{}); });
   })();
 

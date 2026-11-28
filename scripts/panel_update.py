@@ -1,20 +1,31 @@
 #!/usr/bin/env python3
 
 from __future__ import annotations
+import re
 import argparse, datetime as dt, json, os, shutil, subprocess, sys, tarfile, tempfile, time
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+try:
+    from . import deployment as deploy
+except ImportError:
+    import deployment as deploy
+
 EXCLUDES = {
-    ".git", "venv", "__pycache__", ".pytest_cache", ".mypy_cache",
+    ".git", "venv", ".venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache",
     "instance", ".env", "backups", "restore_snapshots",
 }
 
 def atm_json(path: Path, payload: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(prefix='.update-status-', dir=path.parent)
+    try:
+        with os.fdopen(fd,'w',encoding='utf-8') as stream:
+            json.dump(payload,stream,indent=2)
+            stream.flush();os.fsync(stream.fileno())
+        os.replace(tmp,path)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
 
 class Status:
     def __init__(self, path: Path):
@@ -71,7 +82,7 @@ def github_main_metadata(repo: str) -> dict:
                 first = (result.stdout or "").strip().splitlines()
                 if first:
                     candidate = first[0].split()[0].strip()
-                    if len(candidate) >= 40:
+                    if re.fullmatch(r"[0-9a-f]{40}", candidate):
                         revision = candidate
         except Exception:
             pass
@@ -107,6 +118,8 @@ def github_main_metadata(repo: str) -> dict:
         except Exception:
             pass
 
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise RuntimeError("Could not resolve the GitHub main commit")
     return {
         "revision": revision,
         "revision_short": revision[:8],
@@ -116,10 +129,15 @@ def github_main_metadata(repo: str) -> dict:
 
 
 def download_repo(repo: str, target: str, dest: Path) -> dict:
-    """Download main without making GitHub API availability a prerequisite."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        raise ValueError("Invalid GitHub repository")
+    if target != "main":
+        raise ValueError("Only the main update channel is supported")
+    metadata = github_main_metadata(repo)
+    revision = metadata["revision"]
     urls = [
-        f"https://codeload.github.com/{repo}/tar.gz/refs/heads/main",
-        f"https://github.com/{repo}/archive/refs/heads/main.tar.gz",
+        f"https://codeload.github.com/{repo}/tar.gz/{revision}",
+        f"https://github.com/{repo}/archive/{revision}.tar.gz",
     ]
 
     errors = []
@@ -140,7 +158,16 @@ def download_repo(repo: str, target: str, dest: Path) -> dict:
                     urlopen(request, timeout=120) as response,
                     open(dest, "wb") as output,
                 ):
-                    shutil.copyfileobj(response, output)
+                    size = 0
+                    deadline = time.monotonic() + 180
+                    while True:
+                        chunk = response.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        size += len(chunk)
+                        if size > 500 * 1024 * 1024 or time.monotonic() > deadline:
+                            raise RuntimeError("Archive download exceeded its limit")
+                        output.write(chunk)
 
                 if dest.stat().st_size < 1024:
                     raise RuntimeError(
@@ -148,10 +175,9 @@ def download_repo(repo: str, target: str, dest: Path) -> dict:
                     )
 
                 with tarfile.open(dest, "r:gz") as archive:
-                    if not archive.getmembers():
+                    if next(iter(archive), None) is None:
                         raise RuntimeError("Downloaded archive is empty.")
 
-                metadata = github_main_metadata(repo)
                 metadata["archive_url"] = url
                 return metadata
 
@@ -198,8 +224,8 @@ def write_update_source(
         pass
 
     payload = {
-        "source": "main",
-        "target": "main",
+        "source": metadata.get("source", "main"),
+        "target": metadata.get("target", "main"),
         "repo": metadata.get("repo"),
         "revision": metadata.get("revision"),
         "revision_short": metadata.get(
@@ -218,49 +244,109 @@ def write_update_source(
         payload,
     )
 
+def excluded_name(name):
+    return deploy.protected(name) or name in EXCLUDES
+
+
+def safe_extract(archive, destination, code_only=False):
+    destination = Path(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    total = 0
+    with tarfile.open(archive, "r:gz") as tar:
+        members = []
+        seen = set()
+        for member in tar:
+            rel = Path(member.name)
+            if (not rel.parts or rel.is_absolute() or ".." in rel.parts
+                    or "\\" in member.name or not (member.isdir() or member.isfile())
+                    or member.mode & 0o6000 or rel.as_posix() in seen
+                    or (code_only and any(excluded_name(part) for part in rel.parts))):
+                raise ValueError("Unsafe archive entry")
+            seen.add(rel.as_posix())
+            total += max(member.size, 0)
+            members.append(member)
+            if len(members) > 30000 or total > 800 * 1024 * 1024:
+                raise ValueError("Archive exceeds extraction limits")
+        for member in members:
+            path = destination / member.name
+            if not path.resolve().is_relative_to(destination.resolve()) or path.is_symlink():
+                raise ValueError("Unsafe extraction destination")
+            if member.isdir():
+                path.mkdir(parents=True, exist_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with tar.extractfile(member) as src, path.open("xb") as dst:
+                    shutil.copyfileobj(src, dst, 1024 * 1024)
+                path.chmod(0o755 if member.mode & 0o111 else 0o644)
+
+
 def backup_code(root: Path, backup_path: Path):
     backup_path.parent.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(backup_path, "w:gz") as tar:
-        for item in root.iterdir():
-            if item.name in EXCLUDES:
-                continue
-            tar.add(item, arcname=item.name, recursive=True)
+    def include(member):
+        parts = Path(member.name).parts
+        if (any(excluded_name(part) for part in parts) or
+                not (member.isfile() or member.isdir())):
+            return None
+        member.mode &= 0o777
+        return member
+    fd, temporary = tempfile.mkstemp(prefix=".snapshot-", dir=backup_path.parent)
+    os.close(fd)
+    try:
+        with tarfile.open(temporary, "w:gz") as tar:
+            for item in root.iterdir():
+                if not excluded_name(item.name):
+                    tar.add(item, arcname=item.name, recursive=True, filter=include)
+        os.chmod(temporary, 0o600)
+        scope = 'node' if backup_path.name.startswith('node_') else 'panel'
+        marker = root / 'instance' / f'update_source_{scope}.json'
+        try:
+            existing = json.loads(marker.read_text())
+        except (OSError, ValueError):
+            existing = {}
+        if not isinstance(existing, dict):
+            existing = {}
+        revision = str(existing.get('revision') or '')
+        if not revision and existing.get('source') != 'snapshot' and (root / '.git').is_dir():
+            try:
+                revision = run(['git', 'rev-parse', 'HEAD'], cwd=root, timeout=5).stdout.strip()
+            except Exception:
+                pass
+        metadata = {'source': 'snapshot', 'revision': revision if re.fullmatch(r'[0-9a-fA-F]{40,64}', revision) else '',
+                    'snapshot': backup_path.name, 'created_at': utc()}
+        os.link(temporary, backup_path)
+        atm_json(Path(str(backup_path) + '.json'), metadata)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+def restore_source_metadata(root, backup_path):
+    try:
+        data = json.loads(Path(str(backup_path) + '.json').read_text())
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    revision = str(data.get('revision') or '')
+    scope = 'node' if backup_path.name.startswith('node_') else 'panel'
+    atm_json(root / 'instance' / f'update_source_{scope}.json', {
+        'source': 'snapshot', 'snapshot': backup_path.name, 'installed_at': utc(),
+        'revision': revision if re.fullmatch(r'[0-9a-fA-F]{40,64}', revision) else '',
+    })
+
 
 def copy_tree(src: Path, dst: Path):
-    for item in src.iterdir():
-        if item.name in EXCLUDES:
-            continue
-        target = dst / item.name
-        if item.is_dir():
-            shutil.copytree(item, target, dirs_exist_ok=True)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(item, target)
+    deploy.overlay(src, dst)
 
-def restore_backup(root: Path, backup_path: Path):
-    for item in list(root.iterdir()):
-        if item.name in EXCLUDES:
-            continue
-        if item.is_dir():
-            shutil.rmtree(item)
-        else:
-            item.unlink(missing_ok=True)
-    with tarfile.open(backup_path, "r:gz") as tar:
-        tar.extractall(root)
+
+def restore_backup(root: Path, backup_path: Path, *, remove=()):
+    with tempfile.TemporaryDirectory(prefix="wg-restore-") as tmp:
+        stage = Path(tmp)
+        safe_extract(backup_path, stage, code_only=True)
+        deploy.overlay(stage, root, remove=remove)
+        restore_source_metadata(root, backup_path)
+
 
 def validate(root: Path, scope: str):
-    py = root / "venv/bin/python"
-    if not py.exists():
-        py = Path(sys.executable)
-
-    targets = [root / "app.py"] if scope == "panel" else [
-        root / "agent/node_agent.py",
-        root / "agent/node.py",
-    ]
-    existing = [str(p) for p in targets if p.exists()]
-    if not existing:
-        raise RuntimeError("No expected Python entrypoint found after update.")
-    run([str(py), "-m", "py_compile", *existing], timeout=90)
+    deploy.validate_source(root, scope)
 
 def _optional_nftables(log=None):
 
@@ -598,6 +684,9 @@ def install_requirements(root: Path, scope: str):
         req = root / "agent/requirements.txt"
     if pip.exists() and req.exists():
         run([str(pip), "install", "-r", str(req)], timeout=1200)
+        extra = root / 'requirements-postgres.txt'
+        if scope != 'node' and extra.is_file():
+            run([str(pip), 'install', '-r', str(extra)], timeout=1200)
 
 
 def _service_names(scope: str) -> list[str]:
@@ -723,14 +812,6 @@ def schedule_service_restart(
     *,
     scope: str,
 ) -> dict:
-    """
-    Schedule the service restart outside the updater process.
-
-    This is used after rollback so the rollback terminal status is written
-    before the panel/agent service is restarted. Even if the old service
-    cgroup terminates a fallback updater process, Telegram and the web UI
-    still receive a final rollback result instead of remaining at 94%.
-    """
     unit_name = (
         f"wg-panel-rollback-restart-{scope}-"
         f"{int(time.time())}-{os.getpid()}"
@@ -795,572 +876,100 @@ def schedule_service_restart(
     }
 
 
+def apply_staged(root, source, scope, status, backup, *, preferred='auto', metadata=None, rollback_archive=None):
+
+    root, source = Path(root), Path(source)
+    validate(source, scope)
+    deploy.check_compatible(root, source, scope)
+    deploy.validate_destinations(source, root)
+    services = deploy.discover_services(root, scope, preferred)
+    readiness = deploy.readiness_config(root,scope)
+    
+    if not deploy.readiness_ok(readiness):
+        raise RuntimeError('Current authenticated readiness endpoint is unavailable; use manual maintenance.')
+    before = deploy.code_files(root)
+    incoming = deploy.select_scope(source,scope)
+    old_manifest = deploy.load_manifest(root,scope)
+    introduced = incoming - before
+    status.set(stage='backup', percent=45, message='Saving current code before maintenance.', services=services)
+    backup_code(root, backup)
+    status.set(backup=str(backup), stage='stop', percent=55, message='Stopping active panel services.')
+    mutation_started = False
+    try:
+        deploy.stop_services(services)
+        mutation_started = True
+        status.set(stage='install', percent=65, message='Installing validated code; persistent data preserved.')
+        deploy.overlay(source, root, remove=old_manifest-incoming, include=incoming)
+        validate(root, scope)
+        status.set(status='restarting', stage='restart', percent=85, message='Starting services and checking fresh progress.')
+        deploy.start_services(root, services, readiness=readiness)
+        if rollback_archive:
+            restore_source_metadata(root, rollback_archive)
+        elif metadata:
+            write_update_source(root, scope, metadata)
+        deploy.save_manifest(root,scope,incoming)
+    except Exception as exc:
+        status.set(status='running', stage='rollback', percent=94, message='Deployment failed; recovering previous code.', failure_detail=str(exc))
+        try:
+            deploy.stop_services(services)
+            if mutation_started:
+                restore_backup(root, backup, remove=introduced)
+                validate(root, scope)
+                deploy.save_manifest(root,scope,old_manifest)
+            deploy.start_services(root, services, readiness=readiness)
+        except Exception as recovery:
+            status.set(status='rollback_failed', stage='rollback_failed', percent=100, message='Recovery could not be verified. Retain snapshot and inspect service journals.', rollback_detail=str(recovery), completed_at=utc())
+            return False
+        status.set(status='rollback_completed', stage='rollback_completed', percent=100, message='Previous code and active services recovered; database not restored.', completed_at=utc())
+        return False
+    status.set(status='success' if rollback_archive else 'completed', stage='complete' if rollback_archive else 'completed', percent=100,
+               message='Code installed and active services passed authenticated readiness and startup checks. Live customer operations are not tested.', completed_at=utc())
+    return True
+
+
 def main():
     ap = argparse.ArgumentParser()
-
-    ap.add_argument(
-        "--root",
-        required=True,
-    )
-
-    ap.add_argument(
-        "--repo",
-        required=True,
-    )
-
-    ap.add_argument(
-        "--service",
-        default="auto",
-    )
-
-    ap.add_argument(
-        "--status",
-        required=True,
-    )
-
-    ap.add_argument(
-        "--scope",
-        choices=[
-            "panel",
-            "node",
-        ],
-        required=True,
-    )
-
-    ap.add_argument(
-        "--target",
-        default="latest",
-    )
-
+    ap.add_argument('--root', required=True)
+    ap.add_argument('--repo', required=True)
+    ap.add_argument('--service', default='auto')
+    ap.add_argument('--status', required=True)
+    ap.add_argument('--scope', choices=['panel','node'], required=True)
+    ap.add_argument('--target', default='latest')
+    ap.add_argument('--archive', type=Path, help='Locally downloaded trusted release ZIP')
     args = ap.parse_args()
-
-    root = Path(
-        args.root
-    ).resolve()
-
-    service = str(
-        args.service
-        or "auto"
-    ).strip()
-
-    if service.lower() in {
-        "",
-        "auto",
-        "detect",
-    }:
-        service = detect_service(
-            root,
-            args.scope,
-        )
-
-    status = Status(
-        Path(
-            args.status
-        ).resolve()
-    )
-
-    status.set(
-        log=(
-            f"Detected systemd service: "
-            f"{service}"
-        ),
-        service=service,
-    )
-
-    stamp = (
-        dt.datetime.utcnow()
-        .strftime(
-            "%Y%m%d_%H%M%S"
-        )
-    )
-
-    backup = (
-        root
-        / "instance"
-        / "update_backups"
-        / f"{args.scope}_{stamp}.tar.gz"
-    )
-
-    lock = (
-        root
-        / "instance"
-        / "update.lock"
-    )
-
-    lock.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    fd = None
-
-    try:
-
-        fd = os.open(
-            lock,
-            os.O_CREAT
-            | os.O_EXCL
-            | os.O_WRONLY,
-            0o600,
-        )
-
-        os.write(
-            fd,
-            str(
-                os.getpid()
-            ).encode(),
-        )
-
-        os.close(fd)
-        fd = None
-
-        status.set(
-            status="running",
-            stage="backup",
-            percent=8,
-            message=(
-                "Creating rollback backup…"
-            ),
-        )
-
-        backup_code(
-            root,
-            backup,
-        )
-
-        status.set(
-            percent=18,
-            backup=str(
-                backup
-            ),
-            log=(
-                f"Backup created: {backup}"
-            ),
-        )
-
-        with tempfile.TemporaryDirectory(
-            prefix="wg-panel-update-"
-        ) as tmp:
-
-            tmp = Path(tmp)
-
-            archive = (
-                tmp
-                / "source.tar.gz"
-            )
-
-            status.set(
-                stage="download",
-                percent=27,
-                message=(
-                    "Downloading the main branch…"
-                ),
-            )
-
-            source_metadata = download_repo(
-                args.repo,
-                "main",
-                archive,
-            )
-
-            source_metadata[
-                "repo"
-            ] = args.repo
-
-            status.set(
-                percent=38,
-                target="main",
-                source="main",
-                revision=(
-                    source_metadata.get(
-                        "revision"
-                    )
-                ),
-                revision_short=(
-                    source_metadata.get(
-                        "revision_short"
-                    )
-                ),
-                log=(
-                    "Repository main branch "
-                    "downloaded: "
-                    + str(
-                        source_metadata.get(
-                            "revision_short"
-                        )
-                        or "unknown revision"
-                    )
-                ),
-            )
-
-            status.set(
-                stage="extract",
-                percent=45,
-                message=(
-                    "Preparing repository files…"
-                ),
-            )
-
-            with tarfile.open(
-                archive,
-                "r:gz",
-            ) as tar:
-                tar.extractall(
-                    tmp / "source"
-                )
-
-            roots = [
-                p
-                for p
-                in (
-                    tmp
-                    / "source"
-                ).iterdir()
-                if p.is_dir()
-            ]
-
-            if len(roots) != 1:
-                raise RuntimeError(
-                    "Downloaded release layout "
-                    "is invalid."
-                )
-
-            source = roots[0]
-
-            status.set(
-                stage="install",
-                percent=58,
-                message=(
-                    "Installing updated code…"
-                ),
-            )
-
-            copy_tree(
-                source,
-                root,
-            )
-
-            status.set(
-                percent=70,
-                log=(
-                    "Code files replaced; "
-                    "persistent data preserved."
-                ),
-            )
-
-            status.set(
-                stage="dependencies",
-                percent=76,
-                message=(
-                    "Checking system dependencies…"
-                ),
-            )
-
-            nftables_result = (
-                _optional_nftables(
-                    log=lambda message: (
-                        status.set(
-                            log=message,
-                        )
-                    )
-                )
-            )
-
-            nftables_status = str(
-                nftables_result.get(
-                    "status"
-                )
-                or "unknown"
-            )
-
-            if (
-                nftables_status
-                == "already_present"
-            ):
-                status.set(
-                    percent=78,
-                    log=(
-                        "nftables is already "
-                        "installed and ready."
-                    ),
-                    nftables=(
-                        nftables_result
-                    ),
-                )
-
-            elif nftables_result.get(
-                "ok"
-            ):
-                status.set(
-                    percent=78,
-                    log=(
-                        "nftables was installed "
-                        "and is ready."
-                    ),
-                    nftables=(
-                        nftables_result
-                    ),
-                )
-
-            else:
-                status.set(
-                    percent=78,
-                    log=(
-                        "Warning: nftables is "
-                        "unavailable. The update "
-                        "will continue; Traffic "
-                        "Control may not be "
-                        "available on this server."
-                    ),
-                    nftables=(
-                        nftables_result
-                    ),
-                )
-
-            status.set(
-                percent=80,
-                message=(
-                    "Installing Python "
-                    "dependencies…"
-                ),
-            )
-
-            install_requirements(
-                root,
-                args.scope,
-            )
-
-            status.set(
-                stage="validate",
-                percent=87,
-                message=(
-                    "Validating updated Python…"
-                ),
-            )
-
-            validate(
-                root,
-                args.scope,
-            )
-
-            status.set(
-                percent=93,
-                log=(
-                    "Validation completed."
-                ),
-            )
-
-        status.set(
-            status="restarting",
-            stage="restart",
-            percent=97,
-            message=(
-                f"Restarting {service}…"
-            ),
-        )
-
-        restart_info = (
-            schedule_service_restart(
-                service,
-                scope=args.scope,
-            )
-        )
-
-        status.set(
-            restart_launcher=(
-                restart_info.get(
-                    "launcher"
-                )
-            ),
-            restart_unit=(
-                restart_info.get(
-                    "unit"
-                )
-            ),
-            restart_pid=(
-                restart_info.get(
-                    "pid"
-                )
-            ),
-            log=(
-                "Detached service restart "
-                "scheduled for "
-                f"{service}."
-            ),
-        )
-
-        write_update_source(
-            root,
-            args.scope,
-            source_metadata,
-        )
-
-        status.set(
-            status="completed",
-            stage="completed",
-            percent=100,
-            message=(
-                "Update installed successfully. "
-                "Service restart was scheduled."
-            ),
-            completed_at=utc(),
-            restart_launcher=(
-                restart_info.get(
-                    "launcher"
-                )
-            ),
-            restart_unit=(
-                restart_info.get(
-                    "unit"
-                )
-            ),
-            restart_pid=(
-                restart_info.get(
-                    "pid"
-                )
-            ),
-            log=(
-                "Updated revision "
-                f"{source_metadata.get('revision_short') or 'unknown'} "
-                "installed; detached restart "
-                f"scheduled for {service}."
-            ),
-        )
-
-    except Exception as exc:
-
-        status.set(
-            status="running",
-            stage="rollback",
-            percent=94,
-            message=(
-                "Update failed; restoring "
-                "previous code…"
-            ),
-            log=str(
-                exc
-            ),
-        )
-
+    root = Path(args.root).resolve()
+    if os.getenv('DOCKER_MODE','').lower() in ('1','true','yes','on'):
+        raise SystemExit('Container source is immutable. Rebuild and recreate the Compose services.')
+    with deploy.deployment_lock(root):
+        status = Status(Path(args.status).resolve())
         try:
-            if backup.exists():
-                restore_backup(
-                    root,
-                    backup,
-                )
-
-                try:
-                    lock.unlink(
-                        missing_ok=True,
-                    )
-                except Exception:
-                    pass
-
-                restart_info = (
-                    schedule_service_restart(
-                        service,
-                        scope=args.scope,
-                    )
-                )
-
-                status.set(
-                    status=(
-                        "rollback_completed"
-                    ),
-                    stage=(
-                        "rollback_completed"
-                    ),
-                    percent=100,
-                    message=(
-                        "Update was not installed. "
-                        "Previous code was restored "
-                        "and restart was scheduled."
-                    ),
-                    failure_detail=str(
-                        exc
-                    ),
-                    restart_launcher=(
-                        restart_info.get(
-                            "launcher"
-                        )
-                    ),
-                    restart_unit=(
-                        restart_info.get(
-                            "unit"
-                        )
-                    ),
-                    restart_pid=(
-                        restart_info.get(
-                            "pid"
-                        )
-                    ),
-                    completed_at=utc(),
-                    log=(
-                        "Rollback files restored; "
-                        "detached restart scheduled "
-                        f"for {service}."
-                    ),
-                )
-
-            else:
-                status.set(
-                    status=(
-                        "rollback_failed"
-                    ),
-                    stage=(
-                        "rollback_failed"
-                    ),
-                    percent=100,
-                    message=(
-                        "Update failed and no "
-                        "rollback backup was "
-                        "available."
-                    ),
-                    failure_detail=str(
-                        exc
-                    ),
-                    completed_at=utc(),
-                )
-
-        except Exception as rollback_exc:
-            status.set(
-                status=(
-                    "rollback_failed"
-                ),
-                stage=(
-                    "rollback_failed"
-                ),
-                percent=100,
-                message=(
-                    "Update failed and rollback "
-                    "could not be completed."
-                ),
-                failure_detail=str(
-                    exc
-                ),
-                rollback_detail=str(
-                    rollback_exc
-                ),
-                completed_at=utc(),
-            )
-
-    finally:
-
-        if fd is not None:
-            try:
-                os.close(
-                    fd
-                )
-            except Exception:
-                pass
-
-        try:
-            lock.unlink(
-                missing_ok=True,
-            )
-        except Exception:
-            pass
+            status.set(status='running', stage='download', percent=10, message='Downloading a pinned main revision.')
+            with tempfile.TemporaryDirectory(prefix='wg-panel-update-') as temporary:
+                tmp = Path(temporary)
+                if args.archive:
+                    if args.archive.stat().st_size>500*1024*1024:raise RuntimeError('Archive exceeds compressed size limit.')
+                    metadata={'repo':args.repo,'source':'release','target':args.target,'revision':None,'revision_short':None}
+                    status.set(stage='extract',percent=30,message='Validating local release ZIP.')
+                    deploy.extract_zip(args.archive,tmp/'source')
+                else:
+                    archive=tmp/'source.tar.gz'
+                    metadata=download_repo(args.repo,'main',archive)
+                    metadata['repo']=args.repo
+                    status.set(stage='extract',percent=30,revision=metadata['revision'],revision_short=metadata['revision_short'],message='Validating staged source.')
+                    safe_extract(archive,tmp/'source')
+                source=tmp/'source'
+                if not (source/'app.py').is_file() and not (source/'agent'/'node_agent.py').is_file():
+                    roots=list(source.iterdir())
+                    if len(roots)!=1 or not roots[0].is_dir():raise RuntimeError('Invalid repository archive layout.')
+                    source=roots[0]
+                stamp = dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d_%H%M%S')
+                backup = root/'instance'/'update_backups'/f'{args.scope}_{stamp}.tar.gz'
+                if not apply_staged(root,source,args.scope,status,backup,preferred=args.service,metadata=metadata):
+                    raise SystemExit(1)
+        except Exception as exc:
+            status.set(status='failed',stage='failed',percent=100,message='Update refused or failed before deployment. Check details.',failure_detail=str(exc),completed_at=utc())
+            raise
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

@@ -1,0 +1,83 @@
+<fieldset class="rp-form-section rp-plan-basics">
+  <legend>Plan &amp; pricing</legend>
+  <div class="rp-fields rp-pricing">
+    <label class="rp-name-field">Plan name
+      <input name="name" required maxlength="80" placeholder="e.g. Business monthly" value="{{form.get('name','')}}">
+    </label>
+    <label>Price
+      <input name="price" type="number" step="0.00000001" min="0.00000001" max="1000000000000" required placeholder="0.00" value="{{form.get('price','')}}">
+      <small>Enter a value greater than zero.</small>
+    </label>
+    <label>Currency
+      <input name="currency" list="rp-currencies-{{p.id if p is defined else 'new'}}" required maxlength="16" placeholder="Select or type" value="{{form.get('currency','')}}">
+      <datalist id="rp-currencies-{{p.id if p is defined else 'new'}}">{% for c in ['TOMAN','IRR','TRX','USDT_TRC20','USD'] %}<option value="{{c}}">{% endfor %}</datalist>
+      <small>Used for customer payments.</small>
+    </label>
+  </div>
+</fieldset>
+
+<fieldset class="rp-form-section rp-plan-allowances">
+  <legend>Limits &amp; duration</legend>
+  <div class="rp-fields rp-allowance">
+    {% for name,label,value,min,max in [('days','Duration · days',30,1,3650),('traffic_gib','Shared traffic · GiB',100,1,10000000),('peers','Peer limit',20,1,100000),('subscriptions','Subscription limit',5,0,100000)] %}
+    <label>{{label}}<input name="{{name}}" type="number" min="{{min}}" max="{{max}}" value="{{form.get(name,value)}}" required></label>
+    {% endfor %}
+  </div>
+  <p class="rp-field-help">Each subscription location uses a peer slot. All customers share the traffic allowance.</p>
+</fieldset>
+
+<fieldset class="rp-form-section rp-plan-interfaces">
+  <legend>Network access</legend>
+  <p class="rp-field-help rp-intro-help">Select the interfaces customers can use.</p>
+  <div class="rp-checks rp-plan-interface-list" role="group" aria-label="Allowed interfaces">
+    {% for i in interfaces %}
+      <label class="rp-plan-interface" data-rp-interface-id="{{i.id}}" data-rp-interface-node="{{i.node_id or ''}}">
+        <input name="interfaces" type="checkbox" value="{{i.id}}" {{'checked' if i.id|string in form.getlist('interfaces') else ''}}>
+        <span class="rp-interface-copy"><strong>{{i.name}}</strong><small>{{'Node '~i.node_id if i.node_id else 'Local server'}}</small></span>
+        <span class="rp-interface-live" data-rp-interface-state aria-label="Interface status">Checking…</span>
+      </label>
+    {% else %}
+      <p class="rp-muted">Add a WireGuard interface in the main panel before creating this plan.</p>
+    {% endfor %}
+  </div>
+</fieldset>
+
+<fieldset class="rp-form-section rp-plan-payment">
+  <legend>Payment instructions</legend>
+  <label class="rp-field">Instructions for the buyer
+    <textarea class="rp-input" name="payment_instructions" minlength="1" maxlength="1500" rows="3" required placeholder="Send a payment screenshot, or contact us for payment details.">{{form.get('payment_instructions','')}}</textarea>
+    <small class="rp-field-help">Shown at checkout. A submitted receipt stays in the review queue until you approve or reject it.</small>
+  </label>
+</fieldset>
+
+<div class="rp-plan-extras" aria-label="Additional plan capabilities">
+  <div class="rp-plan-extras-heading"><strong>Advanced capabilities</strong><span>Optional settings and reseller permissions</span></div>
+  <details class="rp-plan-advanced rp-plan-permissions">
+    <summary><span><i class="fas fa-shield-halved" aria-hidden="true"></i> Workspace permissions</span><small>Pages, customer actions &amp; tools</small></summary>
+    <div class="rp-advanced-inner">{{permissions_editor(permissions if not form else form.getlist('permissions'), not form or form.get('panel_access'), p is defined and 'customer_unlimited' in p.spec.permissions)}}</div>
+  </details>
+  <details class="rp-plan-advanced"><summary><span><i class="fas fa-gauge" aria-hidden="true"></i> Workspace usage limits</span><small>Request budgets</small></summary><div class="rp-advanced-inner">{% from 'reseller/limit_fields.html' import limit_editor %}{{limit_editor(form)}}</div></details>
+  <details class="rp-plan-advanced">
+    <summary><span><i class="fas fa-route" aria-hidden="true"></i> Connection policy</span><small>Endpoint &amp; network options</small></summary>
+    <div class="rp-advanced-inner">
+      <p class="rp-field-help">Default endpoint settings apply when a reseller account starts or renews on this plan.</p>
+      <div class="rp-fields">
+        <label>Server host<input name="server_host" value="{{form.get('server_host','')}}" placeholder="vpn.example.com"></label>
+        <label>Server port<input name="server_port" type="number" min="1" max="65535" value="{{form.get('server_port','')}}" placeholder="51820"></label>
+      </div>
+      <div class="rp-checks">{% for key,label in [('allow_endpoint','Allow endpoint changes'),('allow_fixed','Allow fixed client endpoints'),('allow_internal','Allow internal network presets')] %}
+        <label><input type="checkbox" name="{{key}}" role="switch" {{'checked' if form.get(key)=='on'}}>{{label}}</label>
+      {% endfor %}</div>
+      <label class="rp-field">Internal networks<textarea class="rp-input" name="internal_routes" placeholder="10.20.0.0/24">{{form.get('internal_routes','')}}</textarea></label>
+    </div>
+  </details>
+  {% from 'reseller/telegram_access.html' import telegram_access with context %}
+  <input type="hidden" name="plan_features_present" value="1">
+  <details class="rp-plan-advanced rp-plan-telegram">
+    <summary><span><i class="fab fa-telegram" aria-hidden="true"></i> Telegram capabilities</span><small>Bot commands &amp; alerts</small></summary>
+    <div class="rp-advanced-inner">
+      {{telegram_access(form.get('approved')=='on',form.getlist('telegram_features'),'Enable Telegram for accounts on this plan')}}
+      <p class="rp-field-help">The reseller provides their own bot token. Bot commands also require the corresponding workspace permission.</p>
+    </div>
+  </details>
+</div>

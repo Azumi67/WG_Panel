@@ -1,3 +1,44 @@
+x-reseller-worker-env: &reseller-worker-env
+  WG_CONTAINER_ROLE: reseller-worker
+  DOCKER_MODE: "1"
+  DATABASE_URL: "${DATABASE_URL:?Set PostgreSQL DATABASE_URL and migrate your existing data first}"
+  LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+  SECURE_COOKIES: "${SECURE_COOKIES:-0}"
+  WIREGUARD_CONF_PATH: /etc/wireguard
+  PG_POOL_SIZE: "${PG_POOL_SIZE:-5}"
+  PG_MAX_OVERFLOW: "${PG_MAX_OVERFLOW:-5}"
+  PG_POOL_TIMEOUT: "${PG_POOL_TIMEOUT:-10}"
+  WG_ONLINE_PROBE_FIRST: "${WG_ONLINE_PROBE_FIRST:-1}"
+  WG_ONLINE_HANDSHAKE_FALLBACK: "${WG_ONLINE_HANDSHAKE_FALLBACK:-0}"
+  WG_ONLINE_HANDSHAKE_WINDOW: "${WG_ONLINE_HANDSHAKE_WINDOW:-45}"
+  WG_TRUSTED_PROXY_NETWORKS: "${WG_TRUSTED_PROXY_NETWORKS:-127.0.0.1/32,::1/128}"
+  WG_TRUSTED_HOSTS: "${WG_TRUSTED_HOSTS:-}"
+  WG_RESELLER_ENCRYPTION_KEY: "${WG_RESELLER_ENCRYPTION_KEY:-}"
+  WG_RESELLER_PREVIOUS_KEYS: "${WG_RESELLER_PREVIOUS_KEYS:-}"
+  WG_RESELLER_LEGACY_SECRET: "${WG_RESELLER_LEGACY_SECRET:-}"
+  WG_BACKUP_ENCRYPTION_KEY: "${WG_BACKUP_ENCRYPTION_KEY:-}"
+  WG_BACKUP_PREVIOUS_KEYS: "${WG_BACKUP_PREVIOUS_KEYS:-}"
+  TG_BOT_TOKEN: "${TG_BOT_TOKEN:-}"
+
+x-reseller-worker: &reseller-worker
+  image: wg-panel:local
+  restart: unless-stopped
+  network_mode: host
+  profiles: ["reseller"]
+  depends_on:
+    panel:
+      condition: service_healthy
+  cap_add:
+    - NET_ADMIN
+    - NET_RAW
+    - SYS_MODULE
+  environment: *reseller-worker-env
+  volumes:
+    - wg_panel_instance:/app/instance
+    - /etc/wireguard:/etc/wireguard
+    - /lib/modules:/lib/modules:ro
+  stop_grace_period: 60s
+
 services:
   panel:
     build:
@@ -18,12 +59,25 @@ services:
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       SECURE_COOKIES: "${SECURE_COOKIES:-0}"
       WIREGUARD_CONF_PATH: /etc/wireguard
-      DATABASE_URL: "${DATABASE_URL:-sqlite:///instance/wg_panel.db}"
+      DATABASE_URL: "${DATABASE_URL:?Set PostgreSQL DATABASE_URL and migrate your existing data first}"
+      PG_POOL_SIZE: "${PG_POOL_SIZE:-5}"
+      PG_MAX_OVERFLOW: "${PG_MAX_OVERFLOW:-5}"
+      PG_POOL_TIMEOUT: "${PG_POOL_TIMEOUT:-10}"
       FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-}"
       FERNET_KEY: "${FERNET_KEY:-}"
+      WG_RESELLER_ENCRYPTION_KEY: "${WG_RESELLER_ENCRYPTION_KEY:-}"
+      WG_RESELLER_PREVIOUS_KEYS: "${WG_RESELLER_PREVIOUS_KEYS:-}"
+      WG_RESELLER_LEGACY_SECRET: "${WG_RESELLER_LEGACY_SECRET:-}"
+      WG_BACKUP_ENCRYPTION_KEY: "${WG_BACKUP_ENCRYPTION_KEY:-}"
+      WG_BACKUP_PREVIOUS_KEYS: "${WG_BACKUP_PREVIOUS_KEYS:-}"
       API_KEY: "${API_KEY:-}"
       SETUP_TOKEN: "${SETUP_TOKEN:-}"
+      WG_TRUSTED_PROXY_NETWORKS: "${WG_TRUSTED_PROXY_NETWORKS:-127.0.0.1/32,::1/128}"
+      WG_TRUSTED_HOSTS: "${WG_TRUSTED_HOSTS:-}"
+      WG_DOCKER_HEALTH_URL: "${WG_PANEL_HEALTH_URL:-}"
+      WG_DOCKER_ALLOW_SECRET_CHANGE: "${WG_DOCKER_ALLOW_SECRET_CHANGE:-0}"
       TG_HEARTBEAT_SEC: "${TG_HEARTBEAT_SEC:-60}"
+      TG_BOT_TOKEN: "${TG_BOT_TOKEN:-}"
       WG_ONLINE_PROBE_FIRST: "${WG_ONLINE_PROBE_FIRST:-1}"
       WG_ONLINE_HANDSHAKE_FALLBACK: "${WG_ONLINE_HANDSHAKE_FALLBACK:-0}"
       WG_ONLINE_HANDSHAKE_WINDOW: "${WG_ONLINE_HANDSHAKE_WINDOW:-45}"
@@ -31,7 +85,33 @@ services:
       - wg_panel_instance:/app/instance
       - /etc/wireguard:/etc/wireguard
       - /lib/modules:/lib/modules:ro
-    stop_grace_period: 30s
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "bash", "/app/docker/healthcheck.sh", "panel"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  postgres:
+    image: postgres:15-bookworm
+    container_name: wg-panel-postgres
+    restart: unless-stopped
+    profiles: ["postgres"]
+    network_mode: host
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "password_encryption=scram-sha-256"]
+    environment:
+      POSTGRES_DB: wgpanel
+      POSTGRES_USER: wgpanel
+      POSTGRES_PASSWORD: "${PG_PASSWORD:-}"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - wg_panel_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U wgpanel -d wgpanel"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
 
   telegram-bot:
     image: wg-panel:local
@@ -41,7 +121,8 @@ services:
     network_mode: host
     profiles: ["telegram"]
     depends_on:
-      - panel
+      panel:
+        condition: service_healthy
     environment:
       WG_CONTAINER_ROLE: bot
       DOCKER_MODE: "1"
@@ -55,6 +136,66 @@ services:
       TG_HEARTBEAT_SEC: "${TG_HEARTBEAT_SEC:-60}"
     volumes:
       - wg_panel_instance:/app/instance
+
+  reseller-worker:
+    <<: *reseller-worker
+    command: ["python", "-m", "reseller_portal.worker", "--role", "workspace-bots"]
+    healthcheck:
+      test: ["CMD", "python", "/app/docker/healthcheck.py", "worker"]
+      interval: 30s
+      timeout: 5s
+      retries: 4
+      start_period: 90s
+    environment:
+      <<: *reseller-worker-env
+      PG_POOL_SIZE_WORKSPACE: "${PG_POOL_SIZE_WORKSPACE:-${PG_POOL_SIZE:-5}}"
+      PG_MAX_OVERFLOW_WORKSPACE: "${PG_MAX_OVERFLOW_WORKSPACE:-${PG_MAX_OVERFLOW:-5}}"
+      PG_POOL_TIMEOUT_WORKSPACE: "${PG_POOL_TIMEOUT_WORKSPACE:-${PG_POOL_TIMEOUT:-10}}"
+
+  provision:
+    <<: *reseller-worker
+    command: ["python", "-m", "reseller_portal.worker", "--role", "provision"]
+    healthcheck:
+      test: ["CMD", "python", "/app/docker/healthcheck.py", "provision"]
+      interval: 30s
+      timeout: 5s
+      retries: 4
+      start_period: 90s
+    environment:
+      <<: *reseller-worker-env
+      PG_POOL_SIZE_PROVISION: "${PG_POOL_SIZE_PROVISION:-${PG_POOL_SIZE:-5}}"
+      PG_MAX_OVERFLOW_PROVISION: "${PG_MAX_OVERFLOW_PROVISION:-${PG_MAX_OVERFLOW:-5}}"
+      PG_POOL_TIMEOUT_PROVISION: "${PG_POOL_TIMEOUT_PROVISION:-${PG_POOL_TIMEOUT:-10}}"
+
+  monitor:
+    <<: *reseller-worker
+    command: ["python", "-m", "reseller_portal.worker", "--role", "monitor"]
+    healthcheck:
+      test: ["CMD", "python", "/app/docker/healthcheck.py", "monitor"]
+      interval: 30s
+      timeout: 5s
+      retries: 4
+      start_period: 90s
+    environment:
+      <<: *reseller-worker-env
+      PG_POOL_SIZE_MONITOR: "${PG_POOL_SIZE_MONITOR:-${PG_POOL_SIZE:-5}}"
+      PG_MAX_OVERFLOW_MONITOR: "${PG_MAX_OVERFLOW_MONITOR:-${PG_MAX_OVERFLOW:-5}}"
+      PG_POOL_TIMEOUT_MONITOR: "${PG_POOL_TIMEOUT_MONITOR:-${PG_POOL_TIMEOUT:-10}}"
+
+  plan-shop:
+    <<: *reseller-worker
+    command: ["python", "-m", "reseller_portal.worker", "--role", "shop"]
+    healthcheck:
+      test: ["CMD", "python", "/app/docker/healthcheck.py", "shop_worker"]
+      interval: 30s
+      timeout: 5s
+      retries: 4
+      start_period: 90s
+    environment:
+      <<: *reseller-worker-env
+      PG_POOL_SIZE_SHOP: "${PG_POOL_SIZE_SHOP:-${PG_POOL_SIZE:-5}}"
+      PG_MAX_OVERFLOW_SHOP: "${PG_MAX_OVERFLOW_SHOP:-${PG_MAX_OVERFLOW:-5}}"
+      PG_POOL_TIMEOUT_SHOP: "${PG_POOL_TIMEOUT_SHOP:-${PG_POOL_TIMEOUT:-10}}"
 
   node-agent:
     command: ["python", "agent/node_agent.py"]
@@ -75,6 +216,8 @@ services:
       DOCKER_MODE: "1"
       BIND: "${WG_NODE_BIND:-0.0.0.0:9898}"
       API_KEY: "${NODE_API_KEY:-}"
+      WG_DOCKER_HEALTH_URL: "${WG_NODE_HEALTH_URL:-}"
+      WG_DOCKER_ALLOW_SECRET_CHANGE: "${WG_DOCKER_ALLOW_SECRET_CHANGE:-0}"
       WIREGUARD_CONF_PATH: /etc/wireguard
       WG_ONLINE_PROBE_FIRST: "${WG_ONLINE_PROBE_FIRST:-1}"
       WG_ONLINE_HANDSHAKE_FALLBACK: "${WG_ONLINE_HANDSHAKE_FALLBACK:-0}"
@@ -83,8 +226,15 @@ services:
       - wg_node_agent_instance:/app/instance
       - /etc/wireguard:/etc/wireguard
       - /lib/modules:/lib/modules:ro
-    stop_grace_period: 30s
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD", "bash", "/app/docker/healthcheck.sh", "agent"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
 volumes:
+  wg_panel_postgres:
   wg_panel_instance:
   wg_node_agent_instance:

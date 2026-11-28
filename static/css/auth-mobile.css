@@ -1,0 +1,32 @@
+html[data-theme=dark]{color-scheme:dark}html[data-theme=light]{color-scheme:light}
+html[data-theme=dark] body .auth-card input{background:#172033!important;color:#edf1fc!important;-webkit-text-fill-color:#edf1fc!important;caret-color:#edf1fc}
+html[data-theme=dark] body .auth-card input:-webkit-autofill,html[data-theme=dark] body .auth-card input:autofill{box-shadow:0 0 0 1000px #172033 inset!important;-webkit-text-fill-color:#edf1fc!important}
+html[data-theme=light] body .auth-card input:-webkit-autofill{box-shadow:0 0 0 1000px #f4f6fb inset!important;-webkit-text-fill-color:#182137!important}
+@media(max-width:760px){html[data-design] body{overflow-x:hidden!important}html[data-design] body :is(.auth-wrap,.auth-center){width:calc(100% - 24px)!important;min-height:0!important;margin:16px auto!important;padding:0!important}html[data-design] body .auth-card{box-sizing:border-box!important;width:100%!important;max-width:460px!important;padding:24px 18px!important;margin:auto!important;min-width:0!important}html[data-design] body .auth-card input{font-size:16px!important;max-width:100%;box-sizing:border-box}html[data-design][data-theme] body .auth-card .auth-page-header{display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;padding:0 0 18px!important;gap:14px!important}html[data-design][data-theme] body .auth-card .auth-page-header :is(.brand,.brand-badge){justify-content:center!important;align-self:center!important;font-size:20px!important}html[data-design][data-theme] body .auth-card .auth-appearance-controls{display:flex!important;position:static!important;justify-self:center!important;align-self:center!important;gap:10px!important;flex-wrap:nowrap!important;width:auto!important}html[data-design][data-theme] body .auth-card .auth-appearance-controls>div{gap:4px!important}html[data-design][data-theme] body .auth-card .auth-appearance-controls button{display:inline-flex!important;align-items:center;justify-content:center;width:auto!important;min-width:38px!important;height:38px!important;padding:8px 10px!important;font-size:12px!important;line-height:1!important;transform:none!important}html[data-design][data-theme] body .auth-card .auth-appearance-controls button::after{display:none!important}html[data-design] body .auth-card h2{font-size:27px!important}.auth-live-scene{pointer-events:none}}
+
+
+
+html[data-design][data-theme] body .auth-card input:not([type="checkbox"]):not([type="hidden"]) {
+  --login-field-bg:#f4f6fb;--login-field-ink:#182137;
+  background-color:var(--login-field-bg)!important;color:var(--login-field-ink)!important;
+  -webkit-text-fill-color:var(--login-field-ink)!important;caret-color:var(--login-field-ink)!important;
+  -webkit-appearance:none;appearance:none;
+}
+html[data-design][data-theme="dark"] body .auth-card input:not([type="checkbox"]):not([type="hidden"]) {
+  --login-field-bg:#172033;--login-field-ink:#edf1fc;color-scheme:dark;
+}
+html[data-design][data-theme] body .auth-card input:not([type="checkbox"]):not([type="hidden"]):is(:focus,:active,:autofill,:-webkit-autofill) {
+  background:var(--login-field-bg)!important;
+  -webkit-box-shadow:0 0 0 1000px var(--login-field-bg) inset,0 0 0 3px #8870ee40!important;
+  box-shadow:0 0 0 1000px var(--login-field-bg) inset,0 0 0 3px #8870ee40!important;
+  -webkit-text-fill-color:var(--login-field-ink)!important;
+}
+html[data-design][data-theme="dark"] body .auth-card .form-group label {
+  color:#edf1fc!important;
+}
+html[data-design="legacy"][data-theme="dark"] body {
+  background-color:#0d1525!important;color:#edf1fc;
+}
+html[data-design="legacy"] body .auth-card #submit-btn {
+  background:#6d50df!important;color:#fff!important;border:1px solid #8065eb!important;
+}

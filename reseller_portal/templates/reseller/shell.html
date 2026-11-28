@@ -1,0 +1,179 @@
+<!doctype html>
+<html
+  lang="en"
+  data-render-design="modern"
+>
+  <head>
+    <meta charset="utf-8" />
+    <script src="{{url_for('static',filename='js/panel-read-requests.js')}}"></script>
+    <script src="{{url_for('static',filename='js/csrf.js')}}"></script>
+    <script src="{{url_for('static',filename='js/workspace-ui.js')}}"></script>
+    <title>{% block title %}WG Panel{% endblock %}</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+
+    <link
+      rel="icon"
+      href="{{ url_for('static', filename='img/wireguard-badge.svg') }}"
+      type="image/svg+xml"
+    />
+    <link
+      rel="mask-icon"
+      href="{{ url_for('static', filename='img/wireguard-badge.svg') }}"
+      color="#6ee7b7"
+    />
+    <meta name="theme-color" content="#0b1020" />
+    <script>
+      (function () {
+        var allowed = { light: true, auto: true, dark: true };
+        var mode = "auto";
+
+        try {
+          mode = String(localStorage.getItem("wg-theme") || "").toLowerCase();
+
+          if (!allowed[mode]) {
+            var legacy = String(
+              localStorage.getItem("wg-panel:theme-mode") || "",
+            ).toLowerCase();
+
+            mode = allowed[legacy] ? legacy : "auto";
+            localStorage.setItem("wg-theme", mode);
+          }
+        } catch (_) {
+          mode = "auto";
+        }
+
+        var systemDark = false;
+
+        try {
+          systemDark = window.matchMedia(
+            "(prefers-color-scheme: dark)",
+          ).matches;
+        } catch (_) {}
+
+        var effective =
+          mode === "auto" ? (systemDark ? "dark" : "light") : mode;
+
+        var root = document.documentElement;
+        root.dataset.design = 'modern';
+        root.dataset.themeMode = mode;
+        root.dataset.theme = effective;
+        root.style.colorScheme = effective;
+      })();
+    </script>
+    <link
+      rel="preload"
+      as="image"
+      href="{{ url_for('static', filename='img/wireguard-badge.svg') }}"
+    />
+
+    {% block preload_flags %}{% endblock %} {% if not preview|default(false) %}
+    {% if use_poppins_regular|default(true) %}
+    <link
+      rel="preload"
+      href="{{ url_for('static', filename='fonts/Poppins-Regular.woff2') }}"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    {% endif %} {% if use_poppins_semibold|default(false) %}
+    <link
+      rel="preload"
+      href="{{ url_for('static', filename='fonts/Poppins-SemiBold.woff2') }}"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    {% endif %} {% if use_poppins_bold|default(false) %}
+    <link
+      rel="preload"
+      href="{{ url_for('static', filename='fonts/Poppins-Bold.woff2') }}"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    {% endif %} {% if use_fa_solid|default(true) %}
+    <link
+      rel="preload"
+      href="{{ url_for('static', filename='vendor/fa/webfonts/fa-solid-900.woff2') }}"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    {% endif %} {% if use_fa_brands|default(true) %}
+    <link
+      rel="preload"
+      href="{{ url_for('static', filename='vendor/fa/webfonts/fa-brands-400.woff2') }}"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    {% endif %} {% endif %}
+
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='vendor/fa/css/all.min.css') }}"
+    />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/style.css') }}"
+    />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/panel-version.css') }}"
+    />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/shell-base.bundle.css') }}"
+    />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/panel-update.css') }}"
+    />
+
+    {% block head_extras %}{% endblock %}
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/dark-dashboard-peers.css') }}"
+    />
+    {% block responsive_extras %}{% endblock %}
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/base-responsive.css') }}"
+    />
+    {% block final_styles %}{% endblock %}
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/shell-design.bundle.css') }}"
+    />
+
+    {% if request.endpoint == 'index' %}
+    
+    {% endif %}
+    
+    
+    
+    
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/editor-modern.css') }}"
+    />
+    
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='css/shell-controls.bundle.css') }}"
+    />
+    
+  <link rel="stylesheet" href="{{url_for('static',filename='css/dashboard-modern.css')}}">
+<link rel="stylesheet" href="{{ url_for('reseller.static',filename='css/reseller.css') }}"><meta name="csrf-token" content="{{csrf_token()}}"><link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-desk.css')}}"><link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-workspace.css')}}"><link rel="stylesheet" href="{{url_for('static',filename='css/workspace-interactions.css')}}"></head>
+<body class="rp-shell tenant-workspace {{'peers-page' if section=='peers' else ''}}" data-page="{{'users' if section=='peers' else 'subscriptions_page' if section=='subscriptions' else 'index'}}">
+<button class="rp-backdrop" id="rp-backdrop" aria-label="Close navigation" tabindex="-1"></button>
+<aside class="sidebar sb2 rp-sidebar" id="rp-sidebar" aria-label="Reseller navigation">
+<div class="logo rp-brand"><img class="rp-modern-mark" src="{{url_for('static',filename='img/workspace-mark.svg')}}" alt=""><img class="rp-legacy-mark" src="{{url_for('static',filename='img/wireguard-badge.svg')}}" alt=""><strong class="brand-title">WG Panel</strong><button type="button" class="rp-mobile-close" data-rp-close aria-label="Close navigation">×</button></div>
+<div class="rp-workspace-label"><span class="rp-avatar">{{account.username[:1]|upper}}</span><div><b>{{account.username}}</b><small>Reseller workspace</small></div></div>
+<nav class="rp-nav sb2-body" aria-label="Primary"><span class="rp-nav-caption sb2-section">Workspace</span>
+{% for item,icon in [('dashboard','fa-house'),('peers','fa-users'),('subscriptions','fa-link')] %}{% if item in account.spec.permissions %}<a class="sb2-link {{ 'active' if section==item else '' }}" href="{{url_for('reseller.portal',section=item)}}" {% if section==item %}aria-current="page"{% endif %}><i class="fas {{icon}}" aria-hidden="true"></i><span class="sb2-text">{{item|title}}</span></a>{% endif %}{% endfor %}
+<a class="sb2-link" href="{{url_for('reseller.operations')}}"><i class="fas fa-list-check" aria-hidden="true"></i><span class="sb2-text">Operations</span></a>
+<a class="sb2-link {{ 'active' if section=='security' else '' }}" href="{{url_for('reseller.reseller_security')}}" {% if section=='security' %}aria-current="page"{% endif %}><i class="fas fa-shield-halved" aria-hidden="true"></i><span class="sb2-text">Security</span></a>
+</nav><div class="rp-sidebar-footer"><div class="rp-appearance"><div class="rp-segment" aria-label="Color theme"><button type="button" data-rp-theme="light">Light</button><button type="button" data-rp-theme="dark">Dark</button><button type="button" data-rp-theme="auto">System</button></div></div><form method="post" action="{{url_for('reseller.logout')}}"><input type="hidden" name="csrf_token" value="{{csrf_token()}}"><button class="rp-btn rp-signout" type="submit"><i class="fas fa-arrow-right-from-bracket" aria-hidden="true"></i>Sign out</button></form></div></aside>
+<main class="rp-content main" id="main-content"><header class="rp-topbar"><button type="button" id="rp-menu" aria-label="Open navigation" aria-controls="rp-sidebar" aria-expanded="false">☰</button><div class="rp-breadcrumb">Workspace <span>/</span> <b>{{section|title}}</b></div><span class="rp-user-label">{{account.username}}</span></header><div class="rp-wrap" id="tenant-workspace" data-section="{{section}}">{% for category,msg in get_flashed_messages(with_categories=true) %}<div class="rp-alert rp-alert-{{category}}" role="status">{{msg}}</div>{% endfor %}{% block content %}{% endblock %}</div></main><script defer src="{{url_for('reseller.static',filename='js/reseller.js')}}"></script><script defer src="{{url_for('static',filename='vendor/chartjs/chart.umd.min.js')}}"></script><script>window.RESELLER_ACCOUNT_ID={{account.id|tojson}};window.RESELLER_SECTION={{section|tojson}};window.RESELLER_PERMISSIONS={{account.spec.permissions|tojson}};</script><script src="{{url_for('reseller.static',filename='js/reseller-shared.js')}}"></script><script defer src="{{url_for('reseller.static',filename='js/reseller-workspace.js')}}"></script></body></html>

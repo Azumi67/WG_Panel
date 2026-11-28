@@ -1,0 +1,13 @@
+
+[data-reseller-workspace] .peerx-profile-row{display:flex!important;flex-wrap:wrap!important;gap:16px!important}
+[data-reseller-workspace] .peerx-profile-row>.toggle{flex:0 0 auto!important;min-width:170px!important;width:auto!important}
+[data-reseller-workspace] .peerx-profile-row>.profile-picker{flex:1 1 320px!important;min-width:0!important;width:auto!important;max-width:100%}
+[data-reseller-workspace] .profile-picker select{min-width:0!important}
+[data-reseller-workspace] #notice-list{max-height:360px;overflow-y:auto;overscroll-behavior:contain}
+
+html[data-reseller-workspace][data-design][data-theme] body #main-content :is(.rp-wrap.rp-desk,.rb-page,.rp-billing,#reseller-security,.wg-feature-page.wg-operations){width:100%!important;max-width:none!important;margin:0!important;padding:0!important;box-sizing:border-box;min-width:0}
+html[data-reseller-workspace][data-design][data-theme] body #main-content :is(.rp-page-title,.rb-heading,.bill-heading,.rp-security-heading,.wg-feature-heading,.tg-page-heading){margin:0 0 16px!important;padding:0!important}
+html[data-reseller-workspace][data-design][data-theme] body #main-content :is(.rp-security-panel,.rp-security-heading,.rp-security-flash,.rp-security-footnote){max-width:none!important;width:100%;margin-inline:0!important}
+html[data-reseller-workspace][data-design][data-theme] body #main-content :is(.rb-page,.rp-billing,.rp-desk,.wg-operations) > *{min-width:0}
+html[data-reseller-workspace][data-design][data-theme] body #main-content #tenant-workspace,html[data-reseller-workspace][data-design][data-theme] body #main-content #tenant-workspace :is(#nx-dashboard.rd-dashboard,.subx-page.subx-redesign){width:100%!important;max-width:none!important;margin:0!important;padding:0!important;box-sizing:border-box;min-width:0}
+html[data-reseller-workspace][data-design][data-theme] body #main-content #tenant-workspace :is(.tenant-page-head,.peer-page-hero,.peer-context-workspace,.peer-manage-section,.peer-filters,.peers-container,.subx-hero-panel,.subscription-overview,.tenant-filters){width:100%!important;max-width:none!important;margin-inline:0!important;box-sizing:border-box;min-width:0}

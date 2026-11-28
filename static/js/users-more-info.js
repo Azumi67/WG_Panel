@@ -104,10 +104,7 @@
 
   const start = () => {
     const container = document.querySelector('.peers-container');
-    if (!container) {
-      requestAnimationFrame(start);
-      return;
-    }
+    if (!container) return;
     observer.observe(container, { childList: true, subtree: true });
     sync();
   };

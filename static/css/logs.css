@@ -33,3 +33,91 @@
 
 @media(max-width:1100px){.logs-pulse{grid-template-columns:1.5fr repeat(2,1fr)}.logs-pulse__primary{grid-row:span 2}.logs-settings-grid{grid-template-columns:1fr}.log-event{grid-template-columns:34px minmax(0,1fr) 130px}.log-event__time{grid-column:2/4;grid-row:2;display:flex;gap:7px;justify-items:start;justify-content:flex-start}}
 @media(max-width:760px){.logs-header,.logs-control-card__top,.logs-pane-head{align-items:flex-start;flex-direction:column}.logs-header__right{width:100%}.logs-current-source{width:max-content}.logs-workspace-tabs{width:100%;overflow:auto}.logs-workspace-tabs .top-tab{flex:1;justify-content:center;white-space:nowrap}.logs-pulse{grid-template-columns:1fr 1fr}.logs-pulse__primary{grid-column:1/-1;grid-row:auto}.logs-querybar{grid-template-columns:1fr}.logs-actions{justify-content:flex-end}.logs-view-preferences{grid-template-columns:1fr}.logs-scope{align-items:stretch;flex-direction:column}.logs-scope__title{margin-right:0}.logs-scope label{min-width:0}.filters-advanced{grid-template-columns:1fr}.logs-retention-grid{grid-template-columns:1fr}.log-event{grid-template-columns:32px minmax(0,1fr);gap:7px}.log-event__source{grid-column:2;grid-row:2}.log-event__time{grid-column:2;grid-row:3}.logs-stream-head{align-items:flex-start;flex-direction:column}.logs-stream-head__meta{flex-wrap:wrap}}
+
+
+                                                                            
+                                                                                 
+.logs-page #log-tabs.logs-source-tabs {
+  display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end;
+  gap:8px; min-width:0;
+}
+.logs-page #log-tabs.logs-source-tabs .tab,
+html[data-design="modern"] .logs-page #log-tabs.logs-source-tabs .tab {
+  display:inline-flex!important; align-items:center!important; justify-content:center!important;
+  gap:9px!important; min-height:42px!important; height:auto!important;
+  padding:9px 13px!important; line-height:1.2!important;
+  font-size:12.5px!important; font-weight:650!important;
+  border-radius:10px!important; border:1px solid var(--logs-line)!important;
+  background:var(--logs-surface-2)!important; color:var(--logs-muted)!important;
+  box-shadow:none!important; white-space:nowrap;
+}
+.logs-page #log-tabs.logs-source-tabs .tab i {
+  width:17px; height:17px; display:inline-flex; align-items:center;
+  justify-content:center; flex:0 0 17px; font-size:14px!important;
+  line-height:1!important; color:inherit!important;
+}
+.logs-page #log-tabs.logs-source-tabs .tab:hover,
+html[data-design="modern"] .logs-page #log-tabs.logs-source-tabs .tab:hover {
+  background:var(--logs-surface-3)!important; color:var(--logs-text)!important;
+  border-color:var(--logs-line-strong)!important;
+}
+.logs-page #log-tabs.logs-source-tabs .tab.active,
+html[data-design="modern"] .logs-page #log-tabs.logs-source-tabs .tab.active {
+  background:var(--logs-accent-soft)!important; color:var(--logs-accent)!important;
+  border-color:var(--logs-accent)!important;
+}
+.logs-page .logs-querybar .logs-actions {display:flex;gap:9px;align-items:center;justify-content:flex-end;}
+.logs-page .logs-querybar .logs-actions .btn-icon {
+  display:inline-flex!important;align-items:center!important;justify-content:center!important;
+  gap:5px!important;width:42px;height:42px;min-width:42px;min-height:42px;
+  padding:0!important;border-radius:11px!important;line-height:1!important;
+  border:1px solid var(--logs-line-strong)!important;
+  background:var(--logs-surface-2)!important;color:var(--logs-text)!important;
+  box-shadow:none!important;cursor:pointer;
+}
+.logs-page .logs-querybar .logs-actions .btn-icon i {
+  display:inline-flex;justify-content:center;align-items:center;
+  font-size:16px!important;line-height:1!important;color:inherit!important;
+  width:17px;height:17px;flex:0 0 17px;
+}
+.logs-page .logs-querybar .logs-actions #clear {
+  background:var(--logs-red-soft)!important;color:var(--logs-red)!important;
+  border-color:color-mix(in srgb,var(--logs-red) 40%,var(--logs-line))!important;
+}
+.logs-page .logs-querybar .logs-actions #logs-export-btn {width:50px;min-width:50px;}
+.logs-page .logs-querybar .logs-actions #logs-export-btn .caret {
+  font-size:10px!important;width:10px;height:14px;flex:0 0 10px;
+}
+.logs-page .logs-querybar .logs-actions .btn-icon:hover {
+  border-color:var(--logs-accent)!important;color:var(--logs-accent)!important;
+  background:var(--logs-accent-soft)!important;
+}
+.logs-page .logs-querybar .logs-actions #clear:hover {
+  border-color:var(--logs-red)!important;background:var(--logs-red-soft)!important;
+  color:var(--logs-red)!important;
+}
+.logs-page .logs-querybar .logs-actions .btn-icon:focus-visible,
+.logs-page #log-tabs.logs-source-tabs .tab:focus-visible {
+  outline:2px solid var(--logs-accent);outline-offset:2px;
+}
+.logs-page .logs-querybar .logs-search > i,
+.logs-page .logs-querybar .logs-filter-select > i {
+  width:17px;text-align:center;font-size:13px!important;line-height:1!important;
+}
+.logs-page .logs-querybar .input {min-height:42px;height:42px;font-size:12.5px;}
+@media (max-width:760px) {
+  .logs-page #log-tabs.logs-source-tabs {justify-content:flex-start;width:100%;}
+  .logs-page #log-tabs.logs-source-tabs .tab {flex:1 1 145px;}
+  .logs-page .logs-querybar .logs-actions {justify-content:flex-start;}
+}
+
+                                                                         
+.logs-page .logs-control-card__top {flex-wrap:wrap;}
+.logs-page #log-tabs.logs-source-tabs {max-width:100%;flex:1 1 620px;}
+.logs-page #log-tabs.logs-source-tabs .tab {flex:0 1 auto;}
+@media(max-width:900px) {
+  .logs-page #log-tabs.logs-source-tabs {justify-content:flex-start;flex-basis:100%;}
+  .logs-page #log-tabs.logs-source-tabs .tab {flex:1 1 145px;}
+}
+
+html[data-design][data-theme] body .logs-page .logs-querybar{display:flex!important;flex-wrap:wrap;gap:8px!important}.logs-querybar .logs-filter-select{flex:0 1 175px;min-width:130px}.logs-querybar .logs-search{flex:1 1 220px;min-width:0}.logs-querybar .logs-actions{flex:0 0 auto}@media(max-width:700px){.logs-querybar .logs-filter-select{flex:1 1 130px}.logs-querybar .logs-search{flex-basis:100%}.logs-querybar .logs-actions{flex:1 1 100%}}

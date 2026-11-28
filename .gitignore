@@ -1,35 +1,26 @@
-# Python
 venv/
 __pycache__/
 *.pyc
 
-# Env / secrets
 .env
 .env.*
 
-# DB
 wg_panel.db
 *.db
 *.sqlite
 *.sqlite3
 
-# (Flask)
 instance/
-# instance/*.json
-# instance/*.log
 
-# Backups / exports
 backups/
 *.zip
 *.tar
 *.tar.gz
 
-# Logs
 logs/
 *.log
 *.out
 
-# TLS / keys
 *.pem
 *.key
 *.crt
@@ -38,11 +29,9 @@ logs/
 *.pfx
 *.der
 
-# IDE/OS
 .vscode/
 .idea/
 .DS_Store
 .serena/
 
-# Developers
 my-notes/

@@ -7,11 +7,14 @@
 
   const SOURCES = {
   app:      { label:'Application',         endpoint:'/api/app_logs',                   supportsDelete:true  },
-  tg_app:   { label:'Telegram (bot app)',  endpoint:'/api/telegram/logs?format=json', supportsDelete:true  },
+  tg_app:   { label:'Admin bot runtime',  endpoint:'/api/telegram/logs?format=json', supportsDelete:true  },
   tg_admin: { label:'Admins (Telegram)',   endpoint:'/api/telegram/admin_logs',       supportsDelete:true  },
+  tg_reseller: { label:'Reseller bots', endpoint:'/api/telegram/worker-logs/reseller', supportsDelete:false },
+  tg_shop: { label:'Plan Shop bot', endpoint:'/api/telegram/worker-logs/shop', supportsDelete:false },
   iface:    { label:'Interface',           endpoint:'/api/iface/{id}/logs',           supportsDelete:true }
 };
 
+  const SERVICE_NAMES = {panel:'Web panel',workspace:'Reseller worker',shop:'Plan Shop worker',provision:'Provisioning',monitor:'Usage monitor',combined:'Legacy combined worker'};
   const state = {
     pane:'view', source:'app', ifaceId:'',
     auto:false, timer:null, settings:null,
@@ -438,6 +441,8 @@ function formatMessage(x, src, rawMsg, niceMsg){
     switch (src){
       case 'tg_admin': return humanTgAdmin(x);
       case 'tg_app':   return humanTgApp(x);
+      case 'tg_reseller':
+      case 'tg_shop': return humanApp(x);
       case 'iface':    return humanIface(x);
       case 'app':
       default:         return humanApp(x);
@@ -478,6 +483,7 @@ function buildURL() {
 
   const qs = new URLSearchParams();
 
+  if (state.source === 'app' && $('#app-service')?.value) qs.set('service', $('#app-service').value);
   const q = $('#q')?.value.trim();
   if (q) qs.set('q', q);
 
@@ -602,7 +608,7 @@ function renderizeRows(rows){
         <div class="log-event__title">${escapeHtml(main)}</div>
         ${sub ? `<div class="log-event__sub">${escapeHtml(sub)}</div>` : ''}
       </div>
-      <div class="log-event__source"><span>${escapeHtml(srcCfg.label)}</span>${levelBadge(lvl)}</div>
+      <div class="log-event__source"><span>${escapeHtml(state.source==='app' ? (SERVICE_NAMES[x.source] || srcCfg.label) : srcCfg.label)}</span>${levelBadge(lvl)}</div>
       <div class="log-event__time"><time>${escapeHtml(tsShow)}</time>${tsHuman ? `<small>${escapeHtml(tsHuman)}</small>` : ''}</div>
     </article>`;
   }).join('');
@@ -627,23 +633,34 @@ function renderizeRows(rows){
   setStat('#log-stat-source', srcCfg.label);
   const note = $('#log-stat-source-note');
   if (note) {
-    note.textContent = state.source === 'app' ? 'Panel and API activity'
+    note.textContent = state.source === 'app' ? 'Web panel and background services'
       : state.source === 'tg_app' ? 'Telegram bot runtime'
+      : state.source === 'tg_reseller' ? 'Reseller management bot actions and failures'
+      : state.source === 'tg_shop' ? 'Plan Shop polling and delivery diagnostics'
       : state.source === 'tg_admin' ? 'Administrator bot actions'
       : 'WireGuard interface events';
   }
 }
 
+  let logFetchSequence = 0;
   async function getLogs(){
+    const seq = ++logFetchSequence;
     try{await(window.WG_PANEL_TIMEZONE_READY||Promise.resolve())}catch(_){}
+    if(seq !== logFetchSequence) return;
     const url = buildURL(); if (!url) return;
-    const r = await fetch(url, { credentials:'same-origin' });
-    if (!r.ok){ renderizeRows([]); return; }
-    const j = await r.json().catch(()=>({}));
-    renderizeRows(j.logs || j || []);
-    const cfg = SOURCES[state.source] || SOURCES.app;
-    $('#clear')?.toggleAttribute('disabled', !cfg.supportsDelete);
-    window.dispatchEvent(new CustomEvent('logs:refreshed'));
+    try {
+      const r = await fetch(url, { credentials:'same-origin' });
+      if(seq !== logFetchSequence) return;
+      if (!r.ok){ renderizeRows([]); pageToast('Could not load logs', 'error'); return; }
+      const j = await r.json();
+      if(seq !== logFetchSequence) return;
+      renderizeRows(j.logs || j || []);
+      const cfg = SOURCES[state.source] || SOURCES.app;
+      $('#clear')?.toggleAttribute('disabled', !cfg.supportsDelete);
+      window.dispatchEvent(new CustomEvent('logs:refreshed'));
+    } catch (_) {
+      if(seq === logFetchSequence) pageToast('Could not load logs', 'error');
+    }
   }
 
   window.uiConfirm = function({ title = "Are you sure?", body = "", okText = "OK", cancelText = "Cancel", tone = "danger" } = {}) {
@@ -694,7 +711,7 @@ function renderizeRows(rows){
       window.uiConfirm
         ? window.uiConfirm({
             title: 'Clear logs',
-            body: 'This will permanently delete the logs for the current view. Continue?',
+            body: state.source === 'app' ? 'Clear all entries in '+(SERVICE_NAMES[$('#app-service')?.value] || 'all application services')+'? Search and level filters do not limit deletion.' : 'This will permanently delete the logs for the current view. Continue?',
             okText: 'Clear',
             cancelText: 'Cancel',
             tone: 'danger'
@@ -745,7 +762,7 @@ function renderizeRows(rows){
           )).replace(/\n/g,' ').replace(/"/g,'""');
 
         const srcCfg = SOURCES[state.source] || SOURCES.app;
-        return `"${x.time_display || fmtTsDisplay(ts)}","${lvl}","${srcCfg.label}","${msg}"`;
+        return `"${x.time_display || fmtTsDisplay(ts)}","${lvl}","${state.source==='app' ? (SERVICE_NAMES[x.source] || srcCfg.label) : srcCfg.label}","${msg}"`;
       })
     ].join('\n');
     dlBlob(`${state.source}_logs.csv`, csv, 'text/csv;charset=utf-8;');
@@ -856,6 +873,8 @@ function renderizeRows(rows){
       b.classList.toggle('active', b.dataset.source === src)
     );
 
+    const servicePicker = $('#app-service-picker');
+    if (servicePicker) servicePicker.style.display = src === 'app' ? '' : 'none';
     const picker = $('#iface-picker');
     if (picker) picker.style.display = (src === 'iface') ? 'flex' : 'none';
 
@@ -1239,6 +1258,7 @@ window.addEventListener('wgpanel:timezone-change',async()=>{state.localTime=true
     if (deepLink.query && $('#q')) $('#q').value = deepLink.query;
 
     setPane('view');
+    $('#app-service')?.addEventListener('change',getLogs);
     sourceTab(state.source || 'app');
 
   } catch (err) {

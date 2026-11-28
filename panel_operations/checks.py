@@ -1,4 +1,4 @@
-"""Read-only diagnostics for the Operations workspace"""
+
 from __future__ import annotations
 import os
 import shutil
@@ -397,9 +397,7 @@ def _enrich_guidance(items, host, *, remote=False, root_path=None, instance_path
     return items
 
 
-
 def network_path_snapshot(app, context):
-    """Return the read-only host path stages used by Operations and peer diagnosis."""
     stages = []
     model = context.get("InterfaceConfig")
     rows = model.query.filter_by(node_id=None).all() if model is not None else []
@@ -832,15 +830,18 @@ def collect(app, context):
                     "Stop writes and make a filesystem/database backup before recovery. Test recovery on an isolated copy; never delete the live database to repair it.",
                     category="database",
                 )
-            else:
+            elif engine.dialect.name == 'postgresql':
+                server = connection.execute(text('SHOW server_version')).scalar()
                 add(
-                    "db_integrity",
-                    "Database structural integrity",
-                    "review",
-                    "Automatic integrity checks are limited to SQLite.",
-                    "Use database-specific integrity tooling against an isolated backup.",
-                    category="database",
+                    'db_integrity', 'PostgreSQL availability', 'review',
+                    'Read-only query succeeded on PostgreSQL ' + str(server) + '. A successful query is not a full physical integrity check.',
+                    'Verify scheduled pg_dump and test pg_restore on an isolated PostgreSQL server; run pg_amcheck or physical integrity checks during maintenance.',
+                    category='database',
                 )
+            else:
+                add('db_integrity','Database structural integrity','review',
+                    'Backend-specific integrity checks are not configured.',
+                    'Verify a restored copy and run the database vendor integrity tools.',category='database')
         add(
             "database",
             "Database connectivity",
@@ -1014,7 +1015,6 @@ def collect(app, context):
 
 
 def _sanitize_remote_finding(raw):
-    """Validate one node-agent diagnostic finding before exposing it in UI."""
     if not isinstance(raw, dict):
         return None
     status = str(raw.get("status") or "unknown").lower()
@@ -1065,12 +1065,6 @@ def _sanitize_remote_finding(raw):
 
 
 def collect_node_report(context, node):
-    """Return a full authenticated Operations report for a remote node.
-
-    New node agents expose host-local diagnostics. Older agents fall back to
-    the legacy health/version checks so updating the panel does not make an
-    existing node unusable.
-    """
     getter = context.get("node_get")
     if not callable(getter):
         raise RuntimeError("node client unavailable")
@@ -1189,5 +1183,4 @@ def collect_node_report(context, node):
 
 
 def collect_node(context, node):
-    """Backward-compatible list-only wrapper used by older call sites/tests."""
     return collect_node_report(context, node)["checks"]

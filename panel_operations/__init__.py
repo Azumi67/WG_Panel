@@ -1,4 +1,4 @@
-"""Operations endpoints"""
+
 from __future__ import annotations
 import fcntl
 import json
@@ -476,11 +476,6 @@ def register_operations(app, context):
     @bp.post("/api/operations/verify")
     @admin_required
     def verify():
-        """Run a fresh read-only verification without the normal scan cooldown.
-
-        This is used immediately after a repair or a manual recovery step so
-        the user can confirm the selected finding from the same workflow.
-        """
         try:
             with locked():
                 data = request.get_json(silent=True)

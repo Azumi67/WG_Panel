@@ -923,7 +923,7 @@ html[data-theme="light"] .bk-run-progress>span{
   }
   .backup-shell .bk-body{padding:11px 12px!important;gap:10px!important}
 
-  /* Backup */
+
   .backup-shell .bk-hero{
     grid-template-columns:minmax(0,1fr)!important;
     gap:10px!important;
@@ -951,7 +951,7 @@ html[data-theme="light"] .bk-run-progress>span{
     min-height:43px!important;
   }
 
-  /* Restore */
+
   .backup-shell .bk-step-card{
     grid-template-columns:minmax(0,1fr)!important;
     gap:9px!important;
@@ -1000,7 +1000,7 @@ html[data-theme="light"] .bk-run-progress>span{
   .backup-shell .bk-inline-panel{width:100%!important;min-width:0!important}
   .backup-shell .bk-restore-preview-card{position:static!important;top:auto!important}
 
-  /* Auto-backup */
+
   .backup-shell .bk-form-grid{gap:9px!important}
   .backup-shell .bk-field input,
   .backup-shell .bk-field select,
@@ -1045,7 +1045,7 @@ html[data-theme="light"] .bk-run-progress>span{
     height:38px!important;
   }
 
-  /* Modals */
+
   .bk-modal,
   .bk-run-loader{padding:8px!important;align-items:end!important}
   .bk-modal-card,

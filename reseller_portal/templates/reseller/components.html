@@ -1,0 +1,17 @@
+{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{csrf_token()}}">{% endmacro %}
+
+{% macro search(tab,q,status,pager,view='') %}
+<form class="rp-searchbar" method="get" role="search">
+<input type="hidden" name="tab" value="{{tab}}"><input type="hidden" name="per_page" value="{{pager.per_page}}">{% if view %}<input type="hidden" name="view" value="{{view}}">{% endif %}
+<label class="rp-search"><i class="fas fa-search" aria-hidden="true"></i><input type="search" name="q" value="{{q}}" placeholder="Search {{ {'accounts':'resellers','orders':'purchases','bot':'recipients'}.get(tab,tab) }}" aria-label="Search {{tab}}"></label>
+{% if tab in ('accounts','plans','orders','bot') %}<select class="rp-input" name="status" aria-label="Status"><option value="">All statuses</option>{% set choices={'accounts':[('active','Active'),('suspended','Suspended')],'plans':[('published','Published'),('hidden','Hidden')],'orders':[('review','Awaiting review'),('unpaid','Awaiting receipt'),('approved','Approved'),('rejected','Rejected'),('cancelled','Cancelled'),('pending','All open')],'bot':[('sent','Sent'),('queued','Queued'),('retry','Retrying'),('failed','Not delivered')]} %}{% for key,label in choices[tab] %}<option value="{{key}}" {{'selected' if status==key}}>{{label}}</option>{% endfor %}</select>{% endif %}
+<button class="rp-btn" type="submit">Search</button>{% if q or status %}<a class="rp-clear" href="{{url_for('reseller.admin_page',tab=tab,view=view)}}">Clear</a>{% endif %}
+<span class="rp-search-count">{{pager.total}} {{'results' if q or status else {'accounts':'resellers','orders':'purchases','bot':'messages','audit':'events'}.get(tab,tab)}}</span></form>
+{% endmacro %}
+{% macro pagination(pager,tab,q='',status='',view='') %}
+<nav class="rp-pagination" aria-label="{{tab|title}} pages"><span>{{pager.start}}–{{pager.end}} of {{pager.total}}</span><div class="rp-page-controls">
+{% for number,icon,label,disabled in [(1,'angles-left','First page',pager.page<=1),(pager.page-1,'chevron-left','Previous page',pager.page<=1)] %}{% if disabled %}<button class="rp-page-button" disabled aria-label="{{label}}"><i class="fas fa-{{icon}}"></i></button>{% else %}<a class="rp-page-button" aria-label="{{label}}" href="{{url_for('reseller.admin_page',tab=tab,page=number,per_page=pager.per_page,q=q,status=status,view=view)}}"><i class="fas fa-{{icon}}"></i></a>{% endif %}{% endfor %}
+<span>Page <b>{{pager.page}}</b> of <b>{{pager.pages}}</b></span>
+{% for number,icon,label,disabled in [(pager.page+1,'chevron-right','Next page',pager.page>=pager.pages),(pager.pages,'angles-right','Last page',pager.page>=pager.pages)] %}{% if disabled %}<button class="rp-page-button" disabled aria-label="{{label}}"><i class="fas fa-{{icon}}"></i></button>{% else %}<a class="rp-page-button" aria-label="{{label}}" href="{{url_for('reseller.admin_page',tab=tab,page=number,per_page=pager.per_page,q=q,status=status,view=view)}}"><i class="fas fa-{{icon}}"></i></a>{% endif %}{% endfor %}
+<select class="rp-input" data-rp-page-size aria-label="Rows per page">{% for count in [5,8,12,15,20,50] %}<option value="{{count}}" {{'selected' if pager.per_page==count}}>{{count}} / page</option>{% endfor %}</select>
+</div></nav>{% endmacro %}

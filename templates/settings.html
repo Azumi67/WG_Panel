@@ -22,12 +22,13 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
   rel="stylesheet"
   href="{{ url_for('static', filename='css/settings-dark.css') }}"
 />
+{% if telegram_application_shell|default(false) %}<script defer src="{{url_for('static',filename='js/workspace-features.js')}}"></script><script defer src="{{url_for('static',filename='js/api_docs.js')}}"></script>{% endif %}
 {% endblock %} {% block content %}
 
 <header class="modern-page-heading">
   <span class="modern-only modern-eyebrow">WORKSPACE PREFERENCES</span>
   <div class="page-title">
-    <i class="fa-solid fa-gear" aria-hidden="true"></i> Settings
+    <i class="fa-solid fa-gear" aria-hidden="true"></i> {{'Telegram' if telegram_application_shell|default(false) else 'Settings'}}
   </div>
   <p class="modern-only modern-description">
     Configure your panel, delivery channels and administrator access.
@@ -36,26 +37,13 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
 
 <div class="ws-settings-layout">
   <div class="tabs" id="set-tabs" style="margin-bottom: 10px">
-    <button class="tab active" data-tab="panel">
-      <i class="fa-solid fa-lock"></i> Panel
-    </button>
-    <button class="tab" data-tab="security">
-      <i class="fa-solid fa-shield-halved"></i> Security
-    </button>
-    <button class="tab" data-tab="iface">
-      <i class="fa-solid fa-network-wired"></i> Interface
-    </button>
-    <button class="tab" data-tab="traffic">
-      <i class="fa-solid fa-route"></i> Traffic
-    </button>
-    <button class="tab" data-tab="telegram">
-      <i class="fa-brands fa-telegram"></i> Telegram
-    </button>
-    <button class="tab" data-tab="admin">
-      <i class="fa-solid fa-user-shield"></i> Admin
-    </button>
+{% for key,label,icon in [('panel','Panel','fa-lock'),('security','Security','fa-shield-halved'),('iface','Interface','fa-network-wired'),('traffic','Traffic','fa-route'),('telegram','Telegram','fa-telegram'),('admin','Admin','fa-user-shield')] %}
+{% if telegram_application_shell|default(false) %}<a href="{{url_for('settings_page',tab=key)}}" class="tab {{'active' if key=='telegram'}}" data-tab="{{key}}" {% if key=='telegram' %}aria-current="page"{% endif %}><i class="{{'fa-brands' if key=='telegram' else 'fa-solid'}} {{icon}}"></i> {{label}}</a>{% else %}<button class="tab {{'active' if key=='panel'}}" data-tab="{{key}}"><i class="{{'fa-brands' if key=='telegram' else 'fa-solid'}} {{icon}}"></i> {{label}}</button>{% endif %}
+{% endfor %}
   </div>
-
+{% if telegram_application_shell|default(false) %}
+<div id="set-panels" class="tab-panels tg-settings-content"><section class="panel active tg-workspace" data-panel="telegram">{% with active='applications',tab_links=true %}{% include 'telegram_tabs.html' %}{% endwith %}{% include 'reseller/application_content.html' %}</section></div></div>
+{% else %}
   <div id="set-panels" class="tab-panels">
     <section class="panel active" data-panel="panel" id="panel-tab">
       <div
@@ -131,7 +119,7 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
               <div id="tls-advanced" class="fade-wrap" style="display: none">
                 <div class="form-group">
                   <label for="domain"
-                    >Domain (e.g., <code>panel.azumi.com</code>)</label
+                    >Domain (e.g., <code>panel.example.com</code>)</label
                   >
                   <input
                     class="input"
@@ -2410,20 +2398,9 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
       </div>
     </section>
 
-    <section class="panel" data-panel="telegram">
-      <header class="modern-only modern-section-intro">
-        <span class="modern-feature-icon"
-          ><i class="fa-brands fa-telegram"></i
-        ></span>
-        <div>
-          <span class="modern-eyebrow">COMMUNICATIONS</span>
-          <h2>Telegram hub</h2>
-          <p>
-            Connect your bot, manage recipients and choose the events that
-            matter.
-          </p>
-        </div>
-      </header>
+    <section class="panel tg-workspace" data-panel="telegram">
+{% with active='connection',tab_links=false %}{% include 'telegram_tabs.html' %}{% endwith %}
+      
       <div class="cards">
         <div class="card full" id="card-telegram">
           <div class="card-header">
@@ -2452,38 +2429,7 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
           </div>
 
           <div class="card-body">
-            <div class="tg-chips tg-status-strip">
-              <div class="tg-status-card">
-                <i class="fas fa-bell" aria-hidden="true"></i
-                ><small class="modern-only">Delivery</small
-                ><span class="chip" id="tg-chip-enabled">Notifications: —</span
-                ><em class="modern-only">Selected panel events</em>
-              </div>
-              <div class="tg-status-card">
-                <i class="fas fa-key" aria-hidden="true"></i
-                ><small class="modern-only">Bot credentials</small
-                ><span class="chip" id="tg-chip-token">Token: —</span
-                ><em class="modern-only">Stored token status</em>
-              </div>
-              <div class="tg-status-card">
-                <i class="fas fa-users" aria-hidden="true"></i
-                ><small class="modern-only">Recipients</small
-                ><span class="chip" id="tg-chip-admins">Recipients: —</span
-                ><em class="modern-only">Active administrators</em>
-              </div>
-              <div class="tg-status-card">
-                <i class="fas fa-robot" aria-hidden="true"></i
-                ><small class="modern-only">Connection</small
-                ><span class="chip" id="tg-chip-bot">Bot: —</span
-                ><em class="modern-only">Latest bot status</em>
-              </div>
-              <div class="tg-status-card">
-                <i class="fas fa-clock" aria-hidden="true"></i
-                ><small class="modern-only">Last activity</small
-                ><span class="chip" id="tg-chip-seen">Last seen: —</span
-                ><em class="modern-only">Most recent heartbeat</em>
-              </div>
-            </div>
+            <div class="tg-chips tg-status-strip" aria-label="Telegram status"><span class="chip" id="tg-chip-enabled">Notifications: —</span><span class="chip" id="tg-chip-token">Token: —</span><span class="chip" id="tg-chip-admins">Recipients: —</span><span class="chip" id="tg-chip-bot">Bot: —</span><span class="chip" id="tg-chip-seen">Last seen: —</span></div>
 
             <div class="section-head inline tg-master-card">
               <div class="head-text">
@@ -2493,30 +2439,30 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
                     <span class="slider"></span>
                   </label>
                   Telegram delivery
+                  <span id="tg-delivery-status" class="small-text" role="status" aria-live="polite"></span>
                 </div>
                 <div class="small-text">
-                  Send selected panel events to active Telegram recipients.
-                  Delivery rules below do not affect protection or enforcement.
+                  Choose which events reach your recipients.
                 </div>
               </div>
             </div>
 
-            <nav class="ws-tg-tabs" aria-label="Telegram configuration">
-              <button
-                type="button"
-                data-tg-view="connection"
-                aria-pressed="true"
-              >
-                Connection & recipients</button
-              ><button
-                type="button"
-                data-tg-view="notifications"
-                aria-pressed="false"
-              >
-                Notification rules
-              </button>
-            </nav>
             <div class="tg-accordion" data-tg-view="connection">
+              <div class="tg-language-card">
+                <div class="tg-language-copy">
+                  <span class="tg-language-icon" aria-hidden="true"><i class="fa-solid fa-language"></i></span>
+                  <div><strong id="tg-language-heading">Notification language</strong>
+                    <p>Language of administrator notifications, not the panel interface.</p></div>
+                </div>
+                <div class="tg-language-options" role="group" aria-labelledby="tg-language-heading">
+                  <button type="button" data-tg-lang="en" aria-pressed="true"><span>English</span></button>
+                  <button type="button" data-tg-lang="fa" aria-pressed="false"><span>Persian</span><small lang="fa" dir="rtl">فارسی</small></button>
+                </div>
+                <select id="tg-notice-language" class="tg-language-native" tabindex="-1" aria-hidden="true">
+                  <option value="en">English</option><option value="fa">Persian (فارسی)</option>
+                </select>
+              </div>
+
               <details id="tg-acc-token" class="acc">
                 <summary class="acc-bar">
                   <span
@@ -2613,7 +2559,7 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
                       </tr>
                     </thead>
                     <tbody>
-                      <!-- rows -->
+                      
                     </tbody>
                   </table>
                 </div>
@@ -2876,6 +2822,10 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
                     </section>
                   </div>
 
+                  <label class="tg-notify-row">
+                    <span class="tg-notify-copy"><b>Plan purchase receipts</b><small>Notify administrators when a buyer submits payment for a plan or renewal.</small></span>
+                    <span class="switch sm"><input type="checkbox" id="tg-n-reseller-purchase"><span class="slider"></span></span>
+                  </label>
                   <div class="tg-notify-savebar">
                     <span>
                       <i class="fa-solid fa-circle-info"></i>
@@ -2932,7 +2882,7 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
                   <input
                     id="admin-username"
                     class="input"
-                    placeholder="azumi"
+                    placeholder="Enter username"
                     autocomplete="username"
                   />
                   <button id="admin-rename" class="btn" type="submit">
@@ -3041,8 +2991,9 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
                 </p>
                 <div
                   class="twofa-actions"
-                  style="display: flex; gap: 8px; align-items: center"
+                  style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center"
                 >
+                  <label class="twofa-field" for="twofa-enable-password"><span>Current password</span><input id="twofa-enable-password" type="password" autocomplete="current-password" maxlength="1024" class="input"></label>
                   <button id="twofa-begin" class="btn">
                     <i class="fa-solid fa-shield-halved"></i> Enable 2FA
                   </button>
@@ -3055,14 +3006,17 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
                 </p>
                 <div
                   class="twofa-actions"
-                  style="display: flex; gap: 8px; align-items: center"
+                  style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center"
                 >
+                  <label class="twofa-field" for="twofa-disable-password"><span>Current password</span><input id="twofa-disable-password" type="password" autocomplete="current-password" maxlength="1024" class="input"></label>
+                  <label class="twofa-field" for="twofa-disable-code"><span>Authenticator or recovery code</span><input id="twofa-disable-code" type="password" autocomplete="one-time-code" maxlength="64" class="input"></label>
                   <button id="twofa-disable" class="btn secondary">
                     <i class="fa-solid fa-ban"></i> Disable 2FA
                   </button>
                 </div>
               </div>
 
+              <div id="twofa-recovery-reveal" hidden><p><strong>Save your recovery codes now.</strong> Each code works once. They will not be shown again.</p><textarea id="twofa-recovery-codes" rows="10" readonly spellcheck="false" aria-label="Recovery codes"></textarea><button id="twofa-recovery-close" type="button" class="btn secondary">I have saved them</button></div>
               <div id="twofa-setup" class="fade-wrap" style="display: none">
                 <div
                   class="cfg"
@@ -3158,7 +3112,7 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
     <h3 style="margin: 0 0 10px 0">Add Telegram recipient</h3>
     <div class="form-group">
       <label for="tg-new-id">Telegram numeric ID</label
-      ><input class="input" id="tg-new-id" placeholder="e.g. 6325621171" />
+      ><input class="input" id="tg-new-id" placeholder="Enter numeric Telegram ID" />
     </div>
     <div class="form-group">
       <label for="tg-new-username">@username (optional)</label
@@ -3387,7 +3341,7 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
   <div class="modal-backdrop" data-close></div>
 
   <div class="modal-content lg logsheet">
-    <!-- Head -->
+    
     <header class="logsheet__head">
       <div class="logsheet__titlewrap">
         <i class="fa-solid fa-diagram-project" aria-hidden="true"></i>
@@ -3518,4 +3472,5 @@ set use_fa_brands = true %} {% endblock %} {% block head_extras %}
   </div>
 </div>
 
+{% endif %}
 {% endblock %}

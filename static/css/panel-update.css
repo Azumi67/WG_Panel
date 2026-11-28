@@ -100,3 +100,77 @@ html[data-theme="dark"] .pu-node-btn.update{background:rgba(45,212,191,.10);bord
   .pu-section-title{align-items:stretch;flex-direction:column}.pu-update-all{width:100%}
   .pu-foot{align-items:flex-start;flex-direction:column}.pu-log-toggle{width:100%;justify-content:center}
 }
+
+html[data-theme][data-design] body #panel-update-modal .pu-dialog{width:min(860px,calc(100vw - 32px))!important;max-height:calc(100dvh - 40px)!important;border-radius:12px!important}
+html[data-theme][data-design] body #panel-update-modal .pu-head{padding:16px 20px!important}html[data-theme][data-design] body #panel-update-modal .pu-head h2{font-size:20px!important}html[data-theme][data-design] body #panel-update-modal .pu-logo{width:36px;height:36px;border-radius:9px;background:transparent!important}
+html[data-theme][data-design] body #panel-update-modal .pu-body{padding:16px 20px!important}html[data-theme][data-design] body #panel-update-modal .pu-summary{padding:10px 20px!important}html[data-theme][data-design] body #panel-update-modal .pu-target-main{padding:14px!important}html[data-theme][data-design] body #panel-update-modal .pu-target{border-radius:9px!important;box-shadow:none!important}
+html[data-theme][data-design] body #panel-update-modal .pu-revert{margin:14px 0 0!important;padding:16px!important;border:1px solid #d8dfe9!important;border-radius:9px!important;background:transparent!important;display:grid;gap:10px;font-size:13px}
+html[data-theme=dark][data-design] body #panel-update-modal .pu-revert{border-color:#343e50!important}#panel-update-modal .pu-revert strong{font-size:14px}#panel-update-modal .pu-revert p{font-size:12px;line-height:1.5;margin:5px 0 0;color:inherit;opacity:.75}#panel-update-modal .pu-revert label{font-size:12px;font-weight:600}#panel-update-modal .pu-revert-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+html[data-theme][data-design] body #panel-update-modal .pu-revert select{flex:1;min-width:0;width:auto!important;height:40px!important;min-height:40px!important;padding:8px 10px!important;font-size:12px!important;border-radius:7px!important}
+html[data-theme][data-design] body #panel-update-modal .pu-revert :is(button,a){display:inline-flex;align-items:center;justify-content:center;min-height:40px!important;padding:8px 12px!important;border:1px solid #bac4d4!important;border-radius:7px!important;background:transparent!important;color:inherit!important;font-size:12px!important;font-weight:600;text-decoration:none;box-shadow:none!important;cursor:pointer}
+html[data-theme=dark][data-design] body #panel-update-modal .pu-revert :is(button,a){border-color:#485369!important}#panel-update-modal .pu-revert button:disabled{opacity:.45;cursor:default}#panel-update-modal .pu-revert [hidden]{display:none!important}#panel-update-modal .pu-revert small{font-size:11px;opacity:.8}html[data-theme][data-design] body #panel-update-modal .pu-section-title{margin:16px 0 10px!important}html[data-theme][data-design] body #panel-update-modal .pu-empty{padding:16px!important;border-radius:8px!important}html[data-theme][data-design] body #panel-update-modal .pu-foot{padding:10px 20px!important}#panel-update-modal button:focus-visible,#panel-update-modal a:focus-visible{outline:2px solid #9980ff;outline-offset:2px}
+.pu-content {display:contents}
+.pu-check-status {margin:8px 0;font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.pu-check-status[hidden] {display:none}
+
+@media (max-width:760px), (max-height:480px) and (max-width:960px) {
+  html[data-theme][data-design] body #panel-update-modal:not([hidden]) {
+    display:flex;
+    box-sizing:border-box;
+    padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  html[data-theme][data-design] body #panel-update-modal .pu-dialog {
+    width:100%!important;
+    height:100%;
+    max-width:none!important;
+    max-height:100%!important;
+    margin:0!important;
+    border-radius:0!important;
+  }
+  html[data-theme][data-design] body #panel-update-modal .pu-head {
+    padding:8px 14px!important;
+    flex:none;
+  }
+  #panel-update-modal .pu-content {
+    display:block;
+    flex:1;
+    min-height:0;
+    overflow:auto;
+    overscroll-behavior:contain;
+    scrollbar-gutter:stable;
+  }
+  html[data-theme][data-design] body #panel-update-modal .pu-summary {
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto!important;
+    gap:8px!important;
+    padding:8px 14px!important;
+  }
+  html[data-theme][data-design] body #panel-update-modal .pu-summary>div:nth-child(2) {display:flex!important}
+  html[data-theme][data-design] body #panel-update-modal .pu-summary>div {flex-direction:column!important;align-items:flex-start!important;gap:2px!important;min-width:0}
+  html[data-theme][data-design] body #panel-update-modal .pu-summary>div>:is(strong,span) {max-width:100%;white-space:normal!important;line-height:1.3}
+  html[data-theme][data-design] body #panel-update-modal .pu-body {
+    overflow:visible!important;
+    max-height:none!important;
+    padding:12px!important;
+  }
+  html[data-theme][data-design] body #panel-update-modal .pu-revert {min-width:0;grid-template-columns:minmax(0,1fr);padding:12px!important}
+  #panel-update-modal .pu-revert>* {min-width:0}
+  html[data-theme][data-design] body #panel-update-modal .pu-revert-actions {display:flex;align-items:stretch;gap:8px}
+  html[data-theme][data-design] body #panel-update-modal .pu-revert select {max-width:100%;height:44px!important;min-height:44px!important}
+  html[data-theme][data-design] body #panel-update-modal .pu-revert :is(a,button),
+  html[data-theme][data-design] body #panel-update-modal :is(.pu-refresh,.pu-close,.pu-update-btn,.pu-log-toggle,.pu-update-all,#pu-log-clear) {
+    min-height:44px!important;
+    min-width:44px!important;
+    font-size:12px!important;
+  }
+  #panel-update-modal :is(.pu-target-copy,.pu-versions,.pu-versions span,.pu-target-title strong) {min-width:0;overflow-wrap:anywhere}
+  #panel-update-modal .pu-versions {flex-wrap:wrap}
+  html[data-theme][data-design] body #panel-update-modal .pu-foot {padding:8px 12px!important;flex-direction:row!important;align-items:center!important}
+  html[data-theme][data-design] body #panel-update-modal .pu-safety span {display:inline!important}
+  html[data-theme][data-design] body #panel-update-modal .pu-log-toggle {flex:none;width:auto!important}
+  #panel-update-modal .pu-safety {min-width:0}
+  #panel-update-modal .pu-log-drawer pre {overflow-wrap:anywhere}
+}
+@media (max-width:440px) {
+  html[data-theme][data-design] body #panel-update-modal .pu-revert select {flex-basis:100%}
+  html[data-theme][data-design] body #panel-update-modal .pu-revert :is(button,a) {flex:1}
+}

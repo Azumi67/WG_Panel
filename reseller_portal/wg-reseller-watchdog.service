@@ -1,0 +1,14 @@
+[Unit]
+Description=WG Panel worker progress and quota enforcement watchdog (read-only)
+After=wg-reseller-worker.service wg-provision.service wg-monitor.service wg-plan-shop.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=20
+WorkingDirectory=/usr/local/bin/WG_Panel
+EnvironmentFile=/usr/local/bin/WG_Panel/.env
+ExecStart=/usr/local/bin/WG_Panel/venv/bin/python /usr/local/bin/WG_Panel/reseller_portal/watchdog.py
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=true

@@ -1,23 +1,34 @@
+{% set tenant = reseller_mode|default(false) %}
+{% set admin_application = (request.endpoint == 'reseller.admin_app_key' and (request.view_args or {}).get('role') == 'admin') or request.endpoint == 'reseller.admin_workspace_app_key' %}
+{% set preferred_design = 'legacy' if request.args.get('design', request.cookies.get('wg-design')) == 'legacy' else 'modern' %}
 <!doctype html>
 <html
   lang="en"
-  data-render-design="{{ 'legacy' if request.args.get('design', request.cookies.get('wg-design')) == 'legacy' else 'modern' }}"
+  {% if tenant %}data-design="{{ preferred_design }}" data-reseller-workspace="true"{% endif %}
+  data-render-design="{{ preferred_design }}"
 >
   <head>
     <meta charset="utf-8" />
+    <script src="{{ url_for('static', filename='js/panel-read-requests.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/csrf.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/workspace-ui.js') }}"></script>
+    {% include 'reseller/head.html' %}
+
     <title>{% block title %}WG Panel{% endblock %}</title>
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
 
     <link
       rel="icon"
-      href="{{ url_for('static', filename='img/wireguard-badge.svg') }}"
+      id="wg-favicon"
+      href="{{ url_for('static', filename='img/' + ('workspace-mark.svg' if preferred_design == 'modern' else 'wireguard-badge.svg')) }}"
       type="image/svg+xml"
     />
     <link
       rel="mask-icon"
-      href="{{ url_for('static', filename='img/wireguard-badge.svg') }}"
-      color="#6ee7b7"
+      id="wg-mask-icon"
+      href="{{ url_for('static', filename='img/' + ('workspace-mark.svg' if preferred_design == 'modern' else 'wireguard-badge.svg')) }}"
+      color="{{ '#7258ee' if preferred_design == 'modern' else '#6ee7b7' }}"
     />
     <meta name="theme-color" content="#0b1020" />
     <script>
@@ -64,10 +75,33 @@
         } catch (_) {
           root.dataset.design = "modern";
         }
+        function applyFavicon(design) {
+          var modern = String(design || '').toLowerCase() !== 'legacy';
+          var icon = modern
+            ? {{ url_for('static', filename='img/workspace-mark.svg')|tojson }}
+            : {{ url_for('static', filename='img/wireguard-badge.svg')|tojson }};
+          var color = modern ? '#7258ee' : '#6ee7b7';
+          var favicon = document.getElementById('wg-favicon');
+          if (favicon) favicon.href = icon;
+          var mask = document.getElementById('wg-mask-icon');
+          if (mask) {
+            mask.href = icon;
+            mask.setAttribute('color', color);
+          }
+        }
+        window.WG_PANEL_SET_FAVICON = applyFavicon;
         root.dataset.themeMode = mode;
         root.dataset.theme = effective;
         root.style.colorScheme = effective;
+        applyFavicon(root.dataset.design);
       })();
+    </script>
+    <script>
+      window.addEventListener('wg-design-change', function () {
+        if (typeof window.WG_PANEL_SET_FAVICON === 'function') {
+          window.WG_PANEL_SET_FAVICON(document.documentElement.dataset.design);
+        }
+      });
     </script>
     <link
       rel="preload"
@@ -126,28 +160,32 @@
       rel="stylesheet"
       href="{{ url_for('static', filename='css/style.css') }}"
     />
+    {% if not tenant %}
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='css/panel-version.css') }}"
     />
+    {% endif %}
     <link
       rel="stylesheet"
-      href="{{ url_for('static', filename='css/base.css') }}"
+      href="{{ url_for('static', filename='css/shell-base.bundle.css') }}"
     />
-    <link
-      rel="stylesheet"
-      href="{{ url_for('static', filename='css/sidebar-compact.css') }}"
-    />
+    {% if not tenant %}
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='css/panel-update.css') }}"
     />
+    {% endif %}
 
+    <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-features.css')}}">
     {% block head_extras %}{% endblock %}
+
+    {% if not tenant or section in ('peers','subscriptions') %}
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='css/dark-dashboard-peers.css') }}"
     />
+    {% endif %}
     {% block responsive_extras %}{% endblock %}
     <link
       rel="stylesheet"
@@ -156,32 +194,16 @@
     {% block final_styles %}{% endblock %}
     <link
       rel="stylesheet"
-      href="{{ url_for('static', filename='css/modern.css') }}"
+      href="{{ url_for('static', filename='css/shell-design.bundle.css') }}"
     />
     <script
       defer
       src="{{ url_for('static', filename='js/modern.js') }}"
     ></script>
-    <link
-      rel="stylesheet"
-      href="{{ url_for('static', filename='css/workspace.css') }}"
-    />
-    <script
+        <script
       defer
       src="{{ url_for('static', filename='js/workspace.js') }}"
     ></script>
-    <link
-      rel="stylesheet"
-      href="{{ url_for('static', filename='css/design-system.css') }}"
-    />
-    <link
-      rel="stylesheet"
-      href="{{ url_for('static', filename='css/design-modes.css') }}"
-    />
-    <link
-      rel="stylesheet"
-      href="{{ url_for('static', filename='css/refinements.css') }}"
-    />
 
     {% if request.endpoint == 'index' %}
     <script
@@ -193,11 +215,15 @@
       defer
       src="{{ url_for('static', filename='js/toast.js') }}"
     ></script>
-    <script defer src="{{ url_for('static', filename='js/csrf.js') }}"></script>
     <script>
-      window.WG_PANEL_TIMEZONE = {{ PANEL_TIMEZONE|default('UTC', true)|tojson }};
+      window.WG_PANEL_TIMEZONE = {{ (reseller_timezone if tenant else PANEL_TIMEZONE|default('UTC', true))|tojson }};
+                                                                              
+                                                                           
+      {% if tenant or request.blueprint == 'reseller' %}
+      window.WG_PANEL_TIMEZONE_READY = Promise.resolve(window.WG_PANEL_TIMEZONE);
+      {% else %}
       window.WG_PANEL_TIMEZONE_READY = fetch(
-        {{ url_for('api_timezone')|tojson }} + '?_=' + Date.now(),
+        {{ ('/api/timezone' if tenant else url_for('api_timezone'))|tojson }} + '?_=' + Date.now(),
         { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } }
       ).then(function (response) {
         if (!response.ok) throw new Error('timezone endpoint returned ' + response.status);
@@ -211,8 +237,10 @@
       }).catch(function () {
         return window.WG_PANEL_TIMEZONE || 'UTC';
       });
+      {% endif %}
     </script>
-    <script defer src="{{ url_for('static', filename='js/base.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='js/base.js') }}"></script>{% if not tenant %}<script defer src="{{url_for('static',filename='js/panel-manual-rollback.js')}}"></script><link rel="stylesheet" href="{{url_for('static',filename='css/panel-manual-rollback.css')}}">{% endif %}
+    {% if not tenant or section in ('peers','subscriptions','bot','security','backup') %}
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='css/editor-modern.css') }}"
@@ -223,20 +251,23 @@
     ></script>
     <link
       rel="stylesheet"
-      href="{{ url_for('static', filename='css/workspace-refinements.css') }}"
-    />
-    <link
-      rel="stylesheet"
-      href="{{ url_for('static', filename='css/control-polish.css') }}"
+      href="{{ url_for('static', filename='css/shell-controls.bundle.css') }}"
     />
     <script
       defer
       src="{{ url_for('static', filename='js/switch-polish.js') }}"
     ></script>
-  </head>
+    {% endif %}
+  <link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-compact.css')}}"><script defer src="{{url_for('reseller.static',filename='js/reseller-ui.js')}}"></script>
+{% if not tenant or not reseller_plan_expired %}<script defer src="{{url_for('reseller.static',filename='js/inbox-visibility.js')}}"></script>{% endif %}
+{% if tenant and not reseller_plan_expired %}<script defer src="{{url_for('reseller.static',filename='js/reseller-notifications.js')}}"></script>{% endif %}{% if tenant or request.blueprint=='reseller' %}<link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-layout.bundle.css')}}">{% if not tenant or section=='bot' %}<link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-management.css')}}">{% endif %}{% endif %}
+<link rel="stylesheet" href="{{url_for('static',filename='css/workspace-interactions.css')}}"><script defer src="{{url_for('static',filename='js/operation-progress.js')}}"></script>{% if not tenant %}<link rel="stylesheet" href="{{url_for('static',filename='css/panel-notifications.css')}}"><script defer src="{{url_for('static',filename='js/panel-notifications.js')}}"></script>{% endif %}
+{% if request.endpoint == 'settings_page' or admin_application or (tenant and section == 'bot') or request.endpoint == 'reseller.admin_app_key' %}<link rel="stylesheet" href="{{url_for('static',filename='css/telegram-compact.css')}}">{% endif %}
+</head>
 
   <body
-    data-page="{{ request.endpoint }}"
+    class="{{ 'rp-tenant-page' if tenant else 'rp-admin-page' if request.blueprint == 'reseller' and not admin_application else '' }}"
+    data-page="{{ ({'peers':'users','subscriptions':'subscriptions_page','dashboard':'index','bot':'reseller.management_bot_settings','logs':'logs_page','security':'reseller.reseller_security','backup':'reseller.reseller_backup_page','billing':'reseller.billing','operations':'reseller.operations'}.get(section,'index')) if tenant else ('settings_page' if admin_application else request.endpoint) }}"
     data-preview="{{ '1' if preview|default(false) else '0' }}"
   >
     <header
@@ -292,7 +323,7 @@
       </div>
 
       <div class="sb2-body">
-        <nav role="navigation" class="legacy-only" aria-label="Primary">
+{% if not tenant %}        <nav role="navigation" class="legacy-only" aria-label="Primary">
           {% set ep = request.endpoint or '' %}
 
           <div class="sb2-section">Overview</div>
@@ -340,6 +371,7 @@
           {% endif %}
 
           <div class="sb2-section">Admin</div>
+<a class="sb2-link {{'active' if request.blueprint=='reseller' and not admin_application else ''}}" {% if request.blueprint=='reseller' and not admin_application %}aria-current="page"{% endif %} href="{{ url_for('reseller.admin_page') }}"><i class="fas fa-handshake"></i><span class="sb2-text">Resellers</span></a>
           <a
             href="{{ url_for('operations.page') }}"
             class="sb2-link{{ ' active' if ep == 'operations.page' else '' }}"
@@ -371,10 +403,10 @@
           {% if HAS_SETTINGS %}
           <a
             href="{{ url_for('settings_page') }}?tab=panel"
-            class="sb2-link{{ ' active' if ep in ['settings_page','settings'] else '' }}"
+            class="sb2-link{{ ' active' if ep in ['settings_page','settings'] or admin_application else '' }}"
             data-tip="Settings"
             data-settings-nav="panel"
-            aria-current="{{ 'page' if ep in ['settings_page','settings'] else '' }}"
+            aria-current="{{ 'page' if ep in ['settings_page','settings'] or admin_application else '' }}"
           >
             <i class="fas fa-sliders" aria-hidden="true"></i
             ><span class="sb2-text">Settings</span>
@@ -392,23 +424,21 @@
           </a>
         </nav>
 
-        <nav class="nx-nav modern-only" aria-label="Primary">
+{% endif %}        <nav class="nx-nav{{ ' modern-only' if not tenant else ' rp-tenant-nav' }}" aria-label="Primary">
           <details class="nx-workspace-picker">
             <summary>
-              <i class="fas fa-layer-group"></i><span>Main workspace</span
+              <i class="fas fa-layer-group"></i><span>{{ account.username if tenant else "Main workspace" }}</span
               ><i class="fas fa-chevron-down"></i>
             </summary>
-            <a href="/">Overview</a>{% if HAS_NODES %}<a
+            <a href="{{ url_for('reseller.billing') if tenant and reseller_plan_expired else url_for('reseller.portal',section='dashboard') if tenant else '/' }}">{{"My plan" if tenant and reseller_plan_expired else "Overview"}}</a>{% if HAS_NODES and not tenant %}<a
               href="{{ url_for('nodes') }}"
               >Manage nodes</a
             >{% endif %}
           </details>
           <div class="sb2-section">Navigation</div>
-          {% set ep = request.endpoint or '' %} {% for href, label, icon, active
-          in [ (url_for('index'), 'Dashboard', 'fa-house', ep == 'index'),
-          (url_for('users'), 'Peers', 'fa-users', ep == 'users'),
-          ('/subscriptions', 'Subscriptions', 'fa-credit-card',
-          request.path.startswith('/subscriptions'))] %}
+          {% set ep = request.endpoint or '' %}
+          {% set links = [(url_for('reseller.portal',section='dashboard'),'Dashboard','fa-house',section=='dashboard'),(url_for('reseller.portal',section='peers'),'Peers','fa-users',section=='peers'),(url_for('reseller.portal',section='subscriptions'),'Subscriptions','fa-credit-card',section=='subscriptions')] if tenant else [(url_for('index'),'Dashboard','fa-house',ep=='index'),(url_for('users'),'Peers','fa-users',ep=='users'),('/subscriptions','Subscriptions','fa-credit-card',ep=='subscriptions_page')] %}
+          {% for href,label,icon,active in links if not tenant or (not reseller_plan_expired and label|lower in account.spec.permissions) %}
           <a
             class="sb2-link{{ ' active' if active else '' }}"
             href="{{ href }}"
@@ -423,13 +453,14 @@
             ><i class="fas {{ icon }}"></i
             ><span class="sb2-text">{{ label }}</span></a
           >
-          {% endfor %} {% if HAS_NODES %}<a
+          {% endfor %}{% if tenant %}<a class="sb2-link{{' active' if section=='operations' else ''}}" href="{{url_for('reseller.operations')}}" data-tip="Operations" {% if section=='operations' %}aria-current="page"{% endif %}><i class="fas fa-list-check" aria-hidden="true"></i><span class="sb2-text">Operations</span></a>{% endif %}{% if tenant %}<a class="sb2-link{{ ' active' if section=='billing' else '' }}" href="{{url_for('reseller.billing')}}" data-tip="My plan" {% if section=='billing' %}aria-current="page"{% endif %}><i class="fas fa-receipt" aria-hidden="true"></i><span class="sb2-text">My plan</span></a>{% endif %}{% if tenant and not reseller_plan_expired %}<a class="sb2-link{{ ' active' if section=='security' else '' }}" href="{{ url_for('reseller.reseller_security') }}" data-tip="Security &amp; 2FA" {% if section=='security' %}aria-current="page"{% endif %}><i class="fas fa-shield-halved" aria-hidden="true"></i><span class="sb2-text">Security &amp; 2FA</span></a>{% endif %}{% if tenant and not reseller_plan_expired and 'backup' in account.spec.permissions %}<a class="sb2-link{{' active' if section=='backup' else ''}}" href="{{url_for('reseller.reseller_backup_page')}}" data-tip="My backup" {% if section=='backup' %}aria-current="page"{% endif %}><i class="fas fa-box-archive" aria-hidden="true"></i><span class="sb2-text">My backup</span></a>{% endif %}{% if tenant and not reseller_plan_expired and 'logs' in account.spec.permissions %}<a class="sb2-link{{' active' if section=='logs'}}" href="{{url_for('reseller.activity')}}" data-tip="Activity logs"><i class="fas fa-clock-rotate-left"></i><span class="sb2-text">Activity logs</span></a>{% endif %}{% if tenant and (reseller_bot_allowed or reseller_app_allowed|default(false)) %}<a class="sb2-link{{' active' if section=='bot' else ''}}" href="{{url_for('reseller.management_bot_settings' if reseller_bot_allowed else 'reseller.workspace_app_key')}}" data-tip="Telegram" {% if section=='bot' %}aria-current="page"{% endif %}><i class="fab fa-telegram"></i><span class="sb2-text">Telegram</span></a>{% endif %} {% if not tenant %}{% if HAS_NODES %}<a
             class="sb2-link{{ ' active' if ep == 'nodes' else '' }}"
             href="{{ url_for('nodes') }}"
             data-tip="Nodes"
             ><i class="fas fa-server"></i><span class="sb2-text">Nodes</span></a
           >{% endif %}
           <div class="sb2-section nx-nav-divider">Management</div>
+<a class="sb2-link {{'active' if request.blueprint=='reseller' and not admin_application else ''}}" {% if request.blueprint=='reseller' and not admin_application %}aria-current="page"{% endif %} href="{{ url_for('reseller.admin_page') }}"><i class="fas fa-handshake"></i><span class="sb2-text">Resellers</span></a>
           <a
             class="sb2-link{{ ' active' if ep == 'operations.page' else '' }}"
             href="{{ url_for('operations.page') }}"
@@ -452,7 +483,7 @@
             ><span class="sb2-text">Backup</span></a
           >
           {% if HAS_SETTINGS %}<a
-            class="sb2-link{{ ' active' if ep == 'settings_page' else '' }}"
+            class="sb2-link{{ ' active' if ep == 'settings_page' or admin_application else '' }}"
             href="{{ url_for('settings_page') }}?tab=panel"
             data-tip="Settings"
             data-settings-nav="panel"
@@ -466,9 +497,9 @@
             ><i class="fas fa-code"></i
             ><span class="sb2-text">API Docs</span></a
           >
-        </nav>
+        {% endif %}</nav>
         <div class="sb2-bottom">
-          <button
+{% if not tenant %}          <button
             type="button"
             class="sb2-update-card"
             id="sb2-update-open"
@@ -514,8 +545,8 @@
             ></i>
           </button>
 
-          <div class="sb2-utility-row">
-            {% if current_user.is_authenticated %} {% set is_admin =
+{% endif %}          <div class="sb2-utility-row">
+            {% if tenant or current_user.is_authenticated %} {% set is_admin =
             current_user.is_authenticated and
             (current_user.is_admin|default(false) or
             current_user.is_superuser|default(false)) %}
@@ -529,6 +560,7 @@
               endif
               %}
             >
+              {% if tenant %}<span class="sb2-account-avatar reseller-avatar" role="img" aria-label="{{account.username}} avatar"><svg viewBox="0 0 32 32" width="26" height="26" fill="none" aria-hidden="true"><path d="M16 3 27 8v8c0 6-7 11-11 13C12 27 5 22 5 16V8Z" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="12" r="3" fill="currentColor"/><path d="M10 23v-2a6 6 0 0 1 12 0v2" fill="currentColor"/></svg></span>{% else %}
               <button
                 type="button"
                 class="sb2-account-avatar"
@@ -536,17 +568,18 @@
                 data-account-avatar
                 aria-label="Open profile"
               ></button>
+              {% endif %}
               <span class="sb2-account-copy">
                 <strong
                   >{{
-                  current_user.username|default(current_user.name|default('Admin'))
+                  account.username if tenant else current_user.username|default(current_user.name|default('Admin'))
                   }}</strong
                 >
-                {% if is_admin %}<small>Admin</small>{% endif %}
+                {% if tenant %}<small>Reseller account</small>{% elif is_admin %}<small>Admin</small>{% endif %}
               </span>
               <a
                 class="sb2-account-logout"
-                href="{{ url_for('logout') }}"
+                href="{{ url_for('logout') if not tenant else '#' }}" {% if tenant %}data-reseller-logout{% endif %}
                 aria-label="Logout"
                 title="Logout"
               >
@@ -588,10 +621,10 @@
             </div>
           </div>
 
-          <div class="design-switch" role="group" aria-label="Panel design">
+          {% if not tenant %}<div class="design-switch" role="group" aria-label="Panel design">
             <button type="button" data-design-choice="modern">Modern</button>
             <button type="button" data-design-choice="legacy">Legacy</button>
-          </div>
+          </div>{% endif %}
           <div class="sb2-footer-actions">
             <a
               href="{{ PANEL_REPO_URL|default('https://github.com/Azumi67/WG_Panel') }}"
@@ -621,18 +654,18 @@
     </aside>
 
     <main class="main" id="main-content">
-      <header class="nx-topbar modern-only">
+      <header class="nx-topbar{{ ' modern-only' if not tenant else ' rp-tenant-topbar' }}">
         <div class="nx-breadcrumb">
-          <i class="fas fa-house"></i><span>Workspace</span><span>/</span
+          <i class="fas fa-house"></i><span>{{"Reseller workspace" if tenant else "Workspace"}}</span><span>/</span
           ><b
             >{{
             {'index':'Overview','settings_page':'Settings','subscriptions_page':'Subscriptions','logs_page':'Activity','users':'Peers','nodes':'Nodes','operations.page':'Panel
             Center','api_docs_page':'API Docs','api_docs':'API
-            Docs','backup_page':'Backup'}.get(request.endpoint, 'Control panel')
+            Docs','backup_page':'Backup','reseller.admin_app_key':'Telegram','reseller.admin_workspace_app_key':'Telegram','reseller.admin_operations':'Operations','reseller.admin_page':'Resellers','reseller.operations':'Operations','reseller.billing':'My plan','reseller.management_bot_settings':'Telegram','reseller.reseller_security':'Security & 2FA','reseller.reseller_backup_page':'My backup'}.get(({'peers':'users','subscriptions':'subscriptions_page','dashboard':'index','bot':'reseller.management_bot_settings','logs':'logs_page','security':'reseller.reseller_security','backup':'reseller.reseller_backup_page','billing':'reseller.billing','operations':'reseller.operations'}.get(section,'index')) if tenant else request.endpoint, 'Control panel')
             }}</b
           >
         </div>
-        <div class="nx-topbar-actions">
+{% if not tenant %}        <div class="nx-topbar-actions">
           <button
             type="button"
             class="nx-search-trigger"
@@ -641,12 +674,7 @@
           >
             <i class="fas fa-magnifying-glass"></i><span>Search panel…</span
             ><kbd>⌘ / Ctrl K</kbd></button
-          ><a
-            href="{{ url_for('logs_page') }}"
-            class="nx-icon-button"
-            title="Activity logs"
-            aria-label="Activity logs"
-            ><i class="far fa-bell"></i></a
+          ><div id="panel-notifications" data-admin="{{current_user.get_id()}}" data-csrf="{{csrf_token()}}"><button type="button" class="nx-icon-button" aria-label="Panel alerts" aria-expanded="false" aria-controls="panel-alert-menu"><i class="far fa-bell" aria-hidden="true"></i><span class="panel-alert-label">Notifications</span><span data-review-count hidden></span></button><section id="panel-alert-menu" hidden aria-label="Panel alerts"><header><b>Panel alerts</b><button type="button" data-alert-refresh>Refresh</button></header><div data-purchase-list aria-live="polite" hidden></div><div data-alert-list aria-live="polite"></div><footer><a href="{{url_for('logs_page')}}">Activity logs</a><a href="/operations">Panel Center</a></footer></section></div
           ><a
             href="{{ url_for('settings_page') }}?tab=admin"
             class="nx-avatar"
@@ -656,10 +684,10 @@
             >{{ (current_user.username|default('A',true))[:1]|upper }}</a
           >
         </div>
-      </header>
+{% else %}<div class="nx-topbar-actions">{% if not reseller_plan_expired %}<div class="rp-notifications" data-notification-account="{{account.id}}"><button type="button" class="nx-icon-button" id="rp-bell" aria-label="Notifications" aria-expanded="false" aria-controls="rp-notification-menu"><i class="far fa-bell" aria-hidden="true"></i><span id="rp-unread" hidden></span></button><section id="rp-notification-menu" hidden aria-label="Notifications"><header><b>Notifications</b><button type="button" id="rp-mark-read">Mark all read</button></header><div id="rp-notification-list" aria-live="polite"></div><footer><button type="button" id="rp-notice-prev" aria-label="Previous notifications">‹</button><span id="rp-notice-page"></span><button type="button" id="rp-notice-next" aria-label="Next notifications">›</button></footer></section></div>{% endif %}<span class="reseller-workspace-badge" title="R-{{account.id}}">Reseller · {{account.username}}</span><span class="nx-avatar reseller-avatar" role="img" aria-label="{{account.username}} avatar"><svg viewBox="0 0 32 32" width="26" height="26" fill="none" aria-hidden="true"><path d="M16 3 27 8v8c0 6-7 11-11 13C12 27 5 22 5 16V8Z" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="12" r="3" fill="currentColor"/><path d="M10 23v-2a6 6 0 0 1 12 0v2" fill="currentColor"/></svg></span></div>{% endif %}      </header>
       <div id="ui-toast-container" role="status" aria-live="polite"></div>
 
-      {% with msgs = get_flashed_messages(with_categories=true) %} {% if msgs %}
+      {% with msgs = get_flashed_messages(with_categories=true) %} {% if msgs and not (tenant and section=='billing') %}
       <div id="flask-flashes" hidden>
         {% for cat, msg in msgs %}
         <div
@@ -671,20 +699,20 @@
       {% endif %} {% endwith %} {% block content %}{% endblock %}
     </main>
 
-    <script
+{% if not tenant %}    <script
       defer
       src="{{ url_for('static', filename='js/panel-version.js') }}"
-    ></script>
-    <script
+    ></script>{% endif %}
+{% if not tenant %}    <script
       defer
       src="{{ url_for('static', filename='js/panel-update.js') }}"
-    ></script>
+    ></script>{% endif %}
     <script
       defer
       src="{{ url_for('static', filename='js/theme.js') }}"
     ></script>
 
-    <div
+{% if not tenant %}    <div
       class="pu-modal"
       id="panel-update-modal"
       hidden
@@ -699,9 +727,9 @@
           <div class="pu-title-wrap">
             <span class="pu-logo"><i class="fas fa-cloud-arrow-down"></i></span>
             <div>
-              <span class="ws-eyebrow">RELEASE MANAGEMENT</span>
+              
               <h2 id="pu-title">Update center</h2>
-              <p>Safely update the local panel and registered nodes.</p>
+              <p>Panel releases, snapshots and nodes.</p>
             </div>
           </div>
           <button
@@ -714,6 +742,7 @@
           </button>
         </header>
 
+        <div class="pu-content">
         <div class="pu-summary">
           <div>
             <span>Local panel</span
@@ -728,17 +757,7 @@
         </div>
 
         <div class="pu-body">
-          <div class="ws-update-intro">
-            <div>
-              <span class="ws-eyebrow">YOUR INFRASTRUCTURE</span>
-              <h3>Keep your fleet up to date.</h3>
-              <p>
-                Review installed versions and available releases before
-                updating.
-              </p>
-            </div>
-            <i class="fas fa-code-branch" aria-hidden="true"></i>
-          </div>
+          <p class="pu-check-status" id="pu-check-status" role="status" hidden></p>
           <section class="pu-target pu-local" data-target-kind="local">
             <div class="pu-target-main">
               <span class="pu-target-icon"><i class="fas fa-server"></i></span>
@@ -771,6 +790,14 @@
             </div>
           </section>
 
+          <section class="pu-revert" id="pu-revert-panel" aria-label="Restore previous panel code">
+            <div><strong><i class="fas fa-rotate-left" aria-hidden="true"></i> Code snapshots</strong>
+              <p>Save or restore the application code. Rollback requires a compatible database schema.</p></div>
+            <label for="pu-revert-choice">Saved snapshot</label>
+            <div class="pu-revert-actions"><select id="pu-revert-choice"><option value="">Open Update Center to inspect snapshots</option></select><button type="button" id="pu-revert-action" disabled>Revert code</button></div>
+            <div class="pu-revert-actions"><button type="button" id="pu-snapshot-create">Create snapshot</button><a id="pu-snapshot-download" hidden download>Download snapshot</a></div>
+            <small id="pu-revert-info" role="status"></small>
+          </section>
           <div class="pu-section-title">
             <div>
               <strong>Remote nodes</strong>
@@ -790,6 +817,7 @@
             </button>
           </div>
 
+          <p class="pu-check-status" id="pu-batch-status" role="status" hidden></p>
           <div class="pu-node-list" id="pu-node-list">
             <div class="pu-empty">
               <i class="fas fa-spinner fa-spin"></i> Loading nodes…
@@ -801,21 +829,21 @@
           <div class="pu-safety">
             <i class="fas fa-shield-halved"></i>
             <span
-              >Every update creates a code backup, validates Python, installs
-              dependencies, and reports rollback status.</span
+              >A code snapshot is created before each update.</span
             >
           </div>
-          <button type="button" class="pu-log-toggle" id="pu-log-toggle">
+          <button type="button" class="pu-log-toggle" id="pu-log-toggle" aria-controls="pu-log-drawer" aria-expanded="false">
             <i class="fas fa-terminal"></i><span>Update log</span>
           </button>
         </footer>
 
         <div class="pu-log-drawer" id="pu-log-drawer" hidden>
           <div class="pu-log-head">
-            <strong><i class="fas fa-terminal"></i> Update activity</strong>
+            <strong id="pu-log-heading" tabindex="-1"><i class="fas fa-terminal"></i> Update activity</strong>
             <button type="button" id="pu-log-clear">Clear view</button>
           </div>
           <pre id="pu-log-output">No update activity yet.</pre>
+        </div>
         </div>
       </section>
     </div>
@@ -865,7 +893,7 @@
       <p id="nx-command-empty" hidden>No matching pages.</p>
       <small>Navigate with Tab · Close with Esc</small>
     </dialog>
-    <dialog
+{% if not tenant %}    <dialog
       id="account-dialog"
       class="account-dialog"
       aria-labelledby="account-title"
@@ -955,18 +983,20 @@
             >Password & security</a
           ><button type="submit" id="account-save" class="btn">
             Save profile</button
-          ><a class="account-signout" href="{{ url_for('logout') }}"
+          ><a class="account-signout" href="{{ url_for('logout') if not tenant else '#' }}" {% if tenant %}data-reseller-logout{% endif %}
             ><i class="fas fa-right-from-bracket"></i> Sign out</a
           >
         </footer>
       </form>
-    </dialog>
-    <script
+    </dialog>{% endif %}
+{% if not tenant %}    <script
       defer
       src="{{ url_for('static', filename='js/account-profile.js') }}"
-    ></script>
+    ></script>{% endif %}
+{% endif %}    {% if tenant %}<link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-polish.css')}}">{% endif %}{% if not tenant and request.endpoint in ('reseller.admin_page','users','subscriptions_page') %}<link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-visibility.css',v='20261127f')}}"><script defer src="{{url_for('reseller.static',filename='js/reseller-visibility.js',v='20261127b')}}"></script>{% endif %}
     {% block body_extras %}{% endblock %}
 
-    <script src="{{ url_for('static', filename='js/visual-preferences.js') }}?v=8"></script>
-  </body>
+    <script src="{{ url_for('static', filename='js/visual-preferences.js') }}"></script>
+  <script defer src="{{url_for('static',filename='js/sidebar-overflow.js')}}"></script>
+</body>
 </html>

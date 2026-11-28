@@ -1,4 +1,4 @@
-"""presentation profile, stored outside the application code"""
+
 import base64
 import hashlib
 import json

@@ -383,7 +383,7 @@ button.ui-btn.primary {
 }
 
 .card-header i {
-  font-size: 16px; /*margin-right:8px;*/
+  font-size: 16px;
   opacity: 0.85;
 }
 .card-header .card-value {
@@ -3952,7 +3952,7 @@ html[data-theme="light"] .ui-confirm select{background:#fff!important;color:#0f1
   #subpanel-runtime #rt-hint{width:40px!important;min-width:40px!important}
 }
 
-/* Operations deep links briefly identify the exact setting that was requested. */
+
 .settings-deeplink-focus {
   outline: 2px solid color-mix(in srgb, var(--accent, #10b981) 70%, transparent) !important;
   outline-offset: 5px;
@@ -3960,7 +3960,7 @@ html[data-theme="light"] .ui-confirm select{background:#fff!important;color:#0f1
   transition: outline-color .25s ease;
 }
 
-/* Operations -> Settings guided handoff. */
+
 .settings-operations-return {
   margin:8px 0 12px;
   padding:10px 12px;
@@ -3990,7 +3990,7 @@ html[data-theme="dark"] .settings-operations-return {
   .settings-operations-return .btn{grid-column:1/-1;width:100%}
 }
 
-/* Telegram delivery workspace */
+
 #card-telegram .card-header{align-items:center}
 #card-telegram .card-value{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}
 #card-telegram .tg-status-strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin:0 0 12px}
@@ -4021,3 +4021,9 @@ html[data-theme="dark"] .settings-operations-return {
 #card-telegram .tg-notify-savebar{position:sticky;bottom:0;background:rgba(255,255,255,.94);backdrop-filter:blur(8px);border-top:1px solid #e2e8f0}
 @media(max-width:980px){#card-telegram .tg-status-strip{grid-template-columns:repeat(2,minmax(0,1fr))}#card-telegram #tg-token-form .row{grid-template-columns:1fr 1fr}#card-telegram #tg-token-form .row .input{grid-column:1/-1}}
 @media(max-width:620px){#card-telegram .card-value{justify-content:flex-start}#card-telegram .tg-status-strip{grid-template-columns:1fr}#card-telegram #tg-token-form .row{grid-template-columns:1fr}#card-telegram #tg-token-form .row .input{grid-column:auto}#card-telegram .tg-master-card .small-text{margin-left:0}}
+
+html[data-design][data-theme] body #twofa-section .twofa-actions{display:flex!important;flex-wrap:wrap!important;align-items:flex-end!important;gap:12px!important}
+html[data-design][data-theme] body #twofa-section .twofa-field{display:grid!important;gap:6px!important;flex:0 1 320px;min-width:0;max-width:100%;font-size:13px}
+html[data-design][data-theme] body #twofa-section .twofa-field .input{width:100%!important;min-width:0!important;box-sizing:border-box;margin:0!important}
+html[data-design][data-theme] body #twofa-section .twofa-actions>.btn{min-height:40px;flex:0 0 auto;margin:0!important}
+@media(max-width:600px){html[data-design][data-theme] body #twofa-section .twofa-field{flex-basis:100%}html[data-design][data-theme] body #twofa-section .twofa-actions>.btn{width:100%}}

@@ -129,7 +129,7 @@
 .peer-actions-row{background: linear-gradient( 180deg, rgba(17, 24, 39, 0.4), rgba(15, 23, 42, 0.94) ) !important;}
 }
 
-#spinner-peers.spinner.overlay{position: fixed !important;inset: 0 !important;z-index: 11950 !important;display: none;align-items: flex-start !important;justify-content: center !important;padding-top: 92px !important;background: rgba(248, 250, 252, 0.42) !important;backdrop-filter: blur(3px) saturate(120%) !important;-webkit-backdrop-filter: blur(3px) saturate(120%) !important;pointer-events: auto !important;}
+#spinner-peers.overlay{position: fixed !important;inset: 0 !important;z-index: 11950 !important;display: none;align-items: center !important;justify-content: center !important;padding: 16px !important;box-sizing: border-box !important;width: auto !important;height: auto !important;transform: none !important;animation: none !important;border: 0 !important;border-radius: 0 !important;background: rgba(248, 250, 252, 0.42) !important;backdrop-filter: blur(3px) saturate(120%) !important;-webkit-backdrop-filter: blur(3px) saturate(120%) !important;pointer-events: auto !important;}
 .peers-loading-card{width: min(390px, calc(100vw - 32px)) !important;min-height: 64px !important;display: flex !important;align-items: center !important;gap: 12px !important;padding: 12px 14px !important;border: 1px solid rgba(203, 213, 225, 0.88) !important;border-radius: 18px !important;background: linear-gradient( 180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.96) ) !important;box-shadow: 0 22px 70px rgba(15, 23, 42, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.9) !important;color: #0f172a !important;animation: peerLoadingIn 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both !important;}
 .peers-loading-orb{width: 40px !important;height: 40px !important;flex: 0 0 40px !important;border-radius: 15px !important;display: grid !important;place-items: center !important;color: #0f172a !important;background: linear-gradient(180deg, #ffffff, #eef2f7) !important;border: 1px solid #dbe3ee !important;box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08) !important;}
 .peers-loading-orb i{font-size: 16px !important;animation: peerSpin 0.9s linear infinite !important;}
@@ -165,11 +165,11 @@ to{opacity: 1;transform: translateY(0) scale(1);}
 }
 
 @media (max-width: 700px) {
-#spinner-peers.spinner.overlay{padding: 74px 14px 0 !important;}
+#spinner-peers.overlay{padding: 16px !important;}
 .empty-peers-pro{align-items: flex-start !important;justify-content: flex-start !important;padding: 18px !important;}
 }
 @media (prefers-color-scheme: dark) {
-#spinner-peers.spinner.overlay{background: rgba(2, 6, 23, 0.46) !important;}
+#spinner-peers.overlay{background: rgba(2, 6, 23, 0.46) !important;}
 .peers-loading-card, .peer-skeleton-card, .empty-peers-pro{background: linear-gradient(180deg, #111827, #0f172a) !important;border-color: #263244 !important;color: #e5e7eb !important;box-shadow: 0 22px 70px rgba(0, 0, 0, 0.32) !important;}
 .peers-loading-orb{background: linear-gradient(180deg, #1f2937, #111827) !important;border-color: #334155 !important;color: #e5e7eb !important;}
 .peers-loading-copy b, .empty-peers-copy strong{color: #e5e7eb !important;}
@@ -177,7 +177,7 @@ to{opacity: 1;transform: translateY(0) scale(1);}
 .peer-skel-line{background: linear-gradient( 90deg, #1f2937 0%, #334155 45%, #1f2937 100% ) !important;background-size: 220% 100% !important;}
 .empty-peers-icon{background: rgba(16, 185, 129, 0.16) !important;color: #bbf7d0 !important;border-color: rgba(52, 211, 153, 0.3) !important;}
 }
-#spinner-peers.spinner.overlay[aria-busy="true"]{display: flex !important;}
+#spinner-peers.overlay[aria-busy="true"]{display: flex !important;}
 body.peers-is-loading .peers-container{position: relative !important;}
 body.peers-is-loading .peer-skeleton-card{display: block !important;}
 

@@ -1,0 +1,44 @@
+{% from 'reseller/components.html' import csrf with context %}
+{% set photo=receipt_photos.get(o.id) %}
+<details class="rp-order-details" {% if (request.args.get('order')|int)==o.id %}open{% endif %}>
+  <summary><i class="fas fa-{{'clipboard-check' if o.payment_ref else 'list'}}" aria-hidden="true"></i>
+    {{'Review payment' if o.state=='pending' and o.payment_ref else 'Order details'}}
+    <i class="fas fa-chevron-down" aria-hidden="true"></i>
+  </summary>
+  <div class="rp-review-sheet">
+    <div class="rp-receipt-line">
+      <span class="rp-receipt-symbol" aria-hidden="true"><i class="fas fa-{{'image' if photo else 'receipt'}}"></i></span>
+      <div><strong>{{'Receipt photo' if photo else 'Transaction reference' if o.payment_ref else 'Awaiting receipt'}}</strong>
+        {% if photo and photo.caption %}<p dir="auto">{{photo.caption}}</p>{% elif o.payment_ref and not photo %}<p class="rp-proof-ref" dir="auto">{{o.payment_ref}}</p>{% elif not o.payment_ref %}<p>The buyer hasn’t submitted proof of payment.</p>{% endif %}
+      </div>
+      {% if photo %}<a class="rp-btn" href="{{url_for('reseller.receipt_image',oid=o.id)}}" target="_blank" rel="noopener noreferrer">View receipt photo <i class="fas fa-arrow-up-right-from-square" aria-hidden="true"></i></a>{% endif %}
+    </div>
+    {% if o.state=='pending' %}
+      {% if o.payment_ref %}
+      <form id="rp-approve-{{o.id}}" method="post" data-order-review action="{{url_for('reseller.review',oid=o.id,action='approve')}}">
+        {{csrf()}}
+        <label class="rp-ack"><input type="checkbox" name="verified" value="yes" required> I confirmed receipt of {{o.spec.price}} {{o.spec.currency}}.</label>
+        <details class="rp-review-options"><summary><i class="fas fa-chevron-right" aria-hidden="true"></i> Verification details <small>Optional</small></summary>
+          <div class="rp-review-fields">
+            <label class="rp-field">Checked using<select class="rp-input" name="verification_method"><option value="manual">Manual review</option><option value="bank">Bank statement</option><option value="tron">TRON explorer</option><option value="other">Other provider</option></select></label>
+            <label class="rp-field">Transaction reference<input class="rp-input" name="verification_reference" maxlength="160" autocomplete="off"></label>
+          </div>
+        </details>
+      </form>{% endif %}
+      <div class="rp-review-actions">
+        {% if o.payment_ref %}<button class="rp-btn rp-approve" type="submit" form="rp-approve-{{o.id}}"><i class="fas fa-check" aria-hidden="true"></i> Approve &amp; activate</button>{% endif %}
+        <details class="rp-decline"><summary class="rp-btn"><i class="fas fa-xmark" aria-hidden="true"></i> Reject purchase</summary>
+          <form method="post" data-order-review action="{{url_for('reseller.review',oid=o.id,action='reject')}}">{{csrf()}}
+            <label class="rp-field">Message to buyer <small>Optional</small><input class="rp-input" name="note" maxlength="500"></label>
+            <button class="rp-btn danger" type="submit">Confirm rejection</button>
+          </form>
+        </details>
+      </div>
+      <p class="rp-review-feedback" data-review-feedback aria-live="polite" tabindex="-1" hidden></p>
+    {% elif o.reviewed_at %}
+      <div class="rp-review-outcome"><b>{{o.state|title}} by {{o.reviewer}}</b> · {{o.reviewed_at|rp_time}}
+        {% set v=payment_verifications.get(o.id) %}{% if v %}<p>{{{'manual':'Manual review','tron':'TRON explorer','bank':'Bank statement','other':'Other provider'}.get(v.method,v.method)}}{% if v.external_reference %} · <bdi>{{v.external_reference}}</bdi>{% endif %}</p>{% endif %}
+        {% if o.note %}<p dir="auto">{{o.note}}</p>{% endif %}</div>
+    {% elif o.state=='cancelled' %}<p class="rp-muted">Cancelled by the buyer.</p>{% endif %}
+  </div>
+</details>

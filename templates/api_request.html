@@ -1,0 +1,106 @@
+{% macro request_example(title, role, method, path, args, result) -%}
+{% set origin = '$NODE' if role == 'node' else '$PANEL' -%}
+{% set request = ['curl --silent --show-error --request ' ~ method ~ ' "' ~ origin ~ path ~ '"'] -%}
+{% if role in ('admin_app','shop_app','workspace_app') -%}
+  {% set request = request + ['--header "Authorization: Bearer $' ~ role|upper ~ '_KEY"'] -%}
+{% elif role == 'node' -%}
+  {% set request = request + ['--header "X-API-KEY: $NODE_API_KEY"'] -%}
+{% else -%}
+  {% set account = 'RESELLER' if role == 'reseller' else 'ADMIN' -%}
+  {% set request = request + ['--cookie "$' ~ account ~ '_COOKIE_JAR"'] -%}
+  {% if method != 'GET' -%}
+    {% set request = request + ['--referer "$PANEL/"', '--header "X-CSRFToken: $' ~ account ~ '_CSRF"'] -%}
+    {% if role == 'reseller' -%}
+      {% set request = request + ['--header "X-Reseller-Account: $ACCOUNT_ID"'] -%}
+    {% endif -%}
+  {% endif -%}
+{% endif -%}
+<div class="detail-card command-card api-request-example">
+  <div class="api-example-head"><span class="detail-title">{{ title }}</span><button class="copy-btn" type="button" data-copy-visible aria-label="Copy example: {{ title }}"><i class="fa-regular fa-copy" aria-hidden="true"></i> Copy example</button></div>
+  <pre><code>{{ (request + args)|join(' \\\n  ') }}</code></pre>
+  <p class="api-example-result"><strong>Response</strong> {{ result }}</p>
+</div>
+{%- endmacro %}
+
+{% macro workspace_example(action) -%}
+{% if action == 'customers' %}
+{{ request_example("Read workspace customers", "workspace_app", "GET", "/api/bot-apps/workspace/customers?kind=peers&after=0", [], "200 returns the account ID and its customer IDs, names and access status. Use subscriptions for the subscription directory.") }}
+{% elif action == 'access' %}
+{{ request_example("Pause an owned customer", "workspace_app", "POST", "/api/bot-apps/workspace/customers/peers/$PEER_ID/access", ['--header "Idempotency-Key: $REQUEST_ID"', "--header 'Content-Type: application/json'", "--data '{\"enabled\":false}'"], "202 returns an operation reference. Poll status_url until completed; set enabled to true to resume. Requires the directory and access-control grants. Keep the same request ID for retries.") }}
+{% elif action == 'message' %}
+{{ request_example("Message the linked reseller", "workspace_app", "POST", "/api/bot-apps/workspace/messages", ["--data-urlencode \"text=Your customer report is ready.\""], "200 confirms Telegram accepted delivery through the connected workspace bot to its linked reseller. Requires enabled notifications.") }}
+{% endif %}
+{%- endmacro %}
+
+{% macro developer_example(title,method,path,body,scope,result) %}
+{% set curl %}{% autoescape false %}curl --fail-with-body --request {{method}} "$PANEL{{path}}" \
+  --header "Authorization: Bearer $WORKSPACE_APP_KEY"{% if method=='POST' %} \
+  --header "Idempotency-Key: $REQUEST_ID" \
+  --header "Content-Type: application/json" \
+  --data '{{body}}'{% endif %}{% endautoescape %}{% endset %}
+{% set python %}{% autoescape false %}import os
+import requests
+
+headers = {"Authorization": "Bearer " + os.environ["WORKSPACE_APP_KEY"]}
+{% if method=='POST' %}headers["Idempotency-Key"] = os.environ["REQUEST_ID"]
+headers["Content-Type"] = "application/json"
+{% endif %}response = requests.request({{method|tojson}}, os.environ["PANEL"].rstrip("/") + {{path|tojson}},
+    headers=headers, timeout=20{% if method=='POST' %}, data={{body|tojson}}.encode(),{% endif %}
+)
+response.raise_for_status()
+{% if '/config' in path or '/qr' in path %}with open("{{'peer.png' if '/qr' in path else 'peer.conf'}}", "wb") as f:
+    f.write(response.content)
+{% else %}print(response.json()){% endif %}{% endautoescape %}{% endset %}
+{% set js %}{% autoescape false %}const headers = {Authorization: `Bearer ${process.env.WORKSPACE_APP_KEY}`};
+{% if method=='POST' %}headers['Idempotency-Key'] = process.env.REQUEST_ID;
+headers['Content-Type'] = 'application/json';
+{% endif %}const response = await fetch(process.env.PANEL.replace(/\/$/, '') + {{path|tojson}}, {
+  method: {{method|tojson}}, headers, signal: AbortSignal.timeout(20000){% if method=='POST' %}, body: {{body|tojson}}{% endif %}
+});
+if (!response.ok) throw new Error(`HTTP ${response.status}`);
+{% if '/config' in path or '/qr' in path %}const {writeFile} = await import('node:fs/promises');
+await writeFile('{{'peer.png' if '/qr' in path else 'peer.conf'}}', Buffer.from(await response.arrayBuffer()));
+{% else %}console.log(await response.json());{% endif %}{% endautoescape %}{% endset %}
+{% set php %}{% autoescape false %}<?php
+$ch = curl_init(rtrim(getenv('PANEL'), '/') . '{{path}}');
+$headers = ['Authorization: Bearer ' . getenv('WORKSPACE_APP_KEY')];
+{% if method=='POST' %}$headers[] = 'Idempotency-Key: ' . getenv('REQUEST_ID');
+$headers[] = 'Content-Type: application/json';
+curl_setopt($ch, CURLOPT_POSTFIELDS, '{{body}}');
+{% endif %}curl_setopt_array($ch, [CURLOPT_CUSTOMREQUEST => {{method|tojson}},
+    CURLOPT_HTTPHEADER => $headers, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 20]);
+$result = curl_exec($ch);
+if ($result === false || curl_getinfo($ch, CURLINFO_HTTP_CODE) >= 400) { throw new RuntimeException('Request failed'); }
+{% if '/config' in path or '/qr' in path %}file_put_contents('{{'peer.png' if '/qr' in path else 'peer.conf'}}', $result);
+{% else %}echo $result;{% endif %}{% endautoescape %}{% endset %}
+<div class="detail-card command-card api-request-example wg-multilang"><div class="api-example-head"><span class="detail-title">{{title}}</span><button class="copy-btn wg-secondary" type="button" data-copy-visible>Copy example</button></div><p><strong>{{method}}</strong> <code>{{path}}</code></p><p class="api-example-result">Requires: {{scope}}</p><div class="wg-example-langs" aria-label="Code language">{% for lang in ['cURL','Python','Node.js','PHP'] %}<button type="button" class="wg-secondary" data-example-language="{{loop.index0}}" aria-pressed="{{'true' if loop.first else 'false'}}">{{lang}}</button>{% endfor %}</div><pre><code>{{curl|forceescape}}{% if '/config' in path %} --output peer.conf{% elif '/qr' in path %} --output peer.png{% endif %}</code></pre><template data-example-code="0">{{curl|forceescape}}{% if '/config' in path %} --output peer.conf{% elif '/qr' in path %} --output peer.png{% endif %}</template><template data-example-code="1">{{python|forceescape}}</template><template data-example-code="2">{{js|forceescape}}</template><template data-example-code="3">{{php|forceescape}}</template><p class="api-example-result"><strong>Response</strong> {{result}}</p></div>
+{% endmacro %}
+
+{% macro developer_examples(reference=false) %}
+<p class="wg-small">Set PANEL to your HTTPS origin and WORKSPACE_APP_KEY on your server. Replace example IDs. For queued writes, generate a new REQUEST_ID per intended change and reuse it for retries. Never retry with a new ID while an operation is uncertain.</p>
+<div class="wg-api-example-list">
+{% set examples=[
+('Workspace status','GET','/api/bot-apps/workspace/status','','Usage','200: quota, usage, expiry and effective grants.'),
+('Assigned interfaces','GET','/api/bot-apps/workspace/interfaces','','Peers or subscriptions','200: items with interface IDs, names and remote flags.'),
+('List peers','GET','/api/bot-apps/workspace/customers?kind=peers&after=0','','Peers','200: account_id and items (up to 50). Advance after to the last ID.'),
+('List subscriptions','GET','/api/bot-apps/workspace/customers?kind=subscriptions&after=0','','Subscriptions','200: owned subscription directory.'),
+('Customer details','GET','/api/bot-apps/workspace/customers/peers/123','','Peers','200: customer name, enabled state, limits and expiry.'),
+('Create peer','POST','/api/bot-apps/workspace/customers/peers','{"interfaces":[1],"options":{"name":"customer","data_limit_value":5,"data_limit_unit":"Gi","time_limit_days":7}}','Peers + Create','202: operation.id and status_url. Poll until completed.'),
+('Bulk create peers','POST','/api/bot-apps/workspace/customers/peers','{"interfaces":[1],"count":3,"options":{"name":"customer","data_limit_value":5,"data_limit_unit":"Gi","time_limit_days":7}}','Peers + Create + Bulk','202: queued; completed result contains created IDs.'),
+('Create subscription','POST','/api/bot-apps/workspace/customers/subscriptions','{"interfaces":[1,2],"options":{"name":"customer","data_limit_value":5,"data_limit_unit":"Gi","time_limit_days":7}}','Subscriptions + Create','202: queued; each location consumes a peer slot.'),
+('Edit peer','POST','/api/bot-apps/workspace/customers/peers/123/actions','{"action":"edit","options":{"name":"customer","data_limit_value":5,"data_limit_unit":"Gi","time_limit_days":7,"start_on_first_use":false}}','Peers + Edit','202: full settings replacement; include existing contacts and network options if permitted.'),
+('Pause peer','POST','/api/bot-apps/workspace/customers/peers/123/actions','{"action":"disable"}','Peers + Access control','202: queued. Use enable to resume.'),
+('Reset traffic','POST','/api/bot-apps/workspace/customers/peers/123/actions','{"action":"reset_data"}','Peers + Reset traffic','202: queued; plan usage remains protected.'),
+('Reset timer','POST','/api/bot-apps/workspace/customers/peers/123/actions','{"action":"reset_timer"}','Peers + Reset timer','202: queued.'),
+('Rotate subscription link','POST','/api/bot-apps/workspace/customers/subscriptions/123/actions','{"action":"rotate"}','Subscriptions + Rotate link','202: queued; invalidates old subscription link.'),
+('Delete peer','POST','/api/bot-apps/workspace/customers/peers/123/actions','{"action":"delete"}','Peers + Delete','202: queued; destructive action.'),
+('Download configuration','GET','/api/bot-apps/workspace/customers/peers/123/config','','Peers + Download','200: text configuration containing private key. Store securely.'),
+('Download QR','GET','/api/bot-apps/workspace/customers/peers/123/qr','','Peers + Download','200: PNG containing private key.'),
+('Subscription link','GET','/api/bot-apps/workspace/customers/subscriptions/123/link','','Subscriptions + Download','200: private subscription portal URL. Treat as a credential.'),
+('Recover operation by request ID','GET','/api/bot-apps/workspace/operations/by-request/example-request-id','','Customer directory','200: operation; 404: no matching operation. Reuse the original request ID.'),
+('Check operation','GET','/api/bot-apps/workspace/operations/0123456789abcdef0123456789abcdef','','Customer directory','200: operation state; completed includes result, review requires administrator reconciliation.')
+] %}
+{% for title,method,path,body,scope,result in examples %}{% if reference %}<article class="route-row" data-text="{{title}} {{method}} {{path}} {{scope}}"><button type="button" class="route-main" aria-expanded="false"><span class="method m-{{method|lower}}">{{method}}</span><code class="route-path">{{path}}</code><span class="route-desc">{{title}}</span><span class="auth-pill">Workspace key</span><i class="fas fa-chevron-down chev"></i></button><div class="route-detail">{{developer_example(title,method,path,body,scope,result)}}</div></article>{% else %}<details><summary>{{title}} · {{method}}</summary>{{developer_example(title,method,path,body,scope,result)}}</details>{% endif %}{% endfor %}
+{% if not reference %}<details><summary>Send a message through the built-in bot</summary>{{workspace_example('message')}}</details>{% endif %}
+</div>
+{% endmacro %}

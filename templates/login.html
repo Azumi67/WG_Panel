@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en"{% if reseller_mode|default(false) %} data-design="modern" data-design-lock="modern"{% endif %}>
   <head>
     <script src="{{ url_for('static', filename='js/auth-appearance.js') }}"></script>
     <meta charset="utf-8" />
@@ -317,9 +317,10 @@
       rel="stylesheet"
       href="{{ url_for('static', filename='css/auth-workspace.css') }}"
     />
-  </head>
+  {% if reseller_mode|default(false) %}<link rel="stylesheet" href="{{url_for('reseller.static',filename='css/reseller-auth.css')}}"><script defer src="{{url_for('reseller.static',filename='js/reseller-password.js')}}"></script>{% endif %}<link rel="stylesheet" href="{{url_for('static',filename='css/auth-compact.css')}}">
+<link rel="stylesheet" href="{{url_for('static',filename='css/auth-mobile.css')}}"></head>
 
-  <body>
+  <body{% if reseller_mode|default(false) %} class="rp-auth"{% endif %}>
     <div class="auth-wrap">
       <canvas id="bg-canvas" aria-hidden="true"></canvas>
       <div class="bg-glow" aria-hidden="true"></div>
@@ -339,19 +340,20 @@
         </div>
 
         <header class="auth-header">
-          <h2>Welcome back</h2>
-          <div class="muted">Sign in to your WG Panel</div>
+          <h2>{{'Set your password' if setup_mode|default(false) else ('Reseller sign in' if reseller_mode|default(false) else 'Welcome back')}}</h2>
+          <div class="muted">{{'Set a password for '~username if setup_mode|default(false) else ('Workspace for '~reseller_username|default('your reseller account') if reseller_mode|default(false) else 'Sign in to your WG Panel')}}</div>
         </header>
 
         {% with msgs = get_flashed_messages(with_categories=true) %} {% if msgs
         %} {% for category, message in msgs %}
-        <div class="flash {{ category|lower }}">{{ message|safe }}</div>
+        <div class="flash {{ category|lower }}">{% if reseller_mode|default(false) %}{{message}}{% else %}{{message|safe}}{% endif %}</div>
         {% endfor %} {% endif %} {% endwith %}
 
+        {% if error %}<div class="flash error" role="alert">{{error}}</div>{% endif %}
         <form
           id="login-form"
           method="post"
-          action="{{ url_for('login') }}"
+          action="{{ '' if reseller_mode|default(false) else url_for('login', next=request.args.get('next') or none) }}"
           novalidate
         >
           {% if csrf_token is defined %}
@@ -366,7 +368,7 @@
                 id="username"
                 name="username"
                 type="text"
-                placeholder="Your admin username"
+                placeholder="{{'Your username' if reseller_mode|default(false) else 'Your admin username'}}" {% if setup_mode|default(false) %}value="{{username}}" readonly{% endif %}
                 autocomplete="username"
                 required
               />
@@ -381,7 +383,7 @@
                   name="password"
                   type="password"
                   placeholder="••••••••"
-                  autocomplete="current-password"
+                  autocomplete="{{'new-password' if setup_mode|default(false) else 'current-password'}}" {% if setup_mode|default(false) %}minlength="{{reseller_password_min}}" maxlength="256"{% endif %}
                   required
                 />
                 <button
@@ -434,7 +436,14 @@
               </div>
             </div>
 
+{% if reseller_mode|default(false) and show_2fa|default(false) %}
             <div class="form-group">
+              <label for="twofa_code">Authenticator or recovery code</label>
+              <input class="input" id="twofa_code" name="twofa_code" type="text" maxlength="64" autocomplete="one-time-code" placeholder="6-digit code or recovery code" required aria-describedby="reseller-2fa-hint">
+              <small id="reseller-2fa-hint" class="muted">Two-factor authentication is enabled for this account.</small>
+            </div>
+{% endif %}
+{% if not reseller_mode|default(false) %}            <div class="form-group">
               <label for="twofa_code">Two-factor code (optional)</label>
               <input
                 class="input"
@@ -451,14 +460,16 @@
               </div>
             </div>
 
+{% endif %}{% if setup_mode|default(false) %}<div class="form-group"><label for="confirm">Confirm password</label><input class="input" id="confirm" name="confirm" type="password" minlength="{{reseller_password_min}}" maxlength="256" autocomplete="new-password" required><div class="hint">At least {{reseller_password_min}} characters. Setup link valid for 24 hours.</div></div><div class="rp-password-tools"><button type="button" data-password-generate="password" data-password-confirm="confirm">Generate password</button><button type="button" data-password-copy="password">Copy password</button><span role="status" data-password-status></span></div>{% endif %}
             <div class="row-actions">
               <span class="hint"
                 >You can use a password manager; paste is allowed.</span
               >
-              <button type="submit" class="btn" id="submit-btn">Sign in</button>
+              <button type="submit" class="btn" id="submit-btn">{{'Save password' if setup_mode|default(false) else 'Sign in'}}</button>
             </div>
           </div>
         </form>
+
 
         {% if config and config.get('SUPPORT_TELEGRAM') %}
         <div class="auth-footer">
@@ -566,6 +577,7 @@
         const tog = document.getElementById("pwd-toggle");
 
         if (form && btn) {
+          window.addEventListener("pageshow",()=>{btn.disabled=false;btn.textContent=btn.dataset.label||btn.textContent;});
           form.addEventListener(
             "submit",
             () => {

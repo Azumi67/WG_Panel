@@ -1597,3 +1597,8 @@ html[data-theme="dark"] #card-telegram .admin-card-head,html.dark #card-telegram
 html[data-theme="dark"] #card-telegram .acc-body,html.dark #card-telegram .acc-body,body.dark #card-telegram .acc-body,
 html[data-theme="dark"] #card-telegram .admin-card .table-wrap,html.dark #card-telegram .admin-card .table-wrap,body.dark #card-telegram .admin-card .table-wrap{background:#0c161e!important}
 html[data-theme="dark"] #card-telegram .tg-notify-savebar,html.dark #card-telegram .tg-notify-savebar,body.dark #card-telegram .tg-notify-savebar{background:rgba(15,26,35,.95)!important;border-color:#2a404d!important}
+
+html[data-design][data-theme=dark] body #twofa-section .input{background:#09161d!important;color:var(--set-text,#edf3f6)!important;-webkit-text-fill-color:var(--set-text,#edf3f6)!important;border-color:#31505f!important;caret-color:var(--set-text,#edf3f6);color-scheme:dark}
+html[data-design=modern][data-theme=dark] body #twofa-section .input{background:var(--ws-raised,#191c25)!important;border-color:var(--ws-line,#34394a)!important}
+html[data-design][data-theme=dark] body #twofa-section .input:is(:-webkit-autofill,:-webkit-autofill:hover,:-webkit-autofill:focus){-webkit-text-fill-color:var(--set-text,#edf3f6)!important;box-shadow:0 0 0 1000px #09161d inset!important;caret-color:var(--set-text,#edf3f6)!important;transition:none!important}
+html[data-design=modern][data-theme=dark] body #twofa-section .input:is(:-webkit-autofill,:-webkit-autofill:hover,:-webkit-autofill:focus){box-shadow:0 0 0 1000px var(--ws-raised,#191c25) inset!important}

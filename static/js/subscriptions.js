@@ -248,7 +248,7 @@ function subDate(value, serverDisplay='') {
 function subscriptionTimeLabel(s) {if (s.unlimited) {return s.first_used_at? `Active since ${subDate(s.first_used_at,s.first_used_at_display)}`: 'Unlimited · not used yet';}return ttlText(s.ttl_seconds);}
 
 function subscriptionTimePresentation(s){
-  const unlimited = !!s.unlimited || !Number(s.limit_bytes || 0);
+  const unlimited = !!s.unlimited || (!window.RESELLER_PERMISSIONS && !Number(s.limit_bytes || 0));
   const locs = Array.isArray(s.locations) ? s.locations : [];
   const startedAt = s.first_used_at || locs.map(x=>x.first_used_at).filter(Boolean).sort()[0] || null;
   const startedAtDisplay = s.first_used_at_display || locs.map(x=>x.first_used_at_display).filter(Boolean)[0] || '';
@@ -293,7 +293,7 @@ let SUBS_LIVE_TIMER=null, SUBS_LOADING=false, SUBS_LAST_JSON='';
 let SUBX_MOBILE_MANAGE_ID = null;
 let CURRENT_SELECTED = new Set();
 let OPEN_SUBSCRIPTION_LOGS_SID = null;
-const SUBS_REFRESH_MS = 15000;
+const SUBS_REFRESH_MS = document.documentElement.hasAttribute("data-reseller-workspace") ? 30000 : 15000;
 let SUBS_FAILURES = 0;
 const EXISTING_GROUP_PAGE = 36;
 let EXISTING_GROUP_LIMITS = {};
@@ -484,8 +484,7 @@ function updateStudioTargetUI(){
         if(!r.ok) throw new Error(j.detail||j.message||j.error||'Could not remove client template override.');
         SUB_STUDIO_HAS_OVERRIDE=false;
         SUB_SETTINGS=j.settings||{};
-        window.SubscriptionStudioV14?.apply?.(SUB_SETTINGS);
-        window.SubscriptionStudioV13?.apply?.(SUB_SETTINGS);
+        window.SubscriptionStudio?.apply?.(SUB_SETTINGS);
         applySettingsToForm();
         updateStudioTargetUI();
         toastOk('This client now inherits the global subscription template.');
@@ -534,9 +533,7 @@ function updateLayoutPreview(layout){
   p.className = 'preview-card layout-' + (layout || 'aurora');
 }
 async function saveSubscriptionSettings(){
-  const body = window.SubscriptionStudioV14?.collect?.()
-    || window.SubscriptionStudioV13?.collect?.()
-    || window.SubscriptionStudioV9?.collect?.()
+  const body = window.SubscriptionStudio?.collect?.()
     || collectSettingsForm();
 
   const endpoint = SUB_STUDIO_TARGET_ID
@@ -560,9 +557,9 @@ async function saveSubscriptionSettings(){
   }catch(_){}
 
   SUB_SETTINGS=saved||body;
-  window.SubscriptionStudioV14?.apply?.(SUB_SETTINGS);
-  window.SubscriptionStudioV13?.apply?.(SUB_SETTINGS);
-  window.SubscriptionStudioV9?.apply?.(SUB_SETTINGS);
+
+
+  window.SubscriptionStudio?.apply?.(SUB_SETTINGS);
   updateStudioTargetUI();
 
   const expected=String(body.layout||'aurora');
@@ -722,6 +719,7 @@ function renderNewInterfaceCard(x, i, key, disabled){
     <span class="ifc-main">
       <span class="ifc-name"><i class="fas fa-network-wired"></i> ${esc(x.iface || x.label || 'interface')}</span>
       <span class="ifc-meta">
+        ${window.WGResellerAssignment?.label(x) ? `<span class="iface-reseller-assignment">${esc(window.WGResellerAssignment.label(x))}</span>` : ''}
         ${x.listen_port ? `<span>Port ${esc(x.listen_port)}</span>` : ''}
         ${x.address ? `<span>${esc(x.address)}</span>` : ''}
         ${x.location_label ? `<span>${esc(x.location_label)}</span>` : ''}
@@ -1061,7 +1059,7 @@ function modernSubscriptionActions(s){
     ['sub-diagnose','fa-stethoscope','Subscription diagnosis'],
     ['subscription-logs','fa-clock-rotate-left','Activity logs'],
     ['template','fa-wand-magic-sparkles','Portal theme'],
-    [enable ? 'sub-enable' : 'sub-disable','fa-power-off',enable ? 'Enable and reset' : 'Disable client'],
+    [enable ? 'sub-enable' : 'sub-disable','fa-power-off',enable ? (window.RESELLER_PERMISSIONS ? 'Enable client' : 'Enable and reset') : 'Disable client'],
     ['reset-data','fa-gauge-high','Reset used data'],
     ['reset-timer','fa-clock','Reset time limit'],
     ['inbounds','fa-network-wired','Manage inbounds'],
@@ -1124,16 +1122,18 @@ function rowHtml(s){
 }
 
 async function loadSubs(opts={}){
-  try { await (window.WG_PANEL_TIMEZONE_READY || Promise.resolve()); } catch (_) {}
+
   if(SUBS_LOADING) return;
-  if(!opts.force && (document.hidden || modalIsOpen() || window.WGSubscriptionPaused)) return;
+  if(!opts.force && (document.hidden || modalIsOpen() || detailsIsOpen() || window.WGSubscriptionPaused || document.querySelector('#subs-list .is-busy, #subs-list .is-updating') || document.activeElement?.matches('#subs-list input, #subs-list select, #subs-list textarea, #subx-pagination select'))) return;
   SUBS_LOADING = true;
   if(!SUBS_LAST_JSON) setLiveState('Loading…', 'loading');
   try {
     const r=await fetch('/api/subscriptions',{credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(15000)});
     const j=await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(j.detail || j.error || 'Load failed');
-    const next = j.subscriptions || [];
+    if(!Array.isArray(j.subscriptions))throw new Error("Invalid subscriptions response");
+    if(!opts.force && (modalIsOpen() || detailsIsOpen() || document.querySelector('#subs-list .is-busy, #subs-list .is-updating')))return;
+    const next = j.subscriptions;
     if(next[0]?.display_timezone && typeof window.wgPanelApplyTimezone === 'function') window.wgPanelApplyTimezone(next[0].display_timezone, false);
     const nextJson = JSON.stringify(next);
     SUBS = next;
@@ -1202,7 +1202,7 @@ function setEditLayout(isEdit, allowInboundPicker=false){
 }
 
 function fillForm(s=null){
-  const internalAllowed = document.querySelector('#sub-form [name="allowed_ips"]'); if(internalAllowed) internalAllowed.dataset.autoInternalNetworks = ''; 
+  const internalAllowed = document.querySelector('#sub-form [name="allowed_ips"]'); if(internalAllowed) internalAllowed.dataset.autoInternalNetworks = '';
   const f=$('#sub-form'); f.reset(); $('#sub-sid').value=s?.id||''; EDIT_ID=s?.id||null;
   $('#sub-modal-title').innerHTML = s ? '<i class="fas fa-pen"></i> Edit client subscription' : '<i class="fas fa-user-plus"></i> Create client subscription';
   const headHint = $('#sub-modal .subx-modal-head p');
@@ -1211,6 +1211,7 @@ function fillForm(s=null){
     : 'Create a client in one simple form. Only choose a name, limits, and where this client should work.';
   $('#sub-submit').innerHTML = s ? '<i class="fas fa-check"></i> Save changes' : '<i class="fas fa-check"></i> Create subscription';
   if(!s) return;
+  for(const key of ['endpoint','peer_endpoint','allowed_ips','dns','mtu','persistent_keepalive']){const field=f.elements.namedItem(key);if(field && s[key]!=null)field.value=s[key];}
   f.name.value=s.name||''; f.note.value=s.note||''; f.data_limit_value.value=s.data_limit_value||0; f.data_limit_unit.value=s.data_limit_unit||'Gi';
   const days=Number(s.time_limit_days||0);
   const wholeDays=Math.floor(days);
@@ -1218,7 +1219,7 @@ function fillForm(s=null){
   f.time_limit_days.value=wholeDays;
   f.time_limit_hours.value=Math.floor(totalMinutes/60);
   if(f.time_limit_minutes) f.time_limit_minutes.value=totalMinutes%60;
-  f.phone_number.value=s.phone_number||''; f.telegram_id.value=s.telegram_id||''; f.start_on_first_use.checked=!!s.start_on_first_use; f.unlimited.checked=!!s.unlimited;
+  f.phone_number.value=s.phone_number||''; f.telegram_id.value=s.telegram_id||''; f.start_on_first_use.checked=!!s.start_on_first_use; if(f.unlimited) f.unlimited.checked=!!s.unlimited;
 }
 
 async function openCreate(){
@@ -1266,17 +1267,17 @@ async function openCreate(){
 }
 
 async function openEdit(id, opts={}){
-  const s=SUBS.find(x=>String(x.id)===String(id)); 
+  const s=SUBS.find(x=>String(x.id)===String(id));
   if(!s) return;
 
   const manageInbounds = !!opts.manageInbounds;
 
-  MODE='new'; 
-  SCOPE='all'; 
-  STATUS_SCOPE='all'; 
+  MODE='new';
+  SCOPE='all';
+  STATUS_SCOPE='all';
   SEARCH='';
 
-  NEW_ITEMS=[]; 
+  NEW_ITEMS=[];
   CURRENT_ITEMS=[];
   CURRENT_SELECTED.clear();
 
@@ -1813,6 +1814,7 @@ $('#sub-form').addEventListener('submit', async e=>{
     return;
   }
   if(!sid && !body.targets.length){ toastBad('Select at least one interface or existing config.'); return; }
+  if(MODE === 'new' && window.WGResellerAssignment?.confirm(selectedItems()) === false) return;
   if(MODE === 'current' && body.targets.length && body.sync_existing){
     const names = selectedItems().map(x => x.name || x.address || x.iface).slice(0, 6).join(', ');
     const extra = body.targets.length > 6 ? ` and ${body.targets.length - 6} more` : '';
@@ -2304,7 +2306,7 @@ function renderDetails(s, opts={}){
         }).join('') || '<div class="detail-empty"><i class="fas fa-inbox"></i><br>No inbound is attached to this client.</div>'}
       </div>
     </section>`;
-    const dm = $('#details-modal'); 
+    const dm = $('#details-modal');
   if(dm) dm.dataset.sid = s.id;
 
 
@@ -2466,12 +2468,31 @@ document.addEventListener('click', async e=>{
     return;
   }
   const del=e.target.closest('[data-del]');if(del){const ok = await subConfirm({title: 'Delete subscription?',body: 'This removes the subscription record. Attached peer/config deletion still depends on your backend delete behavior.',yesText: 'Delete',noText: 'Cancel',danger: true});if(!ok) return;
-  const r=await fetch(`/api/subscriptions/${del.dataset.del}`,{method:'DELETE',headers:csrfHeaders(true),credentials:'same-origin'});if(r.ok){toastOk('Deleted.');loadSubs();} else {toastBad('Delete failed.');}return;}
-  const rt=e.target.closest('[data-reset-timer]'); if(rt){ const id=rt.dataset.resetTimer; rt.classList.add('is-busy'); rt.closest('.subx-row, .subscription-card')?.classList.add('is-updating'); let r=await fetch(`/api/subscriptions/${id}/reset_timer`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'}); if(r.status===404 || r.status===405){ r=await fetch(`/api/subscriptions/${id}`,{method:'PUT',headers:csrfHeaders(true),credentials:'same-origin',body:JSON.stringify({reset_timer:true})}); } const j=await r.json().catch(()=>({})); if(r.ok){ if(j.still_blocked_reason==='data_limit') toastBad('Timer reset, but the client is still blocked because its data limit is exhausted. Reset data as well.'); else if((j.failed_peer_ids||[]).length) toastBad('Timer reset, but one or more configs could not be re-enabled.'); else toastOk(j.reactivated ? `Timer reset and ${j.reactivated} blocked config${j.reactivated===1?' was':'s were'} re-enabled.` : 'Timer reset successfully.'); await loadSubs({force:true});} else { toastBad(j.detail||j.error||'Reset failed.'); } rt.classList.remove('is-busy'); rt.closest('.subx-row, .subscription-card')?.classList.remove('is-updating'); return; }
-  const rd=e.target.closest('[data-reset-data]'); if(rd){ const id=rd.dataset.resetData; rd.classList.add('is-busy'); rd.closest('.subx-row, .subscription-card')?.classList.add('is-updating'); const r=await fetch(`/api/subscriptions/${id}/reset_data`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'}); const j=await r.json().catch(()=>({})); if(r.ok){ if(j.still_blocked_reason==='time_limit') toastBad('Data reset, but the client is still blocked because its timer has expired. Reset the timer as well.'); else if((j.failed_peer_ids||[]).length) toastBad('Data reset, but one or more configs could not be re-enabled.'); else toastOk(j.reactivated ? `Data reset and ${j.reactivated} blocked config${j.reactivated===1?' was':'s were'} re-enabled.` : 'Data reset successfully.'); await loadSubs({force:true});} else { toastBad(j.detail||j.error||'Reset data failed.'); } rd.classList.remove('is-busy'); rd.closest('.subx-row, .subscription-card')?.classList.remove('is-updating'); return; }
+  del.disabled=true;del.classList.add('is-busy');try{const r=await fetch(`/api/subscriptions/${del.dataset.del}`,{method:'DELETE',headers:csrfHeaders(true),credentials:'same-origin'});if(r.ok){toastOk('Deleted.');await loadSubs({force:true});} else {const j=await r.json().catch(()=>({}));toastBad(j.detail||j.error||'Delete failed.');}}catch(_){toastBad('Deletion could not be confirmed. Refresh before retrying.');}finally{del.disabled=false;del.classList.remove('is-busy');}return;}
+  const reset=e.target.closest('[data-reset-timer], [data-reset-data]');
+  if(reset){
+    if(reset.disabled||reset.classList.contains('is-busy'))return;
+    const timer=reset.hasAttribute('data-reset-timer');
+    const id=timer?reset.dataset.resetTimer:reset.dataset.resetData;
+    const action=timer?'reset_timer':'reset_data';
+    const card=reset.closest('.subx-row, .subscription-card');
+    reset.disabled=true;reset.classList.add('is-busy');card?.classList.add('is-updating');
+    try{
+      let r=await fetch(`/api/subscriptions/${id}/${action}`,{method:'POST',headers:csrfHeaders(true),credentials:'same-origin'});
+      if(timer&&(r.status===404||r.status===405))r=await fetch(`/api/subscriptions/${id}`,{method:'PUT',headers:csrfHeaders(true),credentials:'same-origin',body:JSON.stringify({[action]:true})});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok){toastBad(j.detail||j.error||'Reset failed.');return;}
+      if(j.still_blocked_reason)toastBad('Reset completed, but the client remains blocked. Check its data and timer limits.');
+      else if((j.failed_peer_ids||[]).length)toastBad('Reset completed, but some configs could not be re-enabled.');
+      else toastOk(timer?'Timer reset successfully.':'Data reset successfully.');
+      await loadSubs({force:true});
+    }catch(error){toastBad('Reset could not be confirmed. Refresh the client status before retrying.');}
+    finally{reset.disabled=false;reset.classList.remove('is-busy');card?.classList.remove('is-updating');}
+    return;
+  }
   const rem=e.target.closest('[data-remove-inbound]');if(rem){const sid=SUBS.find(s=>(s.locations||[]).some(l=>String(l.link_id)===String(rem.dataset.removeInbound)))?.id;if(!sid) return;
   const ok = await subConfirm({title: 'Remove inbound?',body: 'This removes the inbound from this client. The underlying peer/config will not be deleted.',yesText: 'Remove inbound',noText: 'Cancel',danger: true});if(!ok) return;
-  const r=await fetch(`/api/subscriptions/${sid}/inbounds/${rem.dataset.removeInbound}`,{method:'DELETE',headers:csrfHeaders(true),credentials:'same-origin'});if(r.ok){toastOk('Inbound removed.');await loadSubs({force:true});} else {const j=await r.json().catch(()=>({}));toastBad(j.detail||j.error||'Remove failed.');}return;}  
+  const r=await fetch(`/api/subscriptions/${sid}/inbounds/${rem.dataset.removeInbound}`,{method:'DELETE',headers:csrfHeaders(true),credentials:'same-origin'});if(r.ok){toastOk('Inbound removed.');await loadSubs({force:true});} else {const j=await r.json().catch(()=>({}));toastBad(j.detail||j.error||'Remove failed.');}return;}
   const save=e.target.closest('[data-save-inbound]'); if(save){ const lid=save.dataset.saveInbound; const sid=SUBS.find(s=>(s.locations||[]).some(l=>String(l.link_id)===String(lid)))?.id; const body={location_label:document.querySelector(`[data-label="${lid}"]`)?.value||''}; const r=await fetch(`/api/subscriptions/${sid}/inbounds/${lid}`,{method:'PATCH',headers:csrfHeaders(true),credentials:'same-origin',body:JSON.stringify(body)}); if(r.ok){toastOk('Inbound saved.'); closeDetails(); await loadSubs();} else toastBad('Save failed.'); return; }
 });
 
@@ -2809,7 +2830,7 @@ function rowHtml(s){
     : 'No config attached';
 
   const used = fmtBytes(s.used_bytes || 0);
-  const unlimited = !!s.unlimited || !s.limit_bytes;
+  const unlimited = !!s.unlimited || (!window.RESELLER_PERMISSIONS && !s.limit_bytes);
   const dataHeadline = unlimited
     ? `${used} used`
     : `${fmtBytes(s.remaining_bytes || 0)} left`;
@@ -2837,7 +2858,7 @@ function rowHtml(s){
     const network = locs.map(loc => subscriptionLogSourceName(loc));
     const contact = [s.phone_number, s.telegram_id ? `Telegram: ${s.telegram_id}` : ''].filter(Boolean).join(' · ');
     return `<article class="subscription-card subscription-bar state-${esc(state.cls)}" data-sub="${s.id}">
-      <header class="subscription-bar-identity"><div class="subscription-avatar" aria-hidden="true">${esc((s.name || '?').slice(0,2).toUpperCase())}</div><div><h2>${esc(s.name)}</h2><p>${esc(note)}</p><small>${esc(contact || 'Client #'+s.id)}</small></div></header>
+      <header class="subscription-bar-identity"><div class="subscription-avatar" aria-hidden="true">${esc((s.name || '?').slice(0,2).toUpperCase())}</div><div><h2>${esc(s.name)}</h2><p>${esc(note)}</p><small>${esc(contact || 'Client #'+s.id)}</small>${s.reseller_owner ? `<small class="iface-reseller-assignment">Reseller · ${esc(s.reseller_owner.username)}</small>` : ''}</div></header>
       <div class="subscription-bar-status"><span class="subscription-label">Access & connection</span><span class="subx-state-pill ${esc(state.cls)}"><i class="fas ${subxIconForState(state.cls)}"></i>${esc(state.label)}</span><span class="subscription-connection ${esc(connection.cls)}" title="${esc(connection.detail)}"><i class="fas fa-circle"></i>${esc(connection.label)}</span><small>${esc(state.sub)}</small></div>
       <div class="subscription-bar-meter"><span class="subscription-label">Data remaining</span><strong>${esc(dataHeadline)}</strong><meter min="0" max="100" value="${Math.max(0,Math.min(100,dataPct))}" aria-label="Data remaining"></meter><small>${esc(dataDetail)}</small></div>
       <div class="subscription-bar-meter"><span class="subscription-label">${esc(timeInfo.title)}</span><strong>${esc(timeHeadline)}</strong><meter min="0" max="100" value="${Math.max(0,Math.min(100,timePct))}" aria-label="Time remaining"></meter><small>${esc(timeDetail)}</small></div>
@@ -2850,7 +2871,7 @@ function rowHtml(s){
   return `<article class="subx-row subx-row-line state-${state.cls}${mobileActionsOpen ? ' subx-mobile-actions-open' : ''}" data-sub="${s.id}">
     <div class="subx-line-id">
       <div class="subx-name"><i class="fas fa-user-shield"></i><span>${esc(s.name)}</span></div>
-      <div class="subx-note">${esc(note)}</div>
+      <div class="subx-note">${esc(note)}</div>${s.reseller_owner ? `<small class="iface-reseller-assignment">Reseller · ${esc(s.reseller_owner.username)}</small>` : ''}
       <div class="subx-client-connection ${esc(connection.cls)}" title="${esc(connection.title || '')}">
         <span class="subx-conn-dot" aria-hidden="true"></span>
         <span class="subx-conn-copy"><b>${esc(connection.label)}</b><small>${esc(connection.detail)}</small></span>
@@ -2901,6 +2922,31 @@ function rowHtml(s){
   </article>`;
 }
 
+
+function subxPatchNode(oldNode,newNode){
+  if(oldNode.nodeType!==newNode.nodeType || oldNode.nodeName!==newNode.nodeName){oldNode.replaceWith(newNode);return;}
+  if(oldNode.nodeType!==1){if(oldNode.nodeValue!==newNode.nodeValue)oldNode.nodeValue=newNode.nodeValue;return;}
+  for(const attr of [...oldNode.attributes])if(!newNode.hasAttribute(attr.name))oldNode.removeAttribute(attr.name);
+  for(const attr of [...newNode.attributes])if(oldNode.getAttribute(attr.name)!==attr.value)oldNode.setAttribute(attr.name,attr.value);
+  const before=[...oldNode.childNodes],after=[...newNode.childNodes];
+  for(let i=0;i<Math.max(before.length,after.length);i++){
+    if(!after[i])before[i].remove();else if(!before[i])oldNode.append(after[i]);else subxPatchNode(before[i],after[i]);
+  }
+}
+function subxUpdateRows(list,html){
+  if(window.WGWorkspace)return window.WGWorkspace.rows(list,html,el=>el.dataset.sub,window.applyResellerPermissions);
+  const template=document.createElement('template');template.innerHTML=html;
+  if(window.applyResellerPermissions)window.applyResellerPermissions(template.content);
+  const existing=new Map([...list.children].filter(el=>el.dataset.sub).map(el=>[el.dataset.sub,el]));
+  const wanted=new Set();
+  [...template.content.children].forEach((next,index)=>{
+    const id=next.dataset.sub;let node=id&&existing.get(id);
+    if(node){wanted.add(node);subxPatchNode(node,next);}else{node=next;wanted.add(node);}
+    if(list.children[index]!==node)list.insertBefore(node,list.children[index]||null);
+  });
+  for(const node of [...list.children])if(!wanted.has(node))node.remove();
+}
+
 function renderSubscriptions(){
   subxEnsureListTools();
   const list = document.getElementById('subs-list');
@@ -2916,7 +2962,7 @@ function renderSubscriptions(){
   const start = (SUBX_LIST.page - 1) * perPage;
   const rows = filtered.slice(start, start + perPage);
 
-  list.innerHTML = rows.map(rowHtml).join('');
+  subxUpdateRows(list,rows.map(rowHtml).join(''));
 
   if(empty){
     empty.hidden = true;
@@ -2934,7 +2980,7 @@ function renderSubscriptions(){
   if(pager){
     const from = total ? start + 1 : 0;
     const to = Math.min(start + perPage, total);
-    pager.innerHTML = `
+    const markup = `
       <div class="subx-page-info">${from}-${to} of ${total} clients</div>
       <div class="subx-page-controls">
         <button type="button" data-page-first ${SUBX_LIST.page<=1?'disabled':''}><i class="fas fa-angles-left"></i></button>
@@ -2947,6 +2993,7 @@ function renderSubscriptions(){
         </select>
       </div>
     `;
+    if(window.WGWorkspace){if(!window.WGWorkspace.html(pager,markup))return;}else pager.innerHTML=markup;
     pager.querySelector('[data-page-first]')?.addEventListener('click',()=>{SUBX_LIST.page=1;renderSubscriptions();});
     pager.querySelector('[data-page-prev]')?.addEventListener('click',()=>{SUBX_LIST.page--;renderSubscriptions();});
     pager.querySelector('[data-page-next]')?.addEventListener('click',()=>{SUBX_LIST.page++;renderSubscriptions();});
@@ -2960,10 +3007,14 @@ function renderSubscriptions(){
   }
 }
 
+let SUBS_FORCE_WAITERS = [];
 async function loadSubs(opts={}){
-  try { await (window.WG_PANEL_TIMEZONE_READY || Promise.resolve()); } catch (_) {}
-  if(SUBS_LOADING) return;
-  if(!opts.force && (document.hidden || modalIsOpen() || window.WGSubscriptionPaused)) return;
+
+  if(SUBS_LOADING){
+    if(opts.force)return new Promise(resolve=>SUBS_FORCE_WAITERS.push(resolve));
+    return;
+  }
+  if(!opts.force && (document.hidden || modalIsOpen() || detailsIsOpen() || window.WGSubscriptionPaused || document.querySelector('#subs-list .is-busy, #subs-list .is-updating') || document.activeElement?.matches('#subs-list input, #subs-list select, #subs-list textarea, #subx-pagination select'))) return;
   SUBS_LOADING = true;
   if(!SUBS_LAST_JSON) setLiveState('Loading…', 'loading');
   try {
@@ -2971,7 +3022,9 @@ async function loadSubs(opts={}){
     const j = await r.json().catch(()=>({}));
     if(!r.ok) throw new Error(j.detail || j.error || 'Load failed');
 
-    const next = j.subscriptions || [];
+    if(!Array.isArray(j.subscriptions))throw new Error("Invalid subscriptions response");
+    if(!opts.force && (document.hidden || modalIsOpen() || detailsIsOpen() || document.querySelector('#subs-list .is-busy, #subs-list .is-updating')))return;
+    const next = j.subscriptions;
     if(next[0]?.display_timezone && typeof window.wgPanelApplyTimezone === 'function') window.wgPanelApplyTimezone(next[0].display_timezone, false);
     const nextJson = JSON.stringify(next);
     SUBS = next;
@@ -3021,6 +3074,10 @@ async function loadSubs(opts={}){
     setLiveState('Update unavailable · retrying', 'error');
   } finally {
     SUBS_LOADING = false;
+    if(SUBS_FORCE_WAITERS.length){
+      const waiting=SUBS_FORCE_WAITERS.splice(0);
+      loadSubs({force:true}).finally(()=>waiting.forEach(resolve=>resolve()));
+    }
   }
 }
 
@@ -3108,14 +3165,14 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
       ? (enabled ? `${found.filter(route=>current.includes(route)).length} detected route${found.length===1?'':'s'} currently included. Remove any chip above or use the quick chips below to exclude them.` : 'Turn this on to append detected local and selected-node networks as removable chips.')
       : 'Select interfaces below to detect their local and node networks.';
     if(tray){
-      if(!found.length){tray.innerHTML='<span class="adv11-empty-detected"><i class="fas fa-circle-info"></i><span>Select interfaces to reveal local or node private networks here.</span></span>';}
+      if(!found.length){tray.innerHTML='<span class="advanced-guide-empty-detected"><i class="fas fa-circle-info"></i><span>Select interfaces to reveal local or node private networks here.</span></span>';}
       else {
         const available=found.filter(route=>!current.includes(route));
         if(!available.length){ tray.innerHTML=''; tray.hidden=true; }
         else {
           tray.hidden=false;
-          tray.innerHTML = available.map(route=>`<button type="button" class="adv11-detected-chip" data-route="${escapeHtml(route)}"><i class="fas fa-plus"></i><span>${escapeHtml(route)}</span><small>Add</small></button>`).join('');
-          qa('.adv11-detected-chip',tray).forEach(btn=>btn.addEventListener('click',()=>{addRoute(btn.dataset.route,{detectedRoute:true});render();updateSummary()}));
+          tray.innerHTML = available.map(route=>`<button type="button" class="advanced-guide-detected-chip" data-route="${escapeHtml(route)}"><i class="fas fa-plus"></i><span>${escapeHtml(route)}</span><small>Add</small></button>`).join('');
+          qa('.advanced-guide-detected-chip',tray).forEach(btn=>btn.addEventListener('click',()=>{addRoute(btn.dataset.route,{detectedRoute:true});render();updateSummary()}));
         }
       }
     }
@@ -3205,9 +3262,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
     updateRangeLabels();schedulePreview(true);
   }
   try{applySettingsToForm=()=>applySettings(SUB_SETTINGS||{});collectSettingsForm=()=>currentSettings();updateLayoutPreview=()=>schedulePreview()}catch(_){window.applySettingsToForm=()=>applySettings(window.SUB_SETTINGS||{});window.collectSettingsForm=currentSettings}
-  window.SubscriptionStudioV9={collect:currentSettings,apply:applySettings,refresh:()=>schedulePreview(true)};
-  window.SubscriptionStudioV13=window.SubscriptionStudioV9;
-  window.SubscriptionStudioV14=window.SubscriptionStudioV9;
+  window.SubscriptionStudio={collect:currentSettings,apply:applySettings,refresh:()=>schedulePreview(true)};
 
   const MODULE_KEYS=['configs','usage','install','support'];
   function normalizeModuleOrder(order){
@@ -3463,9 +3518,9 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
 
   function supportMarkup(s){if(!s.show_support)return'';const icons={telegram:'fab fa-telegram',whatsapp:'fab fa-whatsapp',phone:'fas fa-phone',email:'fas fa-envelope',website:'fas fa-globe',instagram:'fab fa-instagram'};const active=Object.entries(s.support||{}).filter(([,v])=>String(v||'').trim());return `<section class="support surface" id="support-box" data-module-key="support"><div class="section-head simple"><div><h2><i class="fas fa-headset"></i>${esc(s.support_title)}</h2><p>Contact the service team.</p></div></div><div class="support-links">${active.length?active.map(([k])=>`<a href="#"><i class="${icons[k]}"></i><span>${esc(k[0].toUpperCase()+k.slice(1))}</span></a>`).join(''):'<span class="support-empty">No support channels configured.</span>'}</div></section>`}
   function previewDoc(s){
-    const theme=resolvedTheme(s),title=esc(s.portal_title||'premium-user'),label=esc(s.portal_label||defaults.portal_label),subtitle=esc(s.portal_subtitle||defaults.portal_subtitle),css=`${location.origin}/static/css/subscription_public.css?v=20260820-studio-v16`,fa=`${location.origin}/static/vendor/fa/css/all.min.css`;
+    const theme=resolvedTheme(s),title=esc(s.portal_title||'premium-user'),label=esc(s.portal_label||defaults.portal_label),subtitle=esc(s.portal_subtitle||defaults.portal_subtitle),css=`${location.origin}/static/css/subscription_public.css?rev=28b8ec311912cf1a`,fa=`${location.origin}/static/vendor/fa/css/all.min.css`;
     const customStyle=`:root{--custom-accent:${esc(s.primary_color||s.custom_primary)};--custom-accent2:${esc(s.secondary_color||s.custom_secondary)};--background-intensity:${s.background_intensity/100};--card-opacity:${s.card_opacity/100};--motion-speed:${100/s.motion_speed};--motion-power:${s.motion_intensity/100};--particle-density:${s.particle_density/100};--engine-speed:${s.motion_speed/100};--engine-density:${s.particle_density/100};--status-online:${esc(s.online_color)};--status-offline:${esc(s.offline_color)};--status-warning:${esc(s.warning_color)};--status-danger:${esc(s.danger_color)};--pill-color:${esc(s.pill_color)};--action-color:${esc(s.action_color)}}`;
-    return `<!doctype html><html lang="en" data-preview="true" data-preview-device="${previewDevice}" data-theme="${theme}" data-layout="${s.layout}" data-hero-style="${s.hero_style}" data-background="${s.background}" data-stat-style="${s.display_mode}" data-motion="${s.animation}" data-motion-intensity="${s.motion_intensity}" data-accent="${s.accent}" data-surface="${s.surface}" data-radius="${s.radius}" data-shadow="${s.shadow}" data-density="${s.density}" data-page-width="${s.page_width}" data-config-style="${s.config_style}" data-config-columns="${s.config_columns}" data-section-order="${s.section_order}" data-module-1="${normalizeModuleOrder(s.module_order)[0]}" data-module-2="${normalizeModuleOrder(s.module_order)[1]}" data-module-3="${normalizeModuleOrder(s.module_order)[2]}" data-module-4="${normalizeModuleOrder(s.module_order)[3]}" data-module-configs-enabled="${bool(normalizedModuleEnabled(s.module_enabled).configs)}" data-module-usage-enabled="${bool(normalizedModuleEnabled(s.module_enabled).usage)}" data-module-install-enabled="${bool(normalizedModuleEnabled(s.module_enabled).install)}" data-module-support-enabled="${bool(normalizedModuleEnabled(s.module_enabled).support)}" data-module-configs-size="${normalizedModuleSizes(s.module_sizes).configs}" data-module-usage-size="${normalizedModuleSizes(s.module_sizes).usage}" data-module-install-size="${normalizedModuleSizes(s.module_sizes).install}" data-module-support-size="${normalizedModuleSizes(s.module_sizes).support}" data-module-configs-mobile="${normalizedModuleMobile(s.module_mobile).configs}" data-module-usage-mobile="${normalizedModuleMobile(s.module_mobile).usage}" data-module-install-mobile="${normalizedModuleMobile(s.module_mobile).install}" data-module-support-mobile="${normalizedModuleMobile(s.module_mobile).support}" data-module-configs-surface="${normalizedModuleSurface(s.module_surface).configs}" data-module-usage-surface="${normalizedModuleSurface(s.module_surface).usage}" data-module-install-surface="${normalizedModuleSurface(s.module_surface).install}" data-module-support-surface="${normalizedModuleSurface(s.module_surface).support}" data-module-configs-spacing="${normalizedModuleSpacing(s.module_spacing).configs}" data-module-usage-spacing="${normalizedModuleSpacing(s.module_spacing).usage}" data-module-install-spacing="${normalizedModuleSpacing(s.module_spacing).install}" data-module-support-spacing="${normalizedModuleSpacing(s.module_spacing).support}" data-module-configs-radius="${normalizedModuleRadius(s.module_radius).configs}" data-module-usage-radius="${normalizedModuleRadius(s.module_radius).usage}" data-module-install-radius="${normalizedModuleRadius(s.module_radius).install}" data-module-support-radius="${normalizedModuleRadius(s.module_radius).support}" data-module-configs-heading="${normalizedModuleHeading(s.module_heading).configs}" data-module-usage-heading="${normalizedModuleHeading(s.module_heading).usage}" data-module-install-heading="${normalizedModuleHeading(s.module_heading).install}" data-module-support-heading="${normalizedModuleHeading(s.module_heading).support}" data-module-configs-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).configs}" data-module-usage-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).usage}" data-module-install-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).install}" data-module-support-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).support}" data-module-gap="${s.module_gap||'auto'}" data-notice-tone="${esc(s.notice_tone||'info')}" data-notice-style="${esc(s.notice_style||'banner')}" data-notice-position="${esc(s.notice_position||'after_summary')}" data-support-style="${s.support_style}" data-button-style="${s.button_style}" data-font-scale="${s.font_scale}" data-stat-size="${s.stat_size}" data-title-align="${s.title_align}" data-logo-size="${s.logo_size}" data-show-quick="${bool(s.show_quick_stats)}" data-show-install="${bool(s.show_install)}" data-show-support="${bool(s.show_support)}" data-show-live="${bool(s.show_live_badge)}" data-show-percentage="${bool(s.show_percentage)}" data-show-used-detail="${bool(s.show_used_detail)}" data-show-status="${bool(s.show_status_badge)}" data-show-country="${bool(s.show_location_country)}" data-show-download="${bool(s.show_download_action)}" data-show-copy="${bool(s.show_copy_action)}" data-show-theme-action="${bool(s.show_theme_action)}" data-show-descriptions="${bool(s.show_section_descriptions)}" data-entrance="${s.entrance_animation}" data-hover="${s.hover_animation}" data-toast-style="${s.toast_style}" data-toast-position="${s.toast_position}" data-toast-motion="${s.toast_motion}" data-toast-duration="${s.toast_duration}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="${fa}"><link rel="stylesheet" href="${css}"><style>${customStyle}</style><link rel="stylesheet" href="/static/css/public-customization.css?v=7"></head><body class="preview-body"><div class="live-bg"><span class="bg-orb one"></span><span class="bg-orb two"></span><span class="bg-orb three"></span><span class="bg-wave one"></span><span class="bg-wave two"></span><span class="bg-grid"></span><span class="bg-orbits"></span><span class="bg-lines"></span></div><canvas id="particles" aria-hidden="true"></canvas><div class="page"><main class="portal-shell"><div class="layout-chrome" aria-hidden="true"><span class="chrome-dot one"></span><span class="chrome-dot two"></span><span class="chrome-dot three"></span><span class="chrome-brand"><i class="fas fa-shield-halved"></i></span><span class="chrome-rail"><i></i><i></i><i></i><i></i></span></div><section class="portal-hero surface"><div class="portal-id"><div class="portal-icon"><i class="${esc(s.portal_icon)}"></i></div><div class="portal-copy"><div class="portal-meta"><span class="portal-label">${label}</span><span class="hero-live"><i class="fas fa-circle"></i> Live</span></div><h1>${title}</h1><p>${subtitle}</p></div></div><div class="portal-actions"><a class="icon-action primary"><i class="fas fa-download"></i></a><button class="icon-action copy-action"><i class="fas fa-link"></i></button><button class="icon-action theme-action"><i class="fas fa-moon"></i></button><span class="auto-chip"><i class="fas fa-circle"></i><b>Auto</b></span></div></section><section class="quick-stats surface"><article><span>Status</span><b>Ready</b><small>2 configs</small></article><article><span>Data</span><b>8.4 GiB left</b><small>78% left</small></article><article><span>Time</span><b>12d 4h</b><small>Fixed expiry</small></article></section>${s.show_admin_notice&&String(s.notice_text||'').trim()?`<section class="portal-announcement surface" id="portal-announcement" data-tone="${esc(s.notice_tone||'info')}" data-style="${esc(s.notice_style||'banner')}"><span class="announcement-icon"><i class="fas fa-bullhorn"></i></span><div class="announcement-copy"><b>${esc(s.notice_title||'Service notice')}</b><p>${esc(s.notice_text||'')}</p></div></section>`:''}<div class="portal-content"><section class="usage-section" data-module-key="usage"><div class="section-head simple"><div><h2><i class="fas fa-chart-pie"></i>${esc(s.usage_title)}</h2><p>Live data and time remaining.</p></div></div><div class="stats-grid"><article class="stat-card surface data-stat"><div class="stat-head"><span><i class="fas fa-database"></i> Data remaining</span></div><div class="stat-body"><div class="ring" style="--p:78;--c:var(--accent)"><span>78%</span></div><div class="stat-copy"><div class="big">8.4 GiB</div><div class="subline">2.4 GiB used from 10.8 GiB</div><div class="meter"><span style="width:78%"></span></div><div class="segments"><i></i><i></i><i></i><i></i><i></i></div></div></div></article><article class="stat-card surface time-stat"><div class="stat-head"><span><i class="fas fa-clock"></i> Time remaining</span></div><div class="stat-body"><div class="ring" style="--p:42;--c:var(--accent2)"><span>42%</span></div><div class="stat-copy"><div class="big">12d 4h</div><div class="subline">Expires 18 Aug 2026</div><div class="meter"><span style="width:42%"></span></div><div class="segments"><i></i><i></i><i></i><i></i><i></i></div></div></div></article></div></section><section class="install-card surface" data-module-key="install"><div><h2><i class="fas fa-mobile-screen-button"></i>${esc(s.install_title)}</h2><p>Open the official app, then scan QR or import a config.</p></div><div class="client-links"><a title="Desktop"><i class="fas fa-desktop"></i></a><a title="iPhone / iPad"><i class="fab fa-apple"></i></a><a title="Android"><i class="fab fa-android"></i></a><a title="All platforms"><i class="fas fa-arrow-up-right-from-square"></i></a></div></section><section class="configs surface" data-module-key="configs"><div class="section-head"><div><h2><i class="fas fa-location-dot"></i>${esc(s.configs_title)}</h2><p>Choose a location, download the config, or scan QR.</p></div><span>2 configs</span></div><div class="loc-grid">${['🇳🇱|Amsterdam|Netherlands','🇩🇪|Frankfurt|Germany'].map(row=>{const [flag,name,country]=row.split('|');return `<article class="loc"><div class="loc-top"><div class="loc-main"><div class="loc-name"><span class="loc-flag">${flag}</span><span class="loc-title">${name}</span></div><span class="loc-country">${country}</span></div><span class="status online">Online</span></div><div class="loc-actions"><a class="loc-btn loc-download" title="Download config" aria-label="Download config"><i class="fas fa-download"></i></a><button class="loc-btn"><i class="fas fa-qrcode"></i></button><button class="loc-btn copy-action"><i class="fas fa-copy"></i></button></div></article>`}).join('')}</div></section>${supportMarkup(s)}</div></main></div></body></html>`;
+    return `<!doctype html><html lang="en" data-preview="true" data-preview-device="${previewDevice}" data-theme="${theme}" data-layout="${s.layout}" data-hero-style="${s.hero_style}" data-background="${s.background}" data-stat-style="${s.display_mode}" data-motion="${s.animation}" data-motion-intensity="${s.motion_intensity}" data-accent="${s.accent}" data-surface="${s.surface}" data-radius="${s.radius}" data-shadow="${s.shadow}" data-density="${s.density}" data-page-width="${s.page_width}" data-config-style="${s.config_style}" data-config-columns="${s.config_columns}" data-section-order="${s.section_order}" data-module-1="${normalizeModuleOrder(s.module_order)[0]}" data-module-2="${normalizeModuleOrder(s.module_order)[1]}" data-module-3="${normalizeModuleOrder(s.module_order)[2]}" data-module-4="${normalizeModuleOrder(s.module_order)[3]}" data-module-configs-enabled="${bool(normalizedModuleEnabled(s.module_enabled).configs)}" data-module-usage-enabled="${bool(normalizedModuleEnabled(s.module_enabled).usage)}" data-module-install-enabled="${bool(normalizedModuleEnabled(s.module_enabled).install)}" data-module-support-enabled="${bool(normalizedModuleEnabled(s.module_enabled).support)}" data-module-configs-size="${normalizedModuleSizes(s.module_sizes).configs}" data-module-usage-size="${normalizedModuleSizes(s.module_sizes).usage}" data-module-install-size="${normalizedModuleSizes(s.module_sizes).install}" data-module-support-size="${normalizedModuleSizes(s.module_sizes).support}" data-module-configs-mobile="${normalizedModuleMobile(s.module_mobile).configs}" data-module-usage-mobile="${normalizedModuleMobile(s.module_mobile).usage}" data-module-install-mobile="${normalizedModuleMobile(s.module_mobile).install}" data-module-support-mobile="${normalizedModuleMobile(s.module_mobile).support}" data-module-configs-surface="${normalizedModuleSurface(s.module_surface).configs}" data-module-usage-surface="${normalizedModuleSurface(s.module_surface).usage}" data-module-install-surface="${normalizedModuleSurface(s.module_surface).install}" data-module-support-surface="${normalizedModuleSurface(s.module_surface).support}" data-module-configs-spacing="${normalizedModuleSpacing(s.module_spacing).configs}" data-module-usage-spacing="${normalizedModuleSpacing(s.module_spacing).usage}" data-module-install-spacing="${normalizedModuleSpacing(s.module_spacing).install}" data-module-support-spacing="${normalizedModuleSpacing(s.module_spacing).support}" data-module-configs-radius="${normalizedModuleRadius(s.module_radius).configs}" data-module-usage-radius="${normalizedModuleRadius(s.module_radius).usage}" data-module-install-radius="${normalizedModuleRadius(s.module_radius).install}" data-module-support-radius="${normalizedModuleRadius(s.module_radius).support}" data-module-configs-heading="${normalizedModuleHeading(s.module_heading).configs}" data-module-usage-heading="${normalizedModuleHeading(s.module_heading).usage}" data-module-install-heading="${normalizedModuleHeading(s.module_heading).install}" data-module-support-heading="${normalizedModuleHeading(s.module_heading).support}" data-module-configs-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).configs}" data-module-usage-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).usage}" data-module-install-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).install}" data-module-support-mobile-position="${normalizedModuleMobilePosition(s.module_mobile_position).support}" data-module-gap="${s.module_gap||'auto'}" data-notice-tone="${esc(s.notice_tone||'info')}" data-notice-style="${esc(s.notice_style||'banner')}" data-notice-position="${esc(s.notice_position||'after_summary')}" data-support-style="${s.support_style}" data-button-style="${s.button_style}" data-font-scale="${s.font_scale}" data-stat-size="${s.stat_size}" data-title-align="${s.title_align}" data-logo-size="${s.logo_size}" data-show-quick="${bool(s.show_quick_stats)}" data-show-install="${bool(s.show_install)}" data-show-support="${bool(s.show_support)}" data-show-live="${bool(s.show_live_badge)}" data-show-percentage="${bool(s.show_percentage)}" data-show-used-detail="${bool(s.show_used_detail)}" data-show-status="${bool(s.show_status_badge)}" data-show-country="${bool(s.show_location_country)}" data-show-download="${bool(s.show_download_action)}" data-show-copy="${bool(s.show_copy_action)}" data-show-theme-action="${bool(s.show_theme_action)}" data-show-descriptions="${bool(s.show_section_descriptions)}" data-entrance="${s.entrance_animation}" data-hover="${s.hover_animation}" data-toast-style="${s.toast_style}" data-toast-position="${s.toast_position}" data-toast-motion="${s.toast_motion}" data-toast-duration="${s.toast_duration}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="${fa}"><link rel="stylesheet" href="${css}"><style>${customStyle}</style><link rel="stylesheet" href="${esc(window.WG_PUBLIC_CUSTOMIZATION_CSS || '/static/css/public-customization.css')}"></head><body class="preview-body"><div class="live-bg"><span class="bg-orb one"></span><span class="bg-orb two"></span><span class="bg-orb three"></span><span class="bg-wave one"></span><span class="bg-wave two"></span><span class="bg-grid"></span><span class="bg-orbits"></span><span class="bg-lines"></span></div><canvas id="particles" aria-hidden="true"></canvas><div class="page"><main class="portal-shell"><div class="layout-chrome" aria-hidden="true"><span class="chrome-dot one"></span><span class="chrome-dot two"></span><span class="chrome-dot three"></span><span class="chrome-brand"><i class="fas fa-shield-halved"></i></span><span class="chrome-rail"><i></i><i></i><i></i><i></i></span></div><section class="portal-hero surface"><div class="portal-id"><div class="portal-icon"><i class="${esc(s.portal_icon)}"></i></div><div class="portal-copy"><div class="portal-meta"><span class="portal-label">${label}</span><span class="hero-live"><i class="fas fa-circle"></i> Live</span></div><h1>${title}</h1><p>${subtitle}</p></div></div><div class="portal-actions"><a class="icon-action primary"><i class="fas fa-download"></i></a><button class="icon-action copy-action"><i class="fas fa-link"></i></button><button class="icon-action theme-action"><i class="fas fa-moon"></i></button><span class="auto-chip"><i class="fas fa-circle"></i><b>Auto</b></span></div></section><section class="quick-stats surface"><article><span>Status</span><b>Ready</b><small>2 configs</small></article><article><span>Data</span><b>8.4 GiB left</b><small>78% left</small></article><article><span>Time</span><b>12d 4h</b><small>Fixed expiry</small></article></section>${s.show_admin_notice&&String(s.notice_text||'').trim()?`<section class="portal-announcement surface" id="portal-announcement" data-tone="${esc(s.notice_tone||'info')}" data-style="${esc(s.notice_style||'banner')}"><span class="announcement-icon"><i class="fas fa-bullhorn"></i></span><div class="announcement-copy"><b>${esc(s.notice_title||'Service notice')}</b><p>${esc(s.notice_text||'')}</p></div></section>`:''}<div class="portal-content"><section class="usage-section" data-module-key="usage"><div class="section-head simple"><div><h2><i class="fas fa-chart-pie"></i>${esc(s.usage_title)}</h2><p>Live data and time remaining.</p></div></div><div class="stats-grid"><article class="stat-card surface data-stat"><div class="stat-head"><span><i class="fas fa-database"></i> Data remaining</span></div><div class="stat-body"><div class="ring" style="--p:78;--c:var(--accent)"><span>78%</span></div><div class="stat-copy"><div class="big">8.4 GiB</div><div class="subline">2.4 GiB used from 10.8 GiB</div><div class="meter"><span style="width:78%"></span></div><div class="segments"><i></i><i></i><i></i><i></i><i></i></div></div></div></article><article class="stat-card surface time-stat"><div class="stat-head"><span><i class="fas fa-clock"></i> Time remaining</span></div><div class="stat-body"><div class="ring" style="--p:42;--c:var(--accent2)"><span>42%</span></div><div class="stat-copy"><div class="big">12d 4h</div><div class="subline">Expires 18 Aug 2026</div><div class="meter"><span style="width:42%"></span></div><div class="segments"><i></i><i></i><i></i><i></i><i></i></div></div></div></article></div></section><section class="install-card surface" data-module-key="install"><div><h2><i class="fas fa-mobile-screen-button"></i>${esc(s.install_title)}</h2><p>Open the official app, then scan QR or import a config.</p></div><div class="client-links"><a title="Desktop"><i class="fas fa-desktop"></i></a><a title="iPhone / iPad"><i class="fab fa-apple"></i></a><a title="Android"><i class="fab fa-android"></i></a><a title="All platforms"><i class="fas fa-arrow-up-right-from-square"></i></a></div></section><section class="configs surface" data-module-key="configs"><div class="section-head"><div><h2><i class="fas fa-location-dot"></i>${esc(s.configs_title)}</h2><p>Choose a location, download the config, or scan QR.</p></div><span>2 configs</span></div><div class="loc-grid">${['🇳🇱|Amsterdam|Netherlands','🇩🇪|Frankfurt|Germany'].map(row=>{const [flag,name,country]=row.split('|');return `<article class="loc"><div class="loc-top"><div class="loc-main"><div class="loc-name"><span class="loc-flag">${flag}</span><span class="loc-title">${name}</span></div><span class="loc-country">${country}</span></div><span class="status online">Online</span></div><div class="loc-actions"><a class="loc-btn loc-download" title="Download config" aria-label="Download config"><i class="fas fa-download"></i></a><button class="loc-btn"><i class="fas fa-qrcode"></i></button><button class="loc-btn copy-action"><i class="fas fa-copy"></i></button></div></article>`}).join('')}</div></section>${supportMarkup(s)}</div></main></div></body></html>`;
   }
   function updateSummaries(s){const set=(id,text)=>{const el=q('#'+id);if(el)el.textContent=text};set('studio-layout-summary',labels.layout[s.layout]||s.layout);set('studio-background-summary',labels.background[s.background]||s.background);set('studio-stats-summary',labels.display_mode[s.display_mode]||s.display_mode);set('studio-motion-summary',labels.animation[s.animation]||s.animation);set('preview-layout-name',labels.layout[s.layout]||s.layout);set('preview-accent-name',labels.accent[s.accent]||s.accent);set('preview-stats-name',labels.display_mode[s.display_mode]||s.display_mode);set('preview-motion-name',labels.animation[s.animation]||s.animation);set('studio-support-summary',`${Object.values(s.support||{}).filter(v=>String(v||'').trim()).length} active`)}
   let lastVisualSignature='';
@@ -3594,7 +3649,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   function selectedName(scope){return (scope==='studio'?q('#studio-profile-select'):q('#sub-profile-select'))?.value||''}
   function syncSelects(selected=''){for(const select of profileSelects()){const current=selected||select.value;select.innerHTML='<option value="">Choose profile…</option>'+profiles.map(p=>`<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}${p.name===activeProfile?' · default':''}</option>`).join('');if(profiles.some(p=>p.name===current))select.value=current}}
   function escapeHtml(v){return String(v??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-  async function loadProfiles(selected=''){try{const j=await request('/api/subscription_profiles');profiles=j.profiles||[];activeProfile=j.active||'';syncSelects(selected||activeProfile||'')}catch(err){notify(false,'Could not load subscription profiles: '+err.message)}}
+  async function loadProfiles(selected=''){if(window.RESELLER_PERMISSIONS&&!window.RESELLER_PERMISSIONS.includes('profiles'))return;try{const j=await request('/api/subscription_profiles');profiles=j.profiles||[];activeProfile=j.active||'';syncSelects(selected||activeProfile||'')}catch(err){notify(false,'Could not load subscription profiles: '+err.message)}}
   function clientState(){
     const form=q('#sub-form');if(!form)return{};const get=name=>form.elements[name]?.value??'';const yes=name=>!!form.elements[name]?.checked;
     return {name:get('name'),note:get('note'),data_limit_value:get('data_limit_value'),data_limit_unit:get('data_limit_unit'),time_limit_days:get('time_limit_days'),time_limit_hours:get('time_limit_hours'),time_limit_minutes:get('time_limit_minutes'),phone_number:get('phone_number'),telegram_id:get('telegram_id'),start_on_first_use:yes('start_on_first_use'),unlimited:yes('unlimited'),mode:typeof MODE==='string'?MODE:'new'};
@@ -3603,7 +3658,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   function interfaceState(){let items=[];try{items=selectedItems()}catch(_){}return items.map(interfaceDescriptor)}
   async function ensureTemplateLoaded(){
     if(q('input[name="sub-layout"]:checked'))return;
-    try{const settings=await request('/api/subscriptions/settings');try{SUB_SETTINGS=settings}catch(_){window.SUB_SETTINGS=settings}window.SubscriptionStudioV9?.apply?.(settings||{})}catch(_){}
+    try{const settings=await request('/api/subscriptions/settings');try{SUB_SETTINGS=settings}catch(_){window.SUB_SETTINGS=settings}window.SubscriptionStudio?.apply?.(settings||{})}catch(_){}
   }
   function profilePayload(){
     const include={client:checked('profile-include-client'),advanced:checked('profile-include-advanced'),interfaces:checked('profile-include-interfaces'),template:checked('profile-include-template')};
@@ -3611,7 +3666,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
     if(include.client)profile.client=clientState();
     if(include.advanced)profile.advanced=window.SubscriptionAdvancedV9?.getState?.()||{};
     if(include.interfaces)profile.interfaces=interfaceState();
-    if(include.template)profile.template=window.SubscriptionStudioV9?.collect?.()||{};
+    if(include.template)profile.template=window.SubscriptionStudio?.collect?.()||{};
     return profile;
   }
   function checked(id){return !!q('#'+id)?.checked}
@@ -3710,7 +3765,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
     }
     SCOPE='all';SEARCH='';q('#inbound-search')&&(q('#inbound-search').value='');renderPicker();const items=sourceItems();qa('#inbound-list input[type="checkbox"]').forEach(box=>{const item=items[Number(box.value)];box.checked=descriptors.some(d=>matches(item,d))});updateSelected();
   }
-  async function applyProfile(scope){const name=selectedName(scope);if(!name){notify(false,'Choose a subscription profile first.');return}try{const j=await request(`/api/subscription_profiles/${encodeURIComponent(name)}`),p=j.profile||{};if(p.client)applyClient(p.client);if(p.advanced)window.SubscriptionAdvancedV9?.applyState?.(p.advanced);if(p.template)window.SubscriptionStudioV9?.apply?.(p.template);if(p.interfaces)await applyInterfaces(p.interfaces,p.client?.mode||'new');notify(true,`Applied profile “${name}”.`)}catch(err){notify(false,'Profile apply failed: '+err.message)}}
+  async function applyProfile(scope){const name=selectedName(scope);if(!name){notify(false,'Choose a subscription profile first.');return}try{const j=await request(`/api/subscription_profiles/${encodeURIComponent(name)}`),p=j.profile||{};if(p.client)applyClient(p.client);if(p.advanced)window.SubscriptionAdvancedV9?.applyState?.(p.advanced);if(p.template)window.SubscriptionStudio?.apply?.(p.template);if(p.interfaces)await applyInterfaces(p.interfaces,p.client?.mode||'new');notify(true,`Applied profile “${name}”.`)}catch(err){notify(false,'Profile apply failed: '+err.message)}}
 
   async function setDefaultProfile(scope){const name=selectedName(scope);if(!name){notify(false,'Choose a profile first.');return}try{await request(`/api/subscription_profiles/${encodeURIComponent(name)}/activate`,{method:'POST',body:'{}'});await loadProfiles(name);notify(true,`“${name}” is now the default profile.`)}catch(err){notify(false,'Could not set default profile: '+err.message)}}
   function profileTextPrompt(title, initialValue = '') {
@@ -3951,7 +4006,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   }
   function wireFixed(){
     const input=q('#sub-peer-endpoint'), reset=q('#sub-fixed-client-clear');
-    if(!input || input.dataset.v11Wired==='1') return; input.dataset.v11Wired='1';
+    if(!input || input.dataset.fixedInputWired==='1') return; input.dataset.fixedInputWired='1';
     input.addEventListener('input', updateFixedClientState);
     if(reset) reset.addEventListener('click', ()=>{ input.value=''; input.dispatchEvent(new Event('input',{bubbles:true})); input.focus(); });
     const modal=q('#sub-modal'); if(modal) new MutationObserver(()=>{ if(modal.getAttribute('aria-hidden')==='false') setTimeout(updateFixedClientState,0); }).observe(modal,{attributes:true,attributeFilter:['aria-hidden']});
@@ -3969,7 +4024,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   'use strict';
   const q=(s,r=document)=>r.querySelector(s), qa=(s,r=document)=>[...r.querySelectorAll(s)];
   function syncFixedGuide(){
-    const input=q('#sub-peer-endpoint'), summary=q('#sub-fixed-client-summary'), card=q('.adv11-fixed-guide'), clear=q('#sub-fixed-client-clear');
+    const input=q('#sub-peer-endpoint'), summary=q('#sub-fixed-client-summary'), card=q('.advanced-guide-fixed-guide'), clear=q('#sub-fixed-client-clear');
     if(!input) return;
     const has=!!input.value.trim();
     if(summary) summary.textContent = has ? 'A fixed destination is set. Confirm that this client always keeps the same reachable public host and UDP port.' : 'Most clients should leave this field empty and use automatic endpoint behavior.';
@@ -3978,8 +4033,8 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   }
   function bindFixed(){
     const input=q('#sub-peer-endpoint');
-    if(!input || input.dataset.v12Bound==='1') return;
-    input.dataset.v12Bound='1';
+    if(!input || input.dataset.fixedControlBound==='1') return;
+    input.dataset.fixedControlBound='1';
     input.addEventListener('input', syncFixedGuide);
     q('#sub-fixed-client-clear')?.addEventListener('click', ()=>{input.value=''; input.dispatchEvent(new Event('input',{bubbles:true})); input.focus();});
     syncFixedGuide();
@@ -3989,7 +4044,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   }
   function bindPreviewResets(){
     qa('#sub-settings-modal [data-preview-fit], #sub-settings-modal [data-preview-device], #sub-settings-modal [data-preview-theme], #studio-preview-motion-toggle').forEach(btn=>{
-      if(btn.dataset.v12Bound==='1') return; btn.dataset.v12Bound='1';
+      if(btn.dataset.fixedControlBound==='1') return; btn.dataset.fixedControlBound='1';
       btn.addEventListener('click', ()=>setTimeout(resetPreviewStage,25));
     });
   }
@@ -4003,7 +4058,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   onOpenWatch('#sub-settings-modal', ()=>{bindPreviewResets(); resetPreviewStage();});
 })();
 
-(() => {'use strict';const q=(s,r=document)=>r.querySelector(s),qa=(s,r=document)=>[...r.querySelectorAll(s)];function refit(){const stage=q('#sub-settings-modal .studio8-frame-stage');if(stage){stage.scrollTop=0;stage.scrollLeft=0;}window.dispatchEvent(new Event('resize'));}function bind(){qa('#sub-settings-modal [data-preview-theme],#sub-settings-modal [data-preview-device],#sub-settings-modal [data-preview-fit],#studio-preview-motion-toggle').forEach(btn=>{if(btn.dataset.v121Bound==='1')return;btn.dataset.v121Bound='1';btn.addEventListener('click',()=>{setTimeout(refit,40);setTimeout(refit,220);});});}const modal=q('#sub-settings-modal');if(modal)new MutationObserver(()=>{if(modal.getAttribute('aria-hidden')==='false'){setTimeout(bind,20);setTimeout(refit,100);setTimeout(refit,500);}}).observe(modal,{attributes:true,attributeFilter:['aria-hidden']});if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind);else bind();})();
+(() => {'use strict';const q=(s,r=document)=>r.querySelector(s),qa=(s,r=document)=>[...r.querySelectorAll(s)];function refit(){const stage=q('#sub-settings-modal .studio8-frame-stage');if(stage){stage.scrollTop=0;stage.scrollLeft=0;}window.dispatchEvent(new Event('resize'));}function bind(){qa('#sub-settings-modal [data-preview-theme],#sub-settings-modal [data-preview-device],#sub-settings-modal [data-preview-fit],#studio-preview-motion-toggle').forEach(btn=>{if(btn.dataset.optionalControlsBound==='1')return;btn.dataset.optionalControlsBound='1';btn.addEventListener('click',()=>{setTimeout(refit,40);setTimeout(refit,220);});});}const modal=q('#sub-settings-modal');if(modal)new MutationObserver(()=>{if(modal.getAttribute('aria-hidden')==='false'){setTimeout(bind,20);setTimeout(refit,100);setTimeout(refit,500);}}).observe(modal,{attributes:true,attributeFilter:['aria-hidden']});if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind);else bind();})();
 
 (() => {
   'use strict';
@@ -4044,8 +4099,8 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   }
   function bindPanelTheme(){
     const btn=q('#subx-panel-theme-toggle');
-    if(!btn || btn.dataset.v122Bound==='1') return;
-    btn.dataset.v122Bound='1';
+    if(!btn || btn.dataset.advancedButtonsBound==='1') return;
+    btn.dataset.advancedButtonsBound='1';
     btn.addEventListener('click',()=>applyPanelTheme(currentTheme()==='dark'?'light':'dark'));
     renderPanelThemeButton();
     new MutationObserver(renderPanelThemeButton).observe(root,{attributes:true,attributeFilter:['data-theme']});
@@ -4065,8 +4120,8 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   }
   function bindPreviewControls(){
     qa('#sub-settings-modal [data-preview-theme]').forEach(btn=>{
-      if(btn.dataset.v122Bound==='1') return;
-      btn.dataset.v122Bound='1';
+      if(btn.dataset.advancedButtonsBound==='1') return;
+      btn.dataset.advancedButtonsBound='1';
       btn.addEventListener('click',()=>{
         const requested=btn.dataset.previewTheme;
         const theme=requested==='auto'?currentTheme():requested;
@@ -4075,8 +4130,8 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
       });
     });
     qa('#sub-settings-modal [data-preview-fit],#sub-settings-modal [data-preview-device]').forEach(btn=>{
-      if(btn.dataset.v122Bound==='1') return;
-      btn.dataset.v122Bound='1';
+      if(btn.dataset.advancedButtonsBound==='1') return;
+      btn.dataset.advancedButtonsBound='1';
       btn.addEventListener('click',()=>setTimeout(resetPreviewScroll,30));
     });
   }
@@ -4101,14 +4156,14 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   }
   function bindFixed(){
     const input=q('#sub-peer-endpoint'),trigger=q('#sub-fixed-client-info-trigger'),guide=q('#sub-fixed-client-info'),clear=q('#sub-fixed-client-clear');
-    if(input&&input.dataset.v123Bound!=='1'){
-      input.dataset.v123Bound='1'; input.addEventListener('input',fixedState);
+    if(input&&input.dataset.fixedGuideBound!=='1'){
+      input.dataset.fixedGuideBound='1'; input.addEventListener('input',fixedState);
     }
-    if(trigger&&trigger.dataset.v123Bound!=='1'){
-      trigger.dataset.v123Bound='1'; trigger.addEventListener('click',()=>{if(!guide)return;guide.open=!guide.open;trigger.setAttribute('aria-expanded',String(guide.open));if(guide.open)guide.scrollIntoView({block:'nearest',behavior:'smooth'});});
+    if(trigger&&trigger.dataset.fixedGuideBound!=='1'){
+      trigger.dataset.fixedGuideBound='1'; trigger.addEventListener('click',()=>{if(!guide)return;guide.open=!guide.open;trigger.setAttribute('aria-expanded',String(guide.open));if(guide.open)guide.scrollIntoView({block:'nearest',behavior:'smooth'});});
     }
-    if(clear&&clear.dataset.v123Bound!=='1'){
-      clear.dataset.v123Bound='1'; clear.addEventListener('click',()=>{if(!input)return;input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));input.focus();});
+    if(clear&&clear.dataset.fixedGuideBound!=='1'){
+      clear.dataset.fixedGuideBound='1'; clear.addEventListener('click',()=>{if(!input)return;input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));input.focus();});
     }
     fixedState();
   }
@@ -4119,7 +4174,7 @@ document.addEventListener('keydown', e=>{ if(e.key==='Escape' && OPEN_SUBSCRIPTI
   }
   function bindPreview(){
     qa('#sub-settings-modal [data-preview-theme],#sub-settings-modal [data-preview-device],#sub-settings-modal [data-preview-fit],#studio-preview-motion-toggle').forEach(btn=>{
-      if(btn.dataset.v123Bound==='1')return;btn.dataset.v123Bound='1';btn.addEventListener('click',()=>{setTimeout(refreshPreview,50);setTimeout(refreshPreview,250);});
+      if(btn.dataset.fixedGuideBound==='1')return;btn.dataset.fixedGuideBound='1';btn.addEventListener('click',()=>{setTimeout(refreshPreview,50);setTimeout(refreshPreview,250);});
     });
   }
   function watch(sel,cb){const el=q(sel);if(!el)return;new MutationObserver(()=>{if(el.getAttribute('aria-hidden')==='false')setTimeout(cb,30)}).observe(el,{attributes:true,attributeFilter:['aria-hidden']});}
@@ -4171,3 +4226,4 @@ async function openDiagnosisClient(id){
 
 window.wgOpenSubscriptionDiagnosisEditor=(id)=>{if(!SUBS.some(s=>String(s.id)===String(id)))return false;openDiagnosisClient(id);return true;};
 window.addEventListener('wgpanel:diagnosis-changed',()=>loadSubs({force:true}));
+window.addEventListener('rp-operation-completed',()=>{if(!modalIsOpen()&&!detailsIsOpen())void loadSubs({force:true});});

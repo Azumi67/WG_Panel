@@ -46,3 +46,9 @@ html[data-design=legacy][data-theme=dark] :is(.muted,.hint){color:#aebbd0!import
 html[data-design=legacy][data-theme=light]{--auth-field-bg:#fff;--auth-field-text:#0f172a;--auth-field-line:#dbe3ec;--auth-field-muted:#64748b}
 html[data-design=legacy][data-theme=light] :is(.auth-card,.modal-card){background:#fff!important;color:#172033!important;border-color:#dbe3ec!important}
 html[data-design=legacy][data-theme=light] :is(.muted,.hint){color:#64748b!important}
+
+
+.auth-card,.auth-card *{box-sizing:border-box}.auth-wrap,.auth-card,.auth-cols,.auth-form{min-width:0;max-width:100%}.auth-card{height:auto!important;overflow:visible}.auth-wrap{width:100%;box-sizing:border-box}.auth-card input,.auth-card button{max-width:100%}.auth-card .row-actions{flex-wrap:wrap;gap:12px}
+@media(max-height:800px){body.auth-body{align-items:flex-start!important;overflow-y:auto!important}.auth-wrap{margin-block:20px}.auth-orbit{display:none!important}}
+@media(max-width:960px){.auth-cols{gap:24px!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+@media(max-width:760px){.auth-cols{grid-template-columns:minmax(0,1fr)!important}.auth-card{padding:24px!important}}

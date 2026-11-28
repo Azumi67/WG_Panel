@@ -2003,3 +2003,11 @@ html[data-design="modern"] .auth-mobile-gateway { display:none; }
   36% { opacity:.60; transform:scale(2.35); }
   100% { opacity:.08; transform:scale(1.05); }
 }
+
+
+html[data-design="modern"] .auth-card,html[data-design="modern"] .auth-card *{box-sizing:border-box}
+html[data-design="modern"] .auth-card{min-width:0;flex-shrink:0;height:auto!important;max-height:none!important}
+html[data-design="modern"] .auth-card :is(form,.form-grid,.form-group,.row-actions,.actions){min-width:0;max-width:100%}
+html[data-design="modern"] .auth-card :is(input,button[type="submit"],#submit-btn){box-sizing:border-box;max-width:100%}
+html[data-design="modern"] .auth-card :is(.row-actions,.auth-appearance-controls){flex-wrap:wrap}
+@media(max-height:760px){html[data-design="modern"] :is(.auth-wrap,.auth-center){align-items:flex-start!important;height:auto!important;flex:none!important}html[data-design="modern"] body{overflow-y:auto!important}}

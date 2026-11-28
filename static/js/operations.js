@@ -7,6 +7,7 @@
     .replaceAll('"', '&quot;').replaceAll("'", '&#039;');
 
   let report = null;
+  let findingsPage = 1, findingsKey = "";
   let selectedFindingId = null;
   let systemProfile = null;
   let historyEvents = [];
@@ -31,7 +32,7 @@
         await navigator.clipboard.writeText(value);
         return true;
       }
-    } catch (_) { /* use fallback below */ }
+    } catch (_) {                          }
 
     let area = null;
     try {
@@ -161,7 +162,7 @@
     if (Number.isNaN(d.getTime())) return String(ts);
     try {
       if (window.wgPanelFormatDateTime) return window.wgPanelFormatDateTime(d.toISOString(), { seconds: true });
-    } catch (_) { /* fallback below */ }
+    } catch (_) {                      }
     return d.toLocaleString();
   }
 
@@ -358,6 +359,11 @@
     if (!report) return;
 
     const list = sortedFindings();
+    const key = JSON.stringify([$('ops-filter')?.value,$('ops-search')?.value,$('ops-category')?.value,$('ops-sort')?.value,list.map(f=>f.id)]);
+    if(key!==findingsKey){findingsPage=1;findingsKey=key;}
+    const pages=Math.max(1,Math.ceil(list.length/8));findingsPage=Math.min(findingsPage,pages);
+    $('ops-page').textContent=list.length ? `Page ${findingsPage} of ${pages} · ${list.length} findings` : 'No results';
+    $('ops-prev').disabled=findingsPage<=1;$('ops-next').disabled=findingsPage>=pages;
     const total = report.checks?.length || 0;
     const filter = $('ops-filter')?.value || 'all';
     $('ops-findings-title').textContent = 'Findings';
@@ -375,7 +381,7 @@
     }
 
     root.replaceChildren();
-    for (const finding of list) {
+    for (const finding of list.slice((findingsPage-1)*8,findingsPage*8)) {
       const tone = findingTone(finding);
       const severity = severityOf(finding);
       const card = document.createElement('article');
@@ -1039,6 +1045,8 @@
       if (start) runScan();
     });
     $('ops-repair-safe')?.addEventListener('click', fixSafeIssues);
+    $('ops-prev')?.addEventListener('click',()=>{findingsPage=Math.max(1,findingsPage-1);renderFindings();});
+    $('ops-next')?.addEventListener('click',()=>{findingsPage++;renderFindings();});
     $('ops-export')?.addEventListener('click', exportReport);
     $('ops-search')?.addEventListener('input', () => { selectedFindingId = null; render(); });
     document.querySelector('.ops2-status-tabs')?.addEventListener('click', event => {

@@ -1,4 +1,4 @@
-"""Validated peer presentation settings; no executable CSS or HTML is accepted."""
+
 import json
 import os
 import re
@@ -80,7 +80,6 @@ def atomic_save(path, data):
 
 
 def preview_fonts(root):
-    """Embed bundled fonts for the opaque-origin preview sandbox only."""
     import base64
     from pathlib import Path
     fonts = [('Poppins', 400, 'fonts/Poppins-Regular.woff2'),

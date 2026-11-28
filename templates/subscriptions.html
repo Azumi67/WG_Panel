@@ -7,8 +7,8 @@
 {% endblock %}
 {% block content %}
 <script>window.WG_PANEL_IS_ADMIN={{ (current_user.is_authenticated and (current_user.is_admin|default(false) or current_user.is_superuser|default(false)))|tojson }};</script>
-<script defer src="{{ url_for('static', filename='js/peer-diagnose.js', v='fefbc174e4') }}"></script>
-<script defer src="{{ url_for('static', filename='js/csrf.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/peer-diagnose.js') }}"></script>
+
 <script defer src="{{ url_for('static', filename='js/toast.js') }}"></script>
 
 <style>
@@ -216,6 +216,7 @@
     </dl>
   </section>
 
+{% if not reseller_mode|default(false) and current_user.is_authenticated and current_user.is_admin|default(false) %}<div data-reseller-visibility data-resource-reload></div>{% endif %}
   <div id="subs-list" class="subx-list"></div>
 
   <div id="subs-empty" class="subx-empty" hidden>
@@ -277,7 +278,7 @@
               <label><span>Telegram</span><input class="input" name="telegram_id" placeholder="@username or ID"></label>
             </div>
             <label class="subx-switch"><input type="checkbox" name="start_on_first_use"><span></span><b>Start timer on first use</b></label>
-            <label class="subx-switch"><input type="checkbox" name="unlimited"><span></span><b>Unlimited client</b></label>
+            {% if not reseller_mode|default(false) %}<label class="subx-switch"><input type="checkbox" name="unlimited"><span></span><b>Unlimited client</b></label>{% endif %}
           </div>
         </section>
 
@@ -333,13 +334,13 @@
                   <div><b>Routing</b><small>Build the Allowed IPs list using removable route chips.</small></div>
                 </header>
 
-                <div class="adv124-routing-top">
-  <label class="adv124-name-prefix">
+                <div class="advanced-routing-routing-top">
+  <label class="advanced-routing-name-prefix">
     <span>Name prefix</span>
     <input class="input" name="peer_name_prefix" placeholder="Empty = client-name-1, 2, 3">
     <small>Optional prefix when creating configs on multiple interfaces.</small>
   </label>
-  <label class="adv124-auto-inline">
+  <label class="advanced-routing-auto-inline">
 
                   <input type="checkbox" id="sub-include-internal-network" name="include_internal_network" value="1">
                   <span class="adv8-switch"></span>
@@ -351,7 +352,7 @@
 
   </label>
 </div>
-<div class="adv8-route-field adv124-route-wide">
+<div class="adv8-route-field advanced-routing-route-wide">
 
                     <div class="adv8-route-label">
                       <span><b>Allowed IPs</b><small>Each chip is written to the client config.</small></span>
@@ -369,7 +370,7 @@
                       </div>
                     </div>
                     <div class="adv8-route-hint"><i class="fas fa-circle-info"></i><span>Detected local and node private networks can be added as normal chips. Remove any chip with its small × button.</span></div>
-                    <div class="adv11-detected-tray" id="sub-detected-network-tray" aria-live="polite"></div>
+                    <div class="advanced-guide-detected-tray" id="sub-detected-network-tray" aria-live="polite"></div>
                     <div class="adv8-route-error" id="sub-route-error" role="alert" hidden></div>
 
 </div>
@@ -386,27 +387,27 @@
                     <input class="input" name="endpoint" inputmode="url" autocomplete="off" placeholder="Use interface endpoint automatically">
                     <small>Written into the exported client configuration. Leave blank to use the selected interface endpoint.</small>
                   </label>
-                  <div class="adv11-fixed-wrap fixed-endpoint-card">
-  <div class="adv11-fixed-card">
-    <div class="adv11-fixed-head">
-      <div class="adv11-fixed-title"><span class="adv11-fixed-icon"><i class="fas fa-link"></i></span><span><b>Fixed client endpoint</b><small>Optional server-side destination override for advanced cases only.</small></span></div>
-      <button type="button" class="adv123-info-trigger" id="sub-fixed-client-info-trigger" title="Read fixed endpoint guidance" aria-label="Read fixed endpoint guidance"><i class="fas fa-circle-info"></i></button>
+                  <div class="advanced-guide-fixed-wrap fixed-endpoint-card">
+  <div class="advanced-guide-fixed-card">
+    <div class="advanced-guide-fixed-head">
+      <div class="advanced-guide-fixed-title"><span class="advanced-guide-fixed-icon"><i class="fas fa-link"></i></span><span><b>Fixed client endpoint</b><small>Optional server-side destination override for advanced cases only.</small></span></div>
+      <button type="button" class="advanced-info-info-trigger" id="sub-fixed-client-info-trigger" title="Read fixed endpoint guidance" aria-label="Read fixed endpoint guidance"><i class="fas fa-circle-info"></i></button>
     </div>
-    <label class="adv11-fixed-input">
-      <span class="adv11-fixed-label">Stable public host and UDP port</span>
-      <span class="adv123-fixed-input-row"><input class="input" id="sub-peer-endpoint" name="peer_endpoint" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Example: client.example.com:51820"><button type="button" id="sub-fixed-client-clear" class="adv123-fixed-clear" title="Clear fixed endpoint" aria-label="Clear fixed endpoint"><i class="fas fa-xmark"></i></button></span>
+    <label class="advanced-guide-fixed-input">
+      <span class="advanced-guide-fixed-label">Stable public host and UDP port</span>
+      <span class="advanced-info-fixed-input-row"><input class="input" id="sub-peer-endpoint" name="peer_endpoint" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Example: client.example.com:51820"><button type="button" id="sub-fixed-client-clear" class="advanced-info-fixed-clear" title="Clear fixed endpoint" aria-label="Clear fixed endpoint"><i class="fas fa-xmark"></i></button></span>
       <small>Suitable for a stable public client endpoint, or a UDP load-balancer / HA frontend that keeps a consistent WireGuard flow and reachable UDP port.</small>
     </label>
   </div>
-  <details class="adv11-fixed-guide adv123-fixed-guide" id="sub-fixed-client-info">
+  <details class="advanced-guide-fixed-guide advanced-info-fixed-guide" id="sub-fixed-client-info">
     <summary>
-      <span class="adv11-guide-main"><span class="adv11-guide-pulse"><i class="fas fa-circle-info"></i></span><span><b>Fixed endpoint guidance</b><small id="sub-fixed-client-summary">Most clients should leave this field empty and use automatic endpoint behavior.</small></span></span>
-      <i class="fas fa-chevron-down adv11-guide-chevron"></i>
+      <span class="advanced-guide-guide-main"><span class="advanced-guide-guide-pulse"><i class="fas fa-circle-info"></i></span><span><b>Fixed endpoint guidance</b><small id="sub-fixed-client-summary">Most clients should leave this field empty and use automatic endpoint behavior.</small></span></span>
+      <i class="fas fa-chevron-down advanced-guide-guide-chevron"></i>
     </summary>
-    <div class="adv11-guide-body">
-      <article class="adv11-guide-point ok"><i class="fas fa-check"></i><span><b>Good fit</b><small>Office gateways, branch routers, dedicated servers, or a stable UDP load-balancer / HA frontend that preserves the peer flow and return path.</small></span></article>
-      <article class="adv11-guide-point warn"><i class="fas fa-triangle-exclamation"></i><span><b>Leave blank</b><small>Phones, roaming laptops, CGNAT users, changing home addresses, or ordinary HTTP/TCP load balancers. WireGuard requires a reachable UDP endpoint.</small></span></article>
-      <article class="adv11-guide-point note"><i class="fas fa-arrow-right-arrow-left"></i><span><b>What happens</b><small>The panel stores this value on the server-side peer. WireGuard sends encrypted UDP traffic to that exact host and port until the endpoint is changed.</small></span></article>
+    <div class="advanced-guide-guide-body">
+      <article class="advanced-guide-guide-point ok"><i class="fas fa-check"></i><span><b>Good fit</b><small>Office gateways, branch routers, dedicated servers, or a stable UDP load-balancer / HA frontend that preserves the peer flow and return path.</small></span></article>
+      <article class="advanced-guide-guide-point warn"><i class="fas fa-triangle-exclamation"></i><span><b>Leave blank</b><small>Phones, roaming laptops, CGNAT users, changing home addresses, or ordinary HTTP/TCP load balancers. WireGuard requires a reachable UDP endpoint.</small></span></article>
+      <article class="advanced-guide-guide-point note"><i class="fas fa-arrow-right-arrow-left"></i><span><b>What happens</b><small>The panel stores this value on the server-side peer. WireGuard sends encrypted UDP traffic to that exact host and port until the endpoint is changed.</small></span></article>
     </div>
   </details>
 </div>
@@ -942,5 +943,6 @@
 
 
 
-<script defer src="{{ url_for('static', filename='js/subscriptions.js', v='a729b8b86c') }}"></script>
+<script>window.WG_PUBLIC_CUSTOMIZATION_CSS={{url_for('static',filename='css/public-customization.css')|tojson}};</script>
+<script defer src="{{ url_for('static', filename='js/subscriptions.js') }}"></script>
 {% endblock %}

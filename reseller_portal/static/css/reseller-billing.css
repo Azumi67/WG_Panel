@@ -1,0 +1,116 @@
+.rp-billing {
+  width: 100%; max-width: 86rem; margin: 0; padding: 0;
+  display: grid; gap: 16px; color: var(--rp-text); font-size: 14px; line-height: 1.5;
+}
+.rp-billing, .rp-billing * {box-sizing: border-box; min-width: 0}
+.rp-billing :is(h1,h2,h3,p,dl,dd,form) {margin: 0}
+.bill-heading h1 {font-size: clamp(24px, 3vw, 32px); line-height: 1.2; letter-spacing: -.035em}
+.rp-billing .bill-card {border: 1px solid var(--rp-line); background: var(--rp-card); border-radius: 12px; overflow: hidden}
+.bill-card > header {display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 20px; border-bottom:1px solid var(--rp-line)}
+.bill-card h2 {font-size:17px; line-height:1.4; letter-spacing:-.015em; overflow-wrap:anywhere}
+.bill-card h3 {font-size:14px; overflow-wrap:anywhere}
+.bill-current > header {align-items:center}
+.bill-current h2 {font-size:22px}
+.bill-caption, .bill-card small, .bill-summary dt, .bill-traffic > div > span, .bill-empty, .bill-note, .bill-proof-form > p {font-size:13px; color:var(--rp-muted)}
+.bill-status {font-size:12px; font-weight:600; white-space:nowrap; display:inline-flex; align-items:center; gap:8px; padding:4px 10px; border:1px solid var(--rp-line); border-radius:999px; background:var(--rp-soft)}
+.bill-access i {display:inline-block; width:8px; height:8px; flex:none; border-radius:50%; background:#29956d}
+.bill-access[data-state=exhausted] i {background:#c59535}
+.bill-access[data-state=expired] i {background:#d74c58; animation:rp-bill-expiry 2.8s ease-out infinite}
+@keyframes rp-bill-expiry {0%,55%{box-shadow:0 0 0 0 rgb(215 76 88 / .45)} 95%,100%{box-shadow:0 0 0 6px rgb(215 76 88 / 0)}}
+@media(prefers-reduced-motion:reduce){.bill-access[data-state=expired] i{animation:none}}
+.bill-summary {display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.6fr); gap:28px; padding:17px 20px}
+.bill-traffic > div {display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:4px 10px}
+.bill-traffic strong {font-variant-numeric:tabular-nums}
+.bill-traffic small {font-weight:400}
+.bill-traffic progress {display:block; appearance:none; width:100%; height:6px; border:none; border-radius:3px; margin-top:10px; background:var(--rp-soft); overflow:hidden}
+.bill-traffic progress::-webkit-progress-bar {background:var(--rp-soft)}
+.bill-traffic progress::-webkit-progress-value {background:var(--rp-accent)}
+.bill-traffic progress::-moz-progress-bar {background:var(--rp-accent)}
+.bill-metrics {display:grid; grid-template-columns:1.6fr 1fr 1.2fr; gap:10px}
+.bill-metrics > div {border-inline-start:1px solid var(--rp-line); padding-inline-start:14px}
+.bill-metrics dd {font-weight:600; font-variant-numeric:tabular-nums}
+.bill-columns {display:grid; grid-template-columns:minmax(0,1.12fr) minmax(0,1fr); gap:16px; align-items:start}
+.bill-plan, .bill-history, .bill-result, .bill-checkout, .bill-card nav, .rp-billing .bill-empty {padding:14px 20px}
+.bill-plan {display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px 12px}
+.bill-plan > div {grid-row:span 2}
+.bill-plan > :is(form,a,.bill-price) {justify-self:end}
+.bill-price {font-size:16px; line-height:1.25}
+.bill-price small {font-weight:500}
+.bill-history {display:flex; align-items:center; justify-content:space-between; gap:12px; overflow-wrap:anywhere}
+.bill-history small {display:block}
+.bill-order-state {font-size:13px; white-space:nowrap}
+.bill-history i {margin-inline-start:5px}
+.bill-plan + .bill-plan, .bill-history + .bill-history, .bill-card nav {border-top:1px solid var(--rp-line)}
+.rp-billing .bill-note, .rp-billing .bill-feedback {padding:10px 20px; border-top:1px solid var(--rp-line); background:var(--rp-soft)}
+.bill-feedback {border-inline-start:3px solid var(--rp-accent); border-radius:5px}
+.bill-feedback[role=alert] {border-inline-start-color:#cb5965}
+.bill-checkout {display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:24px}
+.rp-billing .bill-instructions {white-space:pre-line; unicode-bidi:plaintext; margin:6px 0 12px; overflow-wrap:anywhere}
+.bill-proof-form, .bill-proof-form label, .bill-result {display:grid; gap:7px}
+.bill-proof-form label {font-weight:600; gap:4px}
+.bill-proof-form label small {font-weight:400}
+.bill-proof-form input {width:100%; border:1px solid var(--rp-line); border-radius:6px; color:inherit; background:var(--rp-soft); padding:7px 9px; font:inherit}
+.rp-billing button {width:auto; min-height:36px; font:inherit; font-weight:600; border:1px solid var(--rp-line); border-radius:7px; color:inherit; background:var(--rp-soft); padding:6px 13px; cursor:pointer}
+.rp-billing .bill-primary {justify-self:start; background:#5741bb; color:white; border-color:#5741bb}
+.rp-billing .bill-primary:hover {background:#47339e}
+.rp-billing a {color:var(--rp-accent); text-decoration:none}
+.rp-billing a:hover {text-decoration:underline}
+.rp-billing .bill-history {color:var(--rp-text)}
+.rp-billing :is(a,button,input,summary):focus-visible {outline:2px solid var(--rp-accent); outline-offset:2px}
+.bill-cancel summary {cursor:pointer}
+.bill-result {justify-items:start; overflow-wrap:anywhere}
+.bill-card nav {display:flex; justify-content:space-between; gap:10px}
+@media(max-width:1000px){.bill-columns{grid-template-columns:1fr}.bill-summary{gap:16px}.bill-plan{grid-template-columns:minmax(0,1fr) auto auto}.bill-plan>div{grid-row:auto}}
+@media(max-width:680px){.rp-billing{padding:8px 0;gap:12px}.bill-summary,.bill-checkout{grid-template-columns:1fr}.bill-summary,.bill-card>header,.bill-plan,.bill-history,.bill-result,.bill-checkout,.bill-card nav,.rp-billing .bill-note,.rp-billing .bill-empty{padding:12px 14px}.bill-metrics{gap:8px}.bill-metrics>div{padding-inline-start:8px}.bill-metrics>div:first-child{border:0;padding:0}.bill-metrics dd,.bill-metrics dt{font-size:12px}.bill-plan{grid-template-columns:minmax(0,1fr) auto}.bill-plan>div{grid-row:span 2}.bill-proof-form{border-top:1px solid var(--rp-line);padding-top:12px}.bill-heading h1{font-size:25px}.bill-columns{gap:12px}}
+
+@media(max-width:440px){
+  .bill-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px}
+  .bill-metrics>div:first-child{grid-column:1/-1;display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .bill-metrics>div:nth-child(2){padding:0;border:0}
+  .bill-metrics>div:nth-child(n+2){display:flex;align-items:baseline;gap:6px}
+}
+
+.bill-integration{max-width:56rem}.bill-result label{display:grid;gap:6px;width:100%;font-weight:600}
+.app-credential{width:100%;padding:9px;color:inherit;background:var(--rp-soft);border:1px solid var(--rp-line);border-radius:6px;font-family:monospace}
+
+.bill-metrics small{color:var(--rp-muted);font-size:.85em;font-weight:500}
+.bill-order-state{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.bill-order-state::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.bill-order-state[data-state=approved]::before{background:#36a47d}.bill-order-state[data-state=pending]::before{background:#d09b31}
+.bill-order-state[data-state=rejected]::before{background:#cb6b69}
+@media(min-width:681px){.bill-plan{grid-template-columns:minmax(0,1fr) auto auto;column-gap:16px}.bill-plan>div{grid-row:auto}.bill-plan .bill-price,.bill-plan form{align-self:center}.bill-columns{align-items:start}}
+.app-examples > summary{cursor:pointer;padding:14px 18px;font-weight:650}
+.app-examples > div{padding:0 18px 16px;min-width:0}
+.app-examples .api-request-example{padding:12px 0;border-top:1px solid var(--rp-line)}
+.app-examples .api-example-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.app-examples .api-example-result{margin:6px 0 0}
+.app-examples pre{max-width:100%;overflow:auto;padding:10px;border-radius:6px;background:var(--rp-soft);font-size:.85rem}
+body:has(.app-examples) .api-copy-toast{display:none}
+body:has(.app-examples) .api-copy-toast.show{display:flex;position:fixed;inset:auto 16px 16px auto;gap:.5rem;padding:.65rem .9rem;color:var(--rp-text);background:var(--rp-surface);border:1px solid var(--rp-line);border-radius:.5rem;z-index:100}
+
+.rp-billing [hidden]{display:none!important}
+.bill-heading,.bill-order-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.bill-heading .bill-open-order,.bill-card header>a{font-weight:600;color:var(--rp-accent);text-underline-offset:.2em}
+.bill-order{scroll-margin-block-start:5rem}
+.bill-checkout{align-items:start;grid-template-columns:minmax(0,4fr) minmax(0,5fr)}
+.bill-payment-note{min-width:0}
+.bill-payment-note p{margin-block:8px;white-space:pre-wrap;overflow-wrap:anywhere}
+.bill-proof-form{max-width:36rem}
+.bill-proof-form .bill-proof-choice{display:flex;gap:8px;flex-wrap:wrap;border:0;padding:0;margin:0;min-width:0}
+.bill-proof-choice legend{font-size:.85rem;color:var(--rp-muted);margin-block-end:8px}
+.bill-proof-choice label{display:flex!important;align-items:center;gap:6px;border:1px solid var(--rp-line);border-radius:7px;padding:7px 10px;cursor:pointer}
+.bill-proof-choice label:has(:checked){border-color:var(--rp-accent);background:var(--rp-soft)}
+.bill-proof-choice input[type=radio]{width:1rem;height:1rem;min-height:0;accent-color:var(--rp-accent);margin:0}
+.bill-upload{min-height:82px;position:relative;display:grid;gap:6px;border:1px dashed var(--rp-line);border-radius:8px;background:var(--rp-soft);padding:15px;cursor:pointer}
+.bill-upload:focus-within{outline:2px solid var(--rp-accent);outline-offset:2px}
+.bill-upload span{font-weight:650}.bill-upload i{margin-inline-end:5px;color:var(--rp-accent)}
+.bill-upload input[type=file]{position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer}
+.bill-upload output{overflow-wrap:anywhere;color:var(--rp-text)}.bill-upload output:empty{display:none}
+.bill-order-footer{border-top:1px solid var(--rp-line);padding:12px 20px}
+.bill-order-footer .bill-cancel{margin:0}.bill-cancel>summary{cursor:pointer;display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:4px 9px;font-weight:600;color:var(--rp-text)}
+.bill-cancel form{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 9px}
+.bill-cancel form p,.bill-action-status{flex-basis:100%}
+.rp-billing .bill-danger{background:#873b47;color:white;border-color:#873b47}
+.bill-action-status{color:var(--rp-text);overflow-wrap:anywhere}
+.bill-action-status a{font-weight:600;text-decoration:underline}
+@media(max-width:720px){.bill-checkout{grid-template-columns:minmax(0,1fr)}.bill-proof-form{max-width:none}.bill-order-footer{padding:10px 14px}.bill-proof-choice label{min-height:42px}}

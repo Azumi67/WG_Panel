@@ -1,0 +1,33 @@
+<section class="peer-summary-card peer-summary-fluent" id="peer-tag-summary">      <div class="peer-overview-head">
+        <div class="peer-overview-heading">
+          <span class="peer-overview-heading-icon"><i class="fas fa-chart-simple" aria-hidden="true"></i></span>
+          <span><strong>Peer overview</strong><small>Quick summary of peers on this interface.</small></span>
+        </div>
+        <div class="peer-overview-filters" role="group" aria-label="Quick peer filters">
+          <button type="button" class="summary-chip total" data-summary-filter="all" title="Show all peers"><i class="fas fa-users" aria-hidden="true"></i><span>All</span><b id="sum-total">0</b></button>
+          <button type="button" class="summary-chip online" data-summary-filter="online" title="Recent WireGuard handshake"><i class="fas fa-circle" aria-hidden="true"></i><span>Online</span><b id="sum-online">0</b></button>
+          <button type="button" class="summary-chip offline" data-summary-filter="offline" title="No recent WireGuard handshake"><i class="fas fa-circle" aria-hidden="true"></i><span>Offline</span><b id="sum-offline">0</b></button>
+          <button type="button" class="summary-chip enabled" data-summary-filter="enabled" title="Enabled in the panel"><i class="fas fa-circle-check" aria-hidden="true"></i><span>Enabled</span><b id="sum-enabled">0</b></button>
+          <button type="button" class="summary-chip disabled" data-summary-filter="disabled" title="Disabled in the panel"><i class="fas fa-circle-minus" aria-hidden="true"></i><span>Disabled</span><b id="sum-disabled">0</b></button>
+          <button type="button" class="summary-chip depleting" data-summary-filter="depleting" title="Near data or time limit"><i class="fas fa-triangle-exclamation" aria-hidden="true"></i><span>Near limit</span><b id="sum-depleting">0</b></button>
+          <button type="button" class="summary-chip blocked" data-summary-filter="blocked" title="Blocked, expired, or out of data"><i class="fas fa-circle-xmark" aria-hidden="true"></i><span>Blocked</span><b id="sum-blocked">0</b></button>
+        </div>
+      </div>
+      <div class="peer-overview-insights">
+        <div class="peer-overview-tile inventory">
+          <span class="overview-tile-icon"><i class="fas fa-layer-group" aria-hidden="true"></i></span>
+          <div class="overview-tile-copy"><strong>Inventory</strong><div class="inventory-line"><b id="ov-total">0</b><span>Total peers<small id="ov-interface">On selected interface</small></span></div></div>
+        </div>
+        <div class="peer-overview-tile connection">
+          <span class="overview-tile-icon"><i class="fas fa-wifi" aria-hidden="true"></i></span>
+          <div class="overview-tile-copy"><strong>Connection health</strong><div class="connection-body"><div class="connection-donut" id="ov-donut"><span><b id="ov-donut-total">0</b><small>peers</small></span></div><div class="overview-legend"><span class="online"><i></i>Online <b id="ov-online">0</b><em id="ov-online-pct">0%</em></span><span class="offline"><i></i>Offline <b id="ov-offline">0</b><em id="ov-offline-pct">0%</em></span></div></div></div>
+        </div>
+        <div class="peer-overview-tile access">
+          <span class="overview-tile-icon"><i class="fas fa-shield-halved" aria-hidden="true"></i></span>
+          <div class="overview-tile-copy"><strong>Access state</strong><div class="access-bar" id="ov-access-bar"><span class="enabled"></span><span class="disabled"></span></div><div class="overview-legend compact"><span class="enabled"><i></i>Enabled <b id="ov-enabled">0</b><em id="ov-enabled-pct">0%</em></span><span class="disabled"><i></i>Disabled <b id="ov-disabled">0</b><em id="ov-disabled-pct">0%</em></span></div></div>
+        </div>
+        <div class="peer-overview-tile risk">
+          <span class="overview-tile-icon"><i class="fas fa-triangle-exclamation" aria-hidden="true"></i></span>
+          <div class="overview-tile-copy"><strong>Risk &amp; attention</strong><div class="risk-metrics"><button type="button" data-summary-filter="depleting" class="risk-mini near"><i class="fas fa-triangle-exclamation"></i><span><b id="ov-near">0</b><small>Near limit</small><em id="ov-near-pct">0% of peers</em></span></button><button type="button" data-summary-filter="blocked" class="risk-mini blocked"><i class="fas fa-circle-xmark"></i><span><b id="ov-blocked">0</b><small>Blocked</small><em id="ov-blocked-pct">0% of peers</em></span></button></div></div>
+        </div>
+      </div></section>

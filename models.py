@@ -114,7 +114,6 @@ class Node(db.Model):
     last_seen = db.Column(db.DateTime)
 
 
-
 class Subscription(db.Model):
     id                   = db.Column(db.Integer, primary_key=True)
     name                 = db.Column(db.String(96), nullable=False)
@@ -172,6 +171,8 @@ class AdminAccount(db.Model):
     totp_secret   = db.Column(db.String(32))
     twofa_enabled = db.Column(db.Boolean, default=False)
     recovery_codes = db.Column(db.Text)
+    last_totp_counter = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    session_revision = db.Column(db.Integer, nullable=False, default=0, server_default="0")
 
     @staticmethod
     def hash_pw(password: str) -> str:
@@ -180,7 +181,10 @@ class AdminAccount(db.Model):
 
     def verify_pw(self, password: str) -> bool:
         password = (password or "").strip()
-        return pwd_ctx.verify(password, self.password_hash)
+        try:
+            return pwd_ctx.verify(password, self.password_hash)
+        except (ValueError, TypeError):
+            return False
     
 class Admin2FA(db.Model):
     __tablename__ = 'admin_twofa'

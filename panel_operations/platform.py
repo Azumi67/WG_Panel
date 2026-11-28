@@ -1,4 +1,4 @@
-"""Host platform detection and OS-aware command suggestions for Operations"""
+
 from __future__ import annotations
 import os
 import platform as py_platform
@@ -102,11 +102,6 @@ def package_name(package_key: str, profile: dict | None = None) -> str | None:
 
 
 def package_install_argv(package_key: str, profile: dict | None = None) -> list[list[str]] | None:
-    """Return fixed argv steps for one supported package family.
-
-    The caller still decides whether to execute them.  Returning argv instead of
-    a shell command prevents user-controlled shell syntax from entering repairs.
-    """
     profile = profile or detect_platform()
     manager = profile.get("package_manager") or ""
     binary = profile.get("package_manager_path") or shutil.which(manager)
@@ -244,9 +239,10 @@ def command_guide(profile: dict | None = None) -> list[dict]:
         {
             "id": "database",
             "title": "Database",
-            "description": "For the default SQLite deployment, integrity_check is read-only. Back up the database before any repair or migration.",
+            "description": "For PostgreSQL, use the panel's pg_dump backup endpoint and verify pg_restore on an isolated database. The commands below also include legacy SQLite recovery tools.",
             "items": [
-                {"label": "SQLite file", "commands": ["ls -lh instance/wg_panel.db 2>/dev/null || true", "stat -c '%a %U:%G %s bytes %n' instance/wg_panel.db 2>/dev/null || true"]},
+                {"label": "PostgreSQL health", "commands": ["pg_isready -h 127.0.0.1 -p 5432", "systemctl status postgresql --no-pager 2>/dev/null || true"]},
+                {"label": "Legacy SQLite file", "commands": ["ls -lh instance/wg_panel.db 2>/dev/null || true", "stat -c '%a %U:%G %s bytes %n' instance/wg_panel.db 2>/dev/null || true"]},
                 {"label": "SQLite integrity", "commands": ["python3 -c \"import sqlite3; c=sqlite3.connect('instance/wg_panel.db'); print(c.execute('PRAGMA integrity_check').fetchone()[0]); c.close()\""]},
             ],
         },

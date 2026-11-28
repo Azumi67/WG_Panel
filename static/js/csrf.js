@@ -1,38 +1,24 @@
-(function () {
-  const origFetch = window.fetch.bind(window);
-
+(() => {
+  'use strict';
+  const original=window.fetch.bind(window);
   function getCookie(name) {
-    const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
-    return m ? decodeURIComponent(m[1]) : '';
+    try{const m=document.cookie.match(new RegExp('(?:^|; )'+name+'=([^;]*)'));return m?decodeURIComponent(m[1]):'';}catch(_){return '';}
   }
-  function getApiKey() {
-    return document.querySelector('meta[name="api-key"]')?.content || '';
-  }
-
-  window.fetch = function (input, init) {
-    init = init || {};
-
-    if (init.credentials == null) init.credentials = 'same-origin';
-
-    const merged = new Headers();
-    if (input instanceof Request && input.headers) {
-      input.headers.forEach((v, k) => merged.set(k, v));
+  window.fetch = (input, options) => {
+    const init=options||{};
+    const request=input instanceof Request?input:null;
+    const target=new URL(request?request.url:input,window.location.href);
+    if(target.origin!==window.location.origin)return original(input,init);
+    const headers=new Headers(request?.headers);
+    new Headers(init.headers).forEach((v,k)=>headers.set(k,v));
+    const token=getCookie('csrf_token')||document.querySelector('meta[name="csrf-token"]')?.content||'';
+    if(token&&!headers.has('X-CSRFToken')&&!headers.has('X-CSRF-Token')){
+      headers.set('X-CSRFToken',token);headers.set('X-CSRF-Token',token);
     }
-    new Headers(init.headers || {}).forEach((v, k) => merged.set(k, v));
-
-    const tok = getCookie('csrf_token');
-    if (tok) {
-      merged.set('X-CSRFToken', tok);
-      merged.set('X-CSRF-Token', tok);
+    const key=document.querySelector('meta[name="api-key"]')?.content||'';
+    if(key&&!document.documentElement.hasAttribute('data-reseller-workspace')&&!headers.has('Authorization')&&!headers.has('X-API-KEY')){
+      headers.set('Authorization',`Bearer ${key}`);headers.set('X-API-KEY',key);
     }
-
-    const key = getApiKey();
-    if (key) {
-      if (!merged.has('Authorization')) merged.set('Authorization', `Bearer ${key}`);
-      if (!merged.has('X-API-KEY'))    merged.set('X-API-KEY', key);
-    }
-
-    init.headers = merged;
-    return origFetch(input, init);
+    return original(input,{...init,credentials:init.credentials??request?.credentials??'same-origin',headers});
   };
 })();

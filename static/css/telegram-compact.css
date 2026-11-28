@@ -1,0 +1,88 @@
+html[data-design][data-theme] body #card-telegram{width:100%;box-sizing:border-box;max-width:none;margin-inline:0;border-radius:12px}
+html[data-design][data-theme] body #card-telegram .card-header{padding:14px 18px;font-size:15px;gap:10px;flex-wrap:wrap}
+html[data-design][data-theme] body #card-telegram .card-body{padding:16px 18px}
+html[data-design][data-theme] body #card-telegram .tg-status-strip{display:flex!important;flex-wrap:wrap;gap:7px;margin:0 0 14px;padding:0}
+html[data-design][data-theme] body #card-telegram .tg-status-strip .chip{padding:5px 9px;min-height:0;font-size:12px}
+html[data-design][data-theme] body #card-telegram .tg-master-card{padding:10px 12px!important;margin-bottom:14px!important;border-radius:8px!important}
+html[data-design][data-theme] body #card-telegram .tg-master-card .h5{font-size:13px}
+html[data-design][data-theme] body #card-telegram .tg-master-card .small-text{font-size:12px;margin-top:3px}
+html[data-design][data-theme] body #card-telegram .ws-tg-tabs{margin:0 0 12px;padding:0;gap:8px}
+html[data-design][data-theme] body #card-telegram .acc>summary{padding:12px 14px;min-height:0}
+html[data-design][data-theme] body #card-telegram .acc .acc-body{padding:14px}
+html[data-design][data-theme] body #card-telegram .btn{min-height:38px;padding:8px 12px;font-size:12px}
+html[data-design][data-theme] body #card-telegram input:not([type=checkbox]){min-height:40px;padding:9px 12px;font-size:13px}
+@media(max-width:600px){html[data-design][data-theme] body #card-telegram .card-header{padding:12px;align-items:flex-start}html[data-design][data-theme] body #card-telegram .card-body{padding:12px}html[data-design][data-theme] body #card-telegram .card-value{flex-wrap:wrap;gap:6px}}
+html[data-design][data-theme] body #card-telegram{max-width:none!important;margin:0!important}
+html[data-design][data-theme] body .ws-settings-layout:has([data-panel=telegram].active){display:block!important;width:100%;min-width:0}
+html[data-design][data-theme] body .ws-settings-layout:has([data-panel=telegram].active) #set-tabs{position:static!important;display:flex!important;flex-flow:row wrap!important;gap:5px!important;padding:0 0 12px!important;margin-bottom:18px!important;border-bottom:1px solid var(--ws-line,#dfe3ed)!important}
+html[data-design][data-theme] body .ws-settings-layout:has([data-panel=telegram].active) #set-tabs .tab{width:auto!important;min-height:38px!important;padding:9px 14px!important;text-decoration:none!important;box-shadow:none!important;border-radius:7px!important}
+html[data-design][data-theme] body .ws-settings-layout:has([data-panel=telegram].active) #set-tabs .tab.active{background:var(--ws-soft,#efecff)!important;color:var(--ws-accent,#6554dc)!important}
+html[data-design][data-theme] body .tg-settings-content>.panel.active{display:block!important}
+html[data-design][data-theme] body .tg-workspace{width:100%;min-width:0;max-width:none;margin:0;box-sizing:border-box}
+html[data-design][data-theme] body .rp-desk.rp-telegram-page.tg-workspace{max-width:none!important;margin:0!important;padding:24px!important}
+.tg-page-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 18px;flex-wrap:wrap}
+.tg-page-heading h1{font-size:26px;letter-spacing:-.03em;line-height:1.25;margin:0;color:var(--ws-text,var(--rp-text,#202638))}
+.tg-page-heading p{margin:5px 0 0;color:var(--ws-muted,var(--rp-muted,#667188));font-size:13px}
+.tg-app-status{font-size:12px;color:var(--ws-muted,var(--rp-muted,#667188));border:1px solid var(--ws-line,var(--rp-line,#dfe3ed));border-radius:6px;padding:5px 9px}
+html[data-design][data-theme] body .tg-workspace .tg-section-tabs{display:flex!important;align-items:stretch;flex-wrap:wrap;gap:5px!important;width:100%;padding:5px!important;margin:0 0 18px!important;border:1px solid var(--ws-line,var(--rp-line,#dfe3ed))!important;border-radius:10px;background:var(--ws-panel,var(--rp-card,#fff));box-sizing:border-box}
+html[data-design][data-theme] body .tg-workspace .tg-section-tabs>:is(a,button,span){display:inline-flex!important;align-items:center;justify-content:center;gap:8px;min-height:38px;padding:9px 14px!important;border:1px solid transparent!important;border-radius:6px!important;color:var(--ws-muted,var(--rp-muted,#667188))!important;background:transparent!important;text-decoration:none!important;white-space:nowrap;font-family:inherit;font-size:13px;font-weight:600;line-height:1.2;box-shadow:none!important;cursor:pointer}
+html[data-design][data-theme] body .tg-workspace .tg-section-tabs>:is([aria-current=page],[aria-pressed=true],[aria-selected=true]){background:var(--ws-soft,var(--rp-soft,#efecff))!important;color:var(--ws-accent,var(--rp-accent,#6554dc))!important;border-color:var(--ws-line,var(--rp-line,#dfe3ed))!important}
+html[data-design][data-theme] body .tg-workspace .tg-section-tabs>:is(a,button):hover{color:var(--ws-text,var(--rp-text,#202638))!important;background:var(--ws-raised,var(--rp-soft,#f0f2f8))!important}
+.tg-section-tabs>:is(a,button):focus-visible{outline:2px solid var(--ws-accent,#6554dc);outline-offset:2px}
+html[data-design][data-theme] body #card-telegram .tg-accordion[data-tg-view=connection] #tg-acc-notify,html[data-design][data-theme] body #card-telegram .tg-accordion[data-tg-view=notifications] :is(#tg-acc-token,.tg-recipient-card,.tg-language-card){display:none!important}
+html[data-design][data-theme] body #card-telegram .tg-language-card{display:flex!important;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:12px 14px!important;background:transparent!important}
+html[data-design][data-theme] body #card-telegram .tg-accordion[data-tg-view=notifications] .tg-language-card{display:none!important}
+html[data-design][data-theme] body #card-telegram .tg-language-options{display:flex!important;gap:6px!important;flex-wrap:wrap}
+html[data-design][data-theme] body #card-telegram .tg-language-options button{display:flex!important;flex-direction:row!important;align-items:center;justify-content:center;gap:8px;min-height:36px!important;min-width:90px;padding:7px 12px!important;text-align:center;border-radius:6px!important}
+html[data-design][data-theme] body #card-telegram .tg-language-options button small[lang=fa]{font-family:Tahoma,Arial,sans-serif;font-size:13px;line-height:1.5;direction:rtl}
+.tg-workspace .tg-app-content{max-width:none;margin:0;padding:0;display:grid;gap:14px}
+.tg-app-content .wg-feature-card{padding:16px 18px;border-radius:10px;box-shadow:none}
+.tg-app-content .wg-card-head{margin-bottom:12px;gap:9px;align-items:center}
+.tg-app-content .wg-card-head h2{font-size:16px!important;margin:0!important;line-height:1.35}
+.tg-app-content .wg-card-head p{font-size:12px;margin:3px 0 0}
+.tg-app-content .wg-feature-icon{width:26px;height:26px;background:transparent;border-radius:0;font-size:15px}
+.tg-app-content .wg-app-directory,.tg-app-content .wg-app-guide{margin:0}
+.tg-app-content .wg-app-rows{margin:10px 0 0;gap:0}
+.tg-app-content .wg-app-row{grid-template-columns:minmax(0,1fr) auto auto;gap:12px;border:0;border-top:1px solid var(--wf-line);border-radius:0;padding:11px 0;background:transparent}
+.tg-app-content .wg-app-row:last-child{padding-bottom:0}
+.tg-app-content .wg-account-name{overflow-wrap:anywhere;min-width:0}
+.tg-app-content .wg-account-name small{display:block;color:var(--wf-muted);font-size:12px}
+.tg-app-content .wg-feature-grid{grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:14px}
+.tg-app-content .wg-key-state,.tg-app-content .wg-permission{border:0;border-bottom:1px solid var(--wf-line);background:transparent;border-radius:0;padding:10px 0;margin:0 0 10px}
+.tg-app-content .wg-key-state strong{font-size:13px}
+.tg-app-content .wg-note{background:transparent;border-top:1px solid var(--wf-line);border-radius:0;padding:11px 0 0;margin:12px 0 0}
+.tg-app-content .wg-access-list li{padding:9px 0;gap:9px}
+.tg-app-content .wg-app-setup{font-size:13px;line-height:1.65;margin:0 0 12px}
+.tg-app-content .wg-doc-detail{margin:8px 0 0;border-radius:7px;padding:10px 12px}
+.tg-app-content .wg-doc-detail[open]>summary{margin-bottom:12px}
+.tg-app-back{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--wf-muted)}
+.tg-app-content .wg-scope-grid{gap:0 18px}
+.tg-app-content .wg-form-actions{margin-top:8px}
+.tg-app-content .wg-text-link{display:inline-block;margin-top:10px;font-size:13px}
+@media(max-width:850px){.tg-app-content .wg-feature-grid{grid-template-columns:1fr}}
+@media(max-width:600px){html[data-design][data-theme] body .rp-desk.rp-telegram-page.tg-workspace{padding:12px!important}html[data-design][data-theme] body .tg-workspace .tg-section-tabs{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin}html[data-design][data-theme] body .tg-workspace .tg-section-tabs>:is(a,button,span){flex:none;padding:9px 10px!important}html[data-design][data-theme] body .ws-settings-layout:has([data-panel=telegram].active) #set-tabs{flex-wrap:nowrap!important;overflow:auto!important}.tg-app-content .wg-feature-card{padding:14px}.tg-app-content .wg-app-row{gap:8px}.tg-app-content .wg-app-row .wg-secondary{padding:7px 9px}.tg-app-content .wg-chip{white-space:normal}.tg-app-content .wg-field-row input{min-width:0}}
+html[data-design][data-theme] body .tg-workspace .tg-section-tabs>:is([aria-current=page],[aria-pressed=true],[aria-selected=true]),html[data-design][data-theme] body .tg-workspace .tg-section-tabs>:is([aria-current=page],[aria-pressed=true],[aria-selected=true]):hover{background:var(--ws-soft,var(--rp-soft,#efecff))!important;color:var(--ws-accent,var(--rp-accent,#6554dc))!important;border-color:var(--ws-accent,var(--rp-accent,#6554dc))!important;font-weight:700}
+
+
+html[data-design][data-theme] body .tg-app-content .wg-key-form{display:grid;gap:14px;min-width:0;margin:12px 0 0}
+html[data-design][data-theme] body .tg-app-content .wg-form-field{display:grid!important;grid-template-columns:minmax(0,1fr)!important;align-items:start!important;gap:6px!important;margin:0!important;font-size:13px;font-weight:600;min-width:0}
+html[data-design][data-theme] body .tg-app-content .wg-form-field .wg-input{display:block!important;width:100%!important;min-width:0!important;max-width:100%!important;margin:0!important;padding:10px 12px!important;min-height:40px!important;color:var(--wf-text)!important;background:var(--wf-bg)!important;border:1px solid var(--wf-line)!important;border-radius:8px!important;box-sizing:border-box;font:inherit;font-weight:400}
+html[data-theme=dark] .tg-app-content .wg-form-field .wg-input{color-scheme:dark}
+.tg-app-content .wg-form-field textarea{resize:vertical}
+.tg-app-content .wg-named-fields{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.tg-app-content .wg-directory-head{justify-content:space-between;flex-wrap:wrap}
+.tg-app-content .wg-directory-head>div{min-width:0;flex:1 1 180px}
+.tg-app-content .wg-directory-head>a{flex:none}
+.tg-app-content .wg-scope-fieldset{min-width:0;border:0;padding:0;margin:0;display:block}
+.tg-app-content .wg-scope-fieldset legend{padding:0;font-weight:650;font-size:13px}
+.tg-app-content .wg-scope-fieldset .wg-scope-grid{margin:4px 0 0}
+.tg-app-content .wg-scope-grid .wg-permission{min-width:0;gap:12px;margin:0;padding:12px 0}
+.tg-app-content .wg-scope-grid .wg-permission strong{font-size:13px;overflow-wrap:anywhere}
+.tg-app-content .wg-limit-row>div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.tg-app-content .wg-limit-row small{display:block;color:var(--wf-muted);overflow-wrap:anywhere}
+.tg-app-content .wg-feature-grid{align-items:start}
+.tg-app-content .wg-named-row{grid-template-columns:minmax(0,1fr) auto;align-items:start}
+.tg-app-content .wg-named-row>.wg-doc-detail{grid-column:1/-1;min-width:0}
+.tg-app-content .wg-key-form>.wg-form-actions{margin-top:0}
+.tg-app-content .wg-doc-detail>summary{font-size:14px;line-height:1.45}
+@media(max-width:680px){.tg-app-content .wg-named-fields,.tg-app-content .wg-scope-grid{grid-template-columns:1fr}.tg-app-content .wg-feature-grid{grid-template-columns:1fr}}

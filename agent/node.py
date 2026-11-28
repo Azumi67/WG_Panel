@@ -5,14 +5,17 @@
 import os
 import io
 import re
+import textwrap
 import sys
 import json
 import time
 import shutil
+import shlex
 import signal
 import socket
 import ipaddress
 import tarfile
+import tempfile
 import zipfile
 import ssl
 import urllib.request
@@ -53,31 +56,42 @@ def ansi(code: str) -> str:
 def _ansi(s: str) -> str:
     return ANSI_RE.sub("", s)
 
-RESET = ansi("0")
-BOLD  = ansi("1")
-DIM   = ansi("2")
+def _tone(rgb: str, indexed: int, basic: str = "37", background: bool = False) -> str:
+    if NO_COLOR:
+        return ""
+    channel = "48" if background else "38"
+    if os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit"):
+        return ansi(f"{channel};2;{rgb}")
+    if any(value in os.environ.get("TERM", "").lower() for value in ("256", "xterm", "screen", "tmux")):
+        return ansi(f"{channel};5;{indexed}")
+    return ansi("40" if background else basic)
 
-BR_RED = ansi("91")
-BR_GRN = ansi("92")
-BR_YEL = ansi("93")
-BR_BLU = ansi("94")
-BR_CYN = ansi("96")
-BR_WHT = ansi("97")
+RESET = ansi("0")
+BOLD = ansi("1")
+DIM = _tone("139;151;172", 246)
+BR_RED = _tone("239;146;154", 210, "31")
+BR_GRN = _tone("126;199;173", 115, "32")
+BR_YEL = _tone("223;190;132", 180, "33")
+BR_BLU = _tone("151;182;224", 110, "34")
+BR_CYN = _tone("183;168;239", 147)
+BR_WHT = _tone("226;231;240", 255)
+UI_LINE = _tone("57;67;86", 238)
+UI_SURFACE = _tone("24;29;40", 235, background=True)
+UI_KEY = _tone("53;45;77", 237, background=True)
 
 def c(text: str, color: str) -> str:
     if NO_COLOR:
         return text
     return f"{color}{text}{RESET}"
 
-TAG_INFO = "[INFO]"
-TAG_OK   = "[SUCCESS]"
-TAG_WARN = "[WARN]"
-TAG_ERR  = "[ERROR]"
+TAG_INFO = "•"
+TAG_OK   = "✓"
+TAG_WARN = "!"
+TAG_ERR  = "×"
 TAG_RUN  = "[RUN]"
 
 
-UI_MAX_WIDTH = 92
-UI_MIN_WIDTH = 64
+UI_MAX_WIDTH = 78
 
 def term(default: int = 96) -> int:
     try:
@@ -86,8 +100,7 @@ def term(default: int = 96) -> int:
         return default
 
 def ui() -> int:
-    w = term()
-    return max(UI_MIN_WIDTH, min(UI_MAX_WIDTH, w))
+    return max(12, min(UI_MAX_WIDTH, term() - 1))
 
 def left_margin() -> str:
     return ""  
@@ -96,65 +109,62 @@ def hr(char: str = "─", color: str = DIM) -> str:
     return left_margin() + c(char * ui(), color)
 
 def clear():
-    if NO_COLOR:
-        print("\n" * 2)
-        return
-    os.system("clear")
+    if _isatty() and os.environ.get("TERM", "") != "dumb":
+        print("\033[2J\033[H", end="", flush=True)
+    else:
+        print()
 
 def _paths(s: str) -> str:
-    if NO_COLOR:
-        return s
-    return s.replace("/", c("/", BR_YEL))
+    return s
 
 def _wrap(s: str, width: int) -> List[str]:
-    s = str(s).replace("\t", "    ")
-    raw = _ansi(s)
+    width = max(1, width)
+    raw = _ansi(str(s)).expandtabs(4)
     if len(raw) <= width:
-        return [s]
-    out: List[str] = []
-    buf = s
-    while buf:
-        r = _ansi(buf)
-        if len(r) <= width:
-            out.append(buf)
-            break
-        chunk_raw = r[:width]
-        sp = chunk_raw.rfind(" ")
-        cut = sp if sp >= max(10, width // 3) else width
-        out.append(buf[:cut].rstrip())
-        buf = buf[cut:].lstrip()
-    return out or [""]
+        return [str(s).expandtabs(4)]
+    return textwrap.wrap(raw, width=width, break_long_words=True,
+                         break_on_hyphens=False, replace_whitespace=True) or [""]
 
 def box(title: str, lines: List[str], border_color: str = BR_CYN) -> str:
-    w = ui()
-    inner = w - 2
-    lm = left_margin()
-
-    t = f" {_ansi(title)} "
-    if len(t) > inner - 6:
-        t = t[: inner - 9] + "… "
-
-    left_pad = 2
-    top_fill = inner - left_pad - len(t)
-    top = "┌" + ("─" * left_pad) + t + ("─" * max(0, top_fill)) + "┐"
-
-    out = [lm + c(top, border_color)]
+    width = ui()
+    inner = width - 6
+    out = []
+    def row(value: str = ""):
+        pad = " " * max(0, inner - len(_ansi(value)))
+        styled = value.replace(RESET, RESET + UI_SURFACE) if RESET else value
+        out.append(c("│", UI_LINE) + UI_SURFACE + "  " + styled + pad + "  " + RESET + c("│", UI_LINE))
+    out.append(c("╭" + "─" * (width - 2) + "╮", UI_LINE))
+    for part in _wrap(_ansi(title), inner):
+        row(c(part, BOLD + BR_WHT))
+    row()
     for line in lines:
         for part in str(line).splitlines() or [""]:
-            for wpart in _wrap(part, inner):
-                vis = len(_ansi(wpart))
-                pad = " " * max(0, inner - vis)
-                out.append(lm + c("│", border_color) + wpart + pad + c("│", border_color))
-    out.append(lm + c("└" + "─" * inner + "┘", border_color))
+            plain = _ansi(part)
+            match = re.match(r"^\s*(\d+)\)\s*(.*)", plain)
+            if match:
+                key = match.group(1)
+                wrapped = _wrap(match.group(2), max(1, inner - 6))
+                row(c(f" {key:>2} ", UI_KEY + BR_CYN + BOLD) + "  " + c(wrapped[0], BR_WHT))
+                for continuation in wrapped[1:]:
+                    row("      " + c(continuation, DIM))
+            else:
+                for wrapped in _wrap(part, inner):
+                    row(wrapped)
+    row()
+    out.append(c("╰" + "─" * (width - 2) + "╯", UI_LINE))
     return "\n".join(out)
 
 def box_text(title: str, text: str, border_color: str = BR_CYN) -> str:
     return box(title, (text.rstrip("\n").splitlines() or [""]), border_color)
 
 def header(title_left: str, title_right: str = ""):
-    lm = left_margin()
-    print(lm + c(title_left, BR_YEL + BOLD) + (("  " + c(title_right, DIM)) if title_right else ""))
-    print(hr("═", DIM))
+    print()
+    for line in _wrap(title_left, ui() - 4):
+        print("  " + c("▍ ", BR_CYN) + c(line, BOLD + BR_WHT))
+    if title_right:
+        for line in _wrap(title_right, ui() - 4):
+            print("    " + c(line, DIM))
+    print()
 
 def info(msg: str):
     print(left_margin() + c(f"{TAG_INFO} ", BR_CYN) + c(msg, BR_WHT))
@@ -175,11 +185,12 @@ def pause(msg: str = "Press Enter to continue..."):
         _exit()
 
 def _prompt(prefix: str, default: Optional[str] = None, show_default: bool = True) -> str:
-    lm = left_margin()
-    d = ""
-    if show_default and default not in (None, ""):
-        d = " " + c(f"[{default}]", BR_YEL)
-    return f"{lm}{c(prefix, BR_CYN)}{d}{c(': ', BR_YEL)}{BR_WHT}"
+    label = _ansi(prefix)
+    lines = _wrap(label, ui() - 4)
+    for line in lines[:-1]:
+        print("  " + c(line, BR_WHT))
+    suffix = f" [{default}]" if show_default and default not in (None, "") else ""
+    return "  " + c(lines[-1], BR_WHT) + c(suffix, DIM) + c("  › ", BR_CYN)
 
 def ask(label: str, default: Optional[str] = None, show_default: bool = True) -> str:
     try:
@@ -217,7 +228,6 @@ def _action(title: str, fn):
         pause()
 
 
-
 AGENT_DIR = Path(__file__).resolve().parent
 ROOT_MARKER = Path.home() / ".wg_node_root.json"
 
@@ -252,36 +262,37 @@ def _cmd(x: str) -> bool:
 
 def _live(cmd: List[str], title: str = "", timeout: int | None = None) -> int:
     if title:
-        print(left_margin() + c(f"{TAG_RUN} ", BR_CYN) + c(title, BR_WHT))
-
-    env = os.environ.copy()
-    env.setdefault("DEBIAN_FRONTEND", "noninteractive")
-    env.setdefault("NEEDRESTART_MODE", "a")
-    env.setdefault("GIT_TERMINAL_PROMPT", "0")
-
+        info(title)
+    child_env = os.environ.copy()
+    child_env.setdefault("DEBIAN_FRONTEND", "noninteractive")
+    child_env.setdefault("NEEDRESTART_MODE", "a")
+    child_env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    stdin = subprocess.DEVNULL
+    process = None
     try:
-        p = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            bufsize=1,
-            universal_newlines=True,
-        )
-        start = time.time()
-        assert p.stdout is not None
-        for line in p.stdout:
-            print(left_margin() + c(line.rstrip("\n"), BR_WHT))
-            if timeout and (time.time() - start) > timeout:
-                p.kill()
-                err(f"Timeout after {timeout}s: {' '.join(cmd)}")
-                return 124
-        return p.wait()
-    except Exception as e:
-        err(f"runing live failed: {e}")
-        return 1
+        process = subprocess.Popen(cmd, stderr=subprocess.STDOUT, env=child_env,
+                                   stdin=stdin, start_new_session=True)
+        rc = process.wait(timeout=timeout)
+        if rc:
+            err(f"Command failed (exit {rc}).")
+        else:
+            ok("Done.")
+        return rc
+    except subprocess.TimeoutExpired:
+        err("Command timed out; stopped its process group.")
+        return 124
+    except FileNotFoundError:
+        err(f"Command not found: {cmd[0]}")
+        return 127
+    except KeyboardInterrupt:
+        _exit()
+    finally:
+        if process is not None and process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
 
 def run(cmd: List[str], title: str = "") -> int:
     if title:
@@ -420,7 +431,6 @@ def list_confs() -> List[Path]:
     return sorted([p for p in d.glob("*.conf") if p.is_file()])
 
 def _wireguard_ipv4_network(address: str) -> str:
-    """Return the first private IPv4 network from a WireGuard Address value."""
     for raw in re.split(r"[\s,]+", str(address or "").strip()):
         if not raw or "/" not in raw:
             continue
@@ -700,7 +710,6 @@ def _bind(s: str) -> bool:
     except Exception:
         return False
     return 1 <= port <= 65535
-
 
 
 def make_env(v: Dict[str, str]) -> str:
@@ -983,7 +992,7 @@ def _wizard(root: Path) -> dict:
         info("GUNICORN")
 
         print(box("Tips", [
-            "• WORKERS can be empty to auto-pick based on CPU.",
+            "• WORKERS can be empty to auto-pick 2–4 processes based on CPU.",
             "• THREADS is per worker.",
         ], BR_CYN))
 
@@ -1098,7 +1107,10 @@ WorkingDirectory={a}
 EnvironmentFile={env_path}
 ExecStart={vpy} {node_agent}
 Restart=always
-RestartSec=2
+RestartSec=5
+TimeoutStopSec=60
+KillMode=mixed
+UMask=0077
 User=root
 
 [Install]
@@ -1242,9 +1254,17 @@ def install_step_2():
 
 def svc_state(name: str) -> str:
     if not _cmd("systemctl"):
-        return "unknown"
-    rc,out,_ = run_out(["systemctl","is-active",name])
-    return out.strip() if rc == 0 else "inactive"
+        return "unavailable"
+    try:
+        result = subprocess.run(["systemctl", "is-active", name], text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                timeout=2)
+        state = (result.stdout or "").strip()
+        return state if state in {"active", "inactive", "failed", "activating", "deactivating", "reloading", "unknown"} else "unknown"
+    except subprocess.TimeoutExpired:
+        return "unreachable"
+    except OSError:
+        return "unavailable"
 
 def service_menu():
     while True:
@@ -1455,22 +1475,6 @@ def uninstall_all(root: Path):
 
 
 RELEASES_API = "https://api.github.com/repos/Azumi67/WG_Panel/releases"
-RELEASE_BACKUP_PREFIX = "release-rollback-"
-
-RELEASE_PRESERVE_TOP = {
-    ".git",
-    ".env",
-    "instance",
-    "backups",
-    "venv",
-    "__pycache__",
-}
-
-RELEASE_PRESERVE_REL = {
-    "agent/.env",
-    "agent/venv",
-    "agent/__pycache__",
-}
 
 
 def _github_json(url: str, timeout: int = 20):
@@ -1515,69 +1519,6 @@ def _current_release_tag(root: Path) -> str:
     return out.strip() if rc == 0 else ""
 
 
-def _release_backup_path(root: Path, tag: str) -> Path:
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", tag or "unknown")
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return backups_dir(root) / f"{RELEASE_BACKUP_PREFIX}{stamp}-before-{safe}.tar.gz"
-
-
-def _release_should_preserve(rel: Path) -> bool:
-    s = rel.as_posix().strip("/")
-    if not s:
-        return False
-    top = s.split("/", 1)[0]
-    if top in RELEASE_PRESERVE_TOP:
-        return True
-    return s in RELEASE_PRESERVE_REL or any(
-        s.startswith(x.rstrip("/") + "/") for x in RELEASE_PRESERVE_REL
-    )
-
-
-def _make_release_rollback_backup(root: Path, target_tag: str) -> Path:
-    out = _release_backup_path(root, target_tag)
-    root_resolved = root.resolve()
-
-    def filt(info: tarfile.TarInfo):
-        try:
-            rel = Path(info.name).relative_to(root_resolved.name)
-        except Exception:
-            return info
-        if _release_should_preserve(rel):
-            return None
-        return info
-
-    with tarfile.open(out, "w:gz") as tar:
-        tar.add(root, arcname=root.name, filter=filt)
-
-    return out
-
-
-def _safe_extract_zip(zip_path: Path, dest: Path) -> Path:
-    dest.mkdir(parents=True, exist_ok=True)
-    dest_real = dest.resolve()
-
-    with zipfile.ZipFile(zip_path, "r") as z:
-        members = z.infolist()
-        if not members:
-            raise RuntimeError("Downloaded release ZIP is empty.")
-
-        for member in members:
-            name = member.filename.replace("\\", "/")
-            if name.startswith("/") or ".." in Path(name).parts:
-                raise RuntimeError(f"Unsafe ZIP member: {name}")
-
-            target = (dest / name).resolve()
-            if target != dest_real and dest_real not in target.parents:
-                raise RuntimeError(f"ZIP path escapes extraction directory: {name}")
-
-        z.extractall(dest)
-
-    roots = [p for p in dest.iterdir() if p.is_dir()]
-    if len(roots) != 1:
-        raise RuntimeError("Release ZIP has an unexpected directory layout.")
-    return roots[0]
-
-
 def _download_release_zip(url: str, out: Path) -> None:
     if not url.startswith("https://api.github.com/") and not url.startswith("https://github.com/"):
         raise RuntimeError("Refusing an unexpected release download URL.")
@@ -1590,146 +1531,30 @@ def _download_release_zip(url: str, out: Path) -> None:
         },
     )
     with urllib.request.urlopen(req, timeout=120) as resp, out.open("wb") as fh:
+        total=0; deadline=time.monotonic()+180
         while True:
-            chunk = resp.read(1024 * 1024)
-            if not chunk:
-                break
+            chunk=resp.read(1024*1024)
+            if not chunk:break
+            total+=len(chunk)
+            if total>500*1024*1024 or time.monotonic()>deadline:raise RuntimeError("Release archive download exceeded limit.")
             fh.write(chunk)
 
     if out.stat().st_size < 1024:
         raise RuntimeError("Downloaded release archive is unexpectedly small.")
 
 
-def _remove_old_release_code(root: Path) -> None:
-    for child in list(root.iterdir()):
-        if child.name in RELEASE_PRESERVE_TOP:
-            continue
-        try:
-            if child.is_dir() and not child.is_symlink():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
-        except FileNotFoundError:
-            pass
-
-
-def _copy_release_tree(src: Path, root: Path) -> None:
-    for child in src.iterdir():
-        if child.name in RELEASE_PRESERVE_TOP:
-            continue
-
-        dest = root / child.name
-
-        if child.name == "agent" and child.is_dir():
-            dest.mkdir(parents=True, exist_ok=True)
-            for sub in child.iterdir():
-                rel = Path("agent") / sub.name
-                if _release_should_preserve(rel):
-                    continue
-                target = dest / sub.name
-                if target.exists() or target.is_symlink():
-                    if target.is_dir() and not target.is_symlink():
-                        shutil.rmtree(target)
-                    else:
-                        target.unlink()
-                if sub.is_dir() and not sub.is_symlink():
-                    shutil.copytree(sub, target, symlinks=True)
-                else:
-                    shutil.copy2(sub, target, follow_symlinks=False)
-            continue
-
-        if child.is_dir() and not child.is_symlink():
-            shutil.copytree(child, dest, symlinks=True)
-        else:
-            shutil.copy2(child, dest, follow_symlinks=False)
-
-
-def _restore_release_backup(root: Path, backup: Path) -> None:
-    with tempfile.TemporaryDirectory(prefix="wgpanel-release-rollback-") as td:
-        tmp = Path(td)
-        with tarfile.open(backup, "r:gz") as tar:
-            for member in tar.getmembers():
-                name = member.name.replace("\\", "/")
-                if name.startswith("/") or ".." in Path(name).parts:
-                    raise RuntimeError(f"Unsafe rollback archive member: {name}")
-            tar.extractall(tmp)
-
-        restored = tmp / root.name
-        if not restored.is_dir():
-            raise RuntimeError("Rollback archive layout is invalid.")
-
-        _remove_old_release_code(root)
-        _copy_release_tree(restored, root)
-
-
-def _release_python_checks(root: Path) -> Tuple[bool, str]:
-    checks = [
-        root / "app.py",
-        root / "wg.py",
-        root / "agent" / "node.py",
-        root / "agent" / "node_agent.py",
-    ]
-    existing = [p for p in checks if p.is_file()]
-    if not existing:
-        return False, "No expected Python entry points exist in the selected release."
-
-    for p in existing:
-        py = root / "venv" / "bin" / "python"
-        if "agent" in p.parts and (root / "agent/venv/bin/python").exists():
-            py = root / "agent/venv/bin/python"
-        if not py.exists():
-            py = Path(sys.executable)
-
-        proc = subprocess.run(
-            [str(py), "-m", "py_compile", str(p)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        if proc.returncode != 0:
-            return False, (proc.stderr or proc.stdout or f"py_compile failed: {p}").strip()
-
-    return True, ""
-
-
-def _refresh_release_requirements(root: Path) -> None:
-    pairs = [
-        (root / "requirements.txt", root / "venv/bin/pip"),
-        (root / "agent/requirements.txt", root / "agent/venv/bin/pip"),
-    ]
-    for req, pip in pairs:
-        if req.is_file() and pip.is_file():
-            rc = _live(
-                [str(pip), "install", "-r", str(req)],
-                f"Refresh dependencies: {req.relative_to(root)}",
-                timeout=1200,
-            )
-            if rc != 0:
-                raise RuntimeError(f"Dependency installation failed for {req.relative_to(root)}")
-
-
-def _known_project_services() -> List[str]:
-    names = []
-    for service in ("wg-panel.service", "wg-node-agent.service"):
-        unit = Path("/etc/systemd/system") / service
-        rc, _, _ = run_out(["systemctl", "status", service]) if _cmd("systemctl") else (1, "", "")
-        if unit.exists() or rc in (0, 3):
-            names.append(service)
-    return names
-
-
-def _restart_release_services(services: List[str]) -> None:
-    if not _cmd("systemctl"):
-        return
-    run(["systemctl", "daemon-reload"], "systemctl daemon-reload")
-    for service in services:
-        rc = run(["systemctl", "restart", service], f"restart {service}")
-        if rc != 0:
-            raise RuntimeError(f"Could not restart {service}")
-        time.sleep(1)
-        state = svc_state(service)
-        if state != "active":
-            raise RuntimeError(f"{service} is {state} after restart")
+def _run_coordinated_node_update(root,archive=None,tag='main'):
+    root=Path(root).resolve()
+    helper=root/'scripts'/'panel_update.py'
+    if not helper.is_file():err('Coordinated update helper is missing. Install Phase 7 manually first.');return False
+    python=root/'agent'/'venv'/'bin'/'python'
+    cmd=[str(python if python.is_file() else Path(sys.executable)),str(helper),'--root',str(root),
+        '--repo','Azumi67/WG_Panel','--scope','node','--status',str(root/'instance'/'node_update_status.json'),'--target',tag]
+    if archive:cmd.extend(['--archive',str(archive)])
+    rc=_live(cmd,'Coordinated node deployment')
+    if rc:err('Deployment failed or requires manual migration. Check instance/node_update_status.json.')
+    else:ok('Node code and service startup checks completed.')
+    return rc==0
 
 
 def downgrade_release(root: Path):
@@ -1802,69 +1627,13 @@ def downgrade_release(root: Path):
         pause()
         return
 
-    services = _known_project_services()
-    rollback = None
-
     try:
-        info("Creating pre-downgrade rollback archive...")
-        rollback = _make_release_rollback_backup(root, tag)
-        ok(f"Rollback archive: {_paths(str(rollback))}")
-
-        with tempfile.TemporaryDirectory(prefix="wgpanel-release-") as td:
-            tmp = Path(td)
-            archive = tmp / f"{tag}.zip"
-            extract_dir = tmp / "extract"
-
-            info(f"Downloading GitHub release {tag}...")
-            _download_release_zip(rel["zipball_url"], archive)
-            release_root = _safe_extract_zip(archive, extract_dir)
-
-            if not (release_root / "app.py").exists() and not (release_root / "agent").exists():
-                raise RuntimeError("Selected archive does not look like WG_Panel.")
-
-            for service in services:
-                run(["systemctl", "stop", service], f"stop {service}")
-
-            _remove_old_release_code(root)
-            _copy_release_tree(release_root, root)
-
-        _refresh_release_requirements(root)
-
-        valid, detail = _release_python_checks(root)
-        if not valid:
-            raise RuntimeError(detail)
-
-        _restart_release_services(services)
-
-        marker = backups_dir(root) / "last_release_change.json"
-        _write(marker, json.dumps({
-            "action": "downgrade",
-            "target_tag": tag,
-            "changed_at": _now_stamp(),
-            "rollback_archive": str(rollback),
-            "services": services,
-        }, indent=2) + "\n")
-
-        ok(f"Downgrade to {tag} completed.")
-        ok(f"Rollback archive kept at: {_paths(str(rollback))}")
-
+        with tempfile.TemporaryDirectory(prefix='wg-node-release-') as tmp:
+            archive=Path(tmp)/'release.zip'
+            _download_release_zip(rel['zipball_url'],archive)
+            _run_coordinated_node_update(root,archive,tag)
     except Exception as exc:
-        err(f"Downgrade failed: {exc}")
-
-        if rollback and rollback.exists():
-            warn("Restoring the previous code automatically...")
-            try:
-                _restore_release_backup(root, rollback)
-                valid, detail = _release_python_checks(root)
-                if not valid:
-                    warn(f"Rollback code validation warning: {detail}")
-                _restart_release_services(services)
-                ok("Previous code restored successfully.")
-            except Exception as rollback_exc:
-                err(f"Automatic rollback also failed: {rollback_exc}")
-                warn(f"Manual rollback archive: {rollback}")
-        else:
-            warn("No rollback archive was created.")
+        err(f'Release deployment failed: {exc}')
 
     pause()
 
@@ -1872,137 +1641,19 @@ def downgrade_release(root: Path):
 def update_menu(root: Path):
     while True:
         clear()
-        header("Update", "safe project updates")
-        print(box("Quick Status", status_lines(root), BR_CYN))
-        print()
-
-        items = [
-            c("1) Show git status", BR_CYN),
-            c("2) Update to latest (safe git pull)", BR_GRN),
-            c("3) Update to latest (force overwrite, keep local data)", BR_YEL),
-            c("4) Downgrade (choose from published releases)", BR_RED),
-            "",
-            c("0) Back", DIM),
-        ]
-        print(box("Update Menu", items, BR_CYN))
-
-        ch = ask("Select", "", False).strip()
-        if ch == "0":
-            return
-
-        if ch == "4":
-            downgrade_release(root)
-            continue
-
-        if not _cmd("git") or not (root / ".git").exists():
-            err("This root is not a git repository.")
-            warn("TIP: Run Install -> Step 1 first.")
+        header('Update','coordinated node deployment')
+        print(box('Services',status_lines(root),BR_CYN))
+        print(box('Update Menu',[c('1) Show git status',BR_CYN),c('2) Update from GitHub',BR_GRN),c('3) Switch to a published release',BR_YEL),'0) Back'],BR_CYN))
+        ch=ask('Select','',False).strip()
+        if ch=='0':return
+        if ch=='1':
+            if (root/'.git').is_dir():_live(['git','-C',str(root),'status','-sb'],'Git status',timeout=30)
+            else:warn('Not a git checkout.')
             pause()
-            continue
-
-        if ch == "1":
-            rc, out, errt = run_out(["git", "-C", str(root), "status", "-sb"])
-            if rc == 0:
-                print(box("git status -sb", [c(x, BR_WHT) for x in out.strip().splitlines()[:12]] or ["(empty)"], BR_CYN))
-            else:
-                err("git status failed.")
-                if errt.strip():
-                    warn(errt.strip()[:400])
+        elif ch=='2':
+            if confirm('Install compatible code and restart the node agent?',False):_run_coordinated_node_update(root)
             pause()
-
-        elif ch == "2":
-            services = _known_project_services()
-            rc = _live(
-                ["git", "-C", str(root), "pull", "--ff-only"],
-                "Update to latest release/branch",
-                timeout=300,
-            )
-            if rc != 0:
-                err("Update failed. Services were not restarted.")
-                pause()
-                continue
-
-            try:
-                _refresh_release_requirements(root)
-                valid, detail = _release_python_checks(root)
-                if not valid:
-                    raise RuntimeError(detail)
-                _restart_release_services(services)
-                ok("Updated to the latest available version.")
-                if services:
-                    ok("Restarted: " + ", ".join(services))
-                else:
-                    warn("No related systemd service was detected to restart.")
-            except Exception as exc:
-                err(f"Update completed, but validation/service restart failed: {exc}")
-            pause()
-
-        elif ch == "3":
-            warn("This overwrites tracked code with the remote version.")
-            warn("Your backups and local data folders will be preserved.")
-            if not confirm("Continue?", False):
-                continue
-
-            excludes = [
-                "backups", "instance", ".env",
-                "agent/.env", "agent/venv",
-                "venv", "__pycache__",
-            ]
-
-            services = _known_project_services()
-
-            rc = _live(
-                ["git", "-C", str(root), "fetch", "--all", "--prune"],
-                "Fetch latest repository state",
-                timeout=300,
-            )
-            if rc != 0:
-                err("Fetch failed. Nothing was changed.")
-                pause()
-                continue
-
-            rc, branch, _ = run_out([
-                "git", "-C", str(root), "rev-parse", "--abbrev-ref", "HEAD"
-            ])
-            branch = (branch or "main").strip() if rc == 0 else "main"
-
-            rc = _live(
-                ["git", "-C", str(root), "reset", "--hard", f"origin/{branch}"],
-                f"Reset code to latest origin/{branch}",
-                timeout=300,
-            )
-            if rc != 0:
-                err("Force update failed during git reset. Services were not restarted.")
-                pause()
-                continue
-
-            cmd = ["git", "-C", str(root), "clean", "-fd"]
-            for e in excludes:
-                cmd += ["-e", e]
-            rc = _live(cmd, "Clean old code while preserving local data", timeout=300)
-            if rc != 0:
-                err("Force update failed during cleanup. Services were not restarted.")
-                pause()
-                continue
-
-            try:
-                _refresh_release_requirements(root)
-                valid, detail = _release_python_checks(root)
-                if not valid:
-                    raise RuntimeError(detail)
-                _restart_release_services(services)
-                ok("Force update to the latest available version completed.")
-                if services:
-                    ok("Restarted: " + ", ".join(services))
-                else:
-                    warn("No related systemd service was detected to restart.")
-            except Exception as exc:
-                err(f"Force update completed, but validation/service restart failed: {exc}")
-            pause()
-
-        else:
-            warn("Invalid option.")
-            time.sleep(0.25)
+        elif ch=='3':downgrade_release(root)
 
 def uninstall_menu(root: Path):
     while True:
@@ -2601,100 +2252,98 @@ def backup_menu(root: Path):
         time.sleep(0.25)
 
 
-
 def status_lines(root: Path) -> List[str]:
     a = agent_dir(root)
+    env_path = a / ".env"
+    env = _env(env_path.read_text(encoding="utf-8") if env_path.exists() else "")
     wg_ok = _cmd("wg") and _cmd("wg-quick")
-    env_ok = (a / ".env").exists()
-    venv_ok = (a / "venv/bin/python").exists()
-    svc = svc_quick()
-    git = git_quick(root)
-
-    add = node_add_url(root)
-    key = node_api_key(root)
-
-    url_txt = add.get("base") or ""
-    key_txt = key or ""
-
     return [
-        f"Root: {c(_paths(str(root)), BR_WHT)}",
-        f"Git: {git}",
-        f"Node URL: {c(url_txt if url_txt else 'N/A', BR_GRN if url_txt else BR_YEL)}",
-        f"Node API key: {c(key_txt if key_txt else 'MISSING', BR_GRN if key_txt else BR_RED)}",
-        f"WireGuard: {c('OK', BR_GRN) if wg_ok else c('MISSING', BR_RED)}",
-        f"Agent .env: {c('OK', BR_GRN) if env_ok else c('MISSING', BR_RED)}",
-        f"Agent venv: {c('OK', BR_GRN) if venv_ok else c('MISSING', BR_RED)}",
-        f"Service: {c(svc, BR_GRN) if svc == 'active' else c(svc, BR_RED)}",
-        last_backup_line(root),
+        f"Directory  {root}",
+        f"Agent      {svc_quick()}",
+        "WireGuard  " + ("Installed" if wg_ok else "Not installed"),
+        "Python     " + ("Ready" if (a / "venv/bin/python").is_file() else "Not configured"),
+        "API key    " + ("Configured" if env.get("API_KEY", "").strip() else "Not configured"),
+        "Listen     " + (env.get("BIND") or "Not configured"),
     ]
 
 
 def node_command():
     if not isitroot():
         return
-
-    target = Path("/usr/local/bin/node")
-    current_script = Path(__file__).resolve()
-
     root = _root()
-    installed_script = (root / "agent" / "node.py").resolve()
-
-    if installed_script.is_file():
-        script = installed_script
-
-        venv_python = (
-            root / "agent" / "venv" / "bin" / "python"
-        ).resolve()
-
-        if venv_python.is_file():
-            launcher = f"""#!/usr/bin/env bash
-exec "{venv_python}" "{script}" "$@"
-"""
-        else:
-            launcher = f"""#!/usr/bin/env bash
-exec /usr/bin/env python3 "{script}" "$@"
-"""
-    else:
-        script = current_script
-        launcher = f"""#!/usr/bin/env bash
-exec /usr/bin/env python3 "{script}" "$@"
-"""
-
-    try:
-        if target.exists():
-            current = target.read_text(
-                encoding="utf-8",
-                errors="ignore",
-            )
-            if current == launcher:
-                return
-    except Exception:
-        pass
-
+    installed = root / "agent" / "node.py"
+    script = installed.resolve() if installed.is_file() else Path(__file__).resolve()
+    python = root / "agent" / "venv" / "bin" / "python"
+    executable = shlex.quote(str(python)) if python.is_file() else "/usr/bin/env python3"
+    launcher = '#!/usr/bin/env bash\n# WG_PANEL_NODE_LAUNCHER\nexec ' + executable + ' ' + shlex.quote(str(script)) + ' "$@"\n'
+    target = Path("/usr/local/bin/wgnode")
+    if target.is_symlink():
+        warn("wgnode is a symlink; launcher was not changed.")
+        return
+    if target.exists():
+        with target.open("rb") as handle:
+            current = handle.read(8192)
+        if b"WG_PANEL_NODE_LAUNCHER" not in current:
+            warn("wgnode belongs to another installation; launcher was not changed.")
+            return
     _write(target, launcher)
+    target.chmod(0o755)
+    legacy = Path("/usr/local/bin/node")
+    if legacy.is_file() and not legacy.is_symlink():
+        with legacy.open("rb") as handle:
+            current = handle.read(8192)
+        if b"#!/usr/bin/env bash" in current and (b"/agent/node.py" in current or b"WG_PANEL_NODE_LAUNCHER" in current):
+            _write(legacy, launcher)
+            legacy.chmod(0o755)
 
-    try:
-        target.chmod(0o755)
-    except Exception:
-        pass
+def action_menu(items: List[Tuple[str, str, str]]) -> str:
+    width = ui()
+    columns = 2 if width >= 70 else 1
+    gap = 2
+    cell = (width - gap) // 2 if columns == 2 else width
+    def tile(item):
+        key, title, description = item
+        inner = cell - 4
+        rows = [c("╭" + "─" * (cell - 2) + "╮", UI_LINE)]
+        def row(value):
+            pad = " " * max(0, inner - len(_ansi(value)))
+            value = value.replace(RESET, RESET + UI_SURFACE) if RESET else value
+            return c("│", UI_LINE) + UI_SURFACE + " " + value + pad + " " + RESET + c("│", UI_LINE)
+        titles = _wrap(title, inner - 5)
+        rows.append(row(c(f" {key} ", UI_KEY + BR_CYN + BOLD) + "  " + c(titles[0], BR_WHT + BOLD)))
+        for continuation in titles[1:]:
+            rows.append(row("     " + c(continuation, BR_WHT)))
+        for line in _wrap(description, inner):
+            rows.append(row(c(line, DIM)))
+        rows.append(c("╰" + "─" * (cell - 2) + "╯", UI_LINE))
+        return rows
+    out = []
+    for start in range(0, len(items), columns):
+        cells = [tile(item) for item in items[start:start + columns]]
+        height = max(map(len, cells))
+        for index in range(height):
+            out.append((" " * gap).join(rows[index] if index < len(rows) else " " * cell for rows in cells))
+    out.append("  " + c(" 0 ", UI_KEY + BR_CYN) + c("  Exit", DIM))
+    return "\n".join(out)
+
 
 def main_menu():
     while True:
         root = _root()
         clear()
-        header("WG Node Installer", "agent + wireguard")
+        header("WG Node", "Remote node management")
 
-        print(box("Quick Status", status_lines(root), BR_CYN))
+        print(box("Services", status_lines(root), BR_CYN))
         print()
-        print(box("Main Menu", [
-        c("1) Status (panel + wireguard + service)", BR_BLU),
-        c("2) Install", BR_YEL),
-        c("3) Add/Edit WireGuard conf", BR_CYN),
-        c("4) Update", BR_GRN),
-        c("5) Backup", BR_YEL),
-        c("6) Uninstall", BR_RED),
-        "0) Exit",
-        ], BR_CYN))
+        print(action_menu([
+            ("1", "Status & connection", "Node details and diagnostics"),
+            ("2", "Install & setup", "Agent, TLS and service"),
+            ("3", "WireGuard", "Create or edit interfaces"),
+            ("4", "Updates & releases", "Update or switch release"),
+            ("5", "Backup & restore", "Protect and recover node data"),
+            ("6", "Uninstall", "Remove node components"),
+        ]))
+        print()
 
         ch = ask("Select", "", False).strip()
         if ch == "0":

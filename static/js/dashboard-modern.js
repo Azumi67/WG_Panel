@@ -26,14 +26,14 @@
   function resource(key,value){const n=number(value);put(`nx-${key}`,n===null?'—':`${n.toFixed(0)}%`);const p=$(`nx-${key}-bar`);if(n===null)p.removeAttribute('value');else p.value=Math.max(0,Math.min(100,n));}
   async function refreshStats(){
     if(fastBusy||document.hidden)return;fastBusy=true;const started=performance.now();
-    try{const s=await request('/api/stats');const elapsed=Math.round(performance.now()-started);put('nx-response',`${elapsed} ms`);spark('response',elapsed);
+    try{const s=await request('/api/stats?view=live');const elapsed=Math.round(performance.now()-started);put('nx-response',`${elapsed} ms`);spark('response',elapsed);
       const rx=number(s.net?.rx_rate_mb??s.rx),tx=number(s.net?.tx_rate_mb??s.tx);
       const rxMbps=rx===null?null:rx*1048576*8/1000000,txMbps=tx===null?null:tx*1048576*8/1000000;
       put('nx-rx',rxMbps===null?'—':`${rxMbps.toFixed(1)} Mbps`);put('nx-tx',txMbps===null?'—':`${txMbps.toFixed(1)} Mbps`);
       const rxt=number(s.net?.rx_total_mb),txt=number(s.net?.tx_total_mb);const total=rxt===null||txt===null?null:(rxt+txt)*1048576;put('nx-transfer',bytes(total));spark('transfer',total);
       samples.push({at:Date.now(),rx:rxMbps,tx:txMbps});while(samples.length&&samples[0].at<Date.now()-900000)samples.shift();drawTraffic();put('nx-chart-note','Live samples · collected while this page is open');
       resource('cpu',s.cpu);resource('mem',s.mem?.percent);resource('disk',s.disk?.percent);
-      put('nx-host',s.hostname);put('nx-platform',s.platform);put('nx-ipv4',s.ipv4||'Not available');put('nx-ipv6',s.ipv6||'Not available');const up=number(s.uptime);put('nx-uptime',up===null?'—':`${Math.floor(up/86400)}d ${Math.floor(up%86400/3600)}h ${Math.floor(up%3600/60)}m`);
+      const up=number(s.uptime);put('nx-uptime',up===null?'—':`${Math.floor(up/86400)}d ${Math.floor(up%86400/3600)}h ${Math.floor(up%3600/60)}m`);
       put('nx-updated',`Updated ${clock(Date.now())} · ${window.WG_PANEL_TIMEZONE||'UTC'}`);$('nx-updated').classList.remove('is-error');
     }catch(_){put('nx-updated','Live metrics unavailable · retrying');$('nx-updated').classList.add('is-error');put('nx-response','—');put('nx-rx','—');put('nx-tx','—');put('nx-chart-note','Refresh failed · chart shows earlier samples');}
     finally{fastBusy=false;clearTimeout(fastTimer);if(!document.hidden)fastTimer=setTimeout(refreshStats,5000);}
@@ -53,6 +53,7 @@
   function health(data){const counts=data.counts||{};const total=['healthy','review','attention','unknown'].reduce((n,k)=>n+(number(counts[k])||0),0);const good=number(counts.healthy)||0;const percent=total?Math.round(good/total*100):null;put('nx-health-percent',percent===null?'—':`${percent}%`);put('nx-health-label',{healthy:'Healthy',review:'Review',attention:'Attention',unknown:'Unknown'}[data.state]||'Unknown');put('nx-health-detail',total?`${good} of ${total} checks healthy`:'Health data unavailable');$('nx-health-ring').style.setProperty('--health',`${percent||0}%`);$('nx-health-ring').dataset.state=data.state||'unknown';$('nx-health-strip').dataset.state=data.state||'unknown';put('nx-health-headline',data.headline||'Health summary unavailable');}
   async function refreshDetails(){if(slowBusy||document.hidden)return;slowBusy=true;
     const tasks=[
+      request('/api/stats?view=host').then(s=>{put('nx-host',s.hostname);put('nx-platform',s.platform);put('nx-ipv4',s.ipv4||'Not available');put('nx-ipv6',s.ipv6||'Not available');}).catch(()=>{put('nx-ipv4','Unavailable');put('nx-ipv6','Unavailable');}),
       request('/api/peers').then(d=>{if(!Array.isArray(d.peers))throw Error();peerRows(d.peers);}).catch(()=>{put('nx-connected','—');put('nx-peer-caption','Peer data unavailable');$('nx-recent-peers').innerHTML='<tr><td colspan="5" class="nx-empty">Unable to load peers. Use Refresh to try again.</td></tr>';put('nx-peer-summary','Peer data unavailable');}),
       request('/api/subscriptions').then(d=>{if(!Array.isArray(d.subscriptions))throw Error();subscriptions(d.subscriptions);}).catch(()=>{put('nx-subscriptions','—');put('nx-sub-caption','Policy data unavailable');put('nx-attention-title','Subscription check unavailable');put('nx-attention-copy','Open subscriptions to inspect current access policies.');put('nx-attention-count','—');}),
       request('/api/telegram/status').then(d=>{put('nx-tg-state',d.bot_online?'Connected':'Offline');$('nx-tg-state').className=`nx-status-pill ${d.bot_online?'online':'offline'}`;put('nx-tg-note',d.bot_online?'Bot service is running': 'Bot is offline or has no recent heartbeat');}).catch(()=>{put('nx-tg-state','Unavailable');$('nx-tg-state').className='nx-status-pill';put('nx-tg-note','Unable to read bot status');})

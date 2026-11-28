@@ -1,0 +1,8 @@
+{% macro limit_editor(values) %}
+<div class="rp-fields rp-budget-fields">
+{% for key,label,default,low,high in [('read_per_minute','Page refreshes per minute',240,30,1200),('write_per_minute','Changes per minute',60,5,120),('create_per_minute','Create actions per minute',10,1,30),('bulk_limit','Maximum batch size',50,1,50),('profile_limit','Saved presets',50,1,100)] %}
+<label>{{label}}<input type="number" name="{{key}}" value="{{values.get(key,default)}}" min="{{low}}" max="{{high}}" required></label>
+{% endfor %}
+</div>
+<p class="rp-muted">Request budgets and batch limits apply across this account's sessions. Existing saved presets are retained when the limit is lowered.</p>
+{% endmacro %}

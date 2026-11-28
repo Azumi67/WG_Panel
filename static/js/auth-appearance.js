@@ -13,7 +13,7 @@
     if (!['dynamic', 'calm', 'off'].includes(motion)) motion = 'dynamic';
   } catch (_) {}
 
-  root.dataset.design = design === 'legacy' ? 'legacy' : 'modern';
+  root.dataset.design = root.dataset.designLock === 'modern' ? 'modern' : (design === 'legacy' ? 'legacy' : 'modern');
   root.dataset.workspaceMotion = motion;
 
   const scheme = matchMedia('(prefers-color-scheme: dark)');
@@ -228,7 +228,7 @@
   }
 
   function setupModernAuth() {
-    if (root.dataset.design !== 'modern') return;
+    if (root.dataset.design !== 'modern' || !document.querySelector('.auth-card')) return;
 
     const isRegister = /register/i.test(location.pathname) || /register/i.test(document.title);
     root.dataset.authPage = isRegister ? 'register' : 'login';
@@ -313,6 +313,7 @@
 
     card?.querySelectorAll('input:not([type="hidden"]), select, textarea').forEach(input => {
       input.addEventListener('focus', () => {
+        if(input.closest('dialog'))return;
         scene.dataset.focus = classifyInput(input);
         root.dataset.authFocus = scene.dataset.focus;
       });
@@ -608,6 +609,7 @@
     };
 
     const pointerMove = event => {
+      if (root.dataset.authModal === 'open')return;
       if (
         reduced.matches ||
         mobileScreen.matches ||

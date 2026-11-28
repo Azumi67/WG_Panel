@@ -46,8 +46,8 @@
     );
 
     if (currentElement) {
-      // Keep the compact sidebar readable.  Revisions stay in the tooltip;
-      // placing them beside the version collided with the state badge.
+
+
       currentElement.textContent = current ? `v${current}` : '—';
       currentElement.title = currentRevision
         ? `Installed version ${current || 'unknown'}, revision ${currentRevision}`
@@ -275,7 +275,7 @@
 
     try {
       const payload = await fetchJson(
-        `/api/panel/version?fresh=1&_=${Date.now()}`,
+        `/api/panel/version?_=${Date.now()}`,
       );
 
       render(payload);
@@ -442,7 +442,7 @@
 
     try {
       const payload = await fetchJson(
-        `/api/panel/version?fresh=1&_=${Date.now()}`,
+        `/api/panel/version?_=${Date.now()}`,
       );
 
       renderDashboardVersion(payload);

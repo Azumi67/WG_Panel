@@ -101,13 +101,13 @@
   #sub-modal #new-defaults summary .adv8-summary{display:none!important}
   #sub-modal .adv8-body{padding:8px!important}
   #sub-modal .adv8-section{padding:10px!important;border-radius:14px!important}
-  #sub-modal .adv124-routing-top,#sub-modal .adv8-grid,#sub-modal .adv8-grid.client-grid,#sub-modal .adv8-endpoint-stack{display:grid!important;grid-template-columns:1fr!important;gap:8px!important}
-  #sub-modal .adv124-auto-inline{display:grid!important;grid-template-columns:36px minmax(0,1fr)!important;gap:8px!important;align-items:center!important}
+  #sub-modal .advanced-routing-routing-top,#sub-modal .adv8-grid,#sub-modal .adv8-grid.client-grid,#sub-modal .adv8-endpoint-stack{display:grid!important;grid-template-columns:1fr!important;gap:8px!important}
+  #sub-modal .advanced-routing-auto-inline{display:grid!important;grid-template-columns:36px minmax(0,1fr)!important;gap:8px!important;align-items:center!important}
   #sub-modal .adv8-route-label{display:grid!important;grid-template-columns:1fr auto!important;gap:7px!important;align-items:start!important}
   #sub-modal .adv8-route-entry-row{grid-template-columns:auto minmax(0,1fr) auto!important}
-  #sub-modal .adv11-fixed-head,#sub-modal .adv8-endpoint-label{gap:7px!important}
-  #sub-modal .adv123-fixed-input-row{display:grid!important;grid-template-columns:minmax(0,1fr) 36px!important;gap:6px!important}
-  #sub-modal .adv11-guide-body{grid-template-columns:1fr!important}
+  #sub-modal .advanced-guide-fixed-head,#sub-modal .adv8-endpoint-label{gap:7px!important}
+  #sub-modal .advanced-info-fixed-input-row{display:grid!important;grid-template-columns:minmax(0,1fr) 36px!important;gap:6px!important}
+  #sub-modal .advanced-guide-guide-body{grid-template-columns:1fr!important}
   #sub-modal .subx-modal-foot{position:sticky!important;bottom:0!important;display:grid!important;grid-template-columns:1fr 1fr!important;padding:9px 10px!important;gap:7px!important}
   #sub-modal .subx-modal-foot .btn{width:100%!important;min-height:42px!important}
   #details-modal.modal.open,#label-edit-modal.modal.open,#subscription-profile-modal.modal.open{align-items:flex-end!important;padding:0!important}
@@ -195,8 +195,8 @@
   html[data-theme="dark"] #sub-modal .subx-network-route-card-item,
   html[data-theme="dark"] #sub-modal .adv8-route-editor,
   html[data-theme="dark"] #sub-modal .adv8-route-field,
-  html[data-theme="dark"] #sub-modal .adv11-detected-tray,
-  html[data-theme="dark"] #sub-modal .adv11-detected-tray > *,
+  html[data-theme="dark"] #sub-modal .advanced-guide-detected-tray,
+  html[data-theme="dark"] #sub-modal .advanced-guide-detected-tray > *,
   html[data-theme="dark"] #sub-modal .subx-auto-network-details,
   html[data-theme="dark"] #sub-modal .subx-network-assistant,
   html[data-theme="dark"] #sub-modal .subx-network-assistant-body,
@@ -324,8 +324,8 @@ html[data-theme="light"] #sub-modal .subx-network-route-card,
 html[data-theme="light"] #sub-modal .subx-network-route-card-item,
 html[data-theme="light"] #sub-modal .adv8-route-editor,
 html[data-theme="light"] #sub-modal .adv8-route-field,
-html[data-theme="light"] #sub-modal .adv11-detected-tray,
-html[data-theme="light"] #sub-modal .adv11-detected-tray>* ,
+html[data-theme="light"] #sub-modal .advanced-guide-detected-tray,
+html[data-theme="light"] #sub-modal .advanced-guide-detected-tray>* ,
 html[data-theme="light"] #sub-modal .subx-auto-network-details,
 html[data-theme="light"] #sub-modal .subx-network-assistant,
 html[data-theme="light"] #sub-modal .subx-network-assistant-body,

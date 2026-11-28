@@ -22,7 +22,7 @@
     const dot0 = chip.querySelector('.iface-dot');
     const isDown = dot0?.classList.contains('down') || /\bdown\b|\boffline\b/i.test(raw);
     const isUp = dot0?.classList.contains('up') || /\bup\b|\bonline\b/i.test(raw);
-    const state = isDown ? 'Offline' : (isUp ? 'Online' : 'Unknown');
+    const state = isDown ? 'Offline' : (isUp ? 'Online' : (window.RESELLER_ACCOUNT_ID ? 'Unavailable' : 'Unknown'));
     const portMatch = raw.match(/\b(\d{2,5})\b/g);
     const port = portMatch?.length ? portMatch[portMatch.length - 1] : '—';
 
@@ -32,6 +32,7 @@
         <strong>${state}</strong>
         <small>UDP ${port}</small>
       </span>`;
+    chip.title=window.RESELLER_ACCOUNT_ID&&!isUp&&!isDown?'Interface health is unavailable. Refresh to retry.':'';
     chip.dataset.normalizedStatus = '1';
   }
 

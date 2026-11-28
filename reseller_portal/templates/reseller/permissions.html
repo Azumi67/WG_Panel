@@ -1,0 +1,15 @@
+{% macro permissions_editor(selected, panel_access=true, keep_shared_allowance=false) %}
+<div class="rp-permission-editor">
+{% if keep_shared_allowance %}<input type="hidden" name="permissions" value="customer_unlimited">{% endif %}
+<label class="rp-permission-access"><input type="checkbox" role="switch" name="panel_access" {{'checked' if panel_access else ''}}> Allow workspace login</label>
+{% for title,description,items in [
+('Workspace pages','Only enabled pages appear in this reseller’s sidebar.', [('dashboard','Dashboard'),('peers','Peers'),('subscriptions','Subscriptions')]),
+('Customer management','Actions apply only to this reseller’s customers and remain subject to plan limits.', [('create','Create customers'),('bulk','Bulk creation and actions'),('edit','Edit customer limits'),('delete','Delete customers'),('control_access','Pause and enable access'),('attach_existing','Attach own existing peers'),('manage_inbounds','Manage subscription configurations'),('reset_data','Reset customer data counters'),('reset_timer','Reset customer timers')]),
+('Configuration tools','Choose the controls available in the shared peer and subscription forms.', [('network_options','Network settings'),('choose_address','Choose free client IP'),('profiles','Save and manage creation profiles')]),
+('Public page design','Design settings are private to this reseller and apply to its customers.', [('peer_template','Peer Template editor'),('portal_design','Subscription Portal designer')]),
+('Customer access and records','Control access to downloads, links and customer activity.', [('download','Configuration, QR and links'),('rotate_link','Rotate subscription links'),('logs','Customer activity logs'),('export','Export customer CSV'),('backup','Own customer backups'),('restore','Restore owned customers from an encrypted backup')])
+] %}
+<fieldset class="rp-permission-group"><legend>{{title}}</legend><p class="rp-muted">{{description}}</p><div class="rp-checks">{% for key,label in items %}<label><input type="checkbox" role="switch" name="permissions" value="{{key}}" {{'checked' if key in selected else ''}}>{{label}}</label>{% endfor %}</div></fieldset>
+{% endfor %}
+</div>
+{% endmacro %}
