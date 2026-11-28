@@ -33,7 +33,7 @@ from telegram.ext import (
     MessageHandler, filters
 )
 from telegram.error import BadRequest, NetworkError, RetryAfter
-import telegram_admin as admin_azumi
+import telegram_admin as admin_telegram
 import html as py_html
 import qrcode
 try:
@@ -940,7 +940,7 @@ async def cmd_updates(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def cmd_subscriptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text_out, keyboard = await asyncio.to_thread(admin_azumi.render_list, globals(), 1, "")
+    text_out, keyboard = await asyncio.to_thread(admin_telegram.render_list, globals(), 1, "")
     await send_text(update, text_out, kb=keyboard)
 
 
@@ -952,7 +952,7 @@ async def cmd_clients(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 @admin_only
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text_out, keyboard = await asyncio.to_thread(admin_azumi.diagnostics, globals())
+    text_out, keyboard = await asyncio.to_thread(admin_telegram.diagnostics, globals())
     await send_text(update, text_out, kb=keyboard)
 
 
@@ -4293,7 +4293,7 @@ async def on_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-    if await admin_azumi.handle_callback(globals(), update, context):
+    if await admin_telegram.handle_callback(globals(), update, context):
         return
 
     if data.startswith("security:"):
@@ -6643,7 +6643,7 @@ async def bulk_step(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not selected:
             default = ""
     elif key == "telegram_id":
-        extra = "\n↗ Tip: For bulk, use commas or new lines; leading <code>@</code> is optional (e.g. <code>@azumi, josh, @jackie</code>)."
+        extra = "\n↗ Tip: For bulk, use commas or new lines; leading <code>@</code> is optional (e.g. <code>@customer1, customer2, @customer3</code>)."
         if not selected:
             default = ""
 
@@ -7034,7 +7034,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await edit_send(update, "● <b>Policy created and applied.</b>\n\n" + out, kb)
             return
 
-    if await admin_azumi.handle_text(globals(), update, context):
+    if await admin_telegram.handle_text(globals(), update, context):
         return
 
     stp1 = context.user_data.get(STATE.get("P_EDIT_ONE"))

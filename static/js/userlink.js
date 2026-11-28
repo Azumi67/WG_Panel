@@ -257,7 +257,7 @@
   function demoPayload() {
     const now = nowSec();
     return {
-      name: 'azumi-premium', status: 'online', address: '10.66.66.7/24',
+      name: 'demo-premium', status: 'online', address: '10.66.66.7/24',
       endpoint: 'wireguard.example.com:51820', unlimited: true,
       limit_unit: 'GiB', data_limit: 50, used_effective_bytes: 18.4 * 1073741824,
       first_used_at_ts: now - 7 * 86400, expires_at_ts: now + 23 * 86400,
