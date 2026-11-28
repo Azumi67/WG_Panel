@@ -85,6 +85,8 @@
   const autoInspectModalFiles = $("#auto-inspect-modal-files");
   const autoInspectDownload = $("#auto-inspect-download");
 
+  const restoreDialog = $("#restore-confirm");
+  if (restoreDialog) document.body.appendChild(restoreDialog);
   const restoreFile = $("#restore-file");
   const restoreBtn = $("#btn-restore");
   const restoreTrigger = $("#restore-file-trigger");
@@ -328,7 +330,7 @@
       restorePreviewSubtitle.textContent = `Detected ${j.kind || "backup"}. Review contents before restore.`;
     }
 
-    if (target === "restore") { renderServerSettings(j); updateServerModeUI(); }
+    if (target === "restore") { renderServerSettings(j); updateRestoreScope(); }
 
     const files = [
       ...(j.has_env ? ["env/.env"] : []),
@@ -1486,6 +1488,7 @@
 
   function renderRestoreResult(j) {
     if (!restoreResult) return;
+    restoreResult.classList.add("show");
     const r = j.restored || {};
     const warnings = j.warnings || [];
     restoreResult.innerHTML = `
@@ -1498,28 +1501,391 @@
       </div>`;
   }
 
+  const postgresBackend = $(".backup-shell")?.dataset.databaseBackend === "postgresql";
+  const maintenanceBox = $("#restore-maintenance-status");
+  const restoreStorageKey = "wgpanel_pg_restore_reference";
+  const restoreKinds = $$('input[name="restore-kind"]');
+
+  function effectiveRestoreKind(kind = $('input[name="restore-kind"]:checked')?.value || "auto") {
+    return kind === "auto" ? (lastInspect?.ok ? lastInspect.kind : "auto") : kind;
+  }
+
+  function updateRestoreScope(kind = effectiveRestoreKind(), inspected = lastInspect) {
+    const managed = postgresBackend && kind !== "settings";
+    const dbOnly = kind === "db";
+    const localRecovery = kind === "full" && !!(inspected?.has_wg || inspected?.contains?.local_wireguard_conf) && !(inspected?.has_node_wg || inspected?.contains?.remote_node_wireguard_conf);
+    if (managed) {
+      const keep = serverModeInputs.find(input => input.value === "keep");
+      if (keep) keep.checked = true;
+    }
+    serverModeInputs.forEach(input => { input.disabled = managed && input.value !== "keep"; });
+    if (restoreWGBox) {
+      restoreWGBox.disabled = dbOnly || (managed && !localRecovery);
+      if (restoreWGBox.disabled) restoreWGBox.checked = false;
+    }
+    const title = $("#restore-scope-title");
+    const text = $("#restore-scope-text");
+    const help = $("#restore-wg-help");
+    if (title) title.textContent = managed ? "Managed database restore" : kind === "settings" ? "Settings restore" : "Database restore scope";
+    if (text) text.textContent = managed ? "Replaces all database records, including reseller accounts and purchases. Current server settings are kept. Full restore can recover compatible local WireGuard configs after PostgreSQL. Recovery copies are automatic." : kind === "settings" ? "Restores panel files without replacing database records. Network files are optional and can affect active access." : "Database restores replace all customer and reseller records, not individual accounts. Review the archive and keep a recovery copy.";
+    if (help) help.textContent = managed ? (dbOnly ? "Database-only restore keeps network files unchanged." : localRecovery ? "Optional: restore local WireGuard files after PostgreSQL verification, before services restart." : "Select a Full backup containing local WireGuard configs and no remote node configs.") : dbOnly ? "Database-only restore does not replace WireGuard files." : "Optional. Use matching trusted configs and review active interfaces before applying changes.";
+    updateServerModeUI();
+  }
+  let maintenanceReference = "";
+  let maintenanceTimer;
+  let maintenancePolling = false;
+  let disconnectedSince = 0;
+  let loggedReference = "";
+  let operationHistory = [];
+  let operationInvocation = "";
+
+  const progressDialog = $("#bk-restore-progress");
+  const progressClose = $("#bk-restore-progress-close");
+  const progressLogin = $("#bk-restore-progress-login");
+  const progressRetry = $("#bk-restore-progress-retry");
+  const terminalRestoreStates = new Set(["completed", "failed", "review"]);
+  const restoreStageNames = {uploading:"Submitting backup",queued:"Queued",validating:"Validating backup",staging:"Staging PostgreSQL",aligning:"Aligning database schema",stopping:"Stopping services",backup:"Creating recovery backup",wireguard:"Restoring WireGuard",cutover:"Activating database",restarting:"Restarting services",completed:"Completed",failed:"Restore stopped",review:"Review required",reconnecting:"Reconnecting",signin:"Sign-in required",unavailable:"Status unavailable"};
+
+  function openRestoreProgress() {
+    if (progressDialog && !progressDialog.open) progressDialog.showModal();
+  }
+
+  function updateRestoreProgress(message, reference = "", state = "reconnecting", open = false) {
+    if (!progressDialog) return;
+    const terminal = terminalRestoreStates.has(state);
+    progressDialog.dataset.state = state;
+    $("#bk-restore-progress-title").textContent = state === "completed" ? "Restore completed" : state === "failed" ? "Restore failed" : state === "review" ? "Restore needs review" : state === "signin" ? "Sign in to view restore result" : state === "unavailable" ? "Restore status unavailable" : "Restoring backup";
+    $("#bk-restore-progress-stage").textContent = restoreStageNames[state] || "Maintenance in progress";
+    $("#bk-restore-progress-message").textContent = message || "Preparing restore…";
+    const ref = $("#bk-restore-progress-reference");
+    ref.hidden = !reference;
+    ref.textContent = reference ? "Reference: " + reference : "";
+    $("#bk-restore-progress-help").textContent = state === "completed" ? "Review customer data and WireGuard connectivity before resuming heavy traffic." : state === "review" || state === "failed" ? "Open Operation log for the recorded stages and SSH diagnostics. Do not manually roll back the database." : state === "uploading" ? "Keep this page open until the request is accepted." : state === "signin" ? "The restore reference is saved. Sign in with the administrator credentials from the backup to retrieve the final result." : state === "unavailable" ? "Automatic checks are paused. Check status again or open Operation log for SSH diagnostics. Do not submit another restore." : "Maintenance runs independently of this page. Do not submit another restore.";
+    if (progressLogin) progressLogin.hidden = state !== "signin";
+    if (progressRetry) progressRetry.hidden = !["signin", "unavailable"].includes(state);
+    progressClose.textContent = terminal || state === "signin" || state === "unavailable" ? "Close" : "Hide";
+    renderOperationLog(reference);
+    progressClose.disabled = state === "uploading";
+    if (open) openRestoreProgress();
+  }
+
+  progressClose?.addEventListener("click", () => progressDialog.close());
+  progressDialog?.addEventListener("cancel", event => {
+    if (progressDialog.dataset.state === "uploading") event.preventDefault();
+  });
+
+  const activityOpen = $("#bk-activity-open");
+  const activityView = $("#bk-activity-view");
+  const statusView = $("#bk-restore-status-view");
+  const activityBack = $("#bk-activity-back");
+  const stagesTab = $("#bk-activity-stages-tab");
+  const sshTab = $("#bk-activity-ssh-tab");
+
+  function selectActivityTab(ssh = false) {
+    if (!stagesTab || !sshTab) return;
+    stagesTab.setAttribute("aria-pressed", String(!ssh));
+    sshTab.setAttribute("aria-pressed", String(ssh));
+    $("#bk-activity-stages").hidden = ssh;
+    $("#bk-activity-ssh").hidden = !ssh;
+    const body = progressDialog?.querySelector(".bk-restore-progress-body");
+    if (body) body.scrollTop = 0;
+  }
+
+  function showActivity(show = false, focus = false) {
+    if (!activityView || !statusView) return;
+    activityView.hidden = !show;
+    statusView.hidden = show;
+    if (progressDialog) progressDialog.dataset.view = show ? "activity" : "status";
+    if (show) selectActivityTab();
+    const body = progressDialog?.querySelector(".bk-restore-progress-body");
+    if (body) body.scrollTop = 0;
+    if (focus) (show ? activityBack : activityOpen)?.focus();
+  }
+
+  activityOpen?.addEventListener("click", () => showActivity(true, true));
+  activityBack?.addEventListener("click", () => showActivity(false, true));
+  stagesTab?.addEventListener("click", () => selectActivityTab());
+  sshTab?.addEventListener("click", () => selectActivityTab(true));
+
+  function resetOperationLog(reference) {
+    if (loggedReference === reference) return;
+    loggedReference = reference;
+    operationHistory = [];
+    operationInvocation = "";
+    showActivity(false);
+  }
+
+  function renderOperationLog(reference) {
+    const entries = $("#bk-restore-log-entries");
+    const command = $("#bk-restore-journal-command");
+    if (!activityOpen || !entries || !command) return;
+    resetOperationLog(reference);
+    activityOpen.hidden = !reference;
+    const count = $("#bk-restore-log-count");
+    if (count) count.textContent = `${operationHistory.length} ${operationHistory.length === 1 ? "entry" : "entries"} · View activity`;
+    const signature = JSON.stringify(operationHistory);
+    if (entries.dataset.signature !== signature) {
+      entries.dataset.signature = signature;
+      entries.replaceChildren();
+      for (const [index, entry] of [...operationHistory].reverse().entries()) {
+        const item = document.createElement("li");
+        const marker = document.createElement("span");
+        const stage = document.createElement("strong");
+        const time = document.createElement("time");
+        const message = document.createElement("p");
+        const content = document.createElement("div");
+        const heading = document.createElement("div");
+        marker.className = "bk-activity-marker";
+        marker.setAttribute("aria-hidden", "true");
+        stage.textContent = restoreStageNames[entry.state] || entry.state || "Maintenance";
+        time.textContent = entry.updated_at ? fmtEpoch(entry.updated_at) : "";
+        message.textContent = entry.message || "";
+        item.dataset.state = entry.state || "";
+        if (index === 0) item.classList.add("latest");
+        heading.className = "bk-activity-entry-head";
+        heading.append(stage, time);
+        content.className = "bk-activity-entry-content";
+        content.append(heading, message);
+        item.append(marker, content);
+        entries.append(item);
+      }
+      if (!operationHistory.length) {
+        const item = document.createElement("li");
+        item.className = "bk-activity-empty";
+        item.textContent = "No maintenance entries received yet.";
+        entries.append(item);
+      }
+    }
+    command.textContent = /^[0-9a-f]{32}$/.test(operationInvocation) ? `journalctl _SYSTEMD_INVOCATION_ID=${operationInvocation} -n 300 --no-pager -o short-iso` : "journalctl -u 'wg-maintenance-restore-*' -n 300 --no-pager -o short-iso";
+  }
+
+  function rememberOperation(result) {
+    if (!result?.reference) return;
+    resetOperationLog(result.reference);
+    if (Array.isArray(result.history)) operationHistory = result.history.slice(-80);
+    else if (result.updated_at && result.state && result.message) {
+      const last = operationHistory[operationHistory.length - 1];
+      if (!last || last.updated_at !== result.updated_at || last.state !== result.state || last.message !== result.message) operationHistory = [...operationHistory, {state:result.state,message:result.message,updated_at:result.updated_at}].slice(-80);
+    }
+    if (/^[0-9a-f]{32}$/.test(result.invocation_id || "")) operationInvocation = result.invocation_id;
+  }
+
+  async function copyRestoreText(value) {
+    try { await navigator.clipboard.writeText(value); toast.success("Copied."); }
+    catch (_) { toast.warn("Clipboard unavailable. Select the text and copy it manually."); }
+  }
+
+  $("#bk-restore-log-copy")?.addEventListener("click", () => copyRestoreText([`Restore reference: ${loggedReference}`, ...operationHistory.map(entry => `${entry.updated_at ? fmtEpoch(entry.updated_at) : ""} ${entry.state}: ${entry.message}`)].join("\n")));
+  $("#bk-restore-journal-copy")?.addEventListener("click", () => copyRestoreText($("#bk-restore-journal-command")?.textContent || ""));
+  progressLogin?.addEventListener("click", () => {
+    try { localStorage.setItem('wg_backup_tab', 'restore'); } catch (_) {}
+  });
+  progressRetry?.addEventListener("click", () => {
+    if (!maintenanceReference || maintenancePolling) return;
+    disconnectedSince = 0;
+    displayMaintenance("Checking the restore result…", maintenanceReference, "reconnecting");
+    pollMaintenance(maintenanceReference);
+  });
+
+  function displayMaintenance(message, reference, state = "reconnecting", open = false) {
+    updateRestoreProgress(message, reference, state, open);
+    if (!maintenanceBox) return;
+    maintenanceBox.hidden = false;
+    maintenanceBox.classList.add("show");
+    const recovery = state === "review" || state === "failed";
+    maintenanceBox.innerHTML = `<div class="bk-result-card ${recovery ? "bad" : state === "completed" ? "ok" : ""}"><div class="bk-maintenance-summary"><div><strong>${safe(restoreStageNames[state] || "Restore maintenance")}</strong><div class="bk-small bk-muted">${safe(message)}</div></div><button type="button" class="bk-btn" data-restore-details>View details</button></div></div>`;
+    maintenanceBox.querySelector('[data-restore-details]')?.addEventListener("click", openRestoreProgress);
+  }
+
+  function setRestoreControls(disabled) {
+    if (restoreBtn) restoreBtn.disabled = disabled;
+    $$('[data-auto-action="restore"]').forEach(button => { button.disabled = disabled; });
+  }
+
+  async function pollMaintenance(reference) {
+    if (maintenanceReference !== reference || maintenancePolling) return;
+    clearTimeout(maintenanceTimer);
+    maintenancePolling = true;
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), 8000);
+    let next = true;
+    try {
+      const response = await fetch(`/api/backup/status?restore=${encodeURIComponent(reference)}`, {credentials:"same-origin",cache:"no-store",signal:controller.signal});
+      if (response.redirected || response.status === 401 || response.status === 403) {
+        next = false;
+        displayMaintenance("The panel responded, but your administrator session is no longer authorized. Restore completion has not yet been confirmed.", reference, "signin", true);
+        return;
+      }
+      if (response.status === 404) {
+        next = false;
+        maintenanceReference = "";
+        setRestoreControls(false);
+        try { localStorage.removeItem(restoreStorageKey); } catch (_) {}
+        displayMaintenance("Restore reference was not found. Check the restore journal before submitting again.",reference,"review",true);
+        return;
+      }
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.ok) throw new Error("Status temporarily unavailable");
+      disconnectedSince = 0;
+      rememberOperation(result);
+      displayMaintenance(result.message || "Restore is running.", reference, result.state, terminalRestoreStates.has(result.state));
+      if (terminalRestoreStates.has(result.state)) {
+        next = false;
+        maintenanceReference = "";
+        setRestoreControls(false);
+        try { localStorage.removeItem(restoreStorageKey); } catch (_) {}
+        if (restoreResult) { restoreResult.innerHTML = ""; restoreResult.classList.remove("show"); }
+        if (result.state === "completed") await loadAll();
+        return;
+      }
+    } catch (_) {
+      if (!disconnectedSince) disconnectedSince = Date.now();
+      if (Date.now() - disconnectedSince >= 120000) {
+        next = false;
+        displayMaintenance("The panel has not returned a restore status for two minutes. Maintenance may still be running; its outcome is not confirmed.", reference, "unavailable", true);
+      } else {
+        displayMaintenance("The panel is temporarily unreachable. Checking for its return automatically.", reference);
+      }
+    } finally {
+      clearTimeout(deadline);
+      maintenancePolling = false;
+      if (next && maintenanceReference === reference) maintenanceTimer = setTimeout(() => pollMaintenance(reference), 4000);
+    }
+  }
+
+  function trackMaintenance(result) {
+    maintenanceReference = result.reference;
+    disconnectedSince = 0;
+    try { localStorage.setItem(restoreStorageKey, result.reference); localStorage.setItem('wg_backup_tab', 'restore'); } catch (_) {}
+    rememberOperation(result);
+    displayMaintenance(result.message, result.reference, result.state, true);
+    setRestoreControls(true);
+    pollMaintenance(result.reference);
+  }
+
+  async function confirmPostgresMaintenance(withWireguard = false) {
+    const modal = $("#restore-confirm");
+    if (!modal) return null;
+    return new Promise(resolve => {
+      const body = $("#bk-modal-body");
+      const button = $("#bk-modal-ok");
+      const title = modal.querySelector(".bk-modal-head strong");
+      const subtitle = modal.querySelector(".bk-modal-head .bk-small");
+      if (!body || !button) { resolve(null); return; }
+      if (title) title.textContent = "Managed PostgreSQL restore";
+      if (subtitle) subtitle.textContent = "The panel will handle the maintenance window automatically.";
+      body.innerHTML = `
+        <div class="bk-restore-dialog">
+          <div class="bk-restore-dialog__hero">
+            <div>
+              <div class="bk-restore-dialog__eyebrow">Managed maintenance</div>
+              <h3>Replace the live database with this verified backup</h3>
+              <p>The panel stages the backup, stops writers, creates a recovery copy and restarts services automatically.</p>
+            </div>
+            <span class="bk-restore-dialog__badge"><i class="fas fa-database"></i> PostgreSQL</span>
+          </div>
+          <div class="bk-restore-dialog__grid">
+            <div class="bk-restore-info-card">
+              <div class="bk-restore-info-card__title"><i class="fas fa-check-circle"></i> What will happen</div>
+              <ul class="bk-restore-list">
+                <li>Current data is retained in a recovery database and dump.</li>
+                <li>Administrator and reseller sessions will expire after restart.</li>
+                <li>Supported profiles, templates and endpoint settings are included in Full restore.</li>
+                ${withWireguard ? "<li>After PostgreSQL verification, saved local WireGuard configurations and peer keys are recovered before services restart. Customers present in the backup keep their saved connection details if the server identity and configuration remain compatible.</li>" : ""}
+              </ul>
+            </div>
+            <div class="bk-restore-info-card warn">
+              <div class="bk-restore-info-card__title"><i class="fas fa-triangle-exclamation"></i> What stays unchanged</div>
+              <ul class="bk-restore-list">
+                <li>Current server settings remain active.</li>
+                <li>Local bot files and encryption keys stay unchanged. ${withWireguard ? "Interface keys, addresses and routing must match; remote nodes are not restored." : "WireGuard files stay unchanged."}</li>
+                <li>The restore stops if required customer or interface identities are incompatible.</li>
+              </ul>
+            </div>
+          </div>
+          ${withWireguard ? '<div class="bk-restore-info-card warn"><div class="bk-restore-info-card__title"><i class="fas fa-clock-rotate-left"></i> Backup date matters</div><p>This is a point-in-time restore, not a merge. Customers created after the backup are not included and may lose access. Changes to keys, limits and expiration dates made after the backup are also reverted. Create a fresh backup if you need to preserve the current state.</p></div>' : ""}
+          <div class="bk-field bk-field-restore-password">
+            <label for="pg-restore-password">Current administrator password</label>
+            <input id="pg-restore-password" type="password" autocomplete="current-password" maxlength="1024" placeholder="Enter your password">
+            <div class="bk-small bk-muted">Use the active administrator password for this panel.</div>
+          </div>
+          <label class="bk-restore-trust">
+            <input id="pg-restore-trusted" type="checkbox">
+            <span>I trust this backup, it uses this installation’s encryption keys, and I accept temporary downtime.</span>
+          </label>
+        </div>`;
+      const password = $("#pg-restore-password");
+      const trusted = $("#pg-restore-trusted");
+      const close = value => {
+        modal.hidden = true;
+        if (password) password.value = "";
+        if (title) title.textContent = "Confirm restore";
+        if (subtitle) subtitle.textContent = "Review the backup details and confirm maintenance.";
+        button.disabled = false;
+        modal.removeEventListener("click", onClick);
+        button.removeEventListener("click", onConfirm);
+        document.removeEventListener("keydown", onKey);
+        resolve(value);
+      };
+      const onClick = e => { if (e.target.closest('[data-close="1"]')) close(null); };
+      const onKey = e => { if (e.key === "Escape") close(null); };
+      const onConfirm = () => { if (trusted?.checked && password?.value) close(password.value); };
+      const update = () => { button.disabled = !(trusted?.checked && password?.value); };
+      password?.addEventListener("input", update);
+      trusted?.addEventListener("change", update);
+      button.addEventListener("click", onConfirm);
+      modal.addEventListener("click", onClick);
+      document.addEventListener("keydown", onKey);
+      update();
+      modal.hidden = false;
+      password?.focus();
+    });
+  }
+
   async function doRestoreFromBlob(blob, filename, kind = "auto") {
+    if (maintenanceReference) throw new Error("A restore operation is already running.");
+    let password = null;
+    let inspected = lastInspect;
+    if (postgresBackend && kind === "auto") {
+      inspected = await inspectBlob(blob, filename, "saved");
+      kind = inspected.kind;
+      if (!["db", "full", "settings"].includes(kind)) throw new Error("Unknown backup type. Inspect a supported backup first.");
+    }
+    if (postgresBackend && kind !== "settings") {
+      updateRestoreScope(kind, inspected);
+      if (currentServerMode() !== "keep") throw new Error("For managed PostgreSQL restore, keep current server settings.");
+      password = await confirmPostgresMaintenance(!!restoreWGBox?.checked);
+      if (password === null) return {cancelled:true};
+    }
     const fd = new FormData();
+    if (password !== null) { fd.append("restore_password",password); fd.append("restore_confirmed","1"); password = null; }
     fd.append("file", blob, filename || "backup.zip");
     fd.append("kind", kind);
     fd.append("restore_wg", restoreWGBox?.checked ? "1" : "0");
     appendServerSettings(fd);
     const headers = csrfHeaders();
     delete headers["Content-Type"];
-    window.panelOperationProgress?.show('Restoring backup…');
+    updateRestoreProgress("Sending the selected backup to the panel.", "", "uploading", true);
     try {
     const r = await fetch("/api/backup/restore", { method: "POST", headers, body: fd });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok) throw new Error(j.message || "Restore failed.");
-    renderRestoreResult(j);
+    if (j.queued) trackMaintenance(j);
+    else {
+      renderRestoreResult(j);
+      updateRestoreProgress(j.message || "Restore completed.", "", j.partial ? "review" : "completed", true);
+    }
     return j;
-    } finally { window.panelOperationProgress?.hide(); }
+    } catch (error) {
+      updateRestoreProgress(error.message || "The restore request could not be confirmed.", "", "review", true);
+      throw error;
+    }
 
   }
 
   async function restoreAutoBackup(filename) {
     if (!filename) return;
-    const ok = await confirmRestore(`<div><strong>Restore auto backup?</strong></div><div class="bk-small bk-muted" style="margin-top:8px"><code>${safe(filename)}</code></div><div style="margin-top:10px">Server settings will use the mode selected in Restore options.</div>`);
+    const ok = await confirmRestore(`<div><strong>Restore auto backup?</strong></div><div class="bk-small bk-muted" style="margin-top:8px"><code>${safe(filename)}</code></div><div style="margin-top:10px">${postgresBackend ? "The archive will be inspected. Managed database restores keep current server settings. To select local WireGuard recovery, download the archive and use the Restore tab." : "Server settings will use the mode selected in Restore options."}</div>`);
     if (!ok) return;
     try {
       const resp = await fetch(`/api/backups/file/${encodeURIComponent(filename)}`, {
@@ -1530,11 +1896,14 @@
       if (!resp.ok) throw new Error("Could not download auto backup file from server.");
       const blob = await resp.blob();
       const j = await doRestoreFromBlob(blob, filename, "auto");
+      if (j.queued || j.cancelled) return;
       if(j.partial) toast.warn("Restore was partial. Review node results before restarting."); else toast.success(j.message || "Restore completed.");
       await loadAll();
     } catch (e) {
       console.error(e);
       toast.error(e.message || "Restore failed.");
+    } finally {
+      updateRestoreScope();
     }
   }
 
@@ -1606,8 +1975,11 @@
       if (restoreName) restoreName.textContent = "No file chosen";
       if (restoreHint) restoreHint.textContent = "Choose a ZIP to preview its contents before restore.";
       lastInspect = null;
+      updateRestoreScope();
       return;
     }
+    lastInspect = null;
+    updateRestoreScope();
     if (restoreName) restoreName.textContent = file.name;
     if (restoreHint) restoreHint.textContent = "Inspecting backup contents…";
     await inspectSelectedBackup(file);
@@ -1618,7 +1990,8 @@
     const file = restoreFile?.files && restoreFile.files[0];
     if (!file) return toast.error("Choose a backup .zip file first.");
     if(!lastInspect?.ok) return toast.error("Inspect a valid backup before restoring.");
-    const kind = $('input[name="restore-kind"]:checked')?.value || "auto";
+    const kind = effectiveRestoreKind();
+    updateRestoreScope(kind);
     const mode = currentServerMode();
     const warning = mode === "saved"
       ? "Saved server settings may change this panel’s port, bind address, domain and TLS. Use only for same-server restore."
@@ -1630,6 +2003,7 @@
     setBusy(restoreBtn, true, "Restoring");
     try {
       const j = await doRestoreFromBlob(file, file.name, kind);
+      if (j.queued || j.cancelled) return;
       if(j.partial) toast.warn("Restore was partial. Review node results before restarting."); else toast.success(j.message || "Restore completed.");
       if (j.needs_restart) toast.info("Restart the panel service to apply restored data.");
       await loadAll();
@@ -1638,6 +2012,7 @@
       toast.error(e.message || "Restore failed.");
     } finally {
       setBusy(restoreBtn, false);
+      if (maintenanceReference) setRestoreControls(true);
     }
   });
 
@@ -1685,7 +2060,8 @@
     }
   });
 
-  updateServerModeUI();
+  restoreKinds.forEach(input => input.addEventListener("change", () => updateRestoreScope()));
+  updateRestoreScope();
   syncPanelTimezone().finally(loadAll);
 
 
@@ -1705,4 +2081,24 @@
     activate(saved);
   }
   initBackupTabs();
+  if (postgresBackend) {
+    try {
+      const reference = localStorage.getItem(restoreStorageKey) || "";
+      if (/^[0-9a-f]{32}$/.test(reference)) trackMaintenance({reference,state:"queued",message:"Checking the previous restore operation…"});
+    } catch (_) {}
+    if (!maintenanceReference) {
+      fetch("/api/backup/status?restore=latest",{credentials:"same-origin",cache:"no-store"})
+        .then(async response => {
+          const result = await response.json().catch(() => null);
+          if (!response.ok) return null;
+          return result;
+        })
+        .then(result => {
+          if (!result || result.error === "restore_not_found" || maintenanceReference || progressDialog?.dataset.state === "uploading") return;
+          if (!result.ok || !result.reference) return;
+          if (terminalRestoreStates.has(result.state)) { rememberOperation(result); displayMaintenance(result.message,result.reference,result.state); }
+          else trackMaintenance(result);
+        }).catch(() => {});
+    }
+  }
 })();

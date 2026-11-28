@@ -226,9 +226,47 @@ def bind_services(*,
                         message='Restore kind must be auto, db, settings, or full.'
                     ), 400
 
-                if db.engine.dialect.name == 'postgresql' and kind in ('db', 'full'):
-                    return jsonify(ok=False, error='postgresql_offline_restore_required',
-                        message='PostgreSQL database/full restores must be performed offline with pg_restore after stopping every panel, worker and bot process. The running panel will not overwrite its live PostgreSQL database.'), 409
+                if db.engine.dialect.name == 'postgresql':
+                    from scripts import postgres_restore as recovery
+                    if recovery.blocked() or recovery.active():
+                        return jsonify(ok=False, error='restore_busy', message='Another restore is running or requires review.'), 409
+                    if kind in ('db', 'full'):
+                        from flask_login import current_user
+                        from flask_wtf.csrf import validate_csrf
+                        from wtforms.validators import ValidationError
+                        from models import AdminAccount
+                        from reseller_portal.request_guard import reserve
+                        from hashlib import sha256
+                        if not current_user.is_authenticated or not getattr(current_user, 'is_admin', False):
+                            return jsonify(ok=False, error='admin_session_required', message='Sign in as the administrator to restore PostgreSQL through the panel.'), 403
+                        try:
+                            validate_csrf(request.headers.get('X-CSRFToken') or request.headers.get('X-CSRF-Token'))
+                        except ValidationError:
+                            return jsonify(ok=False, error='csrf_required', message='Refresh the page and try again.'), 400
+                        if server_settings_mode != 'keep' or (restore_wg and kind != 'full'):
+                            return jsonify(ok=False, error='restore_scope', message='Managed PostgreSQL restore requires Keep current server settings. WireGuard recovery is available with Full restore only.'), 400
+                        if request.form.get('restore_confirmed') != '1':
+                            return jsonify(ok=False, error='confirmation_required', message='Confirm the trusted backup, recovery scope and maintenance window.'), 400
+                        actor = current_user.username
+                        db.session.rollback()
+                        identity = sha256((request.remote_addr or '?').encode()).hexdigest()
+                        if not reserve([('admin-security-ip:'+identity,25,900)]):
+                            return jsonify(ok=False, error='rate_limit', message='Too many security requests. Try again in 15 minutes.'), 429
+                        account = AdminAccount.query.filter_by(username=actor).first()
+                        password = request.form.get('restore_password') or ''
+                        if not account or len(password)>1024 or not account.verify_pw(password):
+                            return jsonify(ok=False, error='invalid_password', message='Administrator password is incorrect.'), 403
+                        try:
+                            if db.engine.url.set(drivername='postgresql+psycopg') != recovery.configured_url():
+                                raise RuntimeError('Running database configuration differs from .env; review before restoring.')
+                            db.session.rollback()
+                            result = recovery.enqueue(tmp.name, kind, actor, restore_wg=restore_wg)
+                        except ValueError as exc:
+                            return jsonify(ok=False, error='invalid_backup', message=str(exc)), 400
+                        except (RuntimeError, OSError) as exc:
+                            message = str(exc) if isinstance(exc, RuntimeError) else 'Restore preparation failed; check the panel logs.'
+                            return jsonify(ok=False, error='restore_unavailable', message=message), 409
+                        return jsonify(ok=True, queued=True, **result), 202
 
                 inst = Path(app.instance_path)
                 db_dir = inst / ("restore_tmp_db_" + secrets.token_hex(8))

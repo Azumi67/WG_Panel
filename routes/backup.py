@@ -1270,6 +1270,22 @@ def build_routes(*,
 
     @require_api_key_or_login
     def backup_status():
+        reference = request.args.get('restore')
+        if reference is not None:
+            if not current_user.is_authenticated or not getattr(current_user, 'is_admin', False):
+                return jsonify(ok=False, error='admin_session_required'), 403
+            from scripts.postgres_restore import read_status
+            try:
+                result = read_status(reference)
+            except ValueError:
+                return jsonify(ok=False, error='restore_not_found'), 404
+            except FileNotFoundError:
+                if reference == 'latest':
+                    return jsonify(ok=False, error='restore_not_found'), 200, {'Cache-Control': 'no-store'}
+                return jsonify(ok=False, error='restore_not_found'), 404
+            except (OSError, RuntimeError):
+                return jsonify(ok=False, error='restore_status_unavailable'), 503
+            return jsonify(ok=True, **result), 200, {'Cache-Control': 'no-store'}
         return jsonify(_load_backup_last())
 
     @require_api_key_or_login

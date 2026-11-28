@@ -10,13 +10,13 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/backup.css') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/backup-dark.css') }}">
 {% endblock %}
-{% block final_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/backup-workspace.css') }}">{% endblock %}
+{% block final_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='css/backup-workspace.css', ui='activity2') }}">{% endblock %}
 {% block responsive_extras %}
 {% endblock %}
 
 
 {% block content %}
-<div class="backup-shell bk-reworked">
+<div class="backup-shell bk-reworked" data-database-backend="{{ database_backend|default('') }}">
   <div class="bk-top">
     <div class="bk-title">
       <h1><i class="fas fa-box-archive"></i> Backup & restore</h1>
@@ -24,6 +24,8 @@
     </div>
     <div class="bk-pills"><span id="status-pill" class="bk-pill muted">Status: Loading</span><span id="next-run-pill" class="bk-pill muted">Next: —</span></div>
   </div>
+
+  <div id="restore-maintenance-status" class="bk-result" role="status" aria-live="polite" hidden></div>
 
   <nav class="bk-tabs" aria-label="Backup tabs">
     <button class="bk-tab active" type="button" data-bk-tab="backup"><i class="fas fa-download"></i> Backup</button>
@@ -99,20 +101,26 @@
               <div class="bk-step-title-row">
                 <div>
                   <div class="bk-step-title">Restore options</div>
-                  <div class="bk-small bk-muted">Defaults are safe for normal restores. Change only what you need.</div><p class="bk-small" style="line-height:1.6;margin-top:10px"><strong>Reseller restore scope:</strong> Database or Full restores replace the entire panel database, including ALL reseller accounts, permissions, 2FA records, purchases and ownership records. They cannot select an individual reseller. Settings restores do not restore reseller records. WireGuard configurations are restored separately only when selected. Review and save a recovery copy before proceeding.</p>
+                  <div class="bk-small bk-muted">Choose which parts of the archive to recover.</div>
                 </div>
                 <span id="server-settings-pill" class="bk-pill ok">Protected</span>
               </div>
 
               <div class="bk-option-strip" aria-label="Restore type">
                 <label class="bk-choice"><input type="radio" name="restore-kind" value="auto" checked><span><strong>Auto</strong><small>Detect</small></span></label>
-                <label class="bk-choice"><input type="radio" name="restore-kind" value="full"><span><strong>Full</strong><small>DB + settings</small></span></label>
-                <label class="bk-choice"><input type="radio" name="restore-kind" value="db"><span><strong>DB</strong><small>Data only</small></span></label>
+                <label class="bk-choice"><input type="radio" name="restore-kind" value="full"><span><strong>Full</strong><small>Database + settings</small></span></label>
+                <label class="bk-choice"><input type="radio" name="restore-kind" value="db"><span><strong>Database</strong><small>Data only</small></span></label>
                 <label class="bk-choice"><input type="radio" name="restore-kind" value="settings"><span><strong>Settings</strong><small>Panel files</small></span></label>
               </div>
 
-              <div class="bk-restore-inline">
-                <label class="bk-switch"><input id="restore-wg" type="checkbox"><span class="track"></span><span>Restore WireGuard configs</span></label>
+              <div id="restore-scope-notice" class="bk-scope-notice" role="status" aria-live="polite">
+                <i class="fas fa-circle-info" aria-hidden="true"></i><div><strong id="restore-scope-title">Restore scope</strong><p id="restore-scope-text">Database restores include all customer and reseller records. Settings restore does not replace the database.</p></div>
+              </div>
+              <div class="bk-network-option">
+                <div class="bk-restore-inline">
+                  <label class="bk-switch"><input id="restore-wg" type="checkbox" aria-describedby="restore-wg-help"><span class="track"></span><span>Restore WireGuard configs</span></label>
+                </div>
+                <div id="restore-wg-help" class="bk-small bk-muted">Only restore trusted network files that match this server.</div>
               </div>
 
               <div class="bk-server-compact">
@@ -148,7 +156,7 @@
             <div class="bk-step-mark">3</div>
             <div class="bk-step-content">
               <div class="bk-step-title">Restore</div>
-              <div class="bk-small bk-muted">After inspection, confirm the restore. Restart the panel only if the result asks for it.</div>
+              <div class="bk-small bk-muted">Review the selected scope and confirm. Managed database restores restart services automatically.</div>
               <div class="bk-action-row"><button id="btn-restore" class="bk-btn danger" type="button"><i class="fas fa-rotate-left"></i> Restore backup</button></div>
               <div id="restore-result" class="bk-result"></div>
             </div>
@@ -289,16 +297,72 @@
   </div>
 </div>
 
-<div id="restore-confirm" class="bk-modal" hidden>
+<div id="restore-confirm" class="bk-modal bk-modal-restore" hidden>
   <div class="bk-modal-backdrop" data-close="1"></div>
-  <div class="bk-modal-card" role="dialog" aria-modal="true">
-    <div class="bk-modal-head"><strong>Confirm restore</strong><button class="bk-close" type="button" data-close="1" aria-label="Close">&times;</button></div>
-    <div id="bk-modal-body" class="bk-modal-body"></div>
-    <div class="bk-modal-actions"><button class="bk-btn" type="button" data-close="1">Cancel</button><button id="bk-modal-ok" class="bk-btn danger" type="button">Restore</button></div>
+  <div class="bk-modal-card bk-modal-card-restore" role="dialog" aria-modal="true" aria-labelledby="bk-restore-modal-title">
+    <div class="bk-modal-head bk-modal-head-restore">
+      <div class="bk-modal-title-block">
+        <span class="bk-modal-icon"><i class="fas fa-shield-halved"></i></span>
+        <div>
+          <strong id="bk-restore-modal-title">Confirm restore</strong>
+          <div class="bk-small bk-muted">Review the backup details and confirm maintenance.</div>
+        </div>
+      </div>
+      <button class="bk-close" type="button" data-close="1" aria-label="Close">&times;</button>
+    </div>
+    <div id="bk-modal-body" class="bk-modal-body bk-modal-body-restore"></div>
+    <div class="bk-modal-actions bk-modal-actions-restore">
+      <button class="bk-btn" type="button" data-close="1">Cancel</button>
+      <button id="bk-modal-ok" class="bk-btn danger" type="button">Restore</button>
+    </div>
   </div>
 </div>
+<dialog id="bk-restore-progress" class="bk-restore-progress" aria-labelledby="bk-restore-progress-title">
+  <div class="bk-restore-progress-head">
+    <span class="bk-restore-progress-icon" aria-hidden="true"><i class="fas fa-database"></i></span>
+    <div><strong id="bk-restore-progress-title">Restoring backup</strong><div class="bk-progress-stage" id="bk-restore-progress-stage">Preparing</div></div>
+  </div>
+  <div class="bk-restore-progress-body">
+    <section id="bk-restore-status-view" class="bk-activity-status">
+      <div id="bk-restore-progress-message" class="bk-restore-progress-message" role="status" aria-live="polite"></div>
+      <div class="bk-restore-progress-track" aria-hidden="true"><span></span></div>
+      <div id="bk-restore-progress-reference" class="bk-restore-progress-reference" hidden></div>
+      <p id="bk-restore-progress-help" class="bk-restore-progress-help"></p>
+      <button id="bk-activity-open" type="button" class="bk-activity-launch" hidden>
+        <span class="bk-activity-symbol"><i class="fas fa-list" aria-hidden="true"></i></span>
+        <span class="bk-activity-label"><strong>Operation log</strong><small id="bk-restore-log-count">0 entries</small></span>
+        <i class="fas fa-chevron-right" aria-hidden="true"></i>
+      </button>
+    </section>
+    <section id="bk-activity-view" class="bk-activity-view" aria-label="Operation log" hidden>
+      <div class="bk-activity-nav">
+        <button id="bk-activity-back" type="button" class="bk-activity-control"><i class="fas fa-arrow-left" aria-hidden="true"></i> Status</button>
+        <strong>Operation log</strong>
+        <button id="bk-restore-log-copy" type="button" class="bk-activity-control"><i class="fas fa-copy" aria-hidden="true"></i> Copy log</button>
+      </div>
+      <div class="bk-activity-tabs" role="group" aria-label="Log view">
+        <button id="bk-activity-stages-tab" type="button" aria-pressed="true">Activity</button>
+        <button id="bk-activity-ssh-tab" type="button" aria-pressed="false">SSH diagnostics</button>
+      </div>
+      <div id="bk-activity-stages" class="bk-activity-content">
+        <div class="bk-activity-caption"><span>Latest first</span><span>Last received stages</span></div>
+        <ol id="bk-restore-log-entries" class="bk-activity-list"></ol>
+      </div>
+      <div id="bk-activity-ssh" class="bk-activity-content" hidden>
+        <p class="bk-activity-note">Run this command on the server for the detailed maintenance journal.</p>
+        <pre id="bk-restore-journal-command" class="bk-activity-command"></pre>
+        <button id="bk-restore-journal-copy" type="button" class="bk-activity-control"><i class="fas fa-copy" aria-hidden="true"></i> Copy command</button>
+      </div>
+    </section>
+  </div>
+  <div class="bk-restore-progress-actions">
+    <button id="bk-restore-progress-close" type="button" class="bk-btn">Hide</button>
+    <button id="bk-restore-progress-retry" type="button" class="bk-btn" hidden>Check status</button>
+    <a id="bk-restore-progress-login" href="{{ url_for('login', next='/backup') }}" class="bk-btn bk-restore-signin" hidden>Sign in to view result</a>
+  </div>
+</dialog>
 {% endblock %}
 
 {% block body_extras %}
-<script defer src="{{ url_for('static', filename='js/backup.js') }}"></script>
+<script defer src="{{ url_for('static', filename='js/backup.js', ui='activity2') }}"></script>
 {% endblock %}
